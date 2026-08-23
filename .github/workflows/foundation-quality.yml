@@ -8,11 +8,17 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: foundation-quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  governance:
+  repository-policy:
+    name: repository-policy
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Shell syntax
         run: bash -n scripts/*.sh
       - name: Governance structure
@@ -21,29 +27,37 @@ jobs:
         run: python3 scripts/check-doc-links.py
       - name: Architecture layering
         run: python3 scripts/check-layering.py
+      - name: Harness contracts
+        run: python3 scripts/test-harnesses.py
+      - name: Fuzz registry smoke
+        run: python3 scripts/fuzz-smoke.py
+      - name: Validator negative fixtures
+        run: python3 scripts/test-ci-validators.py
 
-  canonical-tasks-linux:
+  rust-and-harness-quality:
+    name: rust-and-harness-quality
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - name: Bootstrap pinned toolchain
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Bootstrap pinned Rust toolchain
         run: make bootstrap
-      - name: Canonical task interface
-        run: |
-          make build
-          make test
-          make check
-          make bench
+      - name: Build production Rust surface
+        run: make build
+      - name: Format lint unit and repository checks
+        run: make check
+      - name: Benchmark harness smoke
+        run: make bench
 
-  canonical-tasks-macos:
+  native-macos-smoke:
+    name: native-macos-smoke
     runs-on: macos-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - name: Bootstrap pinned toolchain and macOS prerequisites
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Bootstrap pinned Rust and native toolchains
         run: make bootstrap
-      - name: Canonical task interface
-        run: |
-          make build
-          make test
-          make check
-          make bench
+      - name: Build Rust plus Seyal.app
+        run: make build
+      - name: Unit harness and native launch smoke
+        run: make test

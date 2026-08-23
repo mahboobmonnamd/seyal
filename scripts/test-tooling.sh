@@ -19,12 +19,23 @@ for target in bootstrap bootstrap-agents build test check bench; do
 done
 
 [[ -f scripts/bootstrap-dev.sh ]] || fail "agent bootstrap script is missing"
-grep -q 'ANTHROPIC_SKILLS_DIR=' scripts/bootstrap-dev.sh || fail "Anthropic skill checkout is not managed locally"
-grep -q 'checkout --detach "${FRONTEND_DESIGN_REF}"' scripts/bootstrap-dev.sh || fail "frontend-design source is not checked out at the pinned commit"
-grep -q '"${ANTHROPIC_SKILLS_DIR}/skills/frontend-design"' scripts/bootstrap-dev.sh || fail "frontend-design is not installed from the verified local checkout"
-if grep -q 'github.com/anthropics/skills/tree/' scripts/bootstrap-dev.sh; then
-  fail "frontend-design bootstrap must not encode a commit SHA as a GitHub tree/branch URL"
-fi
+grep -q 'XCODEBUILD_MCP_VERSION=' scripts/bootstrap-dev.sh || fail "XcodeBuildMCP is not pinned"
+grep -q 'github-mcp-server' scripts/bootstrap-dev.sh || fail "GitHub MCP bootstrap is missing"
+grep -q 'mcpbridge' scripts/bootstrap-dev.sh || fail "official Xcode MCP bootstrap is missing"
+grep -q 'xcodebuildmcp@${XCODEBUILD_MCP_VERSION}' scripts/bootstrap-dev.sh || fail "XcodeBuildMCP configuration is missing"
+
+for forbidden in \
+  'frontend-design' \
+  'anthropics/skills' \
+  'playwright' \
+  'AppleDeepDocs' \
+  'appledeepdoc' \
+  'apple-deep-docs' \
+  'SEYAL_ENABLE_APPLE_DEEP_DOCS'; do
+  if grep -Fqi "$forbidden" scripts/bootstrap-dev.sh; then
+    fail "non-project tooling returned to agent bootstrap: ${forbidden}"
+  fi
+done
 
 missing="$(mktemp)"
 trap 'rm -f "$missing"' EXIT

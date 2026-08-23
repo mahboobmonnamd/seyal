@@ -2,6 +2,10 @@
 
 Specifications define **observable behavior and enforceable contracts** below accepted architecture and above milestones/implementation Issues.
 
+## Active specifications
+
+- [`SPEC-001-M001-VT.md`](SPEC-001-M001-VT.md) — M001 incremental VT parser, canonical terminal state, supported/deferred sequences, line identity, resize and damage behavior.
+
 ## When a specification is required
 
 Create or update a specification before implementation when work defines or changes a reusable behavioral contract whose correctness cannot safely be inferred from a single Issue. This includes, in particular:

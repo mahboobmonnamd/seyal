@@ -3,7 +3,8 @@ use std::{env, fs, path::PathBuf};
 use seyal_terminal::TerminalState;
 
 fn input() -> Vec<u8> {
-    let path = PathBuf::from(env::var_os("SEYAL_FUZZ_INPUT").expect("SEYAL_FUZZ_INPUT is required"));
+    let path =
+        PathBuf::from(env::var_os("SEYAL_FUZZ_INPUT").expect("SEYAL_FUZZ_INPUT is required"));
     fs::read(path).expect("read retained fuzz seed")
 }
 

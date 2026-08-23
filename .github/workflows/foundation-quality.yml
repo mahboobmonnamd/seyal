@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Shell syntax
-        run: bash -n scripts/task.sh scripts/validate-governance.sh
+        run: bash -n scripts/*.sh
       - name: Governance structure
         run: make governance-check
       - name: Local documentation links
@@ -22,18 +22,28 @@ jobs:
       - name: Architecture layering
         run: python3 scripts/check-layering.py
 
-  rust-foundation:
+  canonical-tasks-linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Rust gates when workspace exists
-        shell: bash
+      - name: Bootstrap pinned toolchain
+        run: make bootstrap
+      - name: Canonical task interface
         run: |
-          if [[ ! -f Cargo.toml ]]; then
-            echo "No production Rust workspace yet; M001 Pass 1 will activate these gates."
-            exit 0
-          fi
-          test -f rust-toolchain.toml || { echo 'M001 Rust workspace requires rust-toolchain.toml'; exit 1; }
-          cargo fmt --all -- --check
-          cargo clippy --workspace --all-targets --all-features -- -D warnings
-          cargo test --workspace
+          make build
+          make test
+          make check
+          make bench
+
+  canonical-tasks-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bootstrap pinned toolchain and macOS prerequisites
+        run: make bootstrap
+      - name: Canonical task interface
+        run: |
+          make build
+          make test
+          make check
+          make bench

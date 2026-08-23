@@ -1,47 +1,62 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
 cmd="${1:-}"
+channel="$(sed -nE 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' rust-toolchain.toml 2>/dev/null | head -n1 || true)"
+
+cargo_pinned() {
+  [[ -n "$channel" ]] || { echo "rust-toolchain.toml does not declare a Rust channel" >&2; exit 1; }
+  rustup run "$channel" cargo "$@"
+}
 
 case "$cmd" in
   bootstrap)
     bash scripts/bootstrap-dev.sh
     ;;
+  bootstrap-agents)
+    bash scripts/bootstrap-agents.sh
+    ;;
   build)
+    bash scripts/check-toolchain.sh
     if [[ -f Cargo.toml ]]; then
-      cargo build --workspace
+      cargo_pinned build --workspace --locked
     else
-      echo "No production Rust workspace exists yet. M001 Pass 1 owns creation of the minimal justified workspace." >&2
-      exit 2
+      echo "[seyal task] build: no Rust workspace exists yet; Issue #9 owns workspace scaffolding. Nothing to build."
     fi
     ;;
   test)
+    bash scripts/test-tooling.sh
     if [[ -f Cargo.toml ]]; then
-      cargo test --workspace
-    else
-      echo "No production test workspace exists yet. Run 'make governance-check' for the pre-M001 repository system." >&2
-      exit 2
+      bash scripts/check-toolchain.sh
+      cargo_pinned test --workspace --locked
     fi
     ;;
   check)
+    bash scripts/check-toolchain.sh
+    bash -n scripts/*.sh
     bash scripts/validate-governance.sh
-    bash -n scripts/bootstrap-dev.sh
+    python3 scripts/check-doc-links.py
+    python3 scripts/check-layering.py
+    bash scripts/test-tooling.sh
     if [[ -f Cargo.toml ]]; then
-      cargo fmt --all -- --check
-      cargo clippy --workspace --all-targets --all-features -- -D warnings
-      cargo test --workspace
+      cargo_pinned fmt --all -- --check
+      cargo_pinned clippy --workspace --all-targets --all-features -- -D warnings
+      cargo_pinned test --workspace --locked
     fi
     ;;
   bench)
+    bash scripts/check-toolchain.sh
     if [[ -f Cargo.toml ]]; then
-      cargo bench --workspace
+      cargo_pinned bench --workspace --locked
     else
-      echo "No benchmark harness exists yet. M001 Pass 1 owns the first reproducible benchmark skeleton." >&2
-      exit 2
+      echo "[seyal task] bench: no benchmarkable production surface exists yet; no performance result is claimed."
     fi
     ;;
   *)
-    echo "usage: $0 {bootstrap|build|test|check|bench}" >&2
+    echo "usage: $0 {bootstrap|bootstrap-agents|build|test|check|bench}" >&2
     exit 64
     ;;
 esac

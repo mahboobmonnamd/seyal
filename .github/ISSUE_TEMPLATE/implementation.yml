@@ -1,0 +1,116 @@
+name: Feature / implementation task
+description: Refine one coherent Seyal implementation outcome. Creation does not make the issue Ready.
+title: "[Task] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not implement until the GitHub Project status is Ready.** Read `AGENTS.md` and `docs/engineering/ISSUE-PROTOCOL.md` first.
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: One unambiguous outcome.
+    validations: {required: true}
+  - type: textarea
+    id: why
+    attributes:
+      label: Why this exists
+    validations: {required: true}
+  - type: textarea
+    id: authority
+    attributes:
+      label: Architecture / specification references
+      description: Exact repository documents and sections. An issue cannot override them.
+    validations: {required: true}
+  - type: textarea
+    id: scope
+    attributes:
+      label: In scope
+    validations: {required: true}
+  - type: textarea
+    id: outscope
+    attributes:
+      label: Explicitly out of scope
+    validations: {required: true}
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies / blocked-by
+      description: Use native GitHub dependencies after creation; repeat only enough context to make refinement reviewable.
+    validations: {required: true}
+  - type: textarea
+    id: ownership
+    attributes:
+      label: Expected ownership / module boundaries
+      description: Identify canonical state and modules this issue may mutate.
+    validations: {required: true}
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Measurable criteria, not implementation intentions.
+    validations: {required: true}
+  - type: textarea
+    id: tests
+    attributes:
+      label: Tests required
+      description: State test-first fixtures/unit/property/integration/conformance/fuzz/renderer/failure evidence as applicable.
+    validations: {required: true}
+  - type: textarea
+    id: performance
+    attributes:
+      label: Performance impact
+      description: Metrics/budget/benchmark requirement, or justified N/A.
+    validations: {required: true}
+  - type: textarea
+    id: memory
+    attributes:
+      label: Memory impact
+      description: RSS/allocation/thread/GPU implications, or justified N/A.
+    validations: {required: true}
+  - type: textarea
+    id: security
+    attributes:
+      label: Security impact
+      description: Trust/input/permission/resource implications, or justified N/A.
+    validations: {required: true}
+  - type: textarea
+    id: docs
+    attributes:
+      label: Documentation impact
+    validations: {required: true}
+  - type: textarea
+    id: demo
+    attributes:
+      label: Demo / verification procedure
+      description: Reproducible steps that demonstrate acceptance.
+    validations: {required: true}
+  - type: textarea
+    id: dod
+    attributes:
+      label: Definition of Done
+      description: Applicable evidence required beyond visible functionality.
+    validations: {required: true}
+  - type: checkboxes
+    id: readiness
+    attributes:
+      label: Readiness review
+      description: These must all be true before Project status is changed to Ready.
+      options:
+        - label: Goal is unambiguous.
+          required: true
+        - label: Relevant architecture/specification exists and is linked.
+          required: true
+        - label: Dependencies are complete or explicitly represented as blockers.
+          required: true
+        - label: Ownership boundary is known.
+          required: true
+        - label: Acceptance criteria are measurable.
+          required: true
+        - label: Test strategy is defined.
+          required: true
+        - label: Performance and security requirements are identified.
+          required: true
+        - label: No unresolved architecture question remains.
+          required: true

@@ -95,7 +95,14 @@ fn sgr_tracks_supported_attributes_and_colors() {
 
     terminal.feed(b"\x1b[0;38;2;10;20;30;49mY");
     let second = terminal.cell(1, 0).unwrap();
-    assert_eq!(second.style.fg, Color::Rgb { r: 10, g: 20, b: 30 });
+    assert_eq!(
+        second.style.fg,
+        Color::Rgb {
+            r: 10,
+            g: 20,
+            b: 30
+        }
+    );
     assert_eq!(second.style.bg, Color::Default);
     assert!(!second.style.bold);
     assert!(!second.style.underline);
@@ -171,7 +178,10 @@ fn resize_preserves_retained_cells_and_line_identity() {
 
 #[test]
 fn zero_dimensions_are_rejected_without_partial_resize() {
-    assert!(matches!(TerminalState::new(0, 10), Err(TerminalError::InvalidSize)));
+    assert!(matches!(
+        TerminalState::new(0, 10),
+        Err(TerminalError::InvalidSize)
+    ));
 
     let mut terminal = terminal(4, 2);
     assert_eq!(terminal.resize(0, 3), Err(TerminalError::InvalidSize));

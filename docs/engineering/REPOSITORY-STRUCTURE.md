@@ -1,12 +1,28 @@
 # Repository and workspace structure
 
-This document defines logical ownership/dependency boundaries before M001 Pass 1 creates production scaffolding. It intentionally does **not** create empty crates merely because a diagram contains names.
+This document defines Seyal's physical repository layout and the accepted logical ownership/dependency boundaries that are created incrementally as M001 reaches them.
 
 ## Principle
 
 A crate/module exists only when it represents a real ownership, portability, process, ABI/dependency, or testing boundary.
 
 The public Seyal repository is the single canonical OSS codebase. Headless, lightweight and full OSS forms are compositions of the same terminal/runtime authority, not separate repositories.
+
+## Current physical Rust layout
+
+M001 Pass 1 / Issue #9 creates the smallest production Rust workspace justified by the next implementation pass:
+
+```text
+/
+├─ Cargo.toml
+├─ Cargo.lock
+└─ crates/
+   └─ seyal-terminal/          # canonical portable terminal-semantics ownership boundary
+```
+
+`seyal-terminal` exists now because M001 Pass 2 immediately implements the permanent Seyal VT/parser/state model there. Issue #9 intentionally adds no VT behavior.
+
+No `seyal-core` crate exists yet because there is not yet a demonstrated shared stable-value boundary that warrants one. Likewise, `seyal-exec`, `seyal-workspace`, `seyal-protocol`, `seyal-render` and `seyal-runtime` remain logical boundaries until their dependency-ordered M001 passes require physical packages. Creating all diagram names as empty crates would violate the repository principle above.
 
 ## Target logical layout
 
@@ -19,7 +35,7 @@ The public Seyal repository is the single canonical OSS codebase. Headless, ligh
 │  ├─ specs/
 │  ├─ milestones/
 │  └─ engineering/
-├─ crates/                     # created incrementally by M001 Pass 1+
+├─ crates/                     # created incrementally when a real boundary is required
 │  ├─ seyal-core/              # stable IDs/common value types only if justified
 │  ├─ seyal-terminal/          # VT/TerminalState/history/damage semantics
 │  ├─ seyal-exec/              # TerminalEndpoint/PTY + child lifecycle + TerminalExecution
@@ -39,7 +55,7 @@ The public Seyal repository is the single canonical OSS codebase. Headless, ligh
 └─ scripts/
 ```
 
-Names may be adjusted during Pass 1 if evidence shows a smaller correct layout, but authority/dependency rules below may not be silently changed.
+Names may be adjusted during M001 only if evidence shows a smaller correct layout, but authority/dependency rules below may not be silently changed.
 
 Do not create speculative `headless/`, `lite/`, `full/`, `agent/`, `pro/` or `enterprise/` crates merely to mirror product names. Composition roots should be introduced only when a real binary/application boundary exists.
 
@@ -90,6 +106,8 @@ runtime   → exec + terminal + workspace + protocol producer
 
 Avoid circular dependencies. If `seyal-core` becomes a dumping ground, split or remove it; it may contain stable identity/value types only.
 
+The current one-member Cargo workspace is acyclic by construction. `scripts/check-layering.py` validates forbidden edges for physical crates as they appear; Issue #12 owns the production CI hardening of that dependency gate once more build surfaces exist.
+
 ## Commercial repository boundary
 
 `seyal-commercial` is outside this repository and consumes a pinned Seyal OSS revision as a Git submodule once the canonical public repository identity is finalized.
@@ -110,7 +128,7 @@ The public repo does not contain private implementations, private SKU modules or
 - macOS app → a second VT/grid implementation
 - OSS production code → proprietary/commercial packages or commercial entitlement state
 
-Enforce these with Cargo workspace layering checks/lints or a small dependency-graph CI script once crates exist.
+Enforce these with Cargo workspace layering checks/lints or a small dependency-graph CI script as physical crates are introduced.
 
 ## Test/fixture/benchmark locations
 
@@ -119,6 +137,8 @@ Enforce these with Cargo workspace layering checks/lints or a small dependency-g
 - Cross-crate/runtime/native integration tests live under `tests/integration` or a justified harness package.
 - Fuzz targets live under `fuzz/`.
 - Reproducible performance workloads/results metadata live under `benches/` and documented artifacts; generated result blobs should not pollute production modules.
+
+The directories above are created by the Issues that first need them; Issue #9 does not create empty harness directories owned by #11.
 
 ## Platform boundary
 
@@ -130,4 +150,4 @@ Use root `AGENTS.md`. Add nested `AGENTS.md` only if a real subsystem later need
 
 ## Build interface
 
-M001 Pass 1 creates deterministic toolchain pins and wires the root `make bootstrap/build/test/check/bench` interface. Until then, governance validation may exist without fake production crates.
+M001 Pass 1 Issue #8 pinned the deterministic toolchain and canonical root `make bootstrap/build/test/check/bench` interface. Issue #9 activates that interface against the minimal Rust workspace. Native app, test/fuzz/benchmark harness, and production CI expansion remain owned by #10, #11 and #12 respectively.

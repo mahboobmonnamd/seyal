@@ -33,8 +33,14 @@ done
 production_paths=()
 [[ -d crates ]] && production_paths+=(crates)
 [[ -d macos ]] && production_paths+=(macos)
-if [[ ${#production_paths[@]} -gt 0 ]] && grep -R -nE 'if[[:space:]]+.*enterprise_license|enterprise_license.*(vt|pty|render)' "${production_paths[@]}" 2>/dev/null; then
-  echo "forbidden enterprise-license coupling pattern found in production code" >&2
+
+# OSS production code must not know about proprietary SKUs or entitlement state.
+# Public extension seams, when required by a milestone, must be generic capabilities
+# usable by any OSS consumer rather than hidden commercial hooks.
+if [[ ${#production_paths[@]} -gt 0 ]] && grep -R -nE \
+  'enterprise_license|pro_license|teams_license|commercial_license|commercial_entitlement|seyal_commercial' \
+  "${production_paths[@]}" 2>/dev/null; then
+  echo "forbidden commercial SKU/license coupling found in OSS production code" >&2
   fail=1
 fi
 

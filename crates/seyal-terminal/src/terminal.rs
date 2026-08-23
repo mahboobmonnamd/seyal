@@ -122,10 +122,10 @@ impl TerminalCore {
     }
 
     fn current_mut(&mut self) -> &mut Screen {
-        if self.modes.alternate_screen {
-            if let Some(screen) = &mut self.alternate {
-                return screen;
-            }
+        if self.modes.alternate_screen
+            && let Some(screen) = &mut self.alternate
+        {
+            return screen;
         }
         &mut self.primary
     }

@@ -44,7 +44,7 @@ Unsupported or deferred terminal behavior must remain explicitly classified. Tes
 
 ## M001 special gates
 
-Follow `docs/milestones/MILESTONE-001.md` and its readiness amendment. The retained M001 reference/conformance corpus and local IPC/shared-memory security tests are acceptance requirements, not optional later hardening.
+Follow the canonical `docs/milestones/MILESTONE-001.md`. Its retained M001 reference/conformance corpus and local IPC/shared-memory security tests are acceptance requirements, not optional later hardening.
 
 ## CI tiers
 

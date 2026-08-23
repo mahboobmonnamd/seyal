@@ -34,7 +34,7 @@ Prefer least privilege, explicit ownership, bounded inputs/resources, versioned 
 
 ## M001 local IPC gate
 
-`ADR-002-M001-READINESS-CORRECTIONS.md` and the M001 readiness amendment require a focused review before Pass 5 acceptance covering socket permissions/discovery, same-user authorization, controller/observer authority, protocol bounds, shared-memory ownership/lifetime/generation validation, stale identifiers, crash cleanup and denial-of-service limits.
+The canonical `docs/milestones/MILESTONE-001.md` requires a focused review before Pass 5 acceptance covering socket permissions/discovery, same-user authorization, controller/observer authority, protocol bounds, shared-memory ownership/lifetime/generation validation, stale identifiers, crash cleanup and denial-of-service limits.
 
 ## Reporting vulnerabilities
 

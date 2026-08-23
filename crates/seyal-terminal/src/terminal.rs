@@ -174,7 +174,7 @@ impl TerminalCore {
                     self.modes.alternate_screen = true;
                     self.apply(Mutation::full(rows));
                 }
-                Err(_) => self.diagnostics.malformed_sequences += 1,
+                Err(_) => self.record_malformed(),
             }
         } else {
             self.alternate = None;
@@ -183,17 +183,15 @@ impl TerminalCore {
         }
     }
 
-    fn deferred(&mut self) {
-        self.diagnostics.deferred_sequences =
-            self.diagnostics.deferred_sequences.saturating_add(1);
+    fn record_deferred(&mut self) {
+        self.diagnostics.deferred_sequences = self.diagnostics.deferred_sequences.saturating_add(1);
     }
 
-    fn unknown(&mut self) {
-        self.diagnostics.unknown_sequences =
-            self.diagnostics.unknown_sequences.saturating_add(1);
+    fn record_unknown(&mut self) {
+        self.diagnostics.unknown_sequences = self.diagnostics.unknown_sequences.saturating_add(1);
     }
 
-    fn malformed(&mut self) {
+    fn record_malformed(&mut self) {
         self.diagnostics.malformed_sequences =
             self.diagnostics.malformed_sequences.saturating_add(1);
     }
@@ -212,7 +210,7 @@ impl Actions for TerminalCore {
 
     fn csi(&mut self, params: &[u16], private: Option<u8>, ignored: bool, final_byte: u8) {
         if ignored {
-            self.deferred();
+            self.record_deferred();
             return;
         }
 
@@ -223,11 +221,11 @@ impl Actions for TerminalCore {
                     match *mode {
                         25 => self.set_cursor_visible(enabled),
                         1049 => self.set_alternate_screen(enabled),
-                        _ => self.deferred(),
+                        _ => self.record_deferred(),
                     }
                 }
             } else {
-                self.deferred();
+                self.record_deferred();
             }
             return;
         }
@@ -256,16 +254,16 @@ impl Actions for TerminalCore {
             b'u' => self.current_mut().restore_cursor(),
             b'm' => {
                 if self.current_mut().apply_sgr(params) {
-                    self.deferred();
+                    self.record_deferred();
                 }
                 Mutation::none()
             }
             b'@' | b'P' | b'X' | b'L' | b'M' | b'S' | b'T' | b'r' | b'h' | b'l' => {
-                self.deferred();
+                self.record_deferred();
                 Mutation::none()
             }
             _ => {
-                self.unknown();
+                self.record_unknown();
                 Mutation::none()
             }
         };
@@ -274,7 +272,7 @@ impl Actions for TerminalCore {
 
     fn esc(&mut self, final_byte: u8, had_intermediate: bool) {
         if had_intermediate {
-            self.deferred();
+            self.record_deferred();
             return;
         }
         let mutation = match final_byte {
@@ -284,11 +282,11 @@ impl Actions for TerminalCore {
             }
             b'8' => self.current_mut().restore_cursor(),
             b'D' | b'E' | b'M' => {
-                self.deferred();
+                self.record_deferred();
                 Mutation::none()
             }
             _ => {
-                self.unknown();
+                self.record_unknown();
                 Mutation::none()
             }
         };
@@ -296,11 +294,11 @@ impl Actions for TerminalCore {
     }
 
     fn deferred_string(&mut self) {
-        self.deferred();
+        self.record_deferred();
     }
 
     fn malformed(&mut self) {
-        self.malformed();
+        self.record_malformed();
     }
 }
 

@@ -63,7 +63,9 @@ The default branch should reject direct production-code pushes and require pull 
 
 Core/high-risk areas should require at least one independent approving review. Dismiss stale approvals when the head changes materially. Do not allow a merge merely because an implementation agent reports tests passed.
 
-## CI tiers
+## Public OSS repository CI
+
+The canonical public Seyal repository owns the authoritative GitHub Actions quality gates.
 
 Fast PR gates:
 
@@ -84,6 +86,18 @@ Deeper scheduled/release or targeted gates as code appears:
 
 Expensive/noisy checks should be targeted rather than making every documentation PR unusable.
 
+The current repository may temporarily be private during the public-launch transition. A GitHub Actions run that fails before executing any job steps is infrastructure non-execution, not a successful quality result. Once the repository is public, normal PR quality gates must execute and pass.
+
+## Private `seyal-commercial` CI policy
+
+`seyal-commercial` is a private superproject that consumes a pinned Seyal OSS revision.
+
+For now, do **not** add GitHub-hosted Actions workflows to the private repository because of private-repository CI cost. This is a temporary execution-cost decision, not permission to lower engineering standards.
+
+Commercial PRs must still record the canonical local build/test/check/integration evidence relevant to the change. When commercial code becomes substantial, introduce private CI using self-hosted runners or paid hosted capacity rather than relying indefinitely on manual validation.
+
+The public OSS workflow must never be moved into the private repository or made dependent on the private repository.
+
 ## Repository ownership note
 
-The current repository is owned by a personal GitHub account. Moving Seyal to an organization is recommended before distributed production implementation so native Issue Types, organization-level governance, team reviewers and future enterprise administration can be configured cleanly.
+The current OSS repository is owned by a personal GitHub account. Moving Seyal to an organization is recommended before distributed production implementation so native Issue Types, organization-level governance, team reviewers and future enterprise administration can be configured cleanly.

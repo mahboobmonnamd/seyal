@@ -61,7 +61,7 @@ Required before `make bootstrap`:
 - `rustup`, installed explicitly from the official Rust project;
 - network access to the official Rust distribution when the pinned toolchain is not already installed.
 
-On macOS, also install/select Apple's Xcode or Command Line Tools so `xcode-select`, `xcrun` and `clang` are available. Swift and the Metal toolchain are not required by Issues #8/#9 because no native application surface exists yet; Issue #10 owns activation and validation of those native build requirements.
+On macOS, M001 now requires **full Xcode**, selected with `xcode-select`, because the permanent native app surface exists. `make bootstrap` validates `xcodebuild`, the macOS SDK, Swift compiler and Metal shader toolchain through `xcrun`; Command Line Tools alone are no longer sufficient for the canonical macOS build.
 
 The repository pins Rust in `rust-toolchain.toml`. M001 Pass 1 currently uses Rust **1.98.0** with the `minimal` rustup profile plus `rustfmt` and `clippy`. Cargo is supplied by that same pinned Rust toolchain.
 
@@ -89,17 +89,21 @@ make bench
 
 Do not create competing undocumented command paths.
 
-Current behavior after Issue #9:
+Current behavior after Issue #10:
 
-- `make bootstrap` provisions and verifies the pinned toolchain;
-- `make build` builds the minimal Rust workspace with the pinned Cargo toolchain and lockfile;
-- `make test` validates repository/tooling/workspace scaffold invariants and runs workspace unit tests;
-- `make check` validates the pinned toolchain, shell syntax, governance, local documentation links, architecture layering, workspace scaffold invariants, formatting, Clippy and workspace tests;
+- `make bootstrap` provisions/verifies the pinned Rust toolchain and, on macOS, validates full Xcode + Swift + macOS SDK + Metal tooling;
+- `make build` builds the minimal Rust workspace and, on macOS, builds the native `Seyal.app` Xcode target;
+- `make test` validates repository/tooling/workspace scaffold invariants, runs Rust workspace unit tests, and on macOS builds and launches the native app binary in deterministic `--smoke-test` mode;
+- `make check` validates the pinned toolchain, shell syntax, governance, local documentation links, architecture layering, workspace scaffold invariants, Rust formatting/Clippy/tests, and the macOS native skeleton on Darwin;
 - `make bench` reports that no benchmark target exists until Issue #11 creates the benchmark harness, and makes no performance claim.
+
+Linux remains a supported portable-core CI host; native AppKit/Metal build/test steps explicitly skip there instead of introducing a cross-platform GUI abstraction.
 
 Canonical Cargo operations use the pinned toolchain and `--locked` where dependency resolution applies.
 
 Issue #9 creates only the `seyal-terminal` physical Rust crate because M001 Pass 2 immediately needs the permanent terminal-semantics owner. Other accepted logical boundaries become physical crates only when their dependency-ordered Issues require them; do not pre-create empty diagram-driven packages.
+
+Issue #10 establishes the native host under `macos/Seyal` using **Swift + AppKit + Metal**. No Objective-C/Objective-C++ source is required for the current platform boundary. Metal shaders, when introduced by their owning renderer Issue, use Metal Shading Language; future Rust/native interop should cross a coarse C-compatible boundary rather than per-cell language calls.
 
 ## Clean-checkout workflow
 
@@ -113,6 +117,12 @@ make build
 make test
 make check
 make bench
+```
+
+On macOS, after `make build`, the current non-terminal native skeleton can be launched manually with:
+
+```sh
+open target/macos-derived-data/Build/Products/Debug/Seyal.app
 ```
 
 There are no required private repositories, `seyal-commercial` dependencies, shell-profile assumptions, Homebrew assumptions or hidden environment variables for this canonical flow.

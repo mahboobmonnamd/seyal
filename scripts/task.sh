@@ -22,12 +22,14 @@ case "$cmd" in
   build)
     bash scripts/check-toolchain.sh
     cargo_pinned build --workspace --locked
+    bash scripts/build-macos.sh
     ;;
   test)
     bash scripts/test-tooling.sh
     python3 scripts/test-workspace.py
     bash scripts/check-toolchain.sh
     cargo_pinned test --workspace --locked
+    bash scripts/test-macos-skeleton.sh
     ;;
   check)
     bash scripts/check-toolchain.sh
@@ -40,6 +42,7 @@ case "$cmd" in
     cargo_pinned fmt --all -- --check
     cargo_pinned clippy --workspace --all-targets --all-features -- -D warnings
     cargo_pinned test --workspace --locked
+    bash scripts/test-macos-skeleton.sh
     ;;
   bench)
     bash scripts/check-toolchain.sh

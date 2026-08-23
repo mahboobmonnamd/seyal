@@ -38,6 +38,19 @@ Rendering may combine deterministic unit tests, projection fixtures, controlled 
 - **Failure:** child exit, malformed input, stalled/killed client, reconnect/resync, resource cleanup.
 - **Security:** hostile local client inputs, permissions, bounds, authority checks.
 
+## Harness layout
+
+- retained VT/reference fixtures: `tests/fixtures/vt/`;
+- cross-boundary integration tests: `tests/integration/`;
+- M001 fuzz registry/corpora: `fuzz/`;
+- benchmark definitions/environment contract: `benches/`.
+
+`tests/fixtures/vt/manifest.toml` is deterministic and `provenance.schema.toml` defines the minimum provenance record for future semantic fixtures. Pass 1 intentionally contains no fake terminal-behavior fixtures; Pass 2 adds the first real VT corpus test-first.
+
+`fuzz/targets.toml` registers the required M001 fuzz surfaces before their implementations exist. A target remains `pending-production-surface` until its owning pass exposes the real API. Pending targets validate corpus/ownership only. They must not use no-op adapters to claim parser, protocol, projection or reconnect coverage. Once a target is `active`, the smoke runner requires and executes its adapter for every retained seed.
+
+Canonical `make test` and `make check` validate the harness contracts and fuzz registry. `make bench` validates benchmark-environment recording without publishing a performance result.
+
 ## Unsupported behavior
 
 Unsupported or deferred terminal behavior must remain explicitly classified. Tests must verify safe parser continuity where required. Passing through or approximately rendering a sequence does not make it supported.

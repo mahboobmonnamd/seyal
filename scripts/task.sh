@@ -5,7 +5,7 @@ cmd="${1:-}"
 
 case "$cmd" in
   bootstrap)
-    echo "Governance bootstrap complete. M001 Pass 1 must add deterministic Rust/macOS toolchain bootstrap here when production scaffolding is created."
+    bash scripts/bootstrap-dev.sh
     ;;
   build)
     if [[ -f Cargo.toml ]]; then
@@ -25,6 +25,7 @@ case "$cmd" in
     ;;
   check)
     bash scripts/validate-governance.sh
+    bash -n scripts/bootstrap-dev.sh
     if [[ -f Cargo.toml ]]; then
       cargo fmt --all -- --check
       cargo clippy --workspace --all-targets --all-features -- -D warnings

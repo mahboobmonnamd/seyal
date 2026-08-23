@@ -19,11 +19,13 @@ for target in bootstrap bootstrap-agents build test check bench; do
 done
 
 [[ -f scripts/bootstrap-dev.sh ]] || fail "agent bootstrap script is missing"
+[[ -f docs/engineering/AGENT-TOOLING.md ]] || fail "agent tooling policy is missing"
 grep -q 'XCODEBUILD_MCP_VERSION=' scripts/bootstrap-dev.sh || fail "XcodeBuildMCP is not pinned"
 grep -q 'github-mcp-server' scripts/bootstrap-dev.sh || fail "GitHub MCP bootstrap is missing"
 grep -q 'mcpbridge' scripts/bootstrap-dev.sh || fail "official Xcode MCP bootstrap is missing"
 grep -q 'xcodebuildmcp@${XCODEBUILD_MCP_VERSION}' scripts/bootstrap-dev.sh || fail "XcodeBuildMCP configuration is missing"
 
+tooling_scope=(scripts/bootstrap-dev.sh docs/engineering/AGENT-TOOLING.md)
 for forbidden in \
   'frontend-design' \
   'anthropics/skills' \
@@ -32,8 +34,8 @@ for forbidden in \
   'appledeepdoc' \
   'apple-deep-docs' \
   'SEYAL_ENABLE_APPLE_DEEP_DOCS'; do
-  if grep -Fqi "$forbidden" scripts/bootstrap-dev.sh; then
-    fail "non-project tooling returned to agent bootstrap: ${forbidden}"
+  if grep -Fqi "$forbidden" "${tooling_scope[@]}"; then
+    fail "non-project tooling returned to Seyal bootstrap/policy: ${forbidden}"
   fi
 done
 

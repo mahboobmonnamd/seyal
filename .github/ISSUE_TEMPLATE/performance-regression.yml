@@ -1,0 +1,54 @@
+name: Performance regression
+description: Record a measured latency, CPU, RSS, throughput, allocation, thread or GPU-resource regression.
+title: "[Performance] "
+body:
+  - type: textarea
+    id: metric
+    attributes:
+      label: Metric and regression
+      description: State baseline and candidate values; do not report qualitative claims only.
+    validations: {required: true}
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Hardware/chip, OS, build mode, commit SHAs, dimensions/workload and relevant configuration.
+    validations: {required: true}
+  - type: textarea
+    id: methodology
+    attributes:
+      label: Measurement method
+      description: Run count, percentile/statistic, tool/harness and noise controls.
+    validations: {required: true}
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction / benchmark command
+    validations: {required: true}
+  - type: textarea
+    id: authority
+    attributes:
+      label: Relevant budget / architecture / specification
+      description: Link target or performance requirement when one exists.
+    validations: {required: true}
+  - type: textarea
+    id: suspected
+    attributes:
+      label: Suspected scope / ownership boundary
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Define the evidence needed to close the regression without silently changing the workload/threshold.
+    validations: {required: true}
+  - type: checkboxes
+    id: evidence
+    attributes:
+      label: Evidence discipline
+      options:
+        - label: Baseline and candidate were measured under comparable conditions.
+          required: true
+        - label: Raw/reproducible measurement metadata is retained.
+          required: true
+        - label: Any intentional regression will require explicit documented approval rather than a hidden threshold change.
+          required: true

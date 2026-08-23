@@ -1,0 +1,39 @@
+name: Foundation Quality
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  governance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shell syntax
+        run: bash -n scripts/task.sh scripts/validate-governance.sh
+      - name: Governance structure
+        run: make governance-check
+      - name: Local documentation links
+        run: python3 scripts/check-doc-links.py
+      - name: Architecture layering
+        run: python3 scripts/check-layering.py
+
+  rust-foundation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust gates when workspace exists
+        shell: bash
+        run: |
+          if [[ ! -f Cargo.toml ]]; then
+            echo "No production Rust workspace yet; M001 Pass 1 will activate these gates."
+            exit 0
+          fi
+          test -f rust-toolchain.toml || { echo 'M001 Rust workspace requires rust-toolchain.toml'; exit 1; }
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets --all-features -- -D warnings
+          cargo test --workspace

@@ -14,9 +14,17 @@ grep -Eq 'channel[[:space:]]*=[[:space:]]*"1\.98\.0"' rust-toolchain.toml || fai
 grep -Eq 'components[[:space:]]*=[[:space:]]*\[[^]]*"rustfmt"' rust-toolchain.toml || fail "rustfmt is not pinned"
 grep -Eq 'components[[:space:]]*=[[:space:]]*\[[^]]*"clippy"' rust-toolchain.toml || fail "clippy is not pinned"
 
-for target in bootstrap build test check bench; do
+for target in bootstrap bootstrap-agents build test check bench; do
   make -n "$target" >/dev/null || fail "canonical make target '${target}' does not resolve"
 done
+
+[[ -f scripts/bootstrap-dev.sh ]] || fail "agent bootstrap script is missing"
+grep -q 'ANTHROPIC_SKILLS_DIR=' scripts/bootstrap-dev.sh || fail "Anthropic skill checkout is not managed locally"
+grep -q 'checkout --detach "${FRONTEND_DESIGN_REF}"' scripts/bootstrap-dev.sh || fail "frontend-design source is not checked out at the pinned commit"
+grep -q '"${ANTHROPIC_SKILLS_DIR}/skills/frontend-design"' scripts/bootstrap-dev.sh || fail "frontend-design is not installed from the verified local checkout"
+if grep -q 'github.com/anthropics/skills/tree/' scripts/bootstrap-dev.sh; then
+  fail "frontend-design bootstrap must not encode a commit SHA as a GitHub tree/branch URL"
+fi
 
 missing="$(mktemp)"
 trap 'rm -f "$missing"' EXIT

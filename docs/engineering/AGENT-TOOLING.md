@@ -36,7 +36,7 @@ Equivalent existing skills are intentionally reused rather than creating duplica
 | Apple Xcode MCP (`xcrun mcpbridge`) | Required when provided by installed Xcode | First-party Xcode project/build/tool integration. |
 | XcodeBuildMCP | Pinned and registered when `npx` exists | Native macOS build/test/run, screenshots, UI hierarchy and debugging needed by Seyal UI implementation and validation. |
 
-Browser automation, generic frontend-design tooling and third-party Apple documentation indexes are not part of Seyal's development bootstrap.
+Browser automation, generic web/front-end design helpers and third-party Apple documentation indexes are not part of Seyal's development bootstrap.
 
 ## Standard setup
 

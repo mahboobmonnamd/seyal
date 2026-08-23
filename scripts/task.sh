@@ -29,10 +29,9 @@ case "$cmd" in
     ;;
   test)
     bash scripts/test-tooling.sh
-    if [[ -f Cargo.toml ]]; then
-      bash scripts/check-toolchain.sh
-      cargo_pinned test --workspace --locked
-    fi
+    python3 scripts/test-workspace.py
+    bash scripts/check-toolchain.sh
+    cargo_pinned test --workspace --locked
     ;;
   check)
     bash scripts/check-toolchain.sh
@@ -41,11 +40,10 @@ case "$cmd" in
     python3 scripts/check-doc-links.py
     python3 scripts/check-layering.py
     bash scripts/test-tooling.sh
-    if [[ -f Cargo.toml ]]; then
-      cargo_pinned fmt --all -- --check
-      cargo_pinned clippy --workspace --all-targets --all-features -- -D warnings
-      cargo_pinned test --workspace --locked
-    fi
+    python3 scripts/test-workspace.py
+    cargo_pinned fmt --all -- --check
+    cargo_pinned clippy --workspace --all-targets --all-features -- -D warnings
+    cargo_pinned test --workspace --locked
     ;;
   bench)
     bash scripts/check-toolchain.sh

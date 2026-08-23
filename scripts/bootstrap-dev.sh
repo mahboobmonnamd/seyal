@@ -65,7 +65,7 @@ EOF
 
 mcp_present() {
   local client="$1" name="$2"
-  "$client" mcp list 2>/dev/null | grep -Eq "(^|[[:space:]])${name}([[:space:]]|$)"
+  "$client" mcp list 2>/dev/null | grep -Eq "(^|[[:space:]])${name}([[:space:]:]|$)"
 }
 
 configure_claude() {

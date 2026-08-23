@@ -14,10 +14,10 @@ cargo_pinned() {
 
 case "$cmd" in
   bootstrap)
-    bash scripts/bootstrap-dev.sh
+    bash scripts/bootstrap-toolchain.sh
     ;;
   bootstrap-agents)
-    bash scripts/bootstrap-agents.sh
+    bash scripts/bootstrap-dev.sh
     ;;
   build)
     bash scripts/check-toolchain.sh

@@ -35,6 +35,7 @@ An Issue or PR cannot override architecture/specification. Existing code is neve
 5. Use one Issue → one assignee/agent → one isolated worktree → one branch → one PR.
 6. Core behavior is test-first. Do not weaken tests to make code pass.
 7. Do not refactor unrelated code. Create/link another Issue instead.
+8. If an approved screenshot/mockup is visual authority for native UI, run the `image-to-code` skill before implementation. Complete its forensic design/component inventory and issue plan first; split the work into multiple Issues when the visual spans independently reviewable boundaries.
 
 ## Repository map
 
@@ -42,6 +43,7 @@ An Issue or PR cannot override architecture/specification. Existing code is neve
 - `docs/specs/` — observable behavior specifications (when introduced).
 - `docs/milestones/` — bounded vertical milestones and acceptance gates.
 - `docs/engineering/` — development, issue, testing, performance, security, repository and OSS/commercial rules.
+- `docs/engineering/AGENT-TOOLING.md` — canonical skills, external skill pinning and developer MCP/tool policy.
 - `.agents/skills/` — canonical portable agent skills.
 - `.github/` — issue/PR forms and CI.
 

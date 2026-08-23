@@ -52,12 +52,12 @@ Use `docs/engineering/ISSUE-PROTOCOL.md` and the `architecture-change` skill. Ar
 
 ## Development prerequisites
 
-The repository does not silently install host package managers or execute downloaded shell scripts.
+The canonical repository bootstrap does not silently install host package managers or execute downloaded shell scripts.
 
 Required before `make bootstrap`:
 
 - Git;
-- GNU Make;
+- `make`;
 - `rustup`, installed explicitly from the official Rust project;
 - network access to the official Rust distribution when the pinned toolchain is not already installed.
 
@@ -65,15 +65,15 @@ On macOS, also install/select Apple's Xcode or Command Line Tools so `xcode-sele
 
 The repository pins Rust in `rust-toolchain.toml`. For M001 Pass 1 / Issue #8 the pin is Rust **1.98.0** with the `minimal` rustup profile plus `rustfmt` and `clippy`. Cargo is supplied by that same pinned Rust toolchain.
 
-`make bootstrap` is idempotent where rustup permits: it validates host prerequisites, installs/verifies exactly the repository-pinned Rust toolchain/components through rustup, initializes repository-declared pinned submodules if any, and validates the result. It does not run `curl | sh`, invoke Homebrew, install optional MCP servers, or write credentials.
+`make bootstrap` is idempotent where rustup permits: it validates host prerequisites, installs/verifies exactly the repository-pinned Rust toolchain/components through rustup, initializes repository-declared pinned submodules if any, and validates the result. It does not run `curl | sh`, invoke Homebrew, install optional MCP/agent tooling, or write credentials.
 
-Optional developer-agent/MCP configuration from the repository is deliberately separate:
+Optional developer-agent/MCP provisioning is deliberately separate:
 
 ```sh
 make bootstrap-agents
 ```
 
-That command configures already-installed supported tools where possible; it does not install optional packages or credentials.
+That explicit opt-in command uses `scripts/bootstrap-dev.sh` and may provision the pinned developer tools documented in `docs/engineering/AGENT-TOOLING.md`. It is not part of build/test/CI bootstrap and must not become a terminal/runtime dependency.
 
 ## Canonical task interface
 
@@ -113,7 +113,7 @@ make check
 make bench
 ```
 
-There are no required private repositories, `seyal-commercial` dependencies, shell-profile assumptions, Homebrew assumptions or hidden environment variables for this flow.
+There are no required private repositories, `seyal-commercial` dependencies, shell-profile assumptions, Homebrew assumptions or hidden environment variables for this canonical flow.
 
 ## Generated and fixture data
 

@@ -73,32 +73,32 @@ The policy is fixed even when repository settings cannot be inspected or configu
 - core/high-risk changes require independent review when an independent reviewer is available;
 - stale approvals must not be treated as valid after a material head change.
 
-A GitHub ruleset/branch-protection configuration should enforce these rules when available. Lack of platform-level enforcement is a governance-hardening item, not permission to bypass the policy and not a blocker for the current owner-controlled M001 Pass 1.
+A GitHub ruleset/branch-protection configuration should enforce these rules when available. Lack of platform-level enforcement is a governance-hardening item, not permission to bypass the policy and not a blocker for the current owner-controlled M001 work.
 
 ## Public OSS repository CI
 
-The canonical public Seyal repository owns the authoritative GitHub Actions quality gates.
+The canonical public Seyal repository owns the authoritative GitHub Actions quality gates. The `Foundation Quality` workflow uses minimal `contents: read` permissions, pins external actions by reviewed full commit SHA, cancels superseded runs on the same ref, and keeps fast PR responsibilities explicit.
 
-Fast PR gates:
+The required Pass-1 fast PR jobs are:
 
-- instruction/governance validation;
-- local documentation links;
-- architecture layering;
-- format/lint/build/unit tests once code exists;
-- relevant integration/regression smoke tests.
+- **`repository-policy`** — shell syntax, governance structure, local documentation links, architecture layering, test/fuzz harness contracts, and controlled negative fixtures proving repository validators reject invalid inputs;
+- **`rust-and-harness-quality`** — pinned Rust bootstrap, production Rust workspace build, `make check` (format, Clippy with warnings denied, unit tests, layering and harness checks), and benchmark-environment smoke with no performance claim;
+- **`native-macos-smoke`** — full macOS Xcode/Swift/Metal prerequisite validation, Rust plus `Seyal.app` build, unit/harness checks and deterministic native executable smoke.
 
-Deeper scheduled/release or targeted gates as code appears:
+When branch protection/rulesets are configured, these stable job names are the Pass-1 required checks. A renamed/replaced job must update this document and the protection configuration together; a missing check must never be interpreted as a pass.
+
+Repository-owned validators are self-tested through safe temporary negative fixtures. The negative suite proves governance, local-link, architecture-layering, workspace and harness validators fail for controlled violations and for the expected reason. Rust compiler/formatter/Clippy and Xcode/native build failures are enforced by their own non-zero tool exits rather than fake production code.
+
+Deeper scheduled/release or targeted gates are added only as their real production surfaces exist:
 
 - retained VT conformance corpus;
-- fuzz campaigns/sanitizers;
-- renderer/native validation;
+- active fuzz campaigns and sanitizers;
+- deeper renderer/native validation;
 - broad PTY/runtime failure matrix;
 - performance/RSS/thread/GPU regression suites;
 - dependency/security scanning.
 
-Expensive/noisy checks should be targeted rather than making every documentation PR unusable.
-
-The repository is now public and `Foundation Quality` has executed successfully with both governance and rust-foundation jobs. A future red or non-executing run is a real readiness signal and must be investigated; it must never be described as passed validation.
+Pass 1 does not claim these deferred gates are active merely because their harness locations exist. Expensive/noisy checks should be targeted rather than making every PR unusable.
 
 ## Private `seyal-commercial` CI policy
 
@@ -112,4 +112,4 @@ The public OSS workflow must never be moved into the private repository or made 
 
 ## Repository ownership note
 
-The OSS repository is currently public under a personal GitHub account. Moving Seyal to an organization remains recommended before external contributor/team scale so native Issue Types, Projects, team reviewers, rulesets and future enterprise administration can be configured cleanly. That migration is governance hardening and does not block M001 Pass 1 under the temporary fallbacks above.
+The OSS repository is currently public under a personal GitHub account. Moving Seyal to an organization remains recommended before external contributor/team scale so native Issue Types, Projects, team reviewers, rulesets and future enterprise administration can be configured cleanly. That migration is governance hardening and does not block M001 under the temporary fallbacks above.

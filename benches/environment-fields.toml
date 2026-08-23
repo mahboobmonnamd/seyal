@@ -1,0 +1,17 @@
+version = 1
+required = [
+  "record_kind",
+  "commit_sha",
+  "os",
+  "hardware",
+  "build_mode",
+  "terminal_rows",
+  "terminal_cols",
+  "font",
+  "display_scale",
+  "shell",
+  "workload",
+  "run_count",
+  "percentile_method",
+  "performance_claim",
+]

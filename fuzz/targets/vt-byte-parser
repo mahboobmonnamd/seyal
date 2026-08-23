@@ -2,4 +2,4 @@
 set -euo pipefail
 
 input="${1:?retained fuzz seed path is required}"
-SEYAL_FUZZ_INPUT="$input" cargo test --quiet -p seyal-terminal --test fuzz_smoke vt_byte_parser_seed -- --exact
+SEYAL_FUZZ_INPUT="$input" cargo test --quiet -p seyal-terminal --test fuzz_smoke vt_byte_parser_seed -- --ignored --exact

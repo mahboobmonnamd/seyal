@@ -17,4 +17,4 @@ Read `docs/engineering/SECURITY.md`, the active Issue/spec, and relevant archite
 8. Add targeted security tests/fuzz/failure cases and document residual risk.
 9. Escalate architecture changes through the `architecture-change` skill.
 
-For M001 local attachment, explicitly cover the socket/shared-memory gate required by ADR-002 and the M001 readiness amendment.
+For M001 local attachment, explicitly cover the socket/shared-memory security gate in the canonical `docs/milestones/MILESTONE-001.md`.

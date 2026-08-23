@@ -28,7 +28,7 @@ Equivalent existing skills are intentionally reused rather than creating duplica
 
 ## External skill
 
-Bootstrap installs Anthropic's `frontend-design` skill at a reviewed pinned Git commit for installed supported coding agents. It is for Seyal web prototypes, HTML/CSS artifacts and design exploration only.
+`make bootstrap-agents` installs Anthropic's `frontend-design` skill at a reviewed pinned Git commit for installed supported coding agents. It is for Seyal web prototypes, HTML/CSS artifacts and design exploration only.
 
 It is **not** authority for production AppKit behavior, Metal terminal rendering, native accessibility, runtime state or terminal architecture.
 
@@ -36,7 +36,7 @@ The pinned revision is declared in `scripts/bootstrap-dev.sh` and changes only t
 
 ## MCP/tool matrix
 
-| Tool | Bootstrap | Scope |
+| Tool | Agent bootstrap | Scope |
 | --- | --- | --- |
 | GitHub MCP | Required when supported locally | Issues, PRs, repository/CI workflow. Credentials remain user-local/runtime-only. |
 | Apple Xcode MCP (`xcrun mcpbridge`) | Required when provided by installed Xcode | Official Xcode bridge for build/project/tool access. |
@@ -44,21 +44,27 @@ The pinned revision is declared in `scripts/bootstrap-dev.sh` and changes only t
 | Playwright MCP | Pinned and registered when `npx` exists | Web prototype/docs testing only. Never production AppKit/Metal UI authority. |
 | AppleDeepDocs | Explicit opt-in only | Supplemental discovery for Apple/Xcode docs. Material decisions still require first-party Apple evidence. |
 
-AppleDeepDocs is intentionally opt-in because it is third-party and can expose a large documentation tool surface. When enabled, bootstrap uses its reduced code-execution mode and a pinned source commit.
+AppleDeepDocs is intentionally opt-in because it is third-party and can expose a large documentation tool surface. When enabled, agent bootstrap uses its reduced code-execution mode and a pinned source commit.
 
 ```sh
-SEYAL_ENABLE_APPLE_DEEP_DOCS=1 make bootstrap
+SEYAL_ENABLE_APPLE_DEEP_DOCS=1 make bootstrap-agents
 ```
 
 ## Standard setup
 
-From the repository root:
+First run the deterministic repository/toolchain bootstrap required for build/test/CI:
 
 ```sh
 make bootstrap
 ```
 
-Bootstrap is idempotent. It may provision user-level developer tools, but it must not write credentials to the repository. It initializes pinned git submodules when present and skips unavailable optional coding-agent CLIs instead of installing those agents implicitly.
+Then, when local coding-agent/MCP provisioning is wanted, run the explicit developer-tool setup:
+
+```sh
+make bootstrap-agents
+```
+
+Agent bootstrap is separate because it may provision pinned user-level developer tools and mutate supported coding-agent configuration. It must not be required for `make build`, `make test`, `make check`, `make bench`, CI, or terminal/runtime operation. It must not write credentials to the repository. It initializes its reviewed/pinned inputs and skips unavailable optional coding-agent CLIs instead of installing those agents implicitly.
 
 ## Screenshot-to-native work
 

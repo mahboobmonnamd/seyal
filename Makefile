@@ -1,9 +1,12 @@
 SHELL := /bin/bash
 
-.PHONY: bootstrap build test check bench governance-check
+.PHONY: bootstrap bootstrap-agents build test check bench governance-check
 
 bootstrap:
 	@bash scripts/task.sh bootstrap
+
+bootstrap-agents:
+	@bash scripts/task.sh bootstrap-agents
 
 build:
 	@bash scripts/task.sh build

@@ -50,9 +50,34 @@ Do not perform unrelated cleanup. If an out-of-scope problem is discovered, crea
 
 Use `docs/engineering/ISSUE-PROTOCOL.md` and the `architecture-change` skill. Architecture approval and substantial implementation should normally be separate reviewable changes.
 
+## Development prerequisites
+
+The canonical repository bootstrap does not silently install host package managers or execute downloaded shell scripts.
+
+Required before `make bootstrap`:
+
+- Git;
+- `make`;
+- `rustup`, installed explicitly from the official Rust project;
+- network access to the official Rust distribution when the pinned toolchain is not already installed.
+
+On macOS, also install/select Apple's Xcode or Command Line Tools so `xcode-select`, `xcrun` and `clang` are available. Swift and the Metal toolchain are not required by Issue #8 because no native application surface exists yet; the Issue that first builds the macOS application must activate and validate those requirements rather than hiding them here.
+
+The repository pins Rust in `rust-toolchain.toml`. For M001 Pass 1 / Issue #8 the pin is Rust **1.98.0** with the `minimal` rustup profile plus `rustfmt` and `clippy`. Cargo is supplied by that same pinned Rust toolchain.
+
+`make bootstrap` is idempotent where rustup permits: it validates host prerequisites, installs/verifies exactly the repository-pinned Rust toolchain/components through rustup, initializes repository-declared pinned submodules if any, and validates the result. It does not run `curl | sh`, invoke Homebrew, install optional MCP/agent tooling, or write credentials.
+
+Optional developer-agent/MCP provisioning is deliberately separate:
+
+```sh
+make bootstrap-agents
+```
+
+That explicit opt-in command uses `scripts/bootstrap-dev.sh` and may provision the pinned developer tools documented in `docs/engineering/AGENT-TOOLING.md`. It is not part of build/test/CI bootstrap and must not become a terminal/runtime dependency.
+
 ## Canonical task interface
 
-The stable human/agent entry points are:
+The stable human/agent/CI entry points are:
 
 ```sh
 make bootstrap
@@ -62,7 +87,33 @@ make check
 make bench
 ```
 
-M001 Pass 1 must wire these commands to deterministic Rust/native tooling. Agents must not create competing undocumented command paths.
+Do not create competing undocumented command paths.
+
+Current Issue #8 behavior intentionally respects the Issue #8/#9 boundary:
+
+- `make bootstrap` provisions and verifies the pinned toolchain;
+- `make build` validates the toolchain and, until Issue #9 creates the Rust workspace, reports that there is nothing to build and succeeds without inventing production code;
+- `make test` runs deterministic repository/tooling tests and will also run workspace tests once a real workspace exists;
+- `make check` validates the pinned toolchain, shell syntax, governance, local documentation links, architecture layering and tooling tests; workspace format/lint/test gates activate automatically when `Cargo.toml` exists;
+- `make bench` validates the toolchain and, until a benchmarkable production surface exists, reports that no benchmark is applicable and makes no performance claim.
+
+Once a real Cargo workspace exists, canonical Cargo operations use the pinned toolchain and `--locked` where dependency resolution applies.
+
+## Clean-checkout workflow
+
+From a new clone with the prerequisites above:
+
+```sh
+git clone https://github.com/mahboobmonnamd/seyal.git
+cd seyal
+make bootstrap
+make build
+make test
+make check
+make bench
+```
+
+There are no required private repositories, `seyal-commercial` dependencies, shell-profile assumptions, Homebrew assumptions or hidden environment variables for this canonical flow.
 
 ## Generated and fixture data
 

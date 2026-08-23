@@ -13,12 +13,13 @@ validate_host_prerequisites() {
   has make || fail "make is required before bootstrap"
 
   if [[ "$(uname -s)" == "Darwin" ]]; then
-    has xcode-select || fail "Xcode Command Line Tools are required. Install them with Apple's supported installer before bootstrap."
+    has xcode-select || fail "Xcode is required. Install it from Apple before bootstrap."
     if ! xcode-select -p >/dev/null 2>&1; then
-      fail "no active Xcode/Command Line Tools developer directory; install/select Apple's developer tools before bootstrap"
+      fail "no active Xcode developer directory; install/select Xcode before bootstrap"
     fi
-    has xcrun || fail "xcrun is required from Xcode or Command Line Tools"
-    xcrun --find clang >/dev/null 2>&1 || fail "clang is unavailable from the active Xcode/Command Line Tools installation"
+    has xcrun || fail "xcrun is required from Xcode"
+    xcrun --find clang >/dev/null 2>&1 || fail "clang is unavailable from the active Xcode installation"
+    bash "${ROOT}/scripts/check-macos-toolchain.sh"
   fi
 }
 

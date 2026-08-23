@@ -26,6 +26,19 @@ An Issue or PR cannot override architecture/specification. Existing code is neve
 - Headless Runtime exists from M001; GUI detach/crash must not kill the execution.
 - Terminal fundamentals stay license/cloud independent.
 
+## Module cohesion and design patterns
+
+- Prefer single-responsibility modules with explicit ownership and lifecycle boundaries.
+- Use design patterns only when they solve a concrete problem in ownership, lifecycle, extensibility, testability, or correctness. Do not add abstraction layers for pattern purity.
+- For handwritten production code, roughly 500–700 lines in one file is a **cohesion review trigger**, not a hard limit. Review whether responsibilities should be separated.
+- Handwritten production files above 1,000 lines require explicit PR justification and should normally be decomposed before merge.
+- Generated tables/data, Unicode data, protocol fixtures, exhaustive conformance vectors, and comparable machine-oriented artifacts are exempt from the line-count guidance.
+- Split by responsibility and stable boundaries, never into arbitrary numbered files such as `part1`, `part2`, or equivalent.
+- Avoid god objects/types that own unrelated terminal, runtime, renderer, persistence, agent, or UI concerns.
+- Prefer composition and narrow interfaces. Avoid factories, service layers, dependency-injection frameworks, or other indirection unless they materially improve the design.
+- Structural refactoring must not add synchronous IPC, serialization, copies, allocations, locks, thread/process hops, or language round-trips to terminal hot paths merely to satisfy code organization rules.
+- These rules apply to Rust and native macOS Swift/Metal code equally.
+
 ## Before changing code
 
 1. Read the Issue and verify Project status is **Ready**.

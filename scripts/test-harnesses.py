@@ -37,17 +37,47 @@ def validate_fixture_harness() -> None:
     schema = read_toml(schema_path)
     require(manifest.get("version") == 1, "unsupported VT fixture manifest version")
     require(schema.get("version") == 1, "unsupported VT provenance schema version")
-    require(len(schema.get("required", [])) >= 8, "VT provenance schema is incomplete")
+    required_provenance = set(schema.get("required", []))
+    require(len(required_provenance) >= 8, "VT provenance schema is incomplete")
     sorted_fixture_ids(manifest)
 
-    # Exercise deterministic loading without committing fake terminal semantics.
+    allowed_classifications = {"supported", "tested-deferred", "unsupported-deferred"}
+    for fixture in manifest.get("fixtures", []):
+        fixture_id = fixture.get("id", "<missing-id>")
+        require(
+            not (required_provenance - set(fixture)),
+            f"VT fixture {fixture_id} is missing provenance fields: "
+            f"{sorted(required_provenance - set(fixture))}",
+        )
+        require(
+            fixture.get("classification") in allowed_classifications,
+            f"VT fixture {fixture_id} has invalid classification",
+        )
+        for field in ("input", "expected"):
+            relative = fixture.get(field)
+            require(isinstance(relative, str) and relative, f"VT fixture {fixture_id} has no {field} path")
+            path = (ROOT / relative).resolve()
+            require(path.is_relative_to(ROOT), f"VT fixture {fixture_id} {field} escapes repository root")
+            require(path.is_file(), f"VT fixture {fixture_id} is missing {field} file: {relative}")
+        require(
+            isinstance(fixture.get("cols"), int)
+            and fixture["cols"] > 0
+            and isinstance(fixture.get("rows"), int)
+            and fixture["rows"] > 0,
+            f"VT fixture {fixture_id} must declare positive cols/rows",
+        )
+
+    # Exercise deterministic loading independently of the retained manifest.
     with tempfile.TemporaryDirectory() as tmp:
         synthetic = Path(tmp) / "manifest.toml"
         synthetic.write_text(
             'version = 1\n[[fixtures]]\nid = "z"\n[[fixtures]]\nid = "a"\n',
             encoding="utf-8",
         )
-        require(sorted_fixture_ids(read_toml(synthetic)) == ["a", "z"], "fixture ordering is not deterministic")
+        require(
+            sorted_fixture_ids(read_toml(synthetic)) == ["a", "z"],
+            "fixture ordering is not deterministic",
+        )
 
 
 def validate_fuzz_registry() -> None:
@@ -68,7 +98,10 @@ def validate_fuzz_registry() -> None:
     require(names == expected, f"fuzz registry mismatch: expected {sorted(expected)}, got {sorted(names)}")
 
     for target in targets:
-        require(target.get("status") in {"pending-production-surface", "active"}, f"invalid fuzz status for {target.get('name')}")
+        require(
+            target.get("status") in {"pending-production-surface", "active"},
+            f"invalid fuzz status for {target.get('name')}",
+        )
         corpus = ROOT / target["corpus"]
         require(corpus.is_dir(), f"missing fuzz corpus directory: {target['corpus']}")
         seeds = sorted(path for path in corpus.iterdir() if path.is_file())

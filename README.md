@@ -21,3 +21,7 @@ Keep one canonical file for one purpose:
 - Git history and pull requests preserve prior wording and corrections.
 
 Do not create competing `-v2`, `-final`, `-new`, `-amendment`, or correction copies when the owning canonical document can be updated directly.
+
+## License
+
+Seyal OSS is licensed under the [Apache License 2.0](LICENSE).

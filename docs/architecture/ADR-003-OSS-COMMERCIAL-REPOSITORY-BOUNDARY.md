@@ -4,7 +4,7 @@
 
 **Date:** 2026-08-23
 
-**Scope:** Repository/dependency boundary between Seyal OSS and proprietary commercial capabilities. This ADR does not select the OSS software license.
+**Scope:** Repository/dependency boundary between Seyal OSS and proprietary commercial capabilities. The repository boundary is the architectural decision; the selected OSS software license is recorded here for consistency with that boundary.
 
 ## Context
 
@@ -94,8 +94,12 @@ The private commercial repository may temporarily omit GitHub-hosted Actions for
 
 ## Software license
 
-Deferred to explicit product-owner approval. `docs/engineering/OSS-COMMERCIAL-BOUNDARY.md` records the boundary and evaluation criteria. This ADR must not be interpreted as selecting a license.
+Seyal OSS is licensed under **Apache License 2.0 (`Apache-2.0`)**. The canonical license text lives at the repository root in `LICENSE`.
+
+Apache-2.0 is selected as the single OSS license for the foundation. It keeps the project permissive for individual, commercial and enterprise use while providing an explicit patent-license framework for contributions. Seyal does not use an MIT/Apache dual-license unless a future concrete ecosystem or dependency requirement justifies reopening that choice.
+
+This software-license choice does not permit proprietary entitlement logic to enter OSS production code and does not change the one-way repository dependency invariant above.
 
 ## Revisit only if
 
-Measured development/release friction from this model materially exceeds its legal/architectural benefits and an alternative can prove equivalent public canonicality, contributor clarity, one-way dependency enforcement, single terminal/runtime authority and hot-path isolation.
+Measured development/release friction from this model materially exceeds its legal/architectural benefits and an alternative can prove equivalent public canonicality, contributor clarity, one-way dependency enforcement, single terminal/runtime authority and hot-path isolation; or a concrete ecosystem/legal requirement justifies reconsidering the OSS license while preserving the same public-foundation guarantees.

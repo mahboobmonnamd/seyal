@@ -7,5 +7,9 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[[bench]]
+name = "vt_parser_state"
+harness = false
+
 [lints]
 workspace = true

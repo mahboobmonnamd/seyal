@@ -1,7 +1,5 @@
 use crate::{
-    Cell, Color, CursorState, LineId, Style, TerminalError,
-    cursor::Cursor,
-    damage::Mutation,
+    Cell, Color, CursorState, LineId, Style, TerminalError, cursor::Cursor, damage::Mutation,
     line::LineClock,
 };
 

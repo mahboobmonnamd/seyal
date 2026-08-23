@@ -27,6 +27,8 @@ case "$cmd" in
   test)
     bash scripts/test-tooling.sh
     python3 scripts/test-workspace.py
+    python3 scripts/test-harnesses.py
+    python3 scripts/fuzz-smoke.py
     bash scripts/check-toolchain.sh
     cargo_pinned test --workspace --locked
     bash scripts/test-macos-skeleton.sh
@@ -39,6 +41,8 @@ case "$cmd" in
     python3 scripts/check-layering.py
     bash scripts/test-tooling.sh
     python3 scripts/test-workspace.py
+    python3 scripts/test-harnesses.py
+    python3 scripts/fuzz-smoke.py
     cargo_pinned fmt --all -- --check
     cargo_pinned clippy --workspace --all-targets --all-features -- -D warnings
     cargo_pinned test --workspace --locked
@@ -46,10 +50,11 @@ case "$cmd" in
     ;;
   bench)
     bash scripts/check-toolchain.sh
-    if [[ -d benches ]] || find crates -type f -path '*/benches/*.rs' -print -quit 2>/dev/null | grep -q .; then
+    python3 scripts/benchmark-smoke.py
+    if find crates -type f -path '*/benches/*.rs' -print -quit 2>/dev/null | grep -q .; then
       cargo_pinned bench --workspace --locked
     else
-      echo "[seyal task] bench: Rust workspace exists, but Issue #11 owns benchmark harnesses; no benchmark target exists yet and no performance result is claimed."
+      echo "[seyal task] bench: harness metadata recorder passed; no production benchmark target exists yet and no performance result is claimed."
     fi
     ;;
   *)

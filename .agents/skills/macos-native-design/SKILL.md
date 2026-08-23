@@ -15,4 +15,4 @@ Use this skill for production Seyal windows, tabs, panes, toolbars, menus, popov
 6. For novel/futuristic UI, document which macOS convention is intentionally extended and why usability/accessibility remain sound.
 7. Require screenshots or an executable demo for material visual changes.
 
-Do not use generic frontend-design guidance as authority for production AppKit/Metal behavior.
+Generic web/frontend guidance is never authority for production AppKit/Metal behavior.

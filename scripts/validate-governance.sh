@@ -13,6 +13,7 @@ required=(
   docs/engineering/REPOSITORY-STRUCTURE.md
   docs/engineering/OSS-COMMERCIAL-BOUNDARY.md
   docs/engineering/M001-DISTRIBUTION.md
+  docs/engineering/GITHUB-WORKFLOW.md
   docs/architecture/ADR-003-OSS-COMMERCIAL-REPOSITORY-BOUNDARY.md
   .github/pull_request_template.md
 )
@@ -25,10 +26,14 @@ for path in "${required[@]}"; do
 done
 for skill in "${skills[@]}"; do
   [[ -f ".agents/skills/$skill/SKILL.md" ]] || { echo "missing canonical skill: $skill" >&2; fail=1; }
+  [[ -f ".claude/skills/$skill/SKILL.md" ]] || { echo "missing Claude skill adapter: $skill" >&2; fail=1; }
 done
 
-if grep -R -nE 'if[[:space:]]+.*enterprise_license|enterprise_license.*(vt|pty|render)' .agents docs AGENTS.md .github 2>/dev/null; then
-  echo "forbidden enterprise-license coupling pattern found" >&2
+production_paths=()
+[[ -d crates ]] && production_paths+=(crates)
+[[ -d macos ]] && production_paths+=(macos)
+if [[ ${#production_paths[@]} -gt 0 ]] && grep -R -nE 'if[[:space:]]+.*enterprise_license|enterprise_license.*(vt|pty|render)' "${production_paths[@]}" 2>/dev/null; then
+  echo "forbidden enterprise-license coupling pattern found in production code" >&2
   fail=1
 fi
 

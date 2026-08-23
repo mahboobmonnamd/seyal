@@ -125,7 +125,7 @@ runtime   → exec + terminal + workspace + protocol producer
 
 Avoid circular dependencies. If `seyal-core` becomes a dumping ground, split or remove it; it may contain stable identity/value types only.
 
-The current one-member Cargo workspace is acyclic by construction. `scripts/check-layering.py` validates forbidden edges for physical crates as they appear; Issue #12 owns the production CI hardening of that dependency gate once more build surfaces exist.
+The current one-member Cargo workspace is acyclic by construction. `scripts/check-layering.py` validates forbidden edges for physical crates as they appear. The public `Foundation Quality` `repository-policy` job runs this check on every PR/push and `scripts/test-ci-validators.py` proves a controlled forbidden dependency is rejected. As new physical crates appear, their real dependency rules must be added to the validator in the same owning Issue.
 
 ## Commercial repository boundary
 
@@ -157,7 +157,7 @@ Enforce these with Cargo workspace layering checks/lints or a small dependency-g
 - Fuzz targets live under `fuzz/`.
 - Reproducible performance workloads/results metadata live under `benches/` and documented artifacts; generated result blobs should not pollute production modules.
 
-The directories above are created by the Issues that first need them; Issue #9 does not create empty harness directories owned by #11. Issue #10's native smoke test remains a repository script because the general test harness structure is still owned by #11.
+These locations were introduced incrementally by their owning Pass-1 Issues. Issue #11 establishes the general harness contracts without fake terminal semantics; production-specific fixtures and fuzz adapters become active only when their owning implementation passes exist.
 
 ## Platform boundary
 
@@ -171,4 +171,4 @@ Use root `AGENTS.md`. Add nested `AGENTS.md` only if a real subsystem later need
 
 ## Build interface
 
-M001 Pass 1 Issue #8 pinned the deterministic toolchain and canonical root `make bootstrap/build/test/check/bench` interface. Issue #9 activates that interface against the minimal Rust workspace. Issue #10 activates the native `Seyal.app` build/smoke path on macOS while leaving Linux as a portable-core build host. Test/fuzz/benchmark harness expansion and production CI hardening remain owned by #11 and #12 respectively.
+M001 Pass 1 Issue #8 pins the deterministic toolchain and canonical root `make bootstrap/build/test/check/bench` interface. Issue #9 activates that interface against the minimal Rust workspace. Issue #10 activates the native `Seyal.app` build/smoke path on macOS. Issue #11 establishes the test/fuzz/benchmark harness contracts. Issue #12 makes the corresponding public CI and architecture dependency gates deterministic and self-validating. No terminal behavior is introduced by Pass 1.

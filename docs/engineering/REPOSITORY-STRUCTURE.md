@@ -24,6 +24,25 @@ M001 Pass 1 / Issue #9 creates the smallest production Rust workspace justified 
 
 No `seyal-core` crate exists yet because there is not yet a demonstrated shared stable-value boundary that warrants one. Likewise, `seyal-exec`, `seyal-workspace`, `seyal-protocol`, `seyal-render` and `seyal-runtime` remain logical boundaries until their dependency-ordered M001 passes require physical packages. Creating all diagram names as empty crates would violate the repository principle above.
 
+## Current physical native macOS layout
+
+M001 Pass 1 / Issue #10 establishes the permanent native application boundary without terminal behavior:
+
+```text
+macos/Seyal/
+├─ Seyal.xcodeproj/            # native macOS application target + shared scheme
+├─ Info.plist
+├─ README.md
+└─ Sources/
+   ├─ Main.swift               # NSApplication entry point
+   ├─ AppDelegate.swift        # AppKit window lifecycle
+   └─ MetalSurfaceView.swift   # NSView + CAMetalLayer + MTLDevice seam
+```
+
+This boundary is **Swift + AppKit + Metal**. Issue #10 contains no Objective-C, Objective-C++, C++ or SwiftUI terminal surface. Metal shader code, when introduced by its owning renderer Issue, is Metal Shading Language rather than Objective-C. A second native implementation language requires concrete evidence that Swift plus the approved coarse Rust/native boundary cannot satisfy the requirement.
+
+The native skeleton owns no VT/grid/PTY/runtime state and performs no terminal rendering. Its `CAMetalLayer` is only the permanent platform rendering surface seam that later consumes derived renderer data.
+
 ## Target logical layout
 
 ```text
@@ -138,11 +157,13 @@ Enforce these with Cargo workspace layering checks/lints or a small dependency-g
 - Fuzz targets live under `fuzz/`.
 - Reproducible performance workloads/results metadata live under `benches/` and documented artifacts; generated result blobs should not pollute production modules.
 
-The directories above are created by the Issues that first need them; Issue #9 does not create empty harness directories owned by #11.
+The directories above are created by the Issues that first need them; Issue #9 does not create empty harness directories owned by #11. Issue #10's native smoke test remains a repository script because the general test harness structure is still owned by #11.
 
 ## Platform boundary
 
 Portable terminal/runtime behavior is Rust. macOS-only AppKit/Metal/input/accessibility code stays under the macOS host. Do not create a generic cross-platform GUI layer before a second GUI platform is under active development.
+
+The native-language default is Swift. Introduce Objective-C/Objective-C++ only when a reviewed Issue demonstrates a specific API or interoperability need that Swift cannot satisfy cleanly. Cross the future Rust/native boundary with coarse C-compatible arrays/runs/batches rather than per-cell callbacks.
 
 ## Agent instructions
 
@@ -150,4 +171,4 @@ Use root `AGENTS.md`. Add nested `AGENTS.md` only if a real subsystem later need
 
 ## Build interface
 
-M001 Pass 1 Issue #8 pinned the deterministic toolchain and canonical root `make bootstrap/build/test/check/bench` interface. Issue #9 activates that interface against the minimal Rust workspace. Native app, test/fuzz/benchmark harness, and production CI expansion remain owned by #10, #11 and #12 respectively.
+M001 Pass 1 Issue #8 pinned the deterministic toolchain and canonical root `make bootstrap/build/test/check/bench` interface. Issue #9 activates that interface against the minimal Rust workspace. Issue #10 activates the native `Seyal.app` build/smoke path on macOS while leaving Linux as a portable-core build host. Test/fuzz/benchmark harness expansion and production CI hardening remain owned by #11 and #12 respectively.

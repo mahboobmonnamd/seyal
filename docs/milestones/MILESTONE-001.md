@@ -1,8 +1,8 @@
 # Milestone 001 — Production Foundation Vertical Slice
 
-**Status:** Ready for implementation after this specification is merged
+**Status:** Ready for implementation
 
-**Authority:** This document is subordinate to the accepted Seyal foundation architecture and its rationale. It narrows that architecture into an implementable M001 slice; it does not reopen accepted foundation decisions.
+**Authority:** This document is subordinate to the accepted Seyal foundation architecture, its rationale, and accepted ADRs. It narrows that architecture into an implementable M001 slice; it does not reopen accepted foundation decisions.
 
 ## 1. Goal
 
@@ -71,7 +71,7 @@ The Runtime owns:
 - primary and minimal alternate screen state;
 - generation-based damage;
 - minimum logical line identity;
-- minimal Block metadata;
+- minimal Block metadata in Runtime/workspace metadata;
 - local display-projection producer.
 
 The GUI does not own or mirror a VT or grid.
@@ -85,9 +85,12 @@ ExecutionId
 TerminalEndpoint = one real PTY
 child lifecycle
 TerminalState = one authoritative Seyal VT/state
-BlockTimeline minimum
 attachment/projection state
 ```
+
+`BlockTimeline` is **not** owned by `TerminalExecution`. It is Runtime/workspace metadata in the `seyal-workspace` logical boundary, keyed by `ExecutionId` and logical history anchors.
+
+A `TerminalExecution` may emit bounded asynchronous execution/history signals consumed by Block metadata, but PTY → VT → `TerminalState` → damage progress never waits for Block mutation or semantic processing.
 
 No Block, window, pane, renderer, or agent owns terminal infrastructure.
 
@@ -144,7 +147,7 @@ M001 implements only:
 - local projection mechanism;
 - first permanent Metal renderer path;
 - native keyboard input path;
-- minimum Block identity/state;
+- minimum Block identity/state in Runtime/workspace metadata;
 - GUI detach/reconnect;
 - GUI crash survival;
 - clean explicit execution termination;
@@ -204,7 +207,7 @@ These are intentionally deferred, not forgotten.
 | primary/alternate screen | `TerminalState` in Runtime | GUI projection only |
 | logical line identity | `TerminalState`/history seam | stable, minimal |
 | damage generation | Runtime `TerminalState` | monotonic generation |
-| Block metadata | Runtime/workspace metadata | no PTY/grid ownership |
+| Block timeline/metadata | `seyal-workspace` / Runtime workspace metadata keyed by `ExecutionId` | no PTY/grid ownership; async observation only |
 | local projection writer | Runtime | single writer |
 | local projection reader | Seyal.app | derived/read-only |
 | shaping/glyph cache | renderer | client-side/native render domain |
@@ -375,8 +378,11 @@ Optional M001 metadata may include timestamps only if it does not expand scope.
 
 Rules:
 
+- `BlockTimeline` and Block metadata are owned by `seyal-workspace` / Runtime workspace metadata, keyed by `ExecutionId`;
+- `TerminalExecution` does not own Block semantic state;
 - one Block never owns PTY, VT, grid, child process, renderer, or output copy;
 - Block mutation may observe/coarsely bracket execution activity asynchronously;
+- PTY → VT → `TerminalState` → damage progress never waits for Block mutation;
 - shell integration and command intelligence are not required;
 - absence of shell integration must still yield a correct raw terminal;
 - renderer may visually expose one Block identity/shell region, but no rich card system is required.
@@ -544,7 +550,19 @@ Include:
 - alternate-screen enter/leave fixture;
 - resize fixture.
 
-### 12.3 Property tests
+### 12.3 Reference/conformance corpus
+
+For every behavior classified `SUPPORTED M001`, maintain a retained reference/conformance corpus derived from authoritative terminal specifications or independently established terminal-behavior fixtures where practical.
+
+Requirements:
+
+- fixture source/provenance is recorded;
+- supported behavior is checked against expected reference semantics where practical;
+- regression fixtures are retained in the repository;
+- disagreements between implementation and reference behavior are resolved explicitly rather than silently normalizing the implementation;
+- deferred behavior remains deferred and is not pulled into M001 merely to increase conformance breadth.
+
+### 12.4 Property tests
 
 At minimum verify:
 
@@ -554,7 +572,7 @@ At minimum verify:
 - damage generations are monotonic;
 - projection reader never accepts an incomplete generation.
 
-### 12.4 Fuzzing
+### 12.5 Fuzzing
 
 Maintain fuzz targets for:
 
@@ -566,7 +584,7 @@ Maintain fuzz targets for:
 
 Primary gate: no crash, panic, memory unsafety, runaway allocation, or invariant violation for retained corpus/regression cases.
 
-### 12.5 PTY integration tests
+### 12.6 PTY integration tests
 
 Required:
 
@@ -580,7 +598,7 @@ Required:
 - kill GUI test while child runs;
 - explicit execution termination.
 
-### 12.6 Renderer deterministic tests
+### 12.7 Renderer deterministic tests
 
 Use deterministic projection fixtures to verify:
 
@@ -593,7 +611,26 @@ Use deterministic projection fixtures to verify:
 
 Pixel/golden tests may be used for stable synthetic glyph/geometry cases where platform variation is controlled.
 
-### 12.7 Static/dynamic quality gates
+### 12.8 Local Runtime attachment security
+
+Before Pass 5 is accepted, complete a focused threat/security review of the Unix-domain control path and shared-memory projection covering at minimum:
+
+- Unix-domain socket location, ownership and permissions;
+- same-user client authentication/authorization;
+- Runtime discovery without trusting attacker-controlled filesystem paths;
+- controller versus observer authority;
+- malformed or oversized control/protocol messages;
+- shared-memory object ownership, permissions, lifetime and cleanup;
+- stale/reused shared-memory identifiers;
+- bounds/version/generation validation before reads;
+- client crash and Runtime crash cleanup behavior;
+- prevention of client mutation of canonical terminal state;
+- bounded attachment/projection allocation against local denial-of-service;
+- no terminal hot-path cloud/licensing/telemetry dependency.
+
+This does not require enterprise RBAC, SSO, remote internet attach, or cloud security in M001.
+
+### 12.9 Static/dynamic quality gates
 
 At minimum:
 
@@ -688,10 +725,14 @@ TDD the `SUPPORTED M001` parser/state behaviors without PTY dependency.
 Required exits:
 
 - byte fixtures pass;
+- retained reference/conformance corpus exists for the `SUPPORTED M001` subset where authoritative/reference behavior is practical to encode;
+- reference fixture provenance is recorded;
+- supported behavior is checked against reference expectations and disagreements are resolved explicitly;
 - property tests pass;
 - parser fuzz target runs;
 - primary/minimal alternate screen and damage generations are testable headlessly;
 - unsupported/deferred behavior matrix is reflected by tests/diagnostics;
+- conformance work does not pull deferred/full VT behavior into M001;
 - no alternate VT dependency.
 
 ### Pass 3 — PTY + TerminalExecution
@@ -732,6 +773,15 @@ Required exits:
 - killed/stalled app cannot backpressure PTY→VT;
 - first attach/reconnect full snapshot works;
 - socket-only vs hybrid measurements recorded;
+- focused local attachment threat/security review is complete;
+- local socket ownership/permissions and same-user authorization are tested;
+- Runtime discovery does not trust attacker-controlled filesystem paths;
+- malformed/oversized protocol messages are rejected safely;
+- shared-memory mapping validates version, bounds and committed generation before consumption;
+- shared-memory ownership, permission, lifetime and cleanup behavior is tested;
+- stale/reused projection identifiers cannot grant unintended access;
+- stalled/crashed clients cannot mutate canonical terminal state or exhaust unbounded Runtime resources;
+- controller/observer authority is explicit even though M001 exercises one controller;
 - selected mechanism remains justified or ADR amended with evidence.
 
 ### Pass 6 — Metal renderer
@@ -766,6 +816,7 @@ Add minimum Block metadata over the existing execution/history seam.
 Required exits:
 
 - real `BlockId` references real `ExecutionId`;
+- Block timeline authority is `seyal-workspace` / Runtime workspace metadata, not `TerminalExecution`;
 - start anchor uses logical line identity, not viewport row;
 - current/completed state is demonstrable;
 - no second PTY/grid/output transcript;
@@ -791,9 +842,11 @@ Run the complete M001 suite and publish baselines.
 Required exits:
 
 - all VT/PTY/projection/renderer/detach tests pass;
+- retained VT reference/conformance regression corpus is clean;
 - fuzz regression corpus clean;
 - required measurements captured for 1/10/50/100 execution cases;
 - failure tests include GUI death, malformed projection/protocol input, PTY child exit, reconnect/resync;
+- focused local Runtime threat review and security tests pass;
 - no M001 non-goal has leaked into required implementation;
 - final demo procedure passes from clean build.
 
@@ -807,18 +860,23 @@ M001 passes only when every item below is demonstrated, not merely represented b
 
 - [ ] exactly one authoritative VT/state per `TerminalExecution`;
 - [ ] PTY owner is unambiguously `TerminalExecution` in Runtime;
+- [ ] Block timeline authority is `seyal-workspace` / Runtime workspace metadata keyed by `ExecutionId`;
+- [ ] `TerminalExecution` does not own Block semantic state;
+- [ ] Block observation/mutation cannot block PTY → VT → damage progress;
 - [ ] Runtime exists and is headless from M001;
 - [ ] GUI contains no VT mirror;
 - [ ] local projection mechanism matches ADR-001 or has been amended by measured evidence;
 - [ ] no synchronous IPC request/response ping-pong in terminal hot paths;
 - [ ] no display JSON/transcript serialization;
 - [ ] no daemon/thread/render stack per execution by default;
-- [ ] Block owns metadata only;
 - [ ] stable logical line identity exists independently of viewport rows.
 
 ### Correctness
 
 - [ ] every `SUPPORTED M001` VT behavior has tests written before/with implementation;
+- [ ] retained reference/conformance fixtures cover the claimed M001 VT subset where practical;
+- [ ] reference fixture provenance is recorded;
+- [ ] no deferred behavior was promoted merely to satisfy corpus breadth;
 - [ ] unsupported/deferred sequences are not silently represented as correct;
 - [ ] real shell works through a real PTY;
 - [ ] resize is canonical and PTY winsize is updated;
@@ -840,6 +898,17 @@ M001 passes only when every item below is demonstrated, not merely represented b
 - [ ] reopen attaches to the same `ExecutionId`;
 - [ ] explicit terminate is separate from detach;
 - [ ] no claim is made for Runtime-crash live-PTY survival.
+
+### Security
+
+- [ ] local socket ownership/permissions and same-user client authorization are tested;
+- [ ] Runtime discovery is protected from attacker-controlled paths;
+- [ ] protocol length/bounds/version validation is tested;
+- [ ] shared-memory permissions/lifetime/generation validation is tested;
+- [ ] malformed or hostile local-client input cannot corrupt Runtime terminal authority;
+- [ ] attachment/projection resource usage is bounded against local denial-of-service;
+- [ ] controller/observer authority is explicit;
+- [ ] focused M001 local Runtime threat review is recorded.
 
 ### Engineering/performance
 
@@ -865,13 +934,13 @@ The final M001 demo must be reproducible from a clean checkout/build.
 5. Produce ANSI color and cursor/erase behavior from the supported matrix.
 6. Resize the window and demonstrate canonical resize/winsize behavior.
 7. Run the scoped alternate-screen fixture/application; leave alternate screen and recover primary screen state.
-8. Show the real Block identity and logical start anchor without another PTY/grid.
+8. Show the real Block identity and logical start anchor from Runtime/workspace metadata without another PTY/grid.
 9. Start a long-running shell command or counter.
 10. Close Seyal.app; prove the Runtime/execution remains alive.
 11. Reopen Seyal.app; attach to the same `ExecutionId`; show current state from projection snapshot/resync.
 12. Repeat using forced GUI termination/crash; verify the execution still lives.
 13. Explicitly terminate the execution and verify child reap/registry cleanup.
-14. Run/present VT tests, PTY integration tests, projection tests, renderer tests, fuzz smoke/regression corpus, and CI status.
+14. Run/present VT unit/reference/property tests, PTY integration tests, projection tests, renderer tests, fuzz smoke/regression corpus, local attachment security tests, and CI status.
 15. Present benchmark results for startup, latency stages, throughput, CPU, RSS, threads, hidden GPU resources, and the projection comparator.
 
 ---
@@ -881,6 +950,7 @@ The final M001 demo must be reproducible from a clean checkout/build.
 ```text
 [x] exactly one authoritative VT
 [x] PTY owner is unambiguous
+[x] BlockTimeline owner is Runtime/workspace metadata, not TerminalExecution
 [x] Runtime exists from M001
 [x] GUI close does not own shell lifetime
 [x] Block does not own terminal infrastructure
@@ -891,6 +961,8 @@ The final M001 demo must be reproducible from a clean checkout/build.
 [x] local projection mechanism is decided
 [x] VT M001 subset is explicit
 [x] tests precede supported behavior
+[x] retained reference/conformance corpus is required
+[x] local attachment security gate is required
 [x] benchmark harness exists in plan
 [x] M001 is small enough to finish
 ```

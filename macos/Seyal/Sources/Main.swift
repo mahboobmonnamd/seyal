@@ -7,7 +7,7 @@ enum SeyalMain {
     static func main() {
         if CommandLine.arguments.contains("--smoke-test") {
             guard MetalSurfaceView.smokeTest() else {
-                fputs("Seyal native smoke test failed\n", stderr)
+                print("Seyal native smoke test failed.")
                 exit(1)
             }
             print("Seyal native Swift/AppKit/Metal smoke test passed.")

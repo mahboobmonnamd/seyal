@@ -44,6 +44,10 @@ ensure_frontend_design_skill() {
     agent_args+=(--agent codex)
     [[ -f "${HOME}/.codex/skills/frontend-design/SKILL.md" ]] || needs_install=1
   fi
+  if has copilot; then
+    agent_args+=(--agent github-copilot)
+    [[ -f "${HOME}/.copilot/skills/frontend-design/SKILL.md" ]] || needs_install=1
+  fi
 
   if (( ${#agent_args[@]} == 0 )); then
     warn "no supported coding-agent CLI found; skipping external frontend-design skill"
@@ -128,7 +132,7 @@ ensure_apple_deep_docs() {
       warn "managed AppleDeepDocs checkout is dirty; refusing to overwrite it"
       return 0
     fi
-    git -C "${APPLE_DEEP_DOCS_DIR}" fetch origin "${APPLE_DEEP_DOCS_REF}" --depth 1
+    git -C "${APPLE_DEEP_DOCS_DIR}" fetch --depth 1 origin "${APPLE_DEEP_DOCS_REF}"
   else
     rm -rf "${APPLE_DEEP_DOCS_DIR}"
     git clone --filter=blob:none https://github.com/Ahrentlov/appledeepdoc-mcp.git "${APPLE_DEEP_DOCS_DIR}"
@@ -214,6 +218,10 @@ verify_repo_skills() {
   for skill in "${required[@]}"; do
     [[ -f "${ROOT}/.agents/skills/${skill}/SKILL.md" ]] || {
       echo "missing canonical skill: ${skill}" >&2
+      exit 1
+    }
+    [[ -f "${ROOT}/.claude/skills/${skill}/SKILL.md" ]] || {
+      echo "missing Claude adapter: ${skill}" >&2
       exit 1
     }
   done

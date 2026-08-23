@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import os
+import subprocess
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+ENV_ROOT = "SEYAL_VALIDATION_ROOT"
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise SystemExit(f"[seyal CI validator self-test] ERROR: {message}")
+
+
+def run_negative(command: list[str], fixture_root: Path, expected: str) -> None:
+    env = os.environ.copy()
+    env[ENV_ROOT] = str(fixture_root)
+    result = subprocess.run(
+        command,
+        cwd=fixture_root,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    require(result.returncode != 0, f"negative fixture unexpectedly passed: {' '.join(command)}")
+    require(expected in result.stdout, f"negative fixture failed for the wrong reason; expected {expected!r}, output was:\n{result.stdout}")
+
+
+def write(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+def main() -> None:
+    with tempfile.TemporaryDirectory(prefix="seyal-ci-validator-") as tmp:
+        base = Path(tmp)
+
+        governance = base / "governance"
+        governance.mkdir()
+        run_negative(
+            ["bash", str(ROOT / "scripts/validate-governance.sh")],
+            governance,
+            "missing required file: AGENTS.md",
+        )
+
+        docs = base / "doc-links"
+        docs.mkdir()
+        write(docs / "README.md", "[broken local link](missing.md)\n")
+        run_negative(
+            ["python3", str(ROOT / "scripts/check-doc-links.py")],
+            docs,
+            "Broken local Markdown links:",
+        )
+
+        layering = base / "layering"
+        write(
+            layering / "crates/seyal-terminal/Cargo.toml",
+            '[package]\nname = "seyal-terminal"\nversion = "0.0.0"\n\n[dependencies]\nseyal-runtime = { path = "../seyal-runtime" }\n',
+        )
+        run_negative(
+            ["python3", str(ROOT / "scripts/check-layering.py")],
+            layering,
+            "seyal-terminal has forbidden dependencies: seyal-runtime",
+        )
+
+        workspace = base / "workspace"
+        workspace.mkdir()
+        run_negative(
+            ["python3", str(ROOT / "scripts/test-workspace.py")],
+            workspace,
+            "missing root Cargo.toml",
+        )
+
+        harness = base / "harness"
+        harness.mkdir()
+        run_negative(
+            ["python3", str(ROOT / "scripts/test-harnesses.py")],
+            harness,
+            "missing integration-test harness location",
+        )
+
+    print("[seyal CI validator self-test] controlled negative fixtures were rejected by every repository validator.")
+
+
+if __name__ == "__main__":
+    main()

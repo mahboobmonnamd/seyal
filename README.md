@@ -2,19 +2,22 @@
 
 Seyal is an open-source, commercial, enterprise-grade, agent-native terminal workspace for software development and operations.
 
-The project is currently in **foundation architecture**. Production implementation should not begin outside the accepted milestone sequence until the foundation decisions are reviewed.
+The foundation architecture is accepted and **Milestone 001 is ready for implementation**. Production work must follow the accepted milestone sequence and its pass/acceptance gates.
 
 ## Start here
 
 Read [`docs/architecture/README.md`](docs/architecture/README.md).
 
-That index links to the canonical foundation architecture, its decision/prohibition rationale, the UI architecture, and the original R&D brief.
+That index links to the accepted foundation architecture, its decision/prohibition rationale, distinct ADRs, the authoritative M001 implementation specification, UI architecture, and source research brief.
 
-## Architecture authority
+## Documentation rule
 
-- The canonical foundation document owns architecture decisions.
-- Rationale documents explain why decisions and prohibitions exist and when they may be reopened.
-- UI architecture is subordinate to terminal/runtime ownership and performance invariants.
-- Source briefs preserve the original research requirements; they are not implementation specifications.
+Keep one canonical file for one purpose:
 
-Do not create competing `-v2`, `-final`, or `-new` architecture copies. Amend canonical documents and preserve decision history through rationale records and future ADRs.
+- foundation architecture decisions live in the foundation document;
+- M001 implementation scope, passes, tests, security gates, benchmarks, and acceptance criteria live in `docs/milestones/MILESTONE-001.md`;
+- rationale documents explain why decisions exist;
+- ADRs are reserved for genuinely separate architectural decisions with their own lifecycle;
+- Git history and pull requests preserve prior wording and corrections.
+
+Do not create competing `-v2`, `-final`, `-new`, `-amendment`, or correction copies when the owning canonical document can be updated directly.

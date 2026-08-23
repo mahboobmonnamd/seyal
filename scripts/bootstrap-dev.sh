@@ -72,7 +72,7 @@ mcp_present() {
 }
 
 configure_mcp_client() {
-  local client="$1" label="$2"
+  local client="$1" label="$2" github_mode="${3:-external}"
 
   if has xcrun && xcrun --find mcpbridge >/dev/null 2>&1; then
     if ! mcp_present "${client}" xcode; then
@@ -83,9 +83,14 @@ configure_mcp_client() {
     warn "xcrun mcpbridge unavailable; Xcode MCP not configured for ${label}"
   fi
 
-  if [[ -x "${GITHUB_WRAPPER}" ]] && ! mcp_present "${client}" github; then
-    info "configuring GitHub MCP for ${label}"
-    "${client}" mcp add github -- "${GITHUB_WRAPPER}"
+  if [[ "${github_mode}" == "external" ]]; then
+    if [[ -x "${GITHUB_WRAPPER}" ]] && ! mcp_present "${client}" github; then
+      info "configuring GitHub MCP for ${label}"
+      "${client}" mcp add github -- "${GITHUB_WRAPPER}"
+    fi
+  elif [[ "${github_mode}" != "builtin" ]]; then
+    echo "invalid GitHub MCP mode '${github_mode}' for ${label}" >&2
+    return 2
   fi
 
   if has npx; then
@@ -100,12 +105,18 @@ configure_mcp_client() {
 
 configure_claude() {
   has claude || { warn "Claude Code CLI not found; skipping Claude MCP setup"; return 0; }
-  configure_mcp_client claude "Claude Code"
+  configure_mcp_client claude "Claude Code" external
 }
 
 configure_codex() {
   has codex || { warn "Codex CLI not found; skipping Codex MCP setup"; return 0; }
-  configure_mcp_client codex "Codex"
+  configure_mcp_client codex "Codex" external
+}
+
+configure_copilot() {
+  has copilot || { warn "GitHub Copilot CLI not found; skipping Copilot MCP setup"; return 0; }
+  # Copilot CLI ships GitHub MCP itself. Only add the native-development MCPs Seyal needs.
+  configure_mcp_client copilot "GitHub Copilot CLI" builtin
 }
 
 verify_repo_skills() {
@@ -132,12 +143,17 @@ main() {
   verify_repo_skills
   ensure_submodules
 
-  if ensure_github_mcp_binary; then
-    install_github_wrapper
+  # Claude Code and Codex need Seyal's local GitHub MCP wrapper. Copilot CLI
+  # already provides GitHub MCP, so do not install a duplicate solely for it.
+  if has claude || has codex; then
+    if ensure_github_mcp_binary; then
+      install_github_wrapper
+    fi
   fi
 
   configure_claude
   configure_codex
+  configure_copilot
 
   info "complete"
   info "Seyal project skills are versioned in .agents/skills; only project-required MCP tooling is configured; no credentials were written"

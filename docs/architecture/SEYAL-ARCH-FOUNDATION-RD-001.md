@@ -2,7 +2,7 @@
 
 **Document:** SEYAL-ARCH-FOUNDATION-RD-001  
 **Date:** 2026-08-23  
-**Status:** Proposed for acceptance  
+**Status:** Accepted  
 **Scope:** Foundation architecture only. No production implementation is authorized by this document beyond the milestone definitions.
 
 **Companion rationale:** [`rationale/SEYAL-ARCH-FOUNDATION-RATIONALE-001.md`](rationale/SEYAL-ARCH-FOUNDATION-RATIONALE-001.md)
@@ -14,7 +14,7 @@
 ## 1. Executive decision
 
 1. Seyal uses one persistent, headless-capable **per-user Seyal Runtime** as the authority for local live terminal executions. (`R-001`, `R-004`)
-2. Each `TerminalExecution` owns exactly one terminal endpoint (POSIX PTY on macOS/Linux; future ConPTY adapter on Windows), child lifecycle, one Seyal VT state machine, primary/alternate screen state, logical scrollback, damage, and Block timeline. (`R-005`)
+2. Each `TerminalExecution` owns exactly one terminal endpoint (POSIX PTY on macOS/Linux; future ConPTY adapter on Windows), child lifecycle, and one canonical Seyal `TerminalState` containing VT/parser modes, primary/alternate screens, logical history, reflow and damage. Block timeline authority is separate Runtime/workspace metadata keyed by `ExecutionId`. (`R-005`, `R-006`, `R-029`)
 3. The GUI never owns or mirrors a second authoritative VT or grid. (`R-002`)
 4. The local desktop path must avoid synchronous IPC round trips / cross-process ping-pong on input, PTY output, VT mutation, damage, and presentation. (`R-003`)
 5. Local clients use compact binary control/input plus a platform-local derived display projection; remote/cloud clients use compact binary snapshot/delta streams derived from the same canonical state. (`R-003`, `R-031`)
@@ -27,7 +27,7 @@
 12. The portable Rust core is designed now for Linux, Windows, cloud, and embedding, but there is no premature universal GUI abstraction. (`R-012`, `R-013`)
 13. iOS/Android are future first-class **remote controller/viewer clients** for terminals running on a user machine or in Seyal Cloud; mobile does not become terminal-state authority. (`R-014`, `R-031`)
 14. TOML is the canonical static configuration format. Lua provides programmable customization only through cold typed config overlays and asynchronous typed actions; Lua never joins terminal hot paths. (`R-017`–`R-020`)
-15. **Verdict: READY TO IMPLEMENT MILESTONE 001** after this package is accepted.
+15. **Verdict: READY TO IMPLEMENT MILESTONE 001.**
 
 ---
 
@@ -57,19 +57,23 @@ Terminal correctness remains foundational. Agent, collaboration, cloud, persiste
 
 ```text
 Seyal Runtime
-  └─ TerminalExecution
-       ├─ TerminalEndpoint
-       │    ├─ PTY / ConPTY
-       │    └─ child process/job
-       ├─ TerminalState                  ← authoritative
-       │    ├─ VT parser/modes
-       │    ├─ primary screen
-       │    ├─ alternate screen
-       │    ├─ Unicode/grapheme/width
-       │    ├─ logical scrollback
-       │    ├─ reflow
-       │    └─ damage generations
+  ├─ Execution registry
+  │    └─ TerminalExecution
+  │         ├─ TerminalEndpoint
+  │         │    ├─ PTY / ConPTY
+  │         │    └─ child process/job
+  │         └─ TerminalState                  ← authoritative
+  │              ├─ VT parser/modes
+  │              ├─ primary screen
+  │              ├─ alternate screen
+  │              ├─ Unicode/grapheme/width
+  │              ├─ logical scrollback
+  │              ├─ reflow
+  │              └─ damage generations
+  │
+  └─ workspace/runtime metadata
        ├─ BlockTimeline
+       │    └─ references ExecutionId + logical history anchors
        └─ semantic/event metadata
                 │
                 ├─ derived local display projection
@@ -79,6 +83,8 @@ Seyal Runtime
 ```
 
 There is one authoritative VT/state machine per terminal execution.
+
+`BlockTimeline` is authoritative Runtime/workspace metadata, not terminal infrastructure. A `TerminalExecution` may emit bounded asynchronous execution/history signals consumed by Block metadata, but PTY → VT → `TerminalState` → damage progress never waits for Block mutation or semantic processing.
 
 The app renderer receives only derived presentation data. A renderer projection may be rebuilt at any time from canonical runtime state and therefore cannot become a second terminal authority.
 
@@ -223,7 +229,7 @@ Multi-client attach requires explicit resize authority. It must never degenerate
 
 ### 6.1 Block model
 
-A `Block` owns metadata, not terminal infrastructure.
+A `Block` owns metadata, not terminal infrastructure. Block timeline authority lives in `seyal-workspace` / Runtime workspace metadata and is keyed by stable `ExecutionId` plus logical history anchors.
 
 Typical Block fields may include:
 
@@ -251,6 +257,8 @@ child process
 renderer
 private copy of full output
 ```
+
+Block metadata observes execution/history asynchronously. Terminal progress must not synchronously depend on Block lifecycle or semantic extraction.
 
 ### 6.2 Current mutable Block
 
@@ -525,6 +533,8 @@ Lua is lazy, bounded and not instantiated per pane.
 
 The settings UI may show value provenance (`default`, TOML, project policy, Lua patch, managed policy) so customization never creates invisible competing truth.
 
+Production configuration and Lua implementation are **not M001 scope**. M001 may introduce only minimal typed boundaries naturally required by the terminal slice; it must not implement the production Lua VM, final configuration system, config provenance UI, general Lua automation, or unrelated policy composition.
+
 ---
 
 ## 14. Embedding
@@ -612,7 +622,7 @@ Avoid further crate explosion until a distinct authority/process/ABI/portability
 | VT parser/modes | `TerminalState` | execution | Runtime |
 | primary/alternate grid | `TerminalState` | execution | Runtime |
 | logical scrollback | `TerminalState` | execution/persistence policy | Runtime + optional cold store |
-| Block timeline | workspace/runtime metadata | execution/history | Runtime cold/semantic plane |
+| Block timeline | `seyal-workspace` / workspace-runtime metadata keyed by `ExecutionId` | execution/history | Runtime cold/semantic plane |
 | renderer projection | derived attachment state | client attachment | Runtime writer / client reader |
 | glyph/font cache | renderer | app/render device lifetime | client render subsystem |
 | native renderer | client | visible surface | client render thread/device |
@@ -681,7 +691,7 @@ Terminal fundamentals must work without cloud/licensing/telemetry.
 
 1. Exactly one authoritative terminal state per execution.
 2. A pane/window/tab never owns a PTY by virtue of presentation.
-3. Blocks never imply a second PTY/VT/grid/process.
+3. Blocks never imply a second PTY/VT/grid/process and Block timeline authority remains outside `TerminalExecution`.
 4. Agents never own terminal infrastructure.
 5. Terminal I/O/rendering never synchronously waits for agents, persistence, cloud, analytics, telemetry, licensing or Lua.
 6. No synchronous IPC request/response ping-pong belongs in the local terminal hot path.
@@ -726,9 +736,9 @@ M001 also establishes:
 - stable logical line identity for Blocks/history;
 - local binary input/control boundary;
 - derived renderer projection seam;
-- typed TOML `EffectiveConfig` seam;
-- Lua customization API seam (production Lua VM may follow after the terminal path is proven);
 - benchmark and memory measurement harness.
+
+Production configuration and Lua remain later work; M001 must not expand to implement them.
 
 ### M002 — Terminal correctness expansion
 
@@ -755,7 +765,7 @@ M001 passes only when all are demonstrated:
 - no alternate terminal engine exists;
 - primary and alternate screen transitions function for an explicit supported subset;
 - `TerminalExecution` remains alive across app detach/reconnect;
-- Block identity exists without owning another grid/PTy;
+- Block identity exists as Runtime/workspace metadata without owning another grid/PTY;
 - missing VT behavior is recorded in a supported-feature matrix, not silently approximated.
 
 ### Rendering
@@ -787,10 +797,12 @@ M001 starts with:
 
 - TDD for VT/core behavior;
 - byte fixtures;
+- retained reference/conformance fixtures for the claimed M001 VT subset with recorded provenance;
 - parser/state property tests;
 - fuzz harness for VT/parser/protocol boundaries;
 - PTY integration tests;
 - renderer deterministic tests/golden references where appropriate;
+- focused local Runtime IPC/shared-memory threat review before local projection acceptance;
 - sanitizers/static analysis/lints;
 - crash/detach tests;
 - deterministic/reproducible build plan;
@@ -810,7 +822,7 @@ Stop implementation and require architecture review if any of these appear:
 | daemon added too late | M001 already launches through Runtime |
 | daemon/process/thread per pane | bounded shared Runtime architecture |
 | display JSON/serialized cells | binary/shared derived projection |
-| Blocks own grids/PTys | Block is metadata/index only |
+| Blocks own grids/PTys | Block is workspace/runtime metadata/index only |
 | semantic transcript becomes canonical | terminal logical history remains canonical |
 | agent/Lua/persistence on hot path | asynchronous/cold boundaries only |
 | huge per-pane renderer allocation | resources scale by visible surfaces |
@@ -832,6 +844,7 @@ Fixed foundation for M001:
 ```text
 runtime authority           = per-user Seyal Runtime
 PTY/VT authority            = TerminalExecution in Runtime
+BlockTimeline authority     = seyal-workspace / Runtime metadata keyed by ExecutionId
 GUI VT mirror               = forbidden
 headless                     = implemented from M001
 local hot path               = no synchronous IPC ping-pong
@@ -842,7 +855,7 @@ agents                       = capability consumers, never terminal owners
 attention/approvals          = structured global model
 mobile                       = remote controller/viewer
 cloud                        = same headless runtime model
-config                       = typed TOML + cold typed Lua overlay
+config                       = typed TOML + cold typed Lua overlay; production implementation deferred beyond M001
 Lua automation               = async typed events/actions only
 renderer                     = Metal from first macOS production frame
 portable core                = Rust, platform adapters narrow

@@ -1,0 +1,11 @@
+version = 1
+required = [
+  "id",
+  "classification",
+  "source",
+  "source_reference",
+  "license_or_terms",
+  "recorded_at",
+  "owner_issue",
+  "notes",
+]

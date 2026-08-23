@@ -13,7 +13,8 @@ const WORKLOAD: &[u8] = concat!(
     "unicode: € λ ✓ ",
     "\x1b[2;40Hdone",
     "\x1b[?25l\x1b[?25h",
-).as_bytes();
+)
+.as_bytes();
 
 fn main() {
     let iterations = env::var("SEYAL_VT_BENCH_ITERATIONS")

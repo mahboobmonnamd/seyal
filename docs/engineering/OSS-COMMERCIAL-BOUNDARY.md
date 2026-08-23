@@ -8,7 +8,7 @@ The public repository is authoritative for terminal/runtime/workspace foundation
 
 This is formalized by `docs/architecture/ADR-003-OSS-COMMERCIAL-REPOSITORY-BOUNDARY.md`.
 
-The current OSS repository may remain private during transition, but the target is that it becomes the public canonical repository rather than a generated export of a private monorepo.
+The canonical Seyal OSS repository is public and is the authoritative source repository, not a generated export of a private monorepo.
 
 ## What remains in Seyal OSS
 
@@ -97,4 +97,8 @@ Any code moving from private to public must pass provenance/license review. Publ
 
 ## Software license
 
-No final OSS license is selected by this document. Product-owner approval is required. Evaluate **Apache-2.0** versus **Apache-2.0 OR MIT dual-license** before public launch, including patent grant, ecosystem familiarity, contributor expectations and dependency compatibility. Do not add a LICENSE file until that decision is approved.
+Seyal OSS uses **Apache License 2.0 (`Apache-2.0`)** as its single open-source license. The canonical license text is the root `LICENSE` file.
+
+The choice is intentionally permissive and includes Apache-2.0's explicit patent-license terms, which fit a contributor-facing, commercial-friendly systems project. Do not add a second OSS license or custom license clauses without an explicit product/legal decision and corresponding documentation update.
+
+A `NOTICE` file is added only when Seyal has attribution notices that actually require distribution; do not create an empty or ceremonial NOTICE file.

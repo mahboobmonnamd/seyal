@@ -27,6 +27,7 @@ fn assert_same_state(left: &TerminalState, right: &TerminalState) {
 }
 
 #[test]
+#[ignore = "executed by fuzz/targets/vt-byte-parser with a retained seed"]
 fn vt_byte_parser_seed() {
     let bytes = input();
     let mut terminal = new_terminal();
@@ -44,6 +45,7 @@ fn vt_byte_parser_seed() {
 }
 
 #[test]
+#[ignore = "executed by fuzz/targets/parser-state-mutation with a retained seed"]
 fn parser_state_mutation_seed() {
     let bytes = input();
 

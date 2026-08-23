@@ -38,6 +38,10 @@ Never state “faster”, “zero-copy”, “low CPU”, or equivalent as achie
 
 Keep reproducible benchmark definitions separate from production code and record environment metadata with results. M001 targets in the accepted architecture remain targets until measured.
 
+The M001 benchmark harness contract lives under `benches/`. `benches/environment-fields.toml` defines the required metadata fields. `scripts/benchmark-smoke.py` writes a real environment record under `target/benchmarks/` solely to prove that recording is reproducible; it sets `performance_claim = false` and is not a latency/CPU/RSS/throughput result.
+
+Future measured workloads must replace `not-applicable` smoke fields with real terminal dimensions, font/scale, shell, workload, run count and percentile method. Generated benchmark records stay out of production modules and should be retained as explicit CI/release artifacts when a measurement Issue requires them.
+
 ## CI strategy
 
 Fast PR checks use stable smoke benchmarks or guardrails only where noise is controlled. Broader benchmark matrices run scheduled/release and on performance-sensitive changes. A noisy benchmark must not become a fake gate; investigate measurement quality instead.

@@ -1,0 +1,5 @@
+version = 1
+
+# Pass 1 intentionally contains no semantic VT fixtures. Pass 2 adds retained
+# fixtures test-first as supported/deferred behavior is implemented.
+fixtures = []

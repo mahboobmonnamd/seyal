@@ -24,7 +24,7 @@ case "$cmd" in
     fi
     ;;
   check)
-    ./scripts/validate-governance.sh
+    bash scripts/validate-governance.sh
     if [[ -f Cargo.toml ]]; then
       cargo fmt --all -- --check
       cargo clippy --workspace --all-targets --all-features -- -D warnings

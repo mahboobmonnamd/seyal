@@ -24,6 +24,15 @@ grep -q 'XCODEBUILD_MCP_VERSION=' scripts/bootstrap-dev.sh || fail "XcodeBuildMC
 grep -q 'github-mcp-server' scripts/bootstrap-dev.sh || fail "GitHub MCP bootstrap is missing"
 grep -q 'mcpbridge' scripts/bootstrap-dev.sh || fail "official Xcode MCP bootstrap is missing"
 grep -q 'xcodebuildmcp@${XCODEBUILD_MCP_VERSION}' scripts/bootstrap-dev.sh || fail "XcodeBuildMCP configuration is missing"
+grep -q '^configure_copilot()' scripts/bootstrap-dev.sh || fail "GitHub Copilot MCP setup is missing"
+grep -q 'configure_mcp_client copilot "GitHub Copilot CLI" builtin' scripts/bootstrap-dev.sh || fail "Copilot must use built-in GitHub MCP mode"
+grep -q 'if has claude || has codex; then' scripts/bootstrap-dev.sh || fail "external GitHub MCP should only be provisioned for clients that need it"
+
+# Copilot project skills are loaded natively from .agents/skills; do not create a
+# second Copilot-specific project skill tree that can diverge from canonical skills.
+if [[ -d .copilot/skills || -d .github/skills ]]; then
+  fail "duplicate Copilot project skill adapter tree detected"
+fi
 
 tooling_scope=(scripts/bootstrap-dev.sh docs/engineering/AGENT-TOOLING.md)
 for forbidden in \

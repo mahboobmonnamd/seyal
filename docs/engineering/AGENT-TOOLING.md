@@ -6,7 +6,9 @@ The tooling set is intentionally minimal: do not add generic developer tools mer
 
 ## Canonical skills
 
-`.agents/skills/` is the single source of truth for Seyal-owned workflows. `.claude/skills/` contains thin adapters only.
+`.agents/skills/` is the single source of truth for Seyal-owned workflows. `.claude/skills/` contains thin Claude-specific adapters only.
+
+Codex and GitHub Copilot CLI both discover project skills directly from `.agents/skills/`; do not create duplicate Codex or Copilot skill trees.
 
 | Capability | Canonical Seyal skill / authority |
 | --- | --- |
@@ -30,13 +32,15 @@ Equivalent existing skills are intentionally reused rather than creating duplica
 
 ## Approved MCP/tool matrix
 
-| Tool | Agent bootstrap | Seyal use |
-| --- | --- | --- |
-| GitHub MCP | Required when supported locally | Issues, PRs, repository and CI workflow. Credentials remain user-local/runtime-only. |
-| Apple Xcode MCP (`xcrun mcpbridge`) | Required when provided by installed Xcode | First-party Xcode project/build/tool integration. |
-| XcodeBuildMCP | Pinned and registered when `npx` exists | Native macOS build/test/run, screenshots, UI hierarchy and debugging needed by Seyal UI implementation and validation. |
+| Tool | Claude Code | Codex | GitHub Copilot CLI | Seyal use |
+| --- | --- | --- | --- | --- |
+| GitHub MCP | Seyal wrapper around official server | Seyal wrapper around official server | Built into Copilot CLI; do not add a duplicate | Issues, PRs, repository and CI workflow. Credentials remain user-local/runtime-only. |
+| Apple Xcode MCP (`xcrun mcpbridge`) | Configure when available | Configure when available | Configure when available | First-party Xcode project/build/tool integration. |
+| XcodeBuildMCP | Configure pinned version when `npx` exists | Configure pinned version when `npx` exists | Configure pinned version when `npx` exists | Native macOS build/test/run, screenshots, UI hierarchy and debugging needed by Seyal UI implementation and validation. |
 
 Browser automation, generic web/front-end design helpers and third-party Apple documentation indexes are not part of Seyal's development bootstrap.
+
+GitHub Copilot CLI is a special case only for GitHub MCP: GitHub ships that MCP integration with the CLI itself, so Seyal must not install or register a second GitHub server for Copilot. This exception does not change the approved tooling set.
 
 ## Standard setup
 
@@ -51,6 +55,8 @@ Then, when local coding-agent/MCP provisioning is wanted, run:
 ```sh
 make bootstrap-agents
 ```
+
+The agent bootstrap configures the approved project-required MCPs for each supported coding-agent CLI that is already installed. It does not install Claude Code, Codex or GitHub Copilot CLI themselves.
 
 The agent bootstrap may provision only the approved project-required tooling above and may mutate supported coding-agent configuration. It must not be required for `make build`, `make test`, `make check`, `make bench`, CI, or terminal/runtime operation. It must not write credentials to the repository.
 

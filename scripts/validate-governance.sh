@@ -5,6 +5,7 @@ required=(
   AGENTS.md
   CLAUDE.md
   .github/copilot-instructions.md
+  docs/specs/README.md
   docs/engineering/DEVELOPMENT.md
   docs/engineering/ISSUE-PROTOCOL.md
   docs/engineering/TESTING.md

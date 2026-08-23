@@ -3,19 +3,19 @@ SHELL := /bin/bash
 .PHONY: bootstrap build test check bench governance-check
 
 bootstrap:
-	@./scripts/task.sh bootstrap
+	@bash scripts/task.sh bootstrap
 
 build:
-	@./scripts/task.sh build
+	@bash scripts/task.sh build
 
 test:
-	@./scripts/task.sh test
+	@bash scripts/task.sh test
 
 check:
-	@./scripts/task.sh check
+	@bash scripts/task.sh check
 
 bench:
-	@./scripts/task.sh bench
+	@bash scripts/task.sh bench
 
 governance-check:
-	@./scripts/validate-governance.sh
+	@bash scripts/validate-governance.sh

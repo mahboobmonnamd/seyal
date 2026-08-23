@@ -2,9 +2,9 @@
 
 Repository documents define policy; GitHub's control plane should enforce it where the platform supports enforcement.
 
-## Project
+## Project status model
 
-Create one Seyal engineering Project as a view over repository Issues with Status values:
+Seyal uses these workflow states conceptually:
 
 ```text
 Backlog
@@ -17,9 +17,11 @@ Blocked
 Done
 ```
 
-Only `Ready` is eligible for implementation pickup. New Issue Forms do not imply Ready.
+Only work explicitly marked **Ready** is eligible for implementation pickup.
 
-Recommended views:
+A GitHub Project with these states is the preferred long-term control plane. While the repository remains under a personal account or the Project is not configured, the explicit `## State` field in each Issue is the approved temporary source of workflow status. Keep it current; do not infer readiness from an open Issue alone.
+
+Recommended Project views once enabled:
 
 - Ready queue: `Status = Ready`, grouped by milestone/parent.
 - Active: In Progress + In Review + Validation.
@@ -28,7 +30,11 @@ Recommended views:
 
 ## Issue hierarchy and dependencies
 
-Use native sub-issues for Epic/Feature/Task hierarchy and native issue dependencies for blocked-by/blocking relationships. Do not recreate those relationships as Markdown checklists/comments.
+Native sub-issues and native blocked-by/blocking relationships are preferred when available.
+
+Until those controls are available, the approved temporary fallback is explicit parent/dependency text in the Issue body. The relationship must be unambiguous and kept current; do not create a second spreadsheet or planning database merely to emulate GitHub-native relationships.
+
+This fallback is sufficient for current M001 work and must not block terminal implementation. Migrate to native relationships when the repository moves to an organization/control plane that supports them cleanly.
 
 ## Issue types
 
@@ -41,7 +47,7 @@ Task     # native/default organization issue type
 Bug      # native/default organization issue type
 ```
 
-GitHub currently manages Issue Types at the organization level. The current personal-account repository therefore cannot satisfy this part of the desired model until it is transferred to a GitHub organization. Until that owner decision is completed, title prefixes/forms may aid readability but must not be treated as an equivalent canonical type system.
+GitHub manages native Issue Types at the organization level. While Seyal remains under a personal account, Issue Forms plus clear titles are the approved temporary fallback. Organization transfer is recommended before contributor/team scale, but lack of native Issue Types is not an M001 implementation blocker.
 
 ## Labels
 
@@ -59,9 +65,15 @@ Use `type:architecture`, `type:performance`, `type:security`, or `type:spike` on
 
 ## Branch / pull-request protection
 
-The default branch should reject direct production-code pushes and require pull requests. Required checks should include `Foundation Quality / governance` and, once M001 creates production code, the Rust/native build/test jobs relevant to the changed area.
+The policy is fixed even when repository settings cannot be inspected or configured from an automation client:
 
-Core/high-risk areas should require at least one independent approving review. Dismiss stale approvals when the head changes materially. Do not allow a merge merely because an implementation agent reports tests passed.
+- no production feature work is pushed directly to `master`;
+- every implementation change uses branch → pull request → validation/review → merge;
+- required CI must be green before merge;
+- core/high-risk changes require independent review when an independent reviewer is available;
+- stale approvals must not be treated as valid after a material head change.
+
+A GitHub ruleset/branch-protection configuration should enforce these rules when available. Lack of platform-level enforcement is a governance-hardening item, not permission to bypass the policy and not a blocker for the current owner-controlled M001 Pass 1.
 
 ## Public OSS repository CI
 
@@ -86,11 +98,11 @@ Deeper scheduled/release or targeted gates as code appears:
 
 Expensive/noisy checks should be targeted rather than making every documentation PR unusable.
 
-The current repository may temporarily be private during the public-launch transition. A GitHub Actions run that fails before executing any job steps is infrastructure non-execution, not a successful quality result. Once the repository is public, normal PR quality gates must execute and pass.
+The repository is now public and `Foundation Quality` has executed successfully with both governance and rust-foundation jobs. A future red or non-executing run is a real readiness signal and must be investigated; it must never be described as passed validation.
 
 ## Private `seyal-commercial` CI policy
 
-`seyal-commercial` is a private superproject that consumes a pinned Seyal OSS revision.
+`seyal-commercial` is a private superproject that consumes a pinned Seyal OSS revision at `oss/seyal`.
 
 For now, do **not** add GitHub-hosted Actions workflows to the private repository because of private-repository CI cost. This is a temporary execution-cost decision, not permission to lower engineering standards.
 
@@ -100,4 +112,4 @@ The public OSS workflow must never be moved into the private repository or made 
 
 ## Repository ownership note
 
-The current OSS repository is owned by a personal GitHub account. Moving Seyal to an organization is recommended before distributed production implementation so native Issue Types, organization-level governance, team reviewers and future enterprise administration can be configured cleanly.
+The OSS repository is currently public under a personal GitHub account. Moving Seyal to an organization remains recommended before external contributor/team scale so native Issue Types, Projects, team reviewers, rulesets and future enterprise administration can be configured cleanly. That migration is governance hardening and does not block M001 Pass 1 under the temporary fallbacks above.

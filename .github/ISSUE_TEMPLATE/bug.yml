@@ -1,0 +1,45 @@
+name: Bug
+description: Report a reproducible Seyal defect without silently expanding architecture.
+title: "[Bug] "
+body:
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+    validations: {required: true}
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: Cite the specification/architecture when applicable.
+    validations: {required: true}
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Minimal deterministic steps, bytes/workload/environment where relevant.
+    validations: {required: true}
+  - type: textarea
+    id: authority
+    attributes:
+      label: Relevant authority / specification
+      description: Link exact docs if known. If expected behavior is not specified, keep the issue in Refinement.
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Logs, failing tests, screenshots or measurements with secrets removed.
+  - type: textarea
+    id: impact
+    attributes:
+      label: Correctness / performance / memory / security impact
+    validations: {required: true}
+  - type: checkboxes
+    id: discipline
+    attributes:
+      label: Scope
+      options:
+        - label: Fix should not include unrelated refactoring.
+          required: true
+        - label: If the defect exposes an architecture contradiction, implementation will stop for ADR/spec review.
+          required: true

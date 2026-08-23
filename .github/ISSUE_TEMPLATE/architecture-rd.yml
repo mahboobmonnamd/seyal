@@ -1,0 +1,54 @@
+name: Architecture decision / R&D spike
+description: Gather evidence for a possible architecture change before implementation.
+title: "[Architecture] "
+body:
+  - type: textarea
+    id: decision
+    attributes:
+      label: Decision / question
+      description: State the architectural decision or uncertainty precisely.
+    validations: {required: true}
+  - type: textarea
+    id: authority
+    attributes:
+      label: Existing authority affected
+      description: Cite architecture, ADR, rationale IDs, specs and milestones.
+    validations: {required: true}
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence that requires review
+      description: Measurements, correctness failures, security findings or platform constraints. Existing code alone is not evidence.
+    validations: {required: true}
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives to evaluate
+    validations: {required: true}
+  - type: textarea
+    id: invariants
+    attributes:
+      label: Invariants that must remain true
+      description: Include terminal authority/hot-path/persistence/OSS boundaries where applicable.
+    validations: {required: true}
+  - type: textarea
+    id: validation
+    attributes:
+      label: Required experiments / measurements / threat review
+    validations: {required: true}
+  - type: textarea
+    id: impact
+    attributes:
+      label: Specifications / Issues affected if accepted
+    validations: {required: true}
+  - type: checkboxes
+    id: gate
+    attributes:
+      label: Architecture gate
+      options:
+        - label: Substantial implementation is stopped until the decision is accepted.
+          required: true
+        - label: A scoped ADR will be created if the decision changes an architectural boundary listed in ISSUE-PROTOCOL.md.
+          required: true
+        - label: Affected specifications and implementation Issues will be updated after architecture approval.
+          required: true

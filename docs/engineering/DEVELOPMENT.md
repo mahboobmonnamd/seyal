@@ -89,15 +89,15 @@ make bench
 
 Do not create competing undocumented command paths.
 
-Current behavior after Issue #11:
+Current behavior after Issue #12:
 
 - `make bootstrap` provisions/verifies the pinned Rust toolchain and, on macOS, validates full Xcode + Swift + macOS SDK + Metal tooling;
 - `make build` builds the minimal Rust workspace and, on macOS, builds the native `Seyal.app` Xcode target;
 - `make test` validates repository/tooling/workspace and harness invariants, validates the M001 fuzz registry/corpora without pretending pending production targets are active, runs Rust workspace unit tests, and on macOS runs the native app smoke;
-- `make check` runs the full deterministic repository checks plus harness/fuzz validation, Rust formatting/Clippy/tests, architecture layering and the macOS native skeleton on Darwin;
+- `make check` runs the deterministic repository checks, harness/fuzz validation, controlled negative fixtures proving custom validators actually reject bad inputs, Rust formatting/Clippy/tests, architecture layering and the macOS native skeleton on Darwin;
 - `make bench` records and round-trips benchmark environment metadata under `target/benchmarks/`, explicitly marks the harness smoke as not a performance result, and runs real Cargo benchmark targets only once they actually exist.
 
-Linux remains a supported portable-core CI host; native AppKit/Metal build/test steps explicitly skip there instead of introducing a cross-platform GUI abstraction.
+The public `Foundation Quality` workflow separates the fast PR gates into `repository-policy`, `rust-and-harness-quality`, and `native-macos-smoke`. See `docs/engineering/GITHUB-WORKFLOW.md` for the exact responsibility and required-check contract. Linux remains a supported portable-core CI host; native AppKit/Metal build/test steps explicitly skip there instead of introducing a cross-platform GUI abstraction.
 
 Canonical Cargo operations use the pinned toolchain and `--locked` where dependency resolution applies.
 
@@ -106,6 +106,8 @@ Issue #9 creates only the `seyal-terminal` physical Rust crate because M001 Pass
 Issue #10 establishes the native host under `macos/Seyal` using **Swift + AppKit + Metal**. No Objective-C/Objective-C++ source is required for the current platform boundary. Metal shaders, when introduced by their owning renderer Issue, use Metal Shading Language; future Rust/native interop should cross a coarse C-compatible boundary rather than per-cell language calls.
 
 Issue #11 establishes retained harness locations under `tests/`, `fuzz/` and `benches/`. It does not create terminal behavior to make the harnesses look populated. Production-specific fuzz adapters are activated by the pass that introduces the real target API.
+
+Issue #12 makes the Pass-1 CI gates production-shaped: external workflow actions are pinned by reviewed commit SHA, workflow permissions remain minimal, repository validators are negative-fixture tested, and architecture layering is enforced in the public PR path. Deeper conformance/fuzz/performance/security campaigns remain deferred until their real production targets exist.
 
 ## Clean-checkout workflow
 

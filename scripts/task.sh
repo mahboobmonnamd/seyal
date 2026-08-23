@@ -43,6 +43,7 @@ case "$cmd" in
     python3 scripts/test-workspace.py
     python3 scripts/test-harnesses.py
     python3 scripts/fuzz-smoke.py
+    python3 scripts/test-ci-validators.py
     cargo_pinned fmt --all -- --check
     cargo_pinned clippy --workspace --all-targets --all-features -- -D warnings
     cargo_pinned test --workspace --locked

@@ -1,5 +1,29 @@
 version = 1
 
-# Pass 1 intentionally contains no semantic VT fixtures. Pass 2 adds retained
-# fixtures test-first as supported/deferred behavior is implemented.
-fixtures = []
+[[fixtures]]
+id = "m001-basic-cursor-sgr"
+classification = "supported"
+cols = 8
+rows = 3
+input = "tests/fixtures/vt/m001-basic.input"
+expected = "tests/fixtures/vt/m001-basic.expected.txt"
+source = "Seyal M001 VT specification"
+source_reference = "docs/specs/SPEC-001-M001-VT.md sections 4, 6, and 9"
+license_or_terms = "Apache-2.0; fixture authored for Seyal"
+recorded_at = "2026-08-24"
+owner_issue = "#38"
+notes = "Exact byte fixture for CR/LF, SGR ANSI foreground, absolute cursor positioning, and printable state. RILL was reviewed as historical behavior evidence but is not normative."
+
+[[fixtures]]
+id = "m001-deferred-osc-continuity"
+classification = "tested-deferred"
+cols = 8
+rows = 2
+input = "tests/fixtures/vt/m001-deferred-osc.input"
+expected = "tests/fixtures/vt/m001-deferred-osc.expected.txt"
+source = "Seyal M001 VT specification"
+source_reference = "docs/specs/SPEC-001-M001-VT.md sections 3.3 and 15"
+license_or_terms = "Apache-2.0; fixture authored for Seyal"
+recorded_at = "2026-08-24"
+owner_issue = "#38"
+notes = "OSC title semantics remain deferred; the fixture claims only that BEL-terminated OSC is consumed and following supported text parses without corruption."

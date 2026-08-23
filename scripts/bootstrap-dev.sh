@@ -6,6 +6,7 @@ BIN_DIR="${HOME}/.local/bin"
 STATE_DIR="${HOME}/.local/state/seyal/bootstrap"
 DATA_DIR="${HOME}/.local/share/seyal"
 GITHUB_WRAPPER="${BIN_DIR}/seyal-github-mcp"
+ANTHROPIC_SKILLS_DIR="${DATA_DIR}/skills/anthropic-skills"
 APPLE_DEEP_DOCS_WRAPPER="${BIN_DIR}/seyal-apple-deep-docs-mcp"
 APPLE_DEEP_DOCS_DIR="${DATA_DIR}/mcp/appledeepdoc-mcp"
 APPLE_DEEP_DOCS_VENV="${DATA_DIR}/venv/appledeepdoc-mcp"
@@ -24,6 +25,45 @@ ensure_submodules() {
   if [[ -f "${ROOT}/.gitmodules" ]]; then
     info "initializing pinned git submodules"
     git -C "${ROOT}" submodule update --init --recursive
+  fi
+}
+
+prepare_frontend_design_source() {
+  if ! has git; then
+    warn "git not found; cannot prepare pinned Anthropic frontend-design source"
+    return 1
+  fi
+
+  mkdir -p "$(dirname "${ANTHROPIC_SKILLS_DIR}")"
+
+  if [[ -d "${ANTHROPIC_SKILLS_DIR}/.git" ]]; then
+    if [[ -n "$(git -C "${ANTHROPIC_SKILLS_DIR}" status --porcelain)" ]]; then
+      warn "managed Anthropic skills checkout is dirty; refusing to overwrite it"
+      return 1
+    fi
+    git -C "${ANTHROPIC_SKILLS_DIR}" fetch --prune origin
+  else
+    rm -rf "${ANTHROPIC_SKILLS_DIR}"
+    info "cloning Anthropic skills source for pinned frontend-design"
+    git clone --filter=blob:none https://github.com/anthropics/skills.git "${ANTHROPIC_SKILLS_DIR}"
+  fi
+
+  if ! git -C "${ANTHROPIC_SKILLS_DIR}" cat-file -e "${FRONTEND_DESIGN_REF}^{commit}" 2>/dev/null; then
+    git -C "${ANTHROPIC_SKILLS_DIR}" fetch origin "${FRONTEND_DESIGN_REF}"
+  fi
+
+  git -C "${ANTHROPIC_SKILLS_DIR}" checkout --detach "${FRONTEND_DESIGN_REF}"
+
+  local actual_ref
+  actual_ref="$(git -C "${ANTHROPIC_SKILLS_DIR}" rev-parse HEAD)"
+  if [[ "${actual_ref}" != "${FRONTEND_DESIGN_REF}" ]]; then
+    warn "Anthropic skills checkout mismatch: expected ${FRONTEND_DESIGN_REF}, found ${actual_ref}"
+    return 1
+  fi
+
+  if [[ ! -f "${ANTHROPIC_SKILLS_DIR}/skills/frontend-design/SKILL.md" ]]; then
+    warn "pinned Anthropic checkout does not contain skills/frontend-design/SKILL.md"
+    return 1
   fi
 }
 
@@ -63,10 +103,12 @@ ensure_frontend_design_skill() {
     return 0
   fi
 
+  prepare_frontend_design_source
+
   info "installing pinned Anthropic frontend-design skill for web prototypes"
   DISABLE_TELEMETRY=1 npx -y skills add \
-    "https://github.com/anthropics/skills/tree/${FRONTEND_DESIGN_REF}/skills/frontend-design" \
-    --global "${agent_args[@]}" --yes
+    "${ANTHROPIC_SKILLS_DIR}/skills/frontend-design" \
+    --global "${agent_args[@]}" --copy --yes
   printf '%s\n' "${FRONTEND_DESIGN_REF}" >"${marker}"
 }
 

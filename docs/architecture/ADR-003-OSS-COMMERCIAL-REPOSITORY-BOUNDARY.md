@@ -10,61 +10,92 @@
 
 Seyal is both an open-source terminal/workspace foundation and a commercial product family (Pro, Teams, Enterprise). Terminal fundamentals must remain genuinely strong OSS and must never become dependent on licensing, cloud or proprietary services.
 
-The repository model must make that rule difficult to violate accidentally.
+Seyal also has multiple OSS compositions, including headless, lightweight and full native application forms. Those compositions must share the same authoritative PTY/VT/runtime implementation rather than drift into separate repositories or terminal engines.
+
+The repository model must make these rules difficult to violate accidentally.
 
 ## Options considered
 
-### Model A — public OSS canonical repository + separate private commercial repository/repositories
+### Model A — public canonical OSS repository + private commercial superproject
 
-The public repository owns foundational terminal/workspace technology. Private commercial systems consume stable public capabilities.
+The public repository owns the complete OSS foundation and OSS product compositions. A private commercial superproject consumes a pinned public Seyal revision as a Git submodule and adds proprietary composition/services above that foundation.
 
 ### Model B — one monorepo containing both OSS and proprietary sections
 
-This simplifies some coordinated changes but creates legal/export complexity and makes it easier for proprietary dependencies or entitlement logic to leak into foundational code.
+This simplifies some coordinated changes but creates legal/export complexity and makes it easier for proprietary dependencies, SKU checks or entitlement logic to leak into foundational code.
 
 ### Model C — private canonical monorepo with generated/open-source export
 
 Rejected. It would make the public repository derivative rather than authoritative, complicate contributor trust/provenance, and create recurring risk that the actual architecture lives behind private boundaries.
 
+### Model D — separate repositories for headless, lightweight and full OSS variants
+
+Rejected. Those are compositions of the same terminal/runtime authority. Splitting them would increase version skew, duplicate integration work and create pressure for divergent terminal semantics.
+
 ## Decision
 
 Choose **Model A**.
 
-The eventual public Seyal repository is the canonical home of:
+The public Seyal repository is the canonical home of:
 
 - VT/parser/terminal state;
+- Unicode/grapheme/width/history/reflow foundations;
 - PTY/local execution/runtime foundations;
 - rendering foundations;
 - Block and local workspace foundations;
-- stable protocol/API foundations where appropriate;
+- stable protocol/capability foundations where justified by an active milestone;
+- headless, lightweight and full OSS compositions;
 - macOS OSS application foundation;
-- tests/conformance/benchmarks for those foundations.
+- tests/conformance/fuzzing/benchmarks for those foundations;
+- public GitHub workflow quality gates.
 
-Private commercial repositories/services may own hosted agents/cloud execution services, cross-device services, collaboration/team services, identity/RBAC/policy/audit/admin integrations, private deployment/control plane, billing/entitlements and support operations.
+The private repository `seyal-commercial` is the commercial superproject. It may contain proprietary agent implementations, Pro/Teams/Enterprise composition, hosted/cloud services, collaboration, identity/RBAC/policy/audit/admin integrations, billing/entitlements, private deployment/control plane and other commercial-only code.
+
+`seyal-commercial` consumes a **pinned** Seyal OSS revision as a Git submodule. Updating that pin is an explicit compatibility change reviewed in the commercial repository.
 
 ## Dependency invariant
 
 ```text
-commercial/private → stable OSS capabilities
-OSS foundation      ↛ proprietary code
+seyal-commercial/private → pinned Seyal OSS capabilities
+Seyal OSS                ↛ proprietary code
 ```
+
+The public repository must remain independently cloneable, buildable, testable and useful without access to `seyal-commercial`.
+
+The public repository must not contain SKU/license-aware execution branches such as `enterprise_license`, `pro_license` or equivalent commercial entitlement checks. If an extension seam is needed, it must be a coherent public capability that any OSS user can implement and use. Do not create speculative extension traits merely to reserve future commercial hooks; introduce them only when a concrete milestone requires them.
+
+Licensing and entitlement enforcement, when needed, belongs in the private commercial composition layer. VT, PTY, TerminalState, rendering, local execution and OSS workspace foundations must not know that a commercial repository exists.
 
 No license/cloud/telemetry/policy service may become a synchronous dependency of PTY input/output, VT mutation, damage, shaping or rendering.
 
-Commercial code must not change terminal semantics based on entitlement. If a commercial feature needs additional capability, expose an architecturally coherent OSS capability/protocol seam or place the commercial behavior above the terminal foundation.
+## Commercial agent boundary
+
+The public repository may own agent-native primitives that are useful without Seyal commercial services: execution/task identity, attention/approval primitives, terminal-safe integration points and support for external/user-provided agents when justified by product milestones.
+
+The private repository may own hosted model access, commercial agent UX/services, smart routing, managed multi-agent orchestration, usage/account systems, team collaboration and managed enterprise policy implementations.
+
+This split is a product/repository boundary, not permission to speculate those APIs before their milestone.
+
+## CI consequence
+
+The public repository owns authoritative GitHub Actions quality gates.
+
+The private commercial repository may temporarily omit GitHub-hosted Actions for cost reasons, but that is an operational choice rather than a quality exemption. Commercial changes must still provide equivalent local build/test/check evidence until private CI or self-hosted runners are introduced.
 
 ## Consequences
 
 - Public contributors work against the real foundational implementation, not an export.
-- Legal/provenance boundaries are clearer.
-- Commercial services can iterate privately without contaminating terminal fundamentals.
-- Cross-repository compatibility requires explicit versioned APIs/protocols and CI in commercial repositories.
+- All OSS variants share one terminal/runtime authority.
+- Legal/provenance and dependency boundaries are clearer.
+- Proprietary code cannot accidentally become required for the OSS terminal.
+- Commercial composition can evolve privately while consuming an explicit OSS revision.
+- Cross-repository changes require a public change first, followed by a reviewed commercial submodule-pin update.
 - Some coordinated changes require staged releases across repositories; that is preferable to architectural contamination.
 
 ## Software license
 
-Deferred to explicit product-owner approval. `docs/engineering/OSS-COMMERCIAL-BOUNDARY.md` records the recommendation and evaluation criteria. This ADR must not be interpreted as selecting a license.
+Deferred to explicit product-owner approval. `docs/engineering/OSS-COMMERCIAL-BOUNDARY.md` records the boundary and evaluation criteria. This ADR must not be interpreted as selecting a license.
 
 ## Revisit only if
 
-Measured development/release friction from Model A materially exceeds its legal/architectural benefits and an alternative can prove equivalent public canonicality, contributor clarity, dependency enforcement and hot-path isolation.
+Measured development/release friction from this model materially exceeds its legal/architectural benefits and an alternative can prove equivalent public canonicality, contributor clarity, one-way dependency enforcement, single terminal/runtime authority and hot-path isolation.

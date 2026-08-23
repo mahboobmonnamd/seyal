@@ -6,6 +6,8 @@ This document defines logical ownership/dependency boundaries before M001 Pass 1
 
 A crate/module exists only when it represents a real ownership, portability, process, ABI/dependency, or testing boundary.
 
+The public Seyal repository is the single canonical OSS codebase. Headless, lightweight and full OSS forms are compositions of the same terminal/runtime authority, not separate repositories.
+
 ## Target logical layout
 
 ```text
@@ -20,7 +22,7 @@ A crate/module exists only when it represents a real ownership, portability, pro
 ├─ crates/                     # created incrementally by M001 Pass 1+
 │  ├─ seyal-core/              # stable IDs/common value types only if justified
 │  ├─ seyal-terminal/          # VT/TerminalState/history/damage semantics
-│  ├─ seyal-exec/              # TerminalEndpoint/PTTY + child lifecycle + TerminalExecution
+│  ├─ seyal-exec/              # TerminalEndpoint/PTY + child lifecycle + TerminalExecution
 │  ├─ seyal-workspace/         # BlockTimeline/workspace metadata referencing ExecutionId
 │  ├─ seyal-protocol/          # versioned local/remote protocol + projection schema
 │  ├─ seyal-render/            # portable render preparation, not Metal ownership
@@ -38,6 +40,23 @@ A crate/module exists only when it represents a real ownership, portability, pro
 ```
 
 Names may be adjusted during Pass 1 if evidence shows a smaller correct layout, but authority/dependency rules below may not be silently changed.
+
+Do not create speculative `headless/`, `lite/`, `full/`, `agent/`, `pro/` or `enterprise/` crates merely to mirror product names. Composition roots should be introduced only when a real binary/application boundary exists.
+
+## OSS variants
+
+Conceptually, all variants consume the same foundational implementation:
+
+```text
+                       shared Seyal OSS core
+                              │
+                ┌─────────────┼─────────────┐
+                ▼             ▼             ▼
+            headless      lightweight      full OSS
+             runtime        terminal        native app
+```
+
+The exact binaries/packages are decided by active milestones. The architectural rule is fixed: there is one PTY implementation, one VT/state model, one Runtime ownership model and one renderer architecture. Variants may omit layers they do not need; they do not fork those layers.
 
 ## Ownership
 
@@ -71,6 +90,17 @@ runtime   → exec + terminal + workspace + protocol producer
 
 Avoid circular dependencies. If `seyal-core` becomes a dumping ground, split or remove it; it may contain stable identity/value types only.
 
+## Commercial repository boundary
+
+`seyal-commercial` is outside this repository and consumes a pinned Seyal OSS revision as a Git submodule once the canonical public repository identity is finalized.
+
+```text
+seyal-commercial/private → Seyal OSS
+Seyal OSS                ↛ proprietary code
+```
+
+The public repo does not contain private implementations, private SKU modules or license-aware branches. A public extension seam is acceptable only when it is a coherent capability useful to any OSS user and required by a real milestone.
+
 ## Forbidden dependencies
 
 - terminal → workspace/Blocks, agents, cloud, licensing, telemetry, UI/native frameworks
@@ -78,7 +108,7 @@ Avoid circular dependencies. If `seyal-core` becomes a dumping ground, split or 
 - workspace → PTY ownership or canonical VT mutation
 - render → mutable Runtime/TerminalState internals
 - macOS app → a second VT/grid implementation
-- OSS hot-path crates → proprietary/commercial packages
+- OSS production code → proprietary/commercial packages or commercial entitlement state
 
 Enforce these with Cargo workspace layering checks/lints or a small dependency-graph CI script once crates exist.
 

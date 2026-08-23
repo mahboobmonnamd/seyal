@@ -1,0 +1,36 @@
+version = 1
+
+[[target]]
+name = "vt-byte-parser"
+owner_pass = 2
+status = "pending-production-surface"
+corpus = "fuzz/corpus/vt-byte-parser"
+adapter = "fuzz/targets/vt-byte-parser"
+
+[[target]]
+name = "parser-state-mutation"
+owner_pass = 2
+status = "pending-production-surface"
+corpus = "fuzz/corpus/parser-state-mutation"
+adapter = "fuzz/targets/parser-state-mutation"
+
+[[target]]
+name = "local-binary-protocol-decode"
+owner_pass = 5
+status = "pending-production-surface"
+corpus = "fuzz/corpus/local-binary-protocol-decode"
+adapter = "fuzz/targets/local-binary-protocol-decode"
+
+[[target]]
+name = "shared-projection-validation"
+owner_pass = 5
+status = "pending-production-surface"
+corpus = "fuzz/corpus/shared-projection-validation"
+adapter = "fuzz/targets/shared-projection-validation"
+
+[[target]]
+name = "reconnect-resync-state-machine"
+owner_pass = 9
+status = "pending-production-surface"
+corpus = "fuzz/corpus/reconnect-resync-state-machine"
+adapter = "fuzz/targets/reconnect-resync-state-machine"

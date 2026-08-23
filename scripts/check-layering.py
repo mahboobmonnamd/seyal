@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 import tomllib
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(os.environ.get("SEYAL_VALIDATION_ROOT", Path(__file__).resolve().parents[1])).resolve()
 RULES = {
     "seyal-terminal": {"seyal-workspace", "seyal-exec", "seyal-runtime", "seyal-render"},
     "seyal-exec": {"seyal-render", "seyal-runtime", "seyal-workspace"},

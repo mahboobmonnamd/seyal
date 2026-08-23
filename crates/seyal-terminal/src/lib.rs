@@ -1,5 +1,28 @@
-//! Portable terminal-semantics ownership boundary for Seyal.
+//! Seyal-owned terminal semantics.
 //!
-//! M001 Issue #9 establishes only this permanent crate boundary. The crate
-//! intentionally contains no VT behavior yet; M001 Pass 2 adds parser/state
-//! semantics test-first.
+//! This crate is the single portable authority for incremental VT parsing and
+//! canonical terminal state. It owns no PTY, runtime IPC, renderer or native UI
+//! behavior. RILL is historical implementation evidence only; Seyal semantics
+//! are defined by the current architecture, M001 specification and tests.
+
+mod cell;
+mod color;
+mod cursor;
+mod damage;
+mod error;
+mod line;
+mod modes;
+mod parser;
+mod screen;
+mod style;
+mod terminal;
+
+pub use cell::Cell;
+pub use color::Color;
+pub use cursor::CursorState;
+pub use damage::Damage;
+pub use error::TerminalError;
+pub use line::LineId;
+pub use modes::ModeState;
+pub use style::Style;
+pub use terminal::{Diagnostics, TerminalState};

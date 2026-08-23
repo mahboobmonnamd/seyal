@@ -8,9 +8,10 @@ This directory is the canonical entry point for Seyal foundation architecture.
 2. [`rationale/SEYAL-ARCH-FOUNDATION-RATIONALE-001.md`](rationale/SEYAL-ARCH-FOUNDATION-RATIONALE-001.md) — reasons, rejected alternatives, failure modes, and revisit conditions for foundation decisions and prohibitions.
 3. [`ADR-001-LOCAL-DISPLAY-PROJECTION.md`](ADR-001-LOCAL-DISPLAY-PROJECTION.md) — accepted local macOS display-projection decision for M001.
 4. [`ADR-003-OSS-COMMERCIAL-REPOSITORY-BOUNDARY.md`](ADR-003-OSS-COMMERCIAL-REPOSITORY-BOUNDARY.md) — accepted public-OSS/private-commercial repository and dependency boundary.
-5. [`../milestones/MILESTONE-001.md`](../milestones/MILESTONE-001.md) — authoritative M001 implementation scope, passes, tests, security gates, benchmarks, acceptance criteria, and demo procedure.
-6. [`ui/SEYAL-UI-ARCHITECTURE-001.md`](ui/SEYAL-UI-ARCHITECTURE-001.md) — presentation architecture for Flow/Raw/TUI, history, Blocks, workspace chrome, inspectors, attention/approvals, desktop/mobile continuity, and render priority.
-7. [`source/FOUNDATION-RD-BRIEF.md`](source/FOUNDATION-RD-BRIEF.md) — source requirements that initiated the architecture pass; not an implementation specification.
+5. [`ADR-004-VT-STATE-OWNERSHIP.md`](ADR-004-VT-STATE-OWNERSHIP.md) — accepted M001 incremental VT parser, authoritative terminal state, logical-line identity and generation-damage ownership decision.
+6. [`../milestones/MILESTONE-001.md`](../milestones/MILESTONE-001.md) — authoritative M001 implementation scope, passes, tests, security gates, benchmarks, acceptance criteria, and demo procedure.
+7. [`ui/SEYAL-UI-ARCHITECTURE-001.md`](ui/SEYAL-UI-ARCHITECTURE-001.md) — presentation architecture for Flow/Raw/TUI, history, Blocks, workspace chrome, inspectors, attention/approvals, desktop/mobile continuity, and render priority.
+8. [`source/FOUNDATION-RD-BRIEF.md`](source/FOUNDATION-RD-BRIEF.md) — source requirements that initiated the architecture pass; not an implementation specification.
 
 ## Authority
 
@@ -20,6 +21,7 @@ This directory is the canonical entry point for Seyal foundation architecture.
 - `MILESTONE-001.md` owns the complete M001 implementation contract. M001 corrections and readiness gates are edited directly into that file.
 - The UI architecture is subordinate to terminal/runtime ownership and performance invariants.
 - ADR-003 owns the repository/dependency boundary between public Seyal OSS and the private `seyal-commercial` superproject; headless, lightweight and full OSS variants remain compositions of the same public terminal/runtime authority.
+- ADR-004 owns the permanent M001 VT parser/terminal-state separation and one-authoritative-state rule; sequence semantics remain governed by the VT specification and milestone matrix.
 - Source briefs preserve research inputs and historical requirements only.
 - Git history and pull requests preserve superseded wording; duplicate `-v2`, `-final`, `-new`, `-amendment`, or correction documents are not required.
 

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="${SEYAL_VALIDATION_ROOT:-$SCRIPT_ROOT}"
+cd "$ROOT"
+
 required=(
   AGENTS.md
   CLAUDE.md

@@ -21,18 +21,13 @@ case "$cmd" in
     ;;
   build)
     bash scripts/check-toolchain.sh
-    if [[ -f Cargo.toml ]]; then
-      cargo_pinned build --workspace --locked
-    else
-      echo "[seyal task] build: no Rust workspace exists yet; Issue #9 owns workspace scaffolding. Nothing to build."
-    fi
+    cargo_pinned build --workspace --locked
     ;;
   test)
     bash scripts/test-tooling.sh
-    if [[ -f Cargo.toml ]]; then
-      bash scripts/check-toolchain.sh
-      cargo_pinned test --workspace --locked
-    fi
+    python3 scripts/test-workspace.py
+    bash scripts/check-toolchain.sh
+    cargo_pinned test --workspace --locked
     ;;
   check)
     bash scripts/check-toolchain.sh
@@ -41,18 +36,17 @@ case "$cmd" in
     python3 scripts/check-doc-links.py
     python3 scripts/check-layering.py
     bash scripts/test-tooling.sh
-    if [[ -f Cargo.toml ]]; then
-      cargo_pinned fmt --all -- --check
-      cargo_pinned clippy --workspace --all-targets --all-features -- -D warnings
-      cargo_pinned test --workspace --locked
-    fi
+    python3 scripts/test-workspace.py
+    cargo_pinned fmt --all -- --check
+    cargo_pinned clippy --workspace --all-targets --all-features -- -D warnings
+    cargo_pinned test --workspace --locked
     ;;
   bench)
     bash scripts/check-toolchain.sh
-    if [[ -f Cargo.toml ]]; then
+    if [[ -d benches ]] || find crates -type f -path '*/benches/*.rs' -print -quit 2>/dev/null | grep -q .; then
       cargo_pinned bench --workspace --locked
     else
-      echo "[seyal task] bench: no benchmarkable production surface exists yet; no performance result is claimed."
+      echo "[seyal task] bench: Rust workspace exists, but Issue #11 owns benchmark harnesses; no benchmark target exists yet and no performance result is claimed."
     fi
     ;;
   *)

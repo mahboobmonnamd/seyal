@@ -1,8 +1,9 @@
-version = 1
+version = 2
 
 [[fixtures]]
 id = "m001-basic-cursor-sgr"
 classification = "supported"
+evidence_kind = "project-regression"
 cols = 8
 rows = 3
 input = "tests/fixtures/vt/m001-basic.input"
@@ -12,11 +13,12 @@ source_reference = "docs/specs/SPEC-001-M001-VT.md sections 4, 6, and 9"
 license_or_terms = "Apache-2.0; fixture authored for Seyal"
 recorded_at = "2026-08-24"
 owner_issue = "#38"
-notes = "Exact byte fixture for CR/LF, SGR ANSI foreground, absolute cursor positioning, and printable state. RILL was reviewed as historical behavior evidence but is not normative."
+notes = "Project regression fixture for CR/LF, SGR ANSI foreground, absolute cursor positioning, and printable state. It is retained regression evidence but is not counted as independent conformance evidence."
 
 [[fixtures]]
 id = "m001-deferred-osc-continuity"
 classification = "tested-deferred"
+evidence_kind = "project-regression"
 cols = 8
 rows = 2
 input = "tests/fixtures/vt/m001-deferred-osc.input"
@@ -26,4 +28,64 @@ source_reference = "docs/specs/SPEC-001-M001-VT.md sections 3.3 and 15"
 license_or_terms = "Apache-2.0; fixture authored for Seyal"
 recorded_at = "2026-08-24"
 owner_issue = "#38"
-notes = "OSC title semantics remain deferred; the fixture claims only that BEL-terminated OSC is consumed and following supported text parses without corruption."
+notes = "OSC title semantics remain deferred; this fixture claims only parser continuity after a BEL-terminated OSC. It is project regression evidence, not independent conformance evidence."
+
+[[fixtures]]
+id = "m001-ecma48-core"
+classification = "supported"
+evidence_kind = "authoritative-spec"
+cols = 8
+rows = 3
+input = "tests/fixtures/vt/m001-ecma48-core.input"
+expected = "tests/fixtures/vt/m001-ecma48-core.expected.txt"
+source = "ECMA-48 Control Functions for Coded Character Sets, Fifth Edition"
+source_reference = "ECMA-48 (June 1991): C0 CR/LF and CSI CUP/SGR control-function definitions; fixture expectation independently authored for Seyal"
+license_or_terms = "ECMA standard consulted as normative reference; no source text or implementation copied"
+recorded_at = "2026-08-24"
+owner_issue = "#88"
+notes = "Exact-byte evidence for carriage return/line feed, 1-based cursor positioning, printable output, and supported SGR attribute/color selection. Seyal intentionally supports only its M001 subset."
+
+[[fixtures]]
+id = "m001-ecma48-erase-save"
+classification = "supported"
+evidence_kind = "independent-reference"
+cols = 5
+rows = 2
+input = "tests/fixtures/vt/m001-ecma48-erase-save.input"
+expected = "tests/fixtures/vt/m001-ecma48-erase-save.expected.txt"
+source = "ECMA-48 Fifth Edition and XTerm Control Sequences"
+source_reference = "ECMA-48 (June 1991): CSI CUP and EL; xterm ctlseqs: CSI s/u (SCOSC/SCORC, also ANSI.SYS); fixture expectation independently authored for Seyal"
+license_or_terms = "Public standards/control-sequence documentation consulted as behavioral references; no source text or implementation copied"
+recorded_at = "2026-08-24"
+owner_issue = "#88"
+notes = "Exact-byte evidence for cursor positioning, erase-in-line mode 0, and CSI save/restore. ECMA-48 is authority for CUP/EL; CSI s/u is independently grounded in xterm ctlseqs rather than attributed to ECMA-48. Style/background-specific erase behavior remains additionally covered by Seyal unit tests because it is a product invariant."
+
+[[fixtures]]
+id = "m001-xterm-private"
+classification = "supported"
+evidence_kind = "independent-reference"
+cols = 4
+rows = 2
+input = "tests/fixtures/vt/m001-xterm-private.input"
+expected = "tests/fixtures/vt/m001-xterm-private.expected.txt"
+source = "XTerm Control Sequences"
+source_reference = "Thomas E. Dickey xterm ctlseqs: DEC private mode 25 cursor visibility and alternate-screen modes including 1049; expectation independently authored for Seyal"
+license_or_terms = "Public xterm control-sequence documentation consulted as behavioral reference; no xterm source code copied"
+recorded_at = "2026-08-24"
+owner_issue = "#88"
+notes = "Exercises cursor-hide plus enter/write/leave alternate-screen continuity. This does NOT claim complete xterm 1049 DECSC/DECRC behavior: SPEC-001 section 11 deliberately keeps Seyal's narrower M001 subset and the coverage matrix records that disagreement."
+
+[[fixtures]]
+id = "m001-utf8"
+classification = "supported"
+evidence_kind = "authoritative-spec"
+cols = 8
+rows = 2
+input = "tests/fixtures/vt/m001-utf8.input"
+expected = "tests/fixtures/vt/m001-utf8.expected.txt"
+source = "RFC 3629 — UTF-8, a transformation format of ISO 10646"
+source_reference = "RFC 3629 sections 3-4; byte sequence for U+20AC and UTF-8 decoding validity; fixture expectation independently authored for Seyal"
+license_or_terms = "IETF RFC consulted as normative encoding reference; no source text or implementation copied"
+recorded_at = "2026-08-24"
+owner_issue = "#88"
+notes = "Retained UTF-8 fixture is fed both one-shot and byte-by-byte by the production TerminalState integration test, proving chunk-boundary independence for a multibyte scalar within M001's scalar-only width contract."

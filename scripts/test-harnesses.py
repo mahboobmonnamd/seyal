@@ -30,18 +30,28 @@ def sorted_fixture_ids(manifest: dict) -> list[str]:
 def validate_fixture_harness() -> None:
     manifest_path = ROOT / "tests/fixtures/vt/manifest.toml"
     schema_path = ROOT / "tests/fixtures/vt/provenance.schema.toml"
+    coverage_path = ROOT / "tests/fixtures/vt/coverage.toml"
     require(manifest_path.is_file(), "missing VT fixture manifest")
     require(schema_path.is_file(), "missing VT provenance schema")
+    require(coverage_path.is_file(), "missing VT conformance coverage matrix")
 
     manifest = read_toml(manifest_path)
     schema = read_toml(schema_path)
-    require(manifest.get("version") == 1, "unsupported VT fixture manifest version")
-    require(schema.get("version") == 1, "unsupported VT provenance schema version")
+    coverage = read_toml(coverage_path)
+    require(manifest.get("version") == 2, "unsupported VT fixture manifest version")
+    require(schema.get("version") == 2, "unsupported VT provenance schema version")
+    require(coverage.get("version") == 1, "unsupported VT coverage matrix version")
     required_provenance = set(schema.get("required", []))
-    require(len(required_provenance) >= 8, "VT provenance schema is incomplete")
-    sorted_fixture_ids(manifest)
+    require(len(required_provenance) >= 9, "VT provenance schema is incomplete")
+    allowed_evidence_kinds = set(schema.get("allowed_evidence_kinds", []))
+    require(
+        allowed_evidence_kinds == {"project-regression", "authoritative-spec", "independent-reference"},
+        "VT evidence-kind contract is incomplete",
+    )
+    fixture_ids = set(sorted_fixture_ids(manifest))
 
     allowed_classifications = {"supported", "tested-deferred", "unsupported-deferred"}
+    independent_count = 0
     for fixture in manifest.get("fixtures", []):
         fixture_id = fixture.get("id", "<missing-id>")
         require(
@@ -53,6 +63,12 @@ def validate_fixture_harness() -> None:
             fixture.get("classification") in allowed_classifications,
             f"VT fixture {fixture_id} has invalid classification",
         )
+        require(
+            fixture.get("evidence_kind") in allowed_evidence_kinds,
+            f"VT fixture {fixture_id} has invalid evidence_kind",
+        )
+        if fixture.get("evidence_kind") in {"authoritative-spec", "independent-reference"}:
+            independent_count += 1
         for field in ("input", "expected"):
             relative = fixture.get(field)
             require(isinstance(relative, str) and relative, f"VT fixture {fixture_id} has no {field} path")
@@ -66,12 +82,61 @@ def validate_fixture_harness() -> None:
             and fixture["rows"] > 0,
             f"VT fixture {fixture_id} must declare positive cols/rows",
         )
+    require(independent_count >= 4, "VT corpus lacks retained independent conformance fixtures")
+
+    behaviors = coverage.get("behavior", [])
+    require(isinstance(behaviors, list) and behaviors, "VT coverage matrix must contain behaviors")
+    behavior_ids = [entry.get("id") for entry in behaviors]
+    require(all(isinstance(value, str) and value for value in behavior_ids), "VT coverage behavior id missing")
+    require(len(behavior_ids) == len(set(behavior_ids)), "VT coverage behavior ids must be unique")
+    required_behaviors = {
+        "construction-and-size",
+        "incremental-and-utf8",
+        "c0-controls",
+        "printable-wrap-and-scroll",
+        "cursor-csi",
+        "cursor-save-restore",
+        "erase-ed-el",
+        "sgr-and-colors",
+        "cursor-visibility",
+        "alternate-screen-1049",
+        "resize",
+        "line-identity",
+        "damage",
+        "deferred-and-malformed-recovery",
+    }
+    require(set(behavior_ids) == required_behaviors, "VT supported-M001 coverage matrix is incomplete")
+    allowed_bases = {
+        "external",
+        "external-plus-seyal-invariant",
+        "independent-reference-with-documented-disagreement",
+        "seyal-invariant",
+    }
+    for behavior in behaviors:
+        behavior_id = behavior["id"]
+        evidence = behavior.get("evidence")
+        require(isinstance(evidence, list) and evidence, f"VT coverage {behavior_id} has no evidence")
+        require(
+            behavior.get("basis") in allowed_bases,
+            f"VT coverage {behavior_id} has invalid evidence basis",
+        )
+        reference = behavior.get("reference")
+        require(isinstance(reference, str) and reference, f"VT coverage {behavior_id} has no reference")
+        for item in evidence:
+            if item.startswith("m001-"):
+                require(item in fixture_ids, f"VT coverage {behavior_id} references unknown fixture {item}")
+    alternate = next(item for item in behaviors if item["id"] == "alternate-screen-1049")
+    require(
+        alternate.get("classification") == "supported-narrower"
+        and alternate.get("basis") == "independent-reference-with-documented-disagreement",
+        "M001 ?1049 must remain explicitly narrower than full xterm behavior",
+    )
 
     # Exercise deterministic loading independently of the retained manifest.
     with tempfile.TemporaryDirectory() as tmp:
         synthetic = Path(tmp) / "manifest.toml"
         synthetic.write_text(
-            'version = 1\n[[fixtures]]\nid = "z"\n[[fixtures]]\nid = "a"\n',
+            'version = 2\n[[fixtures]]\nid = "z"\n[[fixtures]]\nid = "a"\n',
             encoding="utf-8",
         )
         require(

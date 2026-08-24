@@ -1,0 +1,113 @@
+version = 1
+
+[[behavior]]
+id = "construction-and-size"
+classification = "supported"
+basis = "seyal-invariant"
+evidence = ["crates/seyal-terminal/tests/m001_vt.rs::zero_dimensions_are_rejected_without_partial_resize"]
+reference = "SPEC-001 sections 2 and 12"
+notes = "Product/state invariant; no external terminal reference is needed for zero-size rejection or transactional resize failure."
+
+[[behavior]]
+id = "incremental-and-utf8"
+classification = "supported"
+basis = "external"
+evidence = ["m001-utf8", "crates/seyal-terminal/tests/m001_vt.rs::printable_utf8_survives_arbitrary_chunking", "crates/seyal-terminal/tests/m001_vt.rs::one_shot_and_bytewise_feeds_produce_the_same_canonical_state"]
+reference = "RFC 3629 sections 3-4"
+notes = "M001 claims scalar storage only; grapheme and width semantics remain deferred."
+
+[[behavior]]
+id = "c0-controls"
+classification = "supported"
+basis = "external"
+evidence = ["m001-ecma48-core", "crates/seyal-terminal/tests/m001_vt.rs::controls_apply_without_parser_state_duplication"]
+reference = "ECMA-48 Fifth Edition C0 control functions"
+notes = "BS, HT, LF/VT/FF and CR are covered; unspecified C0 controls remain non-mutating unless later specified."
+
+[[behavior]]
+id = "printable-wrap-and-scroll"
+classification = "supported"
+basis = "external-plus-seyal-invariant"
+evidence = ["m001-ecma48-core", "crates/seyal-terminal/tests/m001_vt.rs::line_feed_scrolls_full_screen_and_advances_line_identity", "crates/seyal-terminal/tests/rill_salvage_regressions.rs"]
+reference = "ECMA-48 printable/control behavior plus SPEC-001 active-background blanking invariant"
+notes = "Scroll-created-row background semantics are a Seyal M001 invariant independently regression-tested after the RILL audit."
+
+[[behavior]]
+id = "cursor-csi"
+classification = "supported"
+basis = "external"
+evidence = ["m001-ecma48-core", "crates/seyal-terminal/tests/m001_vt.rs::relative_and_absolute_cursor_movement_clamps_to_grid"]
+reference = "ECMA-48 cursor movement/position control functions"
+notes = "CUU/CUD/CUF/CUB/CUP/HVP/CHA/VPA and M001 default/clamp rules are covered."
+
+[[behavior]]
+id = "cursor-save-restore"
+classification = "supported"
+basis = "external-plus-seyal-invariant"
+evidence = ["m001-ecma48-erase-save", "crates/seyal-terminal/tests/m001_vt.rs::save_restore_cursor_supports_csi_and_dec_forms"]
+reference = "xterm ctlseqs CSI s/u (SCOSC/SCORC) plus SPEC-001 screen-local saved state; ESC 7/8 remains covered by the Seyal unit test"
+notes = "CSI s/u is independently grounded in xterm ctlseqs, not ECMA-48. Seyal additionally preserves pen and pending-wrap state per SPEC-001."
+
+[[behavior]]
+id = "erase-ed-el"
+classification = "supported"
+basis = "external"
+evidence = ["m001-ecma48-erase-save", "crates/seyal-terminal/tests/m001_vt.rs::erase_line_and_display_support_m001_modes"]
+reference = "ECMA-48 ED/EL control functions"
+notes = "Modes 0/1/2 are covered; unsupported modes intentionally do not mutate cells."
+
+[[behavior]]
+id = "sgr-and-colors"
+classification = "supported"
+basis = "external"
+evidence = ["m001-ecma48-core", "crates/seyal-terminal/tests/m001_vt.rs::sgr_tracks_supported_attributes_and_colors"]
+reference = "ECMA-48 SGR for standard attributes/colors plus xterm-compatible indexed/truecolor extensions covered by Seyal tests"
+notes = "M001 supports only the enumerated SPEC-001 subset; unlisted SGR parameters are deferred."
+
+[[behavior]]
+id = "cursor-visibility"
+classification = "supported"
+basis = "external"
+evidence = ["m001-xterm-private", "crates/seyal-terminal/tests/m001_vt.rs::cursor_visibility_is_runtime_authoritative_mode_state"]
+reference = "xterm ctlseqs DEC private mode 25"
+notes = "Canonical mode state and cursor-visible state remain synchronized."
+
+[[behavior]]
+id = "alternate-screen-1049"
+classification = "supported-narrower"
+basis = "independent-reference-with-documented-disagreement"
+evidence = ["m001-xterm-private", "crates/seyal-terminal/tests/m001_vt.rs::alternate_screen_preserves_primary_and_is_discarded_on_leave", "crates/seyal-terminal/tests/rill_salvage_regressions.rs"]
+reference = "xterm ctlseqs mode 1049; SPEC-001 section 11 defines the deliberately narrower M001 contract"
+notes = "Seyal does not claim xterm's complete 1049 DECSC/DECRC save-slot interaction. The narrower behavior is explicit, tested, and not silently widened."
+
+[[behavior]]
+id = "resize"
+classification = "supported"
+basis = "seyal-invariant"
+evidence = ["crates/seyal-terminal/tests/m001_vt.rs::resize_preserves_retained_cells_and_line_identity", "crates/seyal-terminal/tests/m001_vt.rs::zero_dimensions_are_rejected_without_partial_resize"]
+reference = "SPEC-001 section 12"
+notes = "Top-left retention, cursor clamp, LineId stability and atomic multi-screen growth are product-state invariants rather than external VT claims."
+
+[[behavior]]
+id = "line-identity"
+classification = "supported"
+basis = "seyal-invariant"
+evidence = ["crates/seyal-terminal/tests/m001_vt.rs::allocated_line_ids_do_not_repeat_across_scroll_resize_and_alternate_lifetimes"]
+reference = "SPEC-001 section 13 and Issue #71/PR #77"
+notes = "LineId is Seyal domain identity and intentionally not an external terminal-standard concept."
+
+[[behavior]]
+id = "damage"
+classification = "supported"
+basis = "seyal-invariant"
+evidence = ["crates/seyal-terminal/tests/m001_vt.rs::damage_generations_are_monotonic_and_coalesce_until_consumed"]
+reference = "SPEC-001 section 14"
+notes = "Damage generation/coalescing is an internal renderer-facing state contract."
+
+[[behavior]]
+id = "deferred-and-malformed-recovery"
+classification = "supported-continuity"
+basis = "external-plus-seyal-invariant"
+evidence = ["m001-deferred-osc-continuity", "crates/seyal-terminal/tests/m001_vt.rs::deferred_and_unknown_sequences_leave_parser_continuity_intact", "crates/seyal-terminal/tests/m001_vt.rs::truncated_input_is_held_across_feed_and_reported_only_on_finish"]
+reference = "ECMA-48 control-string framing, RFC 3629 UTF-8 validity, and SPEC-001 section 15"
+notes = "Semantics of deferred families remain deferred; only bounded consumption and recovery continuity are claimed."

@@ -126,10 +126,25 @@ fn graceful_deadline_escalates_to_forced_without_sleeping_reactor() {
     let mut runtime = Runtime::new(config("forced-transition")).unwrap();
     let id = runtime
         .create_execution(
-            CommandSpec::new("/bin/sh").args(["-c", "trap '' TERM; while :; do sleep 1; done"]),
+            CommandSpec::new("/bin/sh")
+                .args(["-c", "trap '' TERM; printf READY; while :; do sleep 1; done"]),
             size(),
         )
         .unwrap();
+
+    let ready_deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        if runtime
+            .execution(id)
+            .and_then(|execution| execution.terminal().row_text(0))
+            .is_some_and(|row| row.contains("READY"))
+        {
+            break;
+        }
+        assert!(Instant::now() < ready_deadline, "TERM trap was not established");
+        runtime.poll_once(Some(Duration::from_millis(50))).unwrap();
+    }
+
     runtime.request_termination(id).unwrap();
     assert_eq!(
         runtime.lookup(id).unwrap().lifecycle,

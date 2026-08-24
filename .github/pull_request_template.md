@@ -33,7 +33,12 @@ Describe trust-boundary/input/permission/resource implications and link security
 
 ## Documentation
 
-List changed authority/spec/engineering/user docs, or explain why none are needed.
+- [ ] Documentation impact was re-assessed against the final implementation.
+- [ ] User Guide updated where user-visible behavior/configuration/workflows changed, or `N/A` is explained below.
+- [ ] Developer/authority docs updated where contributor workflow/architecture/engineering behavior changed, or `N/A` is explained below.
+- [ ] `make docs-check` and `make docs-build` were run when site documentation changed.
+
+List changed authority/spec/engineering/user docs, or give the concrete `N/A` rationale:
 
 ## Demo / verification
 

@@ -5,6 +5,7 @@ use std::{
     fs::{self, DirBuilder, OpenOptions},
     io::Write,
     os::unix::fs::{DirBuilderExt, OpenOptionsExt},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use seyal_exec::CommandSpec;
@@ -15,6 +16,8 @@ const TERM_NAME: &str = "seyal-m001";
 
 #[cfg(target_os = "macos")]
 const BUNDLED_ENTRY: &[u8] = include_bytes!(env!("SEYAL_M001_TERMINFO_ENTRY"));
+#[cfg(target_os = "macos")]
+static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Debug)]
 pub struct CapabilityPolicy {
@@ -30,11 +33,15 @@ impl CapabilityPolicy {
             create_private_dir(&entry_dir)?;
             let entry = entry_dir.join(TERM_NAME);
             if fs::read(&entry).ok().as_deref() != Some(BUNDLED_ENTRY) {
-                let temporary = entry_dir.join(format!(".{TERM_NAME}.{}.tmp", std::process::id()));
+                let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+                let temporary = entry_dir.join(format!(
+                    ".{TERM_NAME}.{}.{}.tmp",
+                    std::process::id(),
+                    sequence
+                ));
                 let mut file = OpenOptions::new()
                     .write(true)
-                    .create(true)
-                    .truncate(true)
+                    .create_new(true)
                     .mode(0o600)
                     .open(&temporary)?;
                 file.write_all(BUNDLED_ENTRY)?;

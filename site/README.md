@@ -13,18 +13,18 @@ The existing repository directories `docs/architecture`, `docs/specs`, `docs/mil
 
 Requires Node.js 22.12 or later.
 
-```sh
-cd site
-npm install
-npm run dev
-```
-
-Build/validate:
+From the repository root, use the canonical commands:
 
 ```sh
-npm run build
-npm run check
+make docs          # install docs dependencies and start the local server
+make docs-install  # install docs dependencies only
+make docs-build    # build the static documentation site
+make docs-check    # validate Starlight/Astro content
 ```
+
+`make docs` is the normal way to view the documentation locally. The development server prints the local URL after startup.
+
+Direct `npm` commands inside `site/` remain implementation details of these Make targets and should not become a competing documented workflow.
 
 ## Media policy
 

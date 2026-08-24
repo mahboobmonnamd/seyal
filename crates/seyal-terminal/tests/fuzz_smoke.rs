@@ -31,8 +31,8 @@ fn assert_same_state(left: &TerminalState, right: &TerminalState) {
 fn vt_byte_parser_seed() {
     let bytes = input();
     let mut terminal = new_terminal();
-    terminal.feed(&bytes);
-    terminal.finish_input();
+    terminal.feed(&bytes).expect("fuzz feed succeeds");
+    terminal.finish_input().expect("fuzz finish succeeds");
 
     // Exercise state mutation after arbitrary parser input. Any panic, invalid
     // dimension transition or unsafe parser state fails the retained seed.
@@ -50,14 +50,18 @@ fn parser_state_mutation_seed() {
     let bytes = input();
 
     let mut one_shot = new_terminal();
-    one_shot.feed(&bytes);
-    one_shot.finish_input();
+    one_shot.feed(&bytes).expect("one-shot feed succeeds");
+    one_shot
+        .finish_input()
+        .expect("one-shot finish input succeeds");
 
     let mut bytewise = new_terminal();
     for byte in &bytes {
-        bytewise.feed(&[*byte]);
+        bytewise.feed(&[*byte]).expect("bytewise feed succeeds");
     }
-    bytewise.finish_input();
+    bytewise
+        .finish_input()
+        .expect("bytewise finish input succeeds");
 
     assert_same_state(&one_shot, &bytewise);
 

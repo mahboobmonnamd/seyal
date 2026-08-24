@@ -36,11 +36,30 @@ One Issue should produce one coherent outcome that can normally be tested, revie
 3. Assign one owner and create an isolated worktree/branch.
 4. Use tests/fixtures first for core behavior.
 5. Implement only the Issue scope.
-6. Run `make check` plus issue-specific tests/benchmarks/security checks.
-7. Open a PR using the repository template.
-8. Require CI evidence; high-risk/core work gets independent review.
-9. Move to Validation where milestone/demo/performance evidence is required.
-10. Merge only after required gates pass. Do not start a dependent milestone early.
+6. Assess **Documentation impact** before final validation. Run the `docs-authoring` skill and update the User Guide and/or Developer Guide in the same Issue/PR when applicable. If no documentation is needed, record a concrete `N/A` rationale in the PR.
+7. Run `make check` plus issue-specific tests/benchmarks/security checks. When documentation changed, also run `make docs-check` and `make docs-build`.
+8. Open a PR using the repository template, including documentation evidence or the `N/A` rationale.
+9. Require CI evidence; high-risk/core work gets independent review.
+10. Move to Validation where milestone/demo/performance evidence is required.
+11. Merge only after required gates pass. Do not start a dependent milestone early.
+
+## Documentation lifecycle
+
+Documentation is part of feature completeness, not a default follow-up task.
+
+Use `.agents/skills/docs-authoring/SKILL.md` whenever implementation adds or changes:
+
+- user-visible behavior, commands, configuration, workflows, troubleshooting or interaction patterns;
+- contributor setup, build/test workflow, architecture orientation, public extension points or engineering procedures;
+- screenshots, diagrams or documentation media.
+
+Choose the audience deliberately:
+
+- **User Guide** for observable product behavior and tasks;
+- **Developer Guide** for contributor orientation and development workflows;
+- authoritative ADR/spec/architecture/engineering records remain under the repository `docs/` authority paths and must not be duplicated into the site as competing truth.
+
+A change with no documentation impact must say why in the PR. Do not satisfy the gate by documenting planned behavior as shipped. Documentation should normally land with the implementation that makes it true so code and docs cannot drift immediately after merge.
 
 ## Scope discipline
 
@@ -77,7 +96,7 @@ That explicit opt-in command uses `scripts/bootstrap-dev.sh` and may provision t
 
 ## Canonical task interface
 
-The stable human/agent/CI entry points are:
+The stable product human/agent/CI entry points are:
 
 ```sh
 make bootstrap
@@ -87,7 +106,16 @@ make check
 make bench
 ```
 
-Do not create competing undocumented command paths.
+Documentation tooling is an opt-in development surface and remains outside the product runtime/build hot path:
+
+```sh
+make docs          # install docs dependencies and start the local documentation server
+make docs-install  # install documentation dependencies only
+make docs-build    # build the static documentation site
+make docs-check    # run Starlight/Astro documentation validation
+```
+
+`make docs` requires Node.js 22.12 or later. Do not create competing undocumented command paths.
 
 Current behavior after Issue #12:
 
@@ -95,7 +123,9 @@ Current behavior after Issue #12:
 - `make build` builds the minimal Rust workspace and, on macOS, builds the native `Seyal.app` Xcode target;
 - `make test` validates repository/tooling/workspace and harness invariants, validates the M001 fuzz registry/corpora without pretending pending production targets are active, runs Rust workspace unit tests, and on macOS runs the native app smoke;
 - `make check` runs the deterministic repository checks, harness/fuzz validation, controlled negative fixtures proving custom validators actually reject bad inputs, Rust formatting/Clippy/tests, architecture layering and the macOS native skeleton on Darwin;
-- `make bench` records and round-trips benchmark environment metadata under `target/benchmarks/`, explicitly marks the harness smoke as not a performance result, and runs real Cargo benchmark targets only once they actually exist.
+- `make bench` records and round-trips benchmark environment metadata under `target/benchmarks/`, explicitly marks the harness smoke as not a performance result, and runs real Cargo benchmark targets only once they actually exist;
+- `make docs` starts the local Starlight documentation site after installing its isolated Node dependencies;
+- `make docs-build` and `make docs-check` validate documentation without becoming dependencies of terminal production execution.
 
 The public `Foundation Quality` workflow separates the fast PR gates into `repository-policy`, `rust-and-harness-quality`, and `native-macos-smoke`. See `docs/engineering/GITHUB-WORKFLOW.md` for the exact responsibility and required-check contract. Linux remains a supported portable-core CI host; native AppKit/Metal build/test steps explicitly skip there instead of introducing a cross-platform GUI abstraction.
 
@@ -121,6 +151,12 @@ make build
 make test
 make check
 make bench
+```
+
+To preview the documentation locally (Node.js 22.12+):
+
+```sh
+make docs
 ```
 
 On macOS, after `make build`, the current non-terminal native skeleton can be launched manually with:

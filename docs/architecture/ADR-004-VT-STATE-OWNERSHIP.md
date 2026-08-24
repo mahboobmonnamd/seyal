@@ -41,7 +41,9 @@ OSC/DCS/SOS/PM/APC framing is recognized sufficiently to preserve parser continu
 
 ### Screen ownership
 
-`TerminalState` owns a primary screen and, only while active, one minimal alternate screen. `CSI ?1049h/l` is the M001 alternate-screen path. Entering alternate creates a clean alternate buffer; leaving discards it and reveals the preserved primary buffer. No output copy or second terminal engine is created.
+`TerminalState` owns a primary screen and, only while active, one minimal alternate screen. `CSI ?1049h/l` is the M001 alternate-screen path. Entering alternate follows the scoped xterm save/switch/clear contract: the primary cursor/rendition remains saved, the clean alternate buffer begins from the active saved pen rendition, and its blank cells carry that pen background with otherwise default cell attributes. Leaving discards the alternate buffer and reveals the preserved primary cursor/rendition state. No output copy or second terminal engine is created.
+
+Full-screen scroll blanking follows the same canonical blank-cell rule: a newly exposed bottom row uses the active pen background and otherwise default attributes. Buffer motion must not accidentally reset visible background color merely because cells were introduced by scrolling rather than ED/EL.
 
 ### Stable logical line identity
 
@@ -70,6 +72,7 @@ M001 accepts printable Unicode scalar input and incremental UTF-8 correctness. I
 - Later VT features extend parser handlers/state; they do not replace the parser architecture.
 - Renderer, PTY, runtime IPC, Blocks and persistence stay outside the VT mutation hot path.
 - Future projection code can consume cell/state/damage without becoming authoritative terminal state.
+- Scroll/alternate blanking use one background-aware cell rule, avoiding renderer-side repair or a second semantic interpretation.
 
 ## RILL salvage review
 
@@ -81,7 +84,8 @@ M001 accepts printable Unicode scalar input and incremental UTF-8 correctness. I
 - non-panicking consumption of unsupported escape families;
 - pending-wrap behavior for printable output;
 - primary/alternate separation;
-- cursor/grid clamping on resize.
+- cursor/grid clamping on resize;
+- active-background blanking for scroll-created and newly cleared alternate cells, after revalidation in Issue #68.
 
 ### Corrected or redesigned
 
@@ -89,7 +93,8 @@ M001 accepts printable Unicode scalar input and incremental UTF-8 correctness. I
 - RILL-specific `PodGrid`/diff/reply coupling is replaced by Seyal-native state plus generation damage;
 - RILL mutation-test production hooks are not imported;
 - deferred behavior is not exposed as supported M001 functionality;
-- logical line identity is made explicit from the start for Block/history compatibility.
+- logical line identity is made explicit from the start for Block/history compatibility;
+- Issue #68 corrected two rewrite regressions where the initial Seyal salvage accidentally used default rendition/background for scroll-created and alternate-screen cells instead of the active saved pen semantics.
 
 ### Rejected/deferred
 

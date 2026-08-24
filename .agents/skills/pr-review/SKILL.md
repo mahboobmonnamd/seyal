@@ -1,21 +1,21 @@
 ---
 name: pr-review
-description: Independently review a Seyal pull request against Issue scope, architecture/spec authority, tests, performance, security, docs and unintended changes.
+description: Seyal facade for AI-SDLC code review, adding Seyal architecture, terminal hot-path, repository, and specialist evidence requirements.
 ---
 
 # Pull request review
 
-Review independently of the implementation agent when required.
+Follow the canonical generic procedure in `.sdlc/framework/skills/code-review/SKILL.md`. If it is unavailable, run `make bootstrap-agents` first.
 
-1. Read `AGENTS.md`, linked Issue, referenced architecture/spec/milestone and PR template evidence.
-2. Verify the Issue was Ready and the PR remains inside its scope.
-3. Diff against authority: look for ownership drift, duplicate state, temporary production paths, new synchronous hot-path dependencies and architecture by precedent.
-4. Verify tests prove intended behavior and were not weakened or rewritten around implementation errors.
-5. Verify required conformance/fuzz/integration/failure evidence.
-6. Verify performance/memory claims against actual measurements and baselines.
-7. Run/inspect the required security review for trust-boundary changes.
-8. Verify documentation and reproducible demo/verification steps.
-9. Identify unrelated cleanup, generated artifacts or hidden dependency changes.
-10. Approve only when CI evidence and all applicable gates are complete; otherwise request concrete changes or return the Issue to Refinement/architecture review.
+Apply only these Seyal-specific rules on top of the generic procedure:
 
-A plausible implementation is not enough if it violates accepted architecture or lacks evidence.
+1. Review the linked GitHub Issue, `AGENTS.md`, and every governing architecture/ADR/spec/milestone source before accepting implementation rationale.
+2. Enforce the Issue's in/out scope and Seyal's single-authoritative-state rules. Flag duplicate VT/grid/runtime ownership, temporary production paths, or architecture-by-precedent as blocking.
+3. Treat new synchronous terminal hot-path dependencies, unnecessary IPC/serialization/allocations/locks/language round trips, or licensing/cloud coupling as architecture/performance concerns requiring explicit authority.
+4. Inspect required terminal evidence where applicable: conformance fixtures, fuzz/regression corpus, PTY/integration/failure tests, renderer checks, and measured latency/CPU/RSS/GPU results.
+5. Require `security-review`, documentation validation, macOS UI/accessibility evidence, or other specialist review only when the Issue's risk/impact classification requires it.
+6. Verify tests were not weakened and claims do not exceed measurements. `make check`/CI success is required evidence, not sufficient proof by itself.
+7. A clean review maps to AI-SDLC `APPROVE_FOR_VERIFICATION`; it does not mark the Issue or milestone Done. Route next to `verification`.
+8. Core/high-risk work must retain the independent-review requirement in `ISSUE-PROTOCOL.md`.
+
+If a reusable review-rule defect is found, fix it in `ai-sdlc` rather than duplicating generic code-review procedure here.

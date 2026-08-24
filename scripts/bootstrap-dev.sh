@@ -10,7 +10,15 @@ AI_SDLC_DIR="${ROOT}/.sdlc/framework"
 XCODEBUILD_MCP_VERSION="2.7.0"
 AI_SDLC_REPO="https://github.com/mahboobmonnamd/ai-sdlc.git"
 AI_SDLC_SOURCE_REF="main"
-AI_SDLC_COMMIT="3a5bf20feb6c890d2d94af949fa82679223dd922"
+AI_SDLC_COMMIT="30fdbadfb16080094b42edf4e008e4ed4bef6b44"
+AI_SDLC_SKILLS=(
+  project-context
+  development-readiness
+  work-item-design
+  implementation
+  code-review
+  verification
+)
 
 info() { printf '[seyal bootstrap] %s\n' "$*"; }
 warn() { printf '[seyal bootstrap] WARN: %s\n' "$*" >&2; }
@@ -42,10 +50,13 @@ ensure_ai_sdlc() {
   fi
   git -C "${AI_SDLC_DIR}" checkout --detach --force "${AI_SDLC_COMMIT}"
 
-  [[ -f "${AI_SDLC_DIR}/skills/project-context/SKILL.md" ]] || {
-    echo "pinned AI-SDLC revision is missing skills/project-context/SKILL.md" >&2
-    exit 1
-  }
+  local skill
+  for skill in "${AI_SDLC_SKILLS[@]}"; do
+    [[ -f "${AI_SDLC_DIR}/skills/${skill}/SKILL.md" ]] || {
+      echo "pinned AI-SDLC revision is missing skills/${skill}/SKILL.md" >&2
+      exit 1
+    }
+  done
   [[ -f "${AI_SDLC_DIR}/tools/project_context.py" ]] || {
     echo "pinned AI-SDLC revision is missing tools/project_context.py" >&2
     exit 1
@@ -159,6 +170,7 @@ verify_repo_skills() {
   local required=(
     architecture-change implement-issue issue-refinement milestone-validation
     performance-gate pr-review security-review vt-tdd project-context
+    development-readiness verification
     macos-native-design macos-ui-testing macos-accessibility visual-regression
     terminal-conformance metal-renderer rust-fuzzing apple-platform-docs image-to-code
   )
@@ -193,7 +205,7 @@ main() {
   configure_copilot
 
   info "complete"
-  info "Seyal-specific skills stay in-repo; generic project-context is pinned from AI-SDLC; no credentials were written"
+  info "Seyal-specific skills stay in-repo; generic project-context and core development loop are pinned from AI-SDLC; no credentials were written"
 }
 
 main "$@"

@@ -90,6 +90,8 @@ M001 supports:
 
 Saved state includes cursor position, pending-wrap state and active pen style. Restore clamps to current dimensions after resize.
 
+The saved-cursor slot belongs to the current `Screen`. The M001 `?1049` subset in §11 does not overwrite an existing primary saved-cursor slot.
+
 ## 8. Erase
 
 ### 8.1 ED (`CSI Ps J`)
@@ -134,22 +136,36 @@ Other SGR parameters are deferred: they do not corrupt subsequent supported SGR 
 Supported:
 
 - `CSI ?25h/l` — cursor visibility
-- `CSI ?1049h/l` — minimal alternate screen
+- `CSI ?1049h/l` — minimal alternate-screen subset defined below
 
 Other private modes are deferred and must not corrupt parser continuity.
 
 ## 11. Primary and alternate screens
 
-- Primary screen is preserved while alternate screen is active.
-- Entering `?1049h` has xterm-compatible save/switch/clear semantics for the M001 subset: the primary cursor/rendition state remains saved, a clean alternate screen with the same dimensions is activated, its rows receive fresh `LineId` values from the same terminal-owned allocator, and the alternate screen begins with the active saved pen rendition rather than resetting SGR state merely because the buffer changed.
-- Blank cells in the newly cleared alternate screen use the active pen background and otherwise default cell attributes.
-- Rendition changes made while alternate is active belong to that alternate-screen lifetime and do not leak into the restored primary state on `?1049l`.
-- Re-entering while already active is idempotent.
-- Leaving `?1049l` discards the alternate buffer and reveals the unchanged primary buffer with its saved cursor/rendition state.
-- Leaving while already on primary is idempotent.
-- Resize while alternate is active resizes both primary and alternate buffers so leaving alternate does not reveal stale dimensions.
+`CSI ?1049h/l` in M001 is deliberately narrower than a claim of complete xterm mode-1049 DECSC/DECRC compatibility.
 
-M001 does not implement broad alternate-screen compatibility variants beyond the sequence above.
+On `?1049h`:
+
+- the primary `Screen` remains unchanged, including its cursor, active pen and any existing `ESC 7` / `CSI s` saved-cursor state;
+- a clean alternate screen with the same dimensions is activated;
+- alternate rows receive fresh `LineId` values from the same terminal-owned allocator;
+- the alternate active pen is initialized from the current primary pen;
+- a printed alternate cell therefore receives the full inherited pen style;
+- untouched blank cells in the clean alternate grid carry only the inherited background color with otherwise default cell attributes.
+
+While alternate is active:
+
+- cursor, pen and saved-cursor mutations belong to the alternate `Screen` lifetime;
+- alternate rendition/cursor changes do not mutate the preserved primary screen.
+
+On `?1049l`:
+
+- the alternate screen is discarded;
+- the unchanged primary screen is revealed with its pre-entry cursor, pen and saved-cursor slot intact.
+
+Re-entering while already active and leaving while already on primary are idempotent. Resize while alternate is active resizes both primary and alternate buffers so leaving alternate does not reveal stale dimensions.
+
+M001 does **not** claim the broader xterm behavior in which mode 1049 itself participates in DECSC/DECRC save-slot semantics. That interaction is deferred until it is deliberately implemented and conformance-tested together with the required cursor-save behavior.
 
 ## 12. Resize
 
@@ -207,6 +223,7 @@ This specification does not claim:
 - device replies;
 - sixel/Kitty/iTerm images;
 - complete grapheme/emoji/width handling;
+- full xterm `?1049` interaction with DECSC/DECRC save slots beyond the M001 subset in §11;
 - production scrollback/reflow;
 - Vim/tmux/htop/Claude Code compatibility.
 
@@ -224,7 +241,7 @@ Historical implementation evidence reviewed for this contract comes from RILL co
 
 RILL behavior is not normative. Where RILL and this specification differ, this specification and current Seyal architecture win.
 
-Issue #68 re-audited two blanking/rendition behaviors against the retained RILL evidence and xterm 1049 save/switch/clear semantics before making them normative here. The resulting regression tests are Seyal-owned and do not import RILL module architecture.
+Issue #68 re-audited active-background blanking for scroll-created and newly cleared alternate cells. Issue #78 then tightened the normative `?1049` wording after comparing the implemented M001 behavior with the broader xterm DECSC/DECRC interaction: Seyal now specifies only what it implements and tests, rather than borrowing a stronger compatibility label.
 
 Issue #71 re-audited long-lived line identity and removed the initial `u32` namespace/local-counter saturation model. Tests cover uniqueness across scroll, resize growth and repeated alternate-screen lifetimes, plus allocator boundary injection proving the final finite ID is issued at most once before explicit exhaustion.
 

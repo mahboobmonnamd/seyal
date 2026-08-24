@@ -210,16 +210,22 @@ Therefore the Seyal rule is:
 
 ### 5.4 Resize
 
+Resize is one logical Runtime transaction across two physical state holders: the kernel terminal endpoint geometry and the canonical `TerminalState`. `TerminalState` remains the semantic/presentation authority; physical syscall commit order does not create a second authority.
+
 ```text
 pane/window geometry
 → client proposes rows/cols
-→ controller authority validates
-→ runtime resizes canonical TerminalState
-→ reflow where required
-→ PTY/ConPTY winsize
+→ controller authority validates resize ownership + geometry
+→ runtime prepares all locally rejectable/infallible resize inputs
+→ apply fallible PTY/ConPTY winsize
+→ commit canonical TerminalState resize + reflow
 → new damage generation
 → renderer projection
 ```
+
+The Runtime must not publish/reflow a new canonical geometry that the terminal endpoint rejected. Conversely, after the endpoint accepts the size, canonical commit must not be allowed to fail silently and leave endpoint/TerminalState divergence. If future `TerminalState::resize` gains a recoverable failure after validation, resize must use an explicit prepare/commit/rollback transaction before retaining endpoint-first physical commit order.
+
+No renderer/client may observe the new geometry until canonical `TerminalState` commit completes.
 
 Multi-client attach requires explicit resize authority. It must never degenerate into uncontrolled “last client packet wins.”
 

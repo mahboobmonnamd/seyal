@@ -17,7 +17,9 @@ This directory is the canonical entry point for Seyal foundation architecture.
 11. [`../milestones/MILESTONE-001.md`](../milestones/MILESTONE-001.md) — authoritative M001 implementation scope, passes, tests, security gates, benchmarks, acceptance criteria, and demo procedure.
 12. [`ui/SEYAL-UI-ARCHITECTURE-001.md`](ui/SEYAL-UI-ARCHITECTURE-001.md) — presentation architecture for Flow/Raw/TUI, history, Blocks, workspace chrome, inspectors, attention/approvals, desktop/mobile continuity, and render priority.
 13. [`SEYAL-AGENT-PLATFORM-RD-PLAN-001.md`](SEYAL-AGENT-PLATFORM-RD-PLAN-001.md) — agent-native OSS foundation research plan; consumes stable Runtime/Workspace identities and remains outside terminal hot-path ownership.
-14. [`source/FOUNDATION-RD-BRIEF.md`](source/FOUNDATION-RD-BRIEF.md) — source requirements that initiated the architecture pass; not an implementation specification.
+14. [`SEYAL-WORKFLOW-EXTENSION-PLATFORM-RD-001.md`](SEYAL-WORKFLOW-EXTENSION-PLATFORM-RD-001.md) — deferred R&D direction for task-focused DevOps/agent workflows and provider/adaptor seams; no implementation is authorized before Pass 5 plus required UI foundations.
+15. [`SEYAL-APPLICATION-PROTOCOL-RD-001.md`](SEYAL-APPLICATION-PROTOCOL-RD-001.md) — deferred R&D direction for a future capability-negotiated Seyal Application Protocol/SDK derived from proven integrations rather than a premature generic "Shell API".
+16. [`source/FOUNDATION-RD-BRIEF.md`](source/FOUNDATION-RD-BRIEF.md) — source requirements that initiated the architecture pass; not an implementation specification.
 
 ## Authority
 
@@ -33,6 +35,7 @@ This directory is the canonical entry point for Seyal foundation architecture.
 - ADR-007 owns the Workspace/domain versus presentation boundary, execution→Workspace ownership association, persistence-class separation, memory/resource-tier contract and the rule that future agent work identity is independent of chat/provider-session identity. It does not authorize production persistence or agent implementation.
 - ADR-008 owns local terminal capability advertisement: Runtime/product composition selects the validated `TERM`/terminfo profile, the PTY layer remains policy-neutral, and M001 uses bundled `seyal-m001` without advertising unsupported capabilities.
 - The Agent Platform R&D is subordinate to the terminal/runtime/workspace ownership architecture and must consume stable identities/capabilities without reverse ownership.
+- Workflow-extension and application-protocol documents are **deferred R&D only**. They do not expand M001 or authorize plugin/protocol implementation.
 - Source briefs preserve research inputs and historical requirements only.
 - Git history and pull requests preserve superseded wording; duplicate `-v2`, `-final`, `-new`, `-amendment`, or correction documents are not required.
 

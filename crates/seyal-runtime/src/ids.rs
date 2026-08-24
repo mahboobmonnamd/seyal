@@ -29,9 +29,6 @@ impl RuntimeId {
 }
 
 impl WorkspaceId {
-    /// The M001 implicit Workspace has one stable semantic identity inside each
-    /// local-user scope. The enclosing singleton/user scope disambiguates users;
-    /// this value deliberately does not derive from RuntimeId, cwd or UI state.
     pub const fn m001_default() -> Self {
         Self(DEFAULT_WORKSPACE)
     }
@@ -58,8 +55,6 @@ impl ProjectionId {
 macro_rules! impl_id_wire_bytes {
     ($type:ty) => {
         impl $type {
-            /// Wire/ABI representation is the raw opaque 128-bit value; callers
-            /// must not derive semantic meaning from its bits (SPEC-004 section 6.1).
             pub fn to_bytes(self) -> [u8; 16] {
                 self.0.to_le_bytes()
             }
@@ -71,6 +66,7 @@ macro_rules! impl_id_wire_bytes {
     };
 }
 
+impl_id_wire_bytes!(RuntimeId);
 impl_id_wire_bytes!(ExecutionId);
 impl_id_wire_bytes!(AttachmentId);
 impl_id_wire_bytes!(ProjectionId);
@@ -131,9 +127,11 @@ mod tests {
 
     #[test]
     fn wire_ids_round_trip_through_raw_little_endian_bytes() {
+        let runtime = RuntimeId::new();
         let execution = ExecutionId::new();
         let attachment = AttachmentId::new();
         let projection = ProjectionId::new();
+        assert_eq!(RuntimeId::from_bytes(runtime.to_bytes()), runtime);
         assert_eq!(ExecutionId::from_bytes(execution.to_bytes()), execution);
         assert_eq!(AttachmentId::from_bytes(attachment.to_bytes()), attachment);
         assert_eq!(ProjectionId::from_bytes(projection.to_bytes()), projection);

@@ -52,6 +52,92 @@ Parsing arbitrary terminal text for approvals, tool calls or completion is fragi
 
 A single interface with only start/input/stop would discard important approval, usage, diff and session features. Seyal instead negotiates namespaced capability versions from the shared `CapabilitySet`.
 
+## Adapter ecosystem and extension model
+
+Seyal OSS must support **both** first-party adapters maintained in this repository and independently developed third-party/private adapters. Open source contribution is one distribution path, not a requirement for integration.
+
+```text
+Seyal OSS
+  ├─ Harness Adapter Protocol + SDK
+  ├─ Adapter manifest schema
+  ├─ discovery / compatibility negotiation
+  ├─ conformance suite
+  ├─ first-party adapters
+  │    ├─ Codex
+  │    ├─ Claude Code
+  │    └─ ...
+  └─ external adapter processes
+       ├─ community adapter
+       └─ private organization adapter
+```
+
+### First-party adapters
+
+Important broadly used harnesses should have reviewed first-party OSS adapters where maintenance cost is justified. They may be compiled with Seyal when doing so is the simplest and safest deployment, but they still conform to the same capability and event contracts exposed to external adapters.
+
+### External adapters are out-of-process by default
+
+The default third-party extension boundary is an **adapter executable/process**, not an arbitrary Rust dynamic library loaded into the long-lived Seyal Runtime.
+
+Reasons:
+
+- Rust has no stable plugin ABI suitable for uncoordinated third-party binaries;
+- an unsafe/incompatible in-process adapter could corrupt or crash the Runtime that owns live executions;
+- process isolation gives clear lifecycle, crash and resource boundaries;
+- external adapters may be implemented in languages other than Rust;
+- adapter upgrade/restart can be independent of Seyal release cadence.
+
+The adapter control/event channel is a bounded, versioned, typed IPC protocol. Exact wire encoding is deferred to the implementation spec; it must not place JSON/serialization or external adapter execution on PTY → VT → TerminalState → render progress.
+
+An external adapter never receives the PTY master FD or becomes terminal-state authority. If a harness needs a raw TUI, Seyal owns the real `TerminalExecution`; the adapter references the same logical harness session through opaque session identifiers/capabilities.
+
+### Adapter manifest
+
+Every externally discovered adapter supplies a non-executable manifest containing at least:
+
+```text
+adapter_id
+adapter_version
+protocol_version_range
+entrypoint
+publisher_identity? / signature_metadata?
+supported_platforms
+claimed_capabilities
+required Seyal capability scopes
+upstream harness compatibility/probe rules
+configuration schema reference
+```
+
+The manifest is descriptive, not proof. Runtime capability support remains `declared | probed | observed`.
+
+### Discovery and installation
+
+Initial design supports explicit user/system installation locations and explicit configuration. Repository content may request or recommend an adapter by ID/version, but **opening a repository must never execute an uninstalled/untrusted adapter automatically**.
+
+A future registry/package index is optional convenience, not protocol authority. The protocol and conformance suite remain usable for adapters distributed by GitHub release, package manager, organization tooling or local path.
+
+Adapter selection order must be deterministic and inspectable. Duplicate adapter IDs from multiple locations are an error unless an explicit configured precedence resolves them.
+
+### Trust and authorization
+
+Installing/enabling an external adapter is an explicit trust decision. `required Seyal capability scopes` describe what Seyal will authorize through its own APIs; they do **not** claim that the operating system sandbox restricts everything the adapter process can access as the user.
+
+Keep these concepts separate:
+
+```text
+Seyal capability authorization
+≠ adapter process OS sandbox
+≠ harness/provider authorization
+```
+
+A stronger macOS sandbox/container policy may be added after platform-specific R&D, but the protocol must remain secure when the adapter is merely an untrusted peer process with only bounded Seyal IPC access.
+
+### Adapter failure semantics
+
+External adapter exit/crash must not kill a still-live harness `TerminalExecution`. The Runtime marks structured capability loss, drains/reconciles durable control state, and follows the normal capability-dependent recovery path. Restarting an adapter must not create a new `Attempt` unless actual work is retried.
+
+No adapter can claim that its own restart restores a lost PTY/process.
+
 ## Capability families
 
 Minimum protocol vocabulary:
@@ -110,12 +196,19 @@ Implement after R&D in this order:
 3. **Gemini ACP adapter** — ACP is strategically attractive because it is a standardized JSON-RPC client protocol; stabilize against the upstream capability/version surface before making it a foundation dependency.
 4. **OpenCode adapter** — valuable OpenAPI/SSE reference implementation and conformance test for a server-shaped harness.
 
+After two first-party adapters prove the contract, add one small **out-of-tree reference adapter fixture** to prove the public SDK/discovery process does not depend on private in-repository APIs.
+
 This ordering is about integration clarity, not a product endorsement or model-quality ranking.
 
 ## Adapter conformance suite
 
 Every adapter must be tested against retained fixtures/probes for:
 
+- manifest/schema/protocol-version validation;
+- deterministic discovery and duplicate-ID handling;
+- untrusted/uninstalled repository adapter request does not auto-execute;
+- adapter crash/restart while underlying TerminalExecution remains alive;
+- bounded/oversized IPC behavior;
 - version/capability discovery;
 - launch with explicit working directory/environment policy;
 - upstream session ID capture;
@@ -133,35 +226,47 @@ Every adapter must be tested against retained fixtures/probes for:
 
 ## Security
 
-- Harness process is untrusted code with user-granted capabilities.
+- Harness and external adapter processes are untrusted code with explicitly granted Seyal capabilities.
 - Structured events are data, never instructions to Seyal's terminal engine.
 - Approval IDs must bind to exact run/session/action and expire; never approve by matching terminal text.
 - Adapter authentication material is outside event payloads/logs/caches.
 - MCP/tool capabilities are separately authorized; discovering a tool does not authorize execution.
-- External hook output is bounded and schema validated.
+- External hook/adapter output is bounded and schema validated before allocation proportional to claimed payload size.
+- Repository configuration may reference adapter IDs but cannot silently install/enable/execute code.
+- Adapter manifest permissions are not represented as an OS sandbox guarantee.
 
 ## Performance
 
-No harness adapter callback, event parser, hook, telemetry sink or agent process is on PTY→VT→TerminalState→damage→render. Event ingestion uses bounded asynchronous queues with overload policy; dropping noncritical telemetry is preferable to terminal backpressure. Critical control events may pause the **AgentRun**, never terminal rendering.
+No harness adapter callback, event parser, hook, telemetry sink or agent process is on PTY→VT→TerminalState→damage→render. Event ingestion uses bounded asynchronous queues with overload policy; dropping noncritical telemetry is preferable to terminal backpressure. Durable control/accounting events use bounded persistence/replay/backpressure semantics at the **AgentRun**, never terminal rendering.
 
 ## OSS/commercial ownership
 
-**OSS:** protocol, capability negotiation, adapter SDK, conformance suite and useful first-party local adapters.  
-**Commercial:** managed lifecycle across organization fleets, hosted adapters/workers, organization policy/credentials/analytics. Commercial code consumes the OSS protocol.
+**OSS:** protocol, capability negotiation, public adapter SDK, manifest/discovery rules, external-adapter process contract, conformance suite and useful first-party local adapters.  
+**Commercial:** managed lifecycle across organization fleets, curated/approved adapter catalogs, organization policy/credentials/analytics, hosted adapters/workers. Commercial code consumes the OSS protocol.
+
+A private organization adapter can consume the OSS SDK without becoming commercial-repository code or requiring upstream inclusion.
 
 ## Success / kill criteria
 
-Pass when two materially different harnesses can map lifecycle, session identity, cancellation, approvals and structured events without vendor fields leaking into core identities, while raw TUI remains untouched.
+Pass when:
+
+- two materially different first-party harnesses can map lifecycle, session identity, cancellation, approvals and structured events without vendor fields leaking into core identities;
+- one out-of-tree adapter can be discovered and pass conformance without linking to Seyal Runtime internals;
+- an adapter crash does not kill a live terminal execution;
+- untrusted repository content cannot cause arbitrary adapter execution;
+- raw TUI remains untouched.
 
 Reject/rework if integration requires:
 
 - parsing arbitrary terminal text for correctness-critical events;
 - a second PTY/session to represent one logical run;
+- loading arbitrary third-party native code into the authoritative Runtime;
 - blocking terminal I/O on adapter work;
 - claiming unsupported resume/usage/cost semantics.
 
 ## ADR/spec required before implementation
 
 - Agent Platform Ownership/Lifecycle ADR (shared after #51–#57 stabilize).
-- `HarnessAdapter` capability protocol specification with conformance semantics.
+- `HarnessAdapter` capability + external adapter process/discovery specification with conformance semantics.
+- External adapter trust/authorization/threat-model specification.
 - First Codex adapter behavior spec and threat review.

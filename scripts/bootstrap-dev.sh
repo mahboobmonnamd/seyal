@@ -50,6 +50,9 @@ ensure_ai_sdlc() {
     echo "pinned AI-SDLC revision is missing tools/project_context.py" >&2
     exit 1
   }
+
+  info "validating Seyal derived project context"
+  python3 "${AI_SDLC_DIR}/tools/project_context.py" --root "${ROOT}" validate
 }
 
 ensure_github_mcp_binary() {

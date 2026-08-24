@@ -20,7 +20,7 @@ use seyal_runtime::{
         fd_transfer::{self, RecvFd},
         framing::{
             Attach, Attached, ClientHello, Detach, ErrorCode, ErrorMessage, FrameHeader,
-            HEADER_LEN, InputRef, MessageType, Resync, Resize, Role, ServerHello, encode_frame,
+            HEADER_LEN, InputRef, MessageType, Resize, Resync, Role, ServerHello, encode_frame,
         },
     },
     projection::{
@@ -202,7 +202,8 @@ fn another_attached_connection_cannot_reuse_controller_attachment_identity() {
 
     let mut attacker = harness.connect();
     harness.hello(&mut attacker);
-    let (_observer, _observer_mapping) = harness.attach(&mut attacker, execution_id, Role::Observer);
+    let (_observer, _observer_mapping) =
+        harness.attach(&mut attacker, execution_id, Role::Observer);
 
     harness.expect_stale(
         &mut attacker,
@@ -270,7 +271,10 @@ fn another_attached_connection_cannot_reuse_controller_attachment_identity() {
                 break;
             }
         }
-        assert!(Instant::now() < deadline, "owner projection did not advance");
+        assert!(
+            Instant::now() < deadline,
+            "owner projection did not advance"
+        );
         harness.pump();
     }
 

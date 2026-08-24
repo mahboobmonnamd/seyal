@@ -1,8 +1,8 @@
 # ADR-006 — Bounded multi-execution Runtime reactor on macOS
 
-- **Status:** Accepted for M001 when this change is merged
+- **Status:** Accepted for M001
 - **Date:** 2026-08-24
-- **Issue:** #70
+- **Issue:** #70, hardened by #80
 - **Scope:** M001 Pass 4 headless Runtime readiness, process-exit observation, bounded input/output progress, and termination scheduling
 
 ## Context
@@ -37,11 +37,13 @@ Seyal Runtime
 
 The kqueue descriptor is a Runtime-internal descriptor and must be close-on-exec. It must never leak into spawned shells/commands. Event/change buffers are bounded and reusable; the wait/dispatch path must not require heap allocation per event.
 
-### 2. Raw descriptors stay encapsulated
+### 2. Raw descriptors and event identity stay encapsulated
 
 The reactor implementation may register the PTY master descriptor and child PID internally because it lives inside `seyal-exec`, but public Runtime callers do not receive a raw descriptor or ownership-transferring handle.
 
-The reactor allocates an opaque generation-bearing registration token and returns it to the Runtime for association with an `ExecutionId`. Runtime code does not choose or recycle the registration generation. Events return that token and readiness kind, not a raw FD or PID as identity. Registration generations prevent a stale queued event from being applied to a later execution after FD/PID reuse.
+The reactor allocates an opaque generation-bearing `RegistrationToken` and returns it to the Runtime for association with an `ExecutionId`. Runtime code does not choose or recycle the registration generation. Events return that token and readiness kind, not a raw FD or PID as identity. Registration generations prevent a stale queued event from being applied to a later execution after FD/PID reuse.
+
+On Darwin, the `kevent.udata` field is only an event-routing carrier. Seyal encodes a by-value opaque integer/generation token (or an equivalent non-owning integer representation) in it. `udata` must never contain a pointer or reference to movable, freed, or Runtime-owned Rust storage. Kernel event delivery therefore cannot outlive a Rust object's address and turn a stale event into a dangling-pointer dereference.
 
 The required lifecycle is:
 
@@ -52,27 +54,39 @@ create TerminalExecution
 → publish execution in Runtime registry only if still live
 → service events
 → mark/remove execution from registry
-→ deregister reactor filters
+→ deregister reactor filters idempotently
 → only then drop the TerminalExecution owner
 ```
 
 The spawn-to-registration window is a correctness boundary: a command that exits immediately must not become a permanently registered or permanently unobserved execution. Registration followed by an immediate nonblocking child-state reconciliation closes that race. Rollback must remove any partially installed registration and explicitly finalize/reap the created execution if create/register/publish fails.
 
+Deregistration is idempotent. Teardown can race with kernel-observed process/descriptor/filter disappearance; expected already-gone conditions are treated as successful cleanup (with diagnostics where useful), not promoted into a Runtime-wide failure. A queued event carrying an obsolete generation is ignored even if the numeric FD or PID has already been reused.
+
 ### 3. Read progress is bounded and fair
 
 A readable event causes the Runtime reactor owner to call the existing nonblocking `TerminalExecution::read_output` path. That path still feeds bytes directly into the one authoritative `TerminalState`.
 
-One ready execution may consume only a bounded byte/work quantum per dispatch before the loop returns to other ready events. The exact initial quantum is an implementation constant justified by tests/measurements, not a product protocol. Continuous output from one PTY must not starve unrelated executions or Runtime control events.
+One ready execution may consume only a bounded read byte/work quantum per dispatch before the loop returns to other ready events. The exact initial quantum is an implementation constant justified by tests/measurements, not a product protocol. Continuous output from one PTY must not starve unrelated executions or Runtime control events.
 
-Level readiness must be drained until `WouldBlock` or the per-dispatch quantum is reached. If the quantum is reached while data remains readable, the level-triggered registration remains eligible for a subsequent dispatch. No renderer/client acknowledgement may gate the next PTY read.
+Level readiness must be drained until `WouldBlock` or the per-dispatch read quantum is reached. If the quantum is reached while data remains readable, the level-triggered registration remains eligible for a subsequent dispatch. No renderer/client acknowledgement may gate the next PTY read.
 
-### 4. Writable readiness is armed only for queued input
+### 4. Writable readiness, aggregate memory and write fairness
 
 The Runtime owns a bounded pending-input queue per execution, but only the single Runtime reactor owner mutates a `TerminalExecution` or writes its PTY. Cross-thread/control producers, when they exist, enqueue bounded typed control/input work and trigger the Runtime wake event; they never call `TerminalExecution` concurrently.
 
+Input memory is bounded at two levels:
+
+```text
+per-execution pending-input byte limit
++
+Runtime-wide total pending-input byte limit across all executions
+```
+
+A submission is accepted only if both limits remain satisfied. This prevents 100 individually bounded terminals from multiplying into an unintended aggregate memory commitment. Queue-full/budget-full is explicit backpressure to the caller/control plane; already accepted bytes retain order and are not discarded.
+
 On the reactor owner, input handling first attempts a nonblocking PTY write. If progress becomes partial or `WouldBlock`, unwritten bytes remain queued and writable interest is armed. When the queue becomes empty, writable interest is removed/disabled so idle PTYs do not create permanent writable wakeups.
 
-Queue capacity is bounded. Queue-full is explicit backpressure to the caller/control plane; it must never block PTY output processing, reorder already accepted bytes, or grow memory without bound.
+Writable draining is also fair: one execution may consume only a bounded write byte/work quantum per dispatch before the loop returns to other ready PTYs and Runtime control work. A large queued paste/upload must not monopolize the event loop merely because its PTY remains writable. The exact initial write quantum is implementation evidence, not product protocol.
 
 ### 5. Child exit is an explicit reactor event and primary completion boundary
 
@@ -144,15 +158,19 @@ Rejected for M001. Neither is justified by the current terminal/runtime requirem
 Pass 4 implementation must record reproducible evidence for at least:
 
 - idle Runtime CPU, RSS and thread count with 1, 10, 50 and 100 live idle executions;
-- one continuously busy output execution alongside idle/interactive executions, proving bounded fairness;
+- one continuously busy output execution alongside idle/interactive executions, proving bounded read fairness;
+- one execution with a large pending writable backlog alongside readable/control work, proving bounded write fairness;
 - PTY-readable event → committed `TerminalState` generation latency;
-- bounded pending-input behavior and writable-interest disablement after drain;
+- per-execution and Runtime-wide aggregate pending-input backpressure;
+- writable-interest disablement after drain;
 - create/register/remove cycles without FD/kqueue registration leakage;
+- idempotent removal when filters/processes/descriptors disappear during teardown;
 - immediate-exit commands cannot be missed in the spawn/register race;
 - primary-child exit is observed and final buffered output is preserved even when descendants keep the PTY slave open;
 - continuous descendant output cannot extend post-primary-exit lifetime beyond the configured finalization bound;
 - a distinct job-control process group cannot keep Runtime terminal resources registered after execution finalization;
 - stale registration events cannot act on a replacement execution;
+- event routing uses by-value tokens rather than Rust object pointers;
 - Runtime control wakeup does not require polling sleeps;
 - the kqueue descriptor and other Runtime-only descriptors are not inherited by spawned commands.
 
@@ -162,10 +180,12 @@ These are baseline measurements, not claims that M001 already meets the long-ter
 
 - Reactor tokens are routing identities, not authorization credentials.
 - Registration generations are allocated by the reactor and are not caller-selected/reused identity.
+- Darwin `kevent.udata` carries only a by-value opaque token representation; it never points at movable/freed Rust storage.
 - No public raw PTY descriptor is introduced.
 - Runtime-only descriptors are close-on-exec.
 - Malformed/stale registration events are ignored safely.
-- Input/control queue and registration counts are bounded by Runtime policy.
+- Expected already-gone teardown conditions are idempotent cleanup, not Runtime-wide failure.
+- Per-execution input, aggregate Runtime input, control queue and registration counts are bounded by Runtime policy.
 - A reactor failure is a Runtime-level failure and must not silently create a second terminal owner or hand PTYs to the GUI.
 - Same-user local transport authentication/permissions remain Pass 5 responsibilities.
 - Runtime crash survival of arbitrary live PTYs remains explicitly outside M001.
@@ -175,6 +195,10 @@ These are baseline measurements, not claims that M001 already meets the long-ter
 - Pass 4 can introduce the real `seyal-runtime` physical boundary without changing PTY/VT ownership.
 - `seyal-exec` gains a small macOS-only readiness-composition seam, not a daemon/socket abstraction.
 - The Runtime can supervise many executions with a constant/small bounded thread model.
+- Event delivery cannot depend on the memory address/lifetime of movable Rust registry entries.
+- Per-terminal backpressure cannot multiply into unbounded aggregate pending-input memory.
+- Both read and write progress have explicit dispatch fairness boundaries.
+- Teardown races are handled idempotently instead of escalating normal kernel disappearance into Runtime failure.
 - Blocking termination convenience APIs are kept out of the shared event-loop path.
 - Primary-child exit cannot be confused with PTY EOF, and descendants cannot keep dead executions registered indefinitely.
 - Final primary-command output is drained fairly without a one-shot quantum truncation rule.
@@ -186,7 +210,7 @@ Revisit this ADR if measured macOS evidence shows direct `kqueue` cannot meet co
 
 ## External evidence reviewed
 
-- Darwin/macOS `kqueue(2)` semantics for `EVFILT_PROC`, `NOTE_EXIT`, and `EVFILT_USER`/`NOTE_TRIGGER`.
+- Darwin/macOS `kqueue(2)` semantics for `EVFILT_PROC`, `NOTE_EXIT`, `EVFILT_USER`/`NOTE_TRIGGER`, event identity and `udata` round-tripping.
 - POSIX/macOS session and job-control semantics: `setsid()` creates one session/process group initially, while interactive shells may create distinct process groups for foreground/background jobs.
 - Mio 1.2.x documentation describing macOS `kqueue`, token-based readiness, `Waker`, and its low-level event-loop scope.
 

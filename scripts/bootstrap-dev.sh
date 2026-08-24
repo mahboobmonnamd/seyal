@@ -9,7 +9,6 @@ AI_SDLC_DIR="${ROOT}/.sdlc/framework"
 # Reviewed/pinned developer-tool inputs. Update only through a normal Seyal PR.
 XCODEBUILD_MCP_VERSION="2.7.0"
 AI_SDLC_REPO="https://github.com/mahboobmonnamd/ai-sdlc.git"
-AI_SDLC_SOURCE_REF="main"
 AI_SDLC_COMMIT="30fdbadfb16080094b42edf4e008e4ed4bef6b44"
 AI_SDLC_SKILLS=(
   project-context
@@ -41,11 +40,11 @@ ensure_ai_sdlc() {
   fi
 
   info "materializing pinned AI-SDLC ${AI_SDLC_COMMIT}"
-  git -C "${AI_SDLC_DIR}" fetch --depth 1 origin "${AI_SDLC_SOURCE_REF}"
+  git -C "${AI_SDLC_DIR}" fetch --depth 1 origin "${AI_SDLC_COMMIT}"
   local fetched
   fetched="$(git -C "${AI_SDLC_DIR}" rev-parse FETCH_HEAD)"
   if [[ "${fetched}" != "${AI_SDLC_COMMIT}" ]]; then
-    echo "AI-SDLC pin mismatch: expected ${AI_SDLC_COMMIT}, fetched ${fetched} from ${AI_SDLC_SOURCE_REF}" >&2
+    echo "AI-SDLC pin mismatch: expected ${AI_SDLC_COMMIT}, fetched ${fetched}" >&2
     exit 1
   fi
   git -C "${AI_SDLC_DIR}" checkout --detach --force "${AI_SDLC_COMMIT}"

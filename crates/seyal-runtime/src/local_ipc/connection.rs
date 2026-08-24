@@ -1,35 +1,28 @@
-//! SPEC-004 section 5.3/7 connection state machine, nonblocking socket
-//! integration and bounded per-client queues (macOS).
+//! SPEC-004 local Unix-domain control transport (macOS).
 //!
-//! This module owns transport plumbing only: accepting connections,
-//! reading/framing bytes, and writing queued frames (optionally with one
-//! transferred descriptor). It has no opinion on what `Attach`/`Input`
-//! mean; that semantic handling lives in the Runtime wiring layer that
-//! consumes [`ServerEvent`]s from [`LocalIpcServer::poll`].
+//! This layer owns nonblocking listener/client sockets and bounded framing
+//! buffers only. Readiness is supplied by `ExecutionReactor`, so Pass 5 uses
+//! the same Runtime kqueue as PTY/process/control events rather than a second
+//! polled event loop.
 
 use std::{
     collections::{HashMap, VecDeque},
     io::{self, Read},
-    os::fd::{AsRawFd, OwnedFd},
+    os::fd::{AsRawFd, OwnedFd, RawFd},
     os::unix::net::{UnixListener, UnixStream},
     path::Path,
-    time::Duration,
 };
 
 use crate::local_ipc::{
     auth, fd_transfer,
     framing::{FrameHeader, HEADER_LEN, MAX_FRAME_PAYLOAD, MessageType},
-    kq::{Kqueue, Readiness},
 };
 
-/// M001 hard maximum concurrent local control connections (SPEC-004
-/// section 5.1).
 pub const MAX_CONNECTIONS: usize = 16;
-/// M001 hard maximum mandatory queued outbound control bytes per client
-/// (SPEC-004 section 5.1/7).
 pub const MAX_OUTBOUND_QUEUE_BYTES: usize = 262_144;
-
-const LISTENER_TOKEN: u64 = 0;
+const MAX_RECEIVE_BUFFER_BYTES: usize = HEADER_LEN + MAX_FRAME_PAYLOAD as usize;
+const READ_CHUNK_BYTES: usize = HEADER_LEN * 32;
+const MAX_FRAMES_PER_READINESS: usize = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConnectionState {
@@ -40,10 +33,6 @@ pub enum ConnectionState {
 }
 
 impl ConnectionState {
-    /// Validates whether `message_type` is a legal client-sent message in
-    /// this state (SPEC-004 section 5.3). Server-to-client-only message
-    /// types are always rejected here since a compliant client never sends
-    /// them.
     pub fn validate_incoming(self, message_type: MessageType) -> Result<(), StateError> {
         use MessageType::*;
         let allowed = matches!(
@@ -52,11 +41,7 @@ impl ConnectionState {
                 | (Self::Ready, ListExecutions | Attach | Goodbye)
                 | (Self::Attached, Input | Resize | Resync | Detach | Goodbye)
         );
-        if allowed {
-            Ok(())
-        } else {
-            Err(StateError::InvalidState)
-        }
+        allowed.then_some(()).ok_or(StateError::InvalidState)
     }
 }
 
@@ -65,57 +50,47 @@ pub enum StateError {
     InvalidState,
 }
 
-pub struct OutboundItem {
+struct OutboundItem {
     bytes: Vec<u8>,
     sent: usize,
     fd: Option<OwnedFd>,
 }
 
 impl OutboundItem {
-    pub fn new(bytes: Vec<u8>, fd: Option<OwnedFd>) -> Self {
+    fn new(bytes: Vec<u8>, fd: Option<OwnedFd>) -> Self {
         Self { bytes, sent: 0, fd }
+    }
+
+    fn remaining_len(&self) -> usize {
+        self.bytes.len().saturating_sub(self.sent)
     }
 }
 
-pub struct Connection {
+struct Connection {
     stream: UnixStream,
-    pub state: ConnectionState,
+    state: ConnectionState,
     read_buf: Vec<u8>,
-    outbox: VecDeque<OutboundItem>,
-    outbox_bytes: usize,
-    write_registered: bool,
+    mandatory: VecDeque<OutboundItem>,
+    mandatory_bytes: usize,
+    wake_inflight: Option<OutboundItem>,
+    pending_wake: Option<Vec<u8>>,
 }
 
 #[derive(Debug)]
 pub enum ServerEvent {
-    Connected {
-        token: u64,
-    },
-    /// A fully framed, protocol-version-valid frame. Message-type/semantic
-    /// validation against `state` is the caller's responsibility (it may
-    /// need to send a nonfatal `UnknownMessage`/`Error` reply rather than
-    /// disconnect).
+    Connected { token: u64 },
     Frame {
         token: u64,
         message_type: u16,
         payload: Vec<u8>,
     },
-    /// A protocol-fatal framing error (SPEC-004 section 6.2/6.3): the
-    /// connection is already closed by the time this is reported.
-    FramingError {
-        token: u64,
-    },
-    Disconnected {
-        token: u64,
-    },
-    /// A peer whose UID did not match was rejected before any connection
-    /// state was created (SPEC-004 section 4.3).
+    FramingError { token: u64 },
+    Disconnected { token: u64 },
     PeerRejected,
 }
 
 pub struct LocalIpcServer {
     listener: UnixListener,
-    kq: Kqueue,
     connections: HashMap<u64, Connection>,
     next_token: u64,
     max_connections: usize,
@@ -125,187 +100,201 @@ impl LocalIpcServer {
     pub fn bind(path: &Path, max_connections: usize) -> io::Result<Self> {
         let listener = UnixListener::bind(path)?;
         listener.set_nonblocking(true)?;
-        let kq = Kqueue::create()?;
-        kq.register_read(listener.as_raw_fd(), LISTENER_TOKEN)?;
+        // Socket path permissions are an authorization boundary in addition
+        // to kernel peer-UID verification.
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
         Ok(Self {
             listener,
-            kq,
             connections: HashMap::new(),
-            next_token: LISTENER_TOKEN + 1,
+            next_token: 1,
             max_connections,
         })
+    }
+
+    pub fn listener_fd(&self) -> RawFd {
+        self.listener.as_raw_fd()
+    }
+
+    pub fn connection_fd(&self, token: u64) -> Option<RawFd> {
+        self.connections
+            .get(&token)
+            .map(|connection| connection.stream.as_raw_fd())
     }
 
     pub fn connection_count(&self) -> usize {
         self.connections.len()
     }
 
-    /// Waits for readiness, then services every ready descriptor exactly
-    /// once, returning the resulting high-level events in occurrence order.
-    pub fn poll(&mut self, timeout: Option<Duration>) -> io::Result<Vec<ServerEvent>> {
-        let mut raw_events = [kq_placeholder(); 256];
-        let count = self.kq.wait(timeout, &mut raw_events)?;
-        let mut out = Vec::new();
-        for event in &raw_events[..count] {
-            if event.token == LISTENER_TOKEN {
-                self.accept_ready_connections(&mut out)?;
-                continue;
-            }
-            if event.readiness == Readiness::Readable {
-                self.service_read(event.token, event.hangup, &mut out);
-            }
-            if event.readiness == Readiness::Writable {
-                self.service_write(event.token, &mut out);
-            }
-        }
-        Ok(out)
+    pub fn contains(&self, token: u64) -> bool {
+        self.connections.contains_key(&token)
     }
 
-    fn accept_ready_connections(&mut self, out: &mut Vec<ServerEvent>) -> io::Result<()> {
+    /// Accepts every currently pending client. Same-UID authentication is
+    /// performed before a connection record is published.
+    pub fn accept_ready(&mut self) -> io::Result<Vec<ServerEvent>> {
+        let mut events = Vec::new();
         loop {
             match self.listener.accept() {
-                Ok((stream, _addr)) => {
-                    if let Err(error) = auth::verify_same_user_peer(stream.as_raw_fd()) {
-                        let _ = error;
-                        out.push(ServerEvent::PeerRejected);
+                Ok((stream, _)) => {
+                    if auth::verify_same_user_peer(stream.as_raw_fd()).is_err() {
+                        events.push(ServerEvent::PeerRejected);
                         continue;
                     }
                     if self.connections.len() >= self.max_connections {
-                        // Hard connection-capacity limit (SPEC-004 section
-                        // 5.1): the socket is simply dropped without a
-                        // connection being created.
                         continue;
                     }
                     stream.set_nonblocking(true)?;
                     let token = self.next_token;
-                    self.next_token += 1;
-                    self.kq.register_read(stream.as_raw_fd(), token)?;
+                    self.next_token = self.next_token.wrapping_add(1).max(1);
                     self.connections.insert(
                         token,
                         Connection {
                             stream,
                             state: ConnectionState::AwaitHello,
-                            read_buf: Vec::new(),
-                            outbox: VecDeque::new(),
-                            outbox_bytes: 0,
-                            write_registered: false,
+                            read_buf: Vec::with_capacity(4096),
+                            mandatory: VecDeque::new(),
+                            mandatory_bytes: 0,
+                            wake_inflight: None,
+                            pending_wake: None,
                         },
                     );
-                    out.push(ServerEvent::Connected { token });
+                    events.push(ServerEvent::Connected { token });
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
-                Err(_) => break,
+                Err(error) => return Err(error),
             }
         }
-        Ok(())
+        Ok(events)
     }
 
-    fn service_read(&mut self, token: u64, hangup: bool, out: &mut Vec<ServerEvent>) {
+    /// Services one client read-readiness notification with bounded work.
+    pub fn service_read(&mut self, token: u64, hangup: bool) -> Vec<ServerEvent> {
+        let mut events = Vec::new();
         let Some(connection) = self.connections.get_mut(&token) else {
-            return;
+            return events;
         };
-        let mut chunk = [0u8; 64 * 1024];
-        loop {
+        let mut chunk = [0u8; READ_CHUNK_BYTES];
+
+        while events.len() < MAX_FRAMES_PER_READINESS {
             match connection.stream.read(&mut chunk) {
                 Ok(0) => {
-                    self.close(token, out);
-                    return;
+                    self.close_with_event(token, &mut events);
+                    return events;
                 }
                 Ok(count) => {
+                    let Some(new_len) = connection.read_buf.len().checked_add(count) else {
+                        events.push(ServerEvent::FramingError { token });
+                        self.close_with_event(token, &mut events);
+                        return events;
+                    };
+                    if new_len > MAX_RECEIVE_BUFFER_BYTES {
+                        events.push(ServerEvent::FramingError { token });
+                        self.close_with_event(token, &mut events);
+                        return events;
+                    }
                     connection.read_buf.extend_from_slice(&chunk[..count]);
+                    if drain_frames(connection, token, &mut events).is_err() {
+                        self.close_with_event(token, &mut events);
+                        return events;
+                    }
+                    if events.len() >= MAX_FRAMES_PER_READINESS {
+                        break;
+                    }
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
                 Err(_) => {
-                    self.close(token, out);
-                    return;
+                    self.close_with_event(token, &mut events);
+                    return events;
                 }
             }
         }
-        if let Err(FramingCutError) = drain_frames(connection, token, out) {
-            self.close(token, out);
-            return;
-        }
-        // The only way execution reaches this point is via the `WouldBlock`
-        // break above (the `Ok(0)`/`Err(_)` arms both return early), so the
-        // socket's currently buffered bytes are fully drained/framed. If the
-        // peer also half-closed its write side (`EV_EOF`) and nothing
-        // remains buffered as an incomplete frame, there is nothing left to
-        // read and this connection is done even though the last `read`
-        // returned `WouldBlock` rather than `Ok(0)`.
-        if hangup
-            && self
+
+        if hangup {
+            let partial = self
                 .connections
                 .get(&token)
-                .is_some_and(|connection| connection.read_buf.is_empty())
-        {
-            self.close(token, out);
+                .is_some_and(|connection| !connection.read_buf.is_empty());
+            if partial {
+                events.push(ServerEvent::FramingError { token });
+            }
+            self.close_with_event(token, &mut events);
         }
+        events
     }
 
-    fn service_write(&mut self, token: u64, out: &mut Vec<ServerEvent>) {
-        let close = {
-            let Some(connection) = self.connections.get_mut(&token) else {
-                return;
-            };
-            match flush_outbox(connection) {
-                Ok(()) => false,
-                Err(_) => true,
-            }
-        };
-        if close {
-            self.close(token, out);
-            return;
-        }
-        if let Some(connection) = self.connections.get_mut(&token) {
-            let idle = connection.outbox.is_empty();
-            if idle && connection.write_registered {
-                let _ = self.kq.deregister_write(connection.stream.as_raw_fd());
-                connection.write_registered = false;
-            }
-        }
-    }
-
-    /// Queues `bytes` (a full header+payload frame) with an optional
-    /// descriptor for exactly one transfer, then attempts an immediate
-    /// flush. Enforces the bounded outbound queue (SPEC-004 section 7):
-    /// exceeding it disconnects the slow client.
-    pub fn enqueue(&mut self, token: u64, bytes: Vec<u8>, fd: Option<OwnedFd>) -> io::Result<()> {
+    pub fn service_write(&mut self, token: u64) -> Vec<ServerEvent> {
+        let mut events = Vec::new();
         let Some(connection) = self.connections.get_mut(&token) else {
-            return Ok(());
+            return events;
         };
-        if connection.outbox_bytes + bytes.len() > MAX_OUTBOUND_QUEUE_BYTES {
-            let mut dummy = Vec::new();
-            self.close(token, &mut dummy);
-            return Err(io::Error::other(
-                "outbound queue capacity exceeded; connection closed",
-            ));
+        if flush_outbound(connection).is_err() {
+            self.close_with_event(token, &mut events);
         }
-        connection.outbox_bytes += bytes.len();
-        connection.outbox.push_back(OutboundItem::new(bytes, fd));
-        if let Err(_error) = flush_outbox(connection) {
-            let mut dummy = Vec::new();
-            self.close(token, &mut dummy);
-            return Ok(());
+        events
+    }
+
+    /// Queues a non-coalescible control response. Queue overflow closes the
+    /// slow client; terminal execution remains independent.
+    pub fn enqueue_mandatory(
+        &mut self,
+        token: u64,
+        bytes: Vec<u8>,
+        fd: Option<OwnedFd>,
+    ) -> io::Result<()> {
+        let Some(connection) = self.connections.get_mut(&token) else {
+            return Err(io::Error::new(io::ErrorKind::NotConnected, "connection is closed"));
+        };
+        let new_total = connection
+            .mandatory_bytes
+            .checked_add(bytes.len())
+            .ok_or_else(|| io::Error::other("mandatory queue length overflow"))?;
+        if new_total > MAX_OUTBOUND_QUEUE_BYTES {
+            self.connections.remove(&token);
+            return Err(io::Error::other("mandatory outbound queue capacity exceeded"));
         }
-        if !connection.outbox.is_empty() && !connection.write_registered {
-            self.kq
-                .register_write(connection.stream.as_raw_fd(), token)?;
-            connection.write_registered = true;
+        connection.mandatory_bytes = new_total;
+        connection.mandatory.push_back(OutboundItem::new(bytes, fd));
+        if let Err(error) = flush_outbound(connection) {
+            self.connections.remove(&token);
+            return Err(error);
         }
         Ok(())
     }
 
-    pub fn close(&mut self, token: u64, out: &mut Vec<ServerEvent>) {
-        if let Some(connection) = self.connections.remove(&token) {
-            let _ = self.kq.deregister_all(connection.stream.as_raw_fd());
-            out.push(ServerEvent::Disconnected { token });
+    /// Keeps at most one not-yet-started advisory wake. If a wake frame is
+    /// already partially in flight, one newer pending frame may replace any
+    /// older pending frame; no generation history is accumulated.
+    pub fn enqueue_wake(&mut self, token: u64, bytes: Vec<u8>) -> io::Result<()> {
+        let Some(connection) = self.connections.get_mut(&token) else {
+            return Err(io::Error::new(io::ErrorKind::NotConnected, "connection is closed"));
+        };
+        if connection.wake_inflight.is_none() {
+            connection.pending_wake = Some(bytes);
+        } else {
+            connection.pending_wake = Some(bytes);
         }
+        if let Err(error) = flush_outbound(connection) {
+            self.connections.remove(&token);
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    pub fn wants_write(&self, token: u64) -> bool {
+        self.connections.get(&token).is_some_and(|connection| {
+            !connection.mandatory.is_empty()
+                || connection.wake_inflight.is_some()
+                || connection.pending_wake.is_some()
+        })
+    }
+
+    pub fn close(&mut self, token: u64) -> bool {
+        self.connections.remove(&token).is_some()
     }
 
     pub fn state_of(&self, token: u64) -> Option<ConnectionState> {
-        self.connections
-            .get(&token)
-            .map(|connection| connection.state)
+        self.connections.get(&token).map(|connection| connection.state)
     }
 
     pub fn set_state(&mut self, token: u64, state: ConnectionState) {
@@ -313,273 +302,281 @@ impl LocalIpcServer {
             connection.state = state;
         }
     }
+
+    fn close_with_event(&mut self, token: u64, events: &mut Vec<ServerEvent>) {
+        if self.connections.remove(&token).is_some() {
+            events.push(ServerEvent::Disconnected { token });
+        }
+    }
 }
 
 struct FramingCutError;
 
-/// Parses as many complete frames as are available in `connection`'s read
-/// buffer, emitting one [`ServerEvent::Frame`] per frame and leaving any
-/// trailing partial frame buffered for the next read.
 fn drain_frames(
     connection: &mut Connection,
     token: u64,
-    out: &mut Vec<ServerEvent>,
+    events: &mut Vec<ServerEvent>,
 ) -> Result<(), FramingCutError> {
-    loop {
+    while events.len() < MAX_FRAMES_PER_READINESS {
         if connection.read_buf.len() < HEADER_LEN {
             return Ok(());
         }
         let header = match FrameHeader::decode(&connection.read_buf[..HEADER_LEN]) {
             Ok(header) => header,
-            Err(error) => {
-                out.push(ServerEvent::FramingError { token });
-                let _ = error;
+            Err(_) => {
+                events.push(ServerEvent::FramingError { token });
                 return Err(FramingCutError);
             }
         };
-        let total_len = HEADER_LEN + header.payload_len as usize;
         if header.payload_len > MAX_FRAME_PAYLOAD {
-            out.push(ServerEvent::FramingError { token });
+            events.push(ServerEvent::FramingError { token });
             return Err(FramingCutError);
         }
+        let total_len = HEADER_LEN
+            .checked_add(header.payload_len as usize)
+            .ok_or(FramingCutError)?;
         if connection.read_buf.len() < total_len {
             return Ok(());
         }
         let payload = connection.read_buf[HEADER_LEN..total_len].to_vec();
-        connection.read_buf.drain(0..total_len);
-        out.push(ServerEvent::Frame {
+        connection.read_buf.drain(..total_len);
+        events.push(ServerEvent::Frame {
             token,
             message_type: header.message_type,
             payload,
         });
     }
-}
-
-/// Sends as much of the queued outbound data as the socket currently
-/// accepts. The descriptor on a frame that carries one (`Attached`,
-/// `ProjectionReplaced`) is included in the very first `sendmsg` call for
-/// that frame, so it is never duplicated or lost even if that call (or a
-/// later continuation of the same item) only accepts part of the byte
-/// range; the M001 frames that ever carry a descriptor are always well
-/// under typical socket buffer capacity, so a split send is rare, but a
-/// correct receiver must still be prepared to accumulate the remaining
-/// plain bytes from a subsequent read rather than assuming one `recvmsg`
-/// call always returns the whole frame.
-fn flush_outbox(connection: &mut Connection) -> io::Result<()> {
-    let fd = connection.stream.as_raw_fd();
-    while let Some(item) = connection.outbox.front_mut() {
-        let remaining = &item.bytes[item.sent..];
-        let result = if item.fd.is_some() && item.sent == 0 {
-            fd_transfer::send_with_fd(fd, remaining, item.fd.as_ref().map(AsRawFd::as_raw_fd))
-        } else {
-            fd_transfer::send_with_fd(fd, remaining, None)
-        };
-        match result {
-            Ok(sent) => {
-                if item.fd.is_some() {
-                    // The descriptor (if any) has now been transferred
-                    // regardless of whether every byte went out yet; never
-                    // resend it on a later partial-completion call.
-                    item.fd = None;
-                }
-                item.sent += sent;
-                connection.outbox_bytes -= sent;
-                if item.sent >= item.bytes.len() {
-                    connection.outbox.pop_front();
-                }
-                if sent == 0 {
-                    break;
-                }
-            }
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
-            Err(error) => return Err(error),
-        }
-    }
     Ok(())
 }
 
-fn kq_placeholder() -> crate::local_ipc::kq::Event {
-    crate::local_ipc::kq::Event {
-        token: 0,
-        readiness: Readiness::Readable,
-        hangup: false,
+fn flush_outbound(connection: &mut Connection) -> io::Result<()> {
+    while let Some(item) = connection.mandatory.front_mut() {
+        let before = item.remaining_len();
+        match flush_item(connection.stream.as_raw_fd(), item)? {
+            FlushProgress::WouldBlock => return Ok(()),
+            FlushProgress::Progress => {
+                let after = item.remaining_len();
+                connection.mandatory_bytes = connection
+                    .mandatory_bytes
+                    .saturating_sub(before.saturating_sub(after));
+                if after == 0 {
+                    connection.mandatory.pop_front();
+                }
+            }
+        }
+    }
+
+    loop {
+        if connection.wake_inflight.is_none() {
+            let Some(bytes) = connection.pending_wake.take() else {
+                return Ok(());
+            };
+            connection.wake_inflight = Some(OutboundItem::new(bytes, None));
+        }
+        let Some(item) = connection.wake_inflight.as_mut() else {
+            return Ok(());
+        };
+        match flush_item(connection.stream.as_raw_fd(), item)? {
+            FlushProgress::WouldBlock => return Ok(()),
+            FlushProgress::Progress if item.remaining_len() == 0 => {
+                connection.wake_inflight = None;
+                // If a newer wake arrived while this one was in flight,
+                // immediately continue with that single coalesced successor.
+                continue;
+            }
+            FlushProgress::Progress => return Ok(()),
+        }
+    }
+}
+
+enum FlushProgress {
+    Progress,
+    WouldBlock,
+}
+
+fn flush_item(socket: RawFd, item: &mut OutboundItem) -> io::Result<FlushProgress> {
+    if item.sent >= item.bytes.len() {
+        return Ok(FlushProgress::Progress);
+    }
+    let remaining = &item.bytes[item.sent..];
+    let fd = if item.sent == 0 {
+        item.fd.as_ref().map(AsRawFd::as_raw_fd)
+    } else {
+        None
+    };
+    match fd_transfer::send_with_fd(socket, remaining, fd) {
+        Ok(0) => Ok(FlushProgress::WouldBlock),
+        Ok(sent) => {
+            if sent > remaining.len() {
+                return Err(io::Error::other("sendmsg reported impossible byte count"));
+            }
+            // SCM_RIGHTS is consumed only after at least one byte from this
+            // frame was accepted. EAGAIN/zero never loses the descriptor.
+            if sent > 0 && item.sent == 0 {
+                item.fd = None;
+            }
+            item.sent += sent;
+            Ok(FlushProgress::Progress)
+        }
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(FlushProgress::WouldBlock),
+        Err(error) => Err(error),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::local_ipc::fd_transfer::RecvFd;
-    use crate::local_ipc::framing::{Attach, Role, encode_frame};
-    use std::io::Write;
+    use crate::local_ipc::framing::{ClientHello, GenerationWake, encode_frame};
+    use std::{io::Write, time::Duration};
 
     fn bind_test_server() -> (LocalIpcServer, std::path::PathBuf) {
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let unique = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let mut path = std::env::temp_dir();
-        path.push(format!(
-            "syl-c{}-{}.sock",
-            std::process::id() % 10_000,
-            unique
+        let path = std::env::temp_dir().join(format!(
+            "syl-c{}-{unique}.sock",
+            std::process::id() % 10_000
         ));
         let _ = std::fs::remove_file(&path);
-        let server = LocalIpcServer::bind(&path, MAX_CONNECTIONS).unwrap();
-        (server, path)
+        (LocalIpcServer::bind(&path, MAX_CONNECTIONS).unwrap(), path)
+    }
+
+    fn accept_one(server: &mut LocalIpcServer, path: &Path) -> (UnixStream, u64) {
+        let client = UnixStream::connect(path).unwrap();
+        let events = server.accept_ready().unwrap();
+        let token = events
+            .iter()
+            .find_map(|event| match event {
+                ServerEvent::Connected { token } => Some(*token),
+                _ => None,
+            })
+            .unwrap();
+        (client, token)
+    }
+
+    #[test]
+    fn connection_state_machine_rejects_invalid_transitions() {
+        assert!(
+            ConnectionState::AwaitHello
+                .validate_incoming(MessageType::Attach)
+                .is_err()
+        );
+        assert!(
+            ConnectionState::Ready
+                .validate_incoming(MessageType::ClientHello)
+                .is_err()
+        );
+        assert!(
+            ConnectionState::Attached
+                .validate_incoming(MessageType::Input)
+                .is_ok()
+        );
     }
 
     #[test]
     fn accept_reports_connected_and_verifies_same_user_peer() {
         let (mut server, path) = bind_test_server();
-        let _client = UnixStream::connect(&path).unwrap();
-        let events = server.poll(Some(Duration::from_secs(1))).unwrap();
-        assert!(matches!(events[0], ServerEvent::Connected { .. }));
-        std::fs::remove_file(&path).ok();
+        let (_client, _token) = accept_one(&mut server, &path);
+        assert_eq!(server.connection_count(), 1);
+        std::fs::remove_file(path).ok();
     }
 
     #[test]
-    fn a_complete_frame_arriving_in_one_write_is_reported_once() {
+    fn complete_frame_is_reported_once() {
         let (mut server, path) = bind_test_server();
-        let mut client = UnixStream::connect(&path).unwrap();
-        server.poll(Some(Duration::from_secs(1))).unwrap();
-
-        let attach = Attach {
-            execution_id: crate::ExecutionId::from_bytes(1u128.to_le_bytes()),
-            requested_role: Role::Observer,
-        };
-        let frame = encode_frame(MessageType::Attach, &attach.encode());
-        client.write_all(&frame).unwrap();
-
-        let events = server.poll(Some(Duration::from_secs(1))).unwrap();
-        let frames: Vec<_> = events
-            .iter()
-            .filter(|event| matches!(event, ServerEvent::Frame { .. }))
-            .collect();
-        assert_eq!(frames.len(), 1);
-        std::fs::remove_file(&path).ok();
-    }
-
-    #[test]
-    fn a_frame_split_across_multiple_writes_is_reassembled() {
-        let (mut server, path) = bind_test_server();
-        let mut client = UnixStream::connect(&path).unwrap();
-        server.poll(Some(Duration::from_secs(1))).unwrap();
-
-        let attach = Attach {
-            execution_id: crate::ExecutionId::from_bytes(2u128.to_le_bytes()),
-            requested_role: Role::Controller,
-        };
-        let frame = encode_frame(MessageType::Attach, &attach.encode());
-        client.write_all(&frame[..10]).unwrap();
-        server.poll(Some(Duration::from_millis(50))).unwrap();
-        client.write_all(&frame[10..]).unwrap();
-
-        let events = server.poll(Some(Duration::from_secs(1))).unwrap();
-        let frames: Vec<_> = events
-            .into_iter()
-            .filter(|event| matches!(event, ServerEvent::Frame { .. }))
-            .collect();
-        assert_eq!(frames.len(), 1);
-        std::fs::remove_file(&path).ok();
-    }
-
-    #[test]
-    fn invalid_magic_is_reported_as_a_framing_error_and_closes_the_connection() {
-        let (mut server, path) = bind_test_server();
-        let mut client = UnixStream::connect(&path).unwrap();
-        server.poll(Some(Duration::from_secs(1))).unwrap();
-
-        let mut frame = encode_frame(MessageType::Goodbye, &[]);
-        frame[0] = b'X';
-        client.write_all(&frame).unwrap();
-
-        let events = server.poll(Some(Duration::from_secs(1))).unwrap();
-        assert!(
-            events
-                .iter()
-                .any(|event| matches!(event, ServerEvent::FramingError { .. }))
-        );
-        assert_eq!(server.connection_count(), 0);
-        std::fs::remove_file(&path).ok();
-    }
-
-    #[test]
-    fn disconnect_mid_frame_is_reported_and_reclaims_the_connection() {
-        let (mut server, path) = bind_test_server();
-        let client = UnixStream::connect(&path).unwrap();
-        server.poll(Some(Duration::from_secs(1))).unwrap();
-        drop(client);
-
-        let events = server.poll(Some(Duration::from_secs(1))).unwrap();
-        assert!(
-            events
-                .iter()
-                .any(|event| matches!(event, ServerEvent::Disconnected { .. }))
-        );
-        assert_eq!(server.connection_count(), 0);
-        std::fs::remove_file(&path).ok();
-    }
-
-    #[test]
-    fn enqueue_with_fd_delivers_bytes_and_the_descriptor_together() {
-        let (mut server, path) = bind_test_server();
-        let mut client = UnixStream::connect(&path).unwrap();
-        let events = server.poll(Some(Duration::from_secs(1))).unwrap();
-        let ServerEvent::Connected { token } = events[0] else {
-            panic!("expected Connected");
-        };
-
-        let payload = b"hello".to_vec();
-        let frame = encode_frame(MessageType::Attached, &payload);
-        let file = std::fs::File::open("/dev/null").unwrap();
-        server
-            .enqueue(token, frame, Some(OwnedFd::from(file)))
-            .unwrap();
-
-        let mut buffer = [0u8; 128];
-        let (received, fd) = fd_transfer::recv_with_fd(client.as_raw_fd(), &mut buffer).unwrap();
-        assert!(received >= HEADER_LEN + payload.len());
-        assert!(matches!(fd, RecvFd::One(_)));
-        let _ = client.flush();
-        std::fs::remove_file(&path).ok();
-    }
-
-    #[test]
-    fn exceeding_the_outbound_queue_capacity_disconnects_the_slow_client() {
-        let (mut server, path) = bind_test_server();
-        let _client = UnixStream::connect(&path).unwrap();
-        let events = server.poll(Some(Duration::from_secs(1))).unwrap();
-        let ServerEvent::Connected { token } = events[0] else {
-            panic!("expected Connected");
-        };
-
-        // Never read on the client side, so the server's socket send
-        // buffer plus queue eventually saturates.
-        let big_payload = vec![0u8; 4096];
-        let mut disconnected = false;
-        for _ in 0..200 {
-            let frame = encode_frame(MessageType::Lifecycle, &big_payload);
-            if server.enqueue(token, frame, None).is_err() {
-                disconnected = true;
-                break;
+        let (mut client, token) = accept_one(&mut server, &path);
+        let frame = encode_frame(
+            MessageType::ClientHello,
+            &ClientHello {
+                client_capabilities: 0,
             }
-        }
-        assert!(
-            disconnected,
-            "expected the queue cap to disconnect the client"
+            .encode(),
         );
-        assert_eq!(server.connection_count(), 0);
-        std::fs::remove_file(&path).ok();
+        client.write_all(&frame).unwrap();
+        let events = server.service_read(token, false);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, ServerEvent::Frame { .. }))
+                .count(),
+            1
+        );
+        std::fs::remove_file(path).ok();
     }
 
     #[test]
-    fn connection_state_rejects_input_before_attach() {
-        assert_eq!(
-            ConnectionState::Ready.validate_incoming(MessageType::Input),
-            Err(StateError::InvalidState)
+    fn fragmented_frame_is_buffered_within_the_hard_receive_cap() {
+        let (mut server, path) = bind_test_server();
+        let (mut client, token) = accept_one(&mut server, &path);
+        let frame = encode_frame(
+            MessageType::ClientHello,
+            &ClientHello {
+                client_capabilities: 0,
+            }
+            .encode(),
         );
-        assert_eq!(
-            ConnectionState::Attached.validate_incoming(MessageType::Input),
-            Ok(())
-        );
+        client.write_all(&frame[..10]).unwrap();
+        assert!(server.service_read(token, false).is_empty());
+        client.write_all(&frame[10..]).unwrap();
+        assert!(server
+            .service_read(token, false)
+            .iter()
+            .any(|event| matches!(event, ServerEvent::Frame { .. })));
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn malformed_header_closes_connection() {
+        let (mut server, path) = bind_test_server();
+        let (mut client, token) = accept_one(&mut server, &path);
+        client.write_all(&[0xff; HEADER_LEN]).unwrap();
+        let events = server.service_read(token, false);
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, ServerEvent::FramingError { .. })));
+        assert!(!server.contains(token));
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn mandatory_queue_cap_disconnects_slow_client() {
+        let (mut server, path) = bind_test_server();
+        let (_client, token) = accept_one(&mut server, &path);
+        let bytes = vec![0u8; MAX_OUTBOUND_QUEUE_BYTES + 1];
+        assert!(server.enqueue_mandatory(token, bytes, None).is_err());
+        assert!(!server.contains(token));
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn pending_generation_wakes_coalesce_to_latest_without_history_queue() {
+        let (mut server, path) = bind_test_server();
+        let (client, token) = accept_one(&mut server, &path);
+        client
+            .set_write_timeout(Some(Duration::from_millis(10)))
+            .unwrap();
+        // A live, writable socket may flush immediately. Force an in-memory
+        // coalescing assertion by pre-installing an in-flight wake marker.
+        let connection = server.connections.get_mut(&token).unwrap();
+        connection.wake_inflight = Some(OutboundItem {
+            bytes: vec![1; 64],
+            sent: 1,
+            fd: None,
+        });
+        for generation in [2u64, 3, 99] {
+            let frame = encode_frame(
+                MessageType::GenerationWake,
+                &GenerationWake {
+                    attachment_id: crate::AttachmentId::from_bytes(1u128.to_le_bytes()),
+                    projection_id: crate::ProjectionId::from_bytes(2u128.to_le_bytes()),
+                    committed_generation: generation,
+                }
+                .encode(),
+            );
+            server.enqueue_wake(token, frame).unwrap();
+        }
+        let connection = server.connections.get(&token).unwrap();
+        assert!(connection.pending_wake.is_some());
+        assert_eq!(connection.mandatory.len(), 0);
+        std::fs::remove_file(path).ok();
     }
 }

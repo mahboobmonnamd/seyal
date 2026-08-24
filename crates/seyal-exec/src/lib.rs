@@ -10,6 +10,7 @@ mod endpoint;
 mod error;
 mod execution;
 mod platform;
+mod projection;
 mod reactor;
 mod readiness;
 mod winsize;
@@ -19,6 +20,9 @@ pub use command::CommandSpec;
 pub use endpoint::{ReadOutcome, WriteOutcome};
 pub use error::ExecError;
 pub use execution::TerminalExecution;
+pub use projection::{
+    ProjectionAttributes, ProjectionCell, ProjectionColor, TerminalProjectionSnapshot,
+};
 pub use reactor::{
     ExecutionReactor, ReactorEvent, ReactorEventKind, ReactorWaker, RegistrationToken,
 };

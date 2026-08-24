@@ -15,6 +15,8 @@ Product & Engineering Constitution
 
 Issues and PRs cannot override higher authority. If implementation evidence contradicts an accepted architectural decision: stop implementation, record evidence, run architecture review/ADR, update affected specification and Issue, then resume.
 
+The `.sdlc` context layer is deliberately **not** inserted into the authority chain. It is a compact navigation/provenance layer that helps agents find the relevant authoritative artifacts without rereading the repository.
+
 ## Unit of work
 
 Default distributed-development unit:
@@ -31,17 +33,18 @@ One Issue should produce one coherent outcome that can normally be tested, revie
 
 ## Mandatory flow
 
-1. Refine the Issue using `.agents/skills/issue-refinement/SKILL.md`.
-2. Set Project status to **Ready** only after the readiness checklist in `ISSUE-PROTOCOL.md` passes.
-3. Assign one owner and create an isolated worktree/branch.
-4. Use tests/fixtures first for core behavior.
-5. Implement only the Issue scope.
-6. Assess **Documentation impact** before final validation. Run the `docs-authoring` skill and update the User Guide and/or Developer Guide in the same Issue/PR when applicable. If no documentation is needed, record a concrete `N/A` rationale in the PR.
-7. Run `make check` plus issue-specific tests/benchmarks/security checks. When documentation changed, also run `make docs-check` and `make docs-build`.
-8. Open a PR using the repository template, including documentation evidence or the `N/A` rationale.
-9. Require CI evidence; high-risk/core work gets independent review.
-10. Move to Validation where milestone/demo/performance evidence is required.
-11. Merge only after required gates pass. Do not start a dependent milestone early.
+1. When project context beyond the Issue links is needed, use `project-context` to retrieve the smallest relevant node/relationship set, validate the derived index, and read the returned authoritative sources. A stale/no-match index routes to targeted source search; it never authorizes guessing.
+2. Refine the Issue using `.agents/skills/issue-refinement/SKILL.md`.
+3. Set Project status to **Ready** only after the readiness checklist in `ISSUE-PROTOCOL.md` passes.
+4. Assign one owner and create an isolated worktree/branch.
+5. Use tests/fixtures first for core behavior.
+6. Implement only the Issue scope.
+7. Assess **Documentation impact** before final validation. Run the `docs-authoring` skill and update the User Guide and/or Developer Guide in the same Issue/PR when applicable. If no documentation is needed, record a concrete `N/A` rationale in the PR.
+8. Run `make check` plus issue-specific tests/benchmarks/security checks. When documentation changed, also run `make docs-check` and `make docs-build`.
+9. Open a PR using the repository template, including documentation evidence or the `N/A` rationale.
+10. Require CI evidence; high-risk/core work gets independent review.
+11. Move to Validation where milestone/demo/performance evidence is required.
+12. Merge only after required gates pass. Do not start a dependent milestone early.
 
 ## Documentation lifecycle
 
@@ -92,7 +95,7 @@ Optional developer-agent/MCP provisioning is deliberately separate:
 make bootstrap-agents
 ```
 
-That explicit opt-in command uses `scripts/bootstrap-dev.sh` and may provision the pinned developer tools documented in `docs/engineering/AGENT-TOOLING.md`. It is not part of build/test/CI bootstrap and must not become a terminal/runtime dependency.
+That explicit opt-in command uses `scripts/bootstrap-dev.sh`, materializes the exact reviewed AI-SDLC developer-framework pin under ignored `.sdlc/framework/`, and may provision the other pinned developer tools documented in `docs/engineering/AGENT-TOOLING.md`. It is not part of product build/test/CI bootstrap and must not become a terminal/runtime dependency.
 
 ## Canonical task interface
 
@@ -153,6 +156,13 @@ make check
 make bench
 ```
 
+For coding-agent/project-context tooling, explicitly opt in:
+
+```sh
+make bootstrap-agents
+python3 .sdlc/framework/tools/project_context.py --root . validate
+```
+
 To preview the documentation locally (Node.js 22.12+):
 
 ```sh
@@ -165,7 +175,7 @@ On macOS, after `make build`, the current non-terminal native skeleton can be la
 open target/macos-derived-data/Build/Products/Debug/Seyal.app
 ```
 
-There are no required private repositories, `seyal-commercial` dependencies, shell-profile assumptions, Homebrew assumptions or hidden environment variables for this canonical flow.
+There are no required private repositories, `seyal-commercial` dependencies, shell-profile assumptions, Homebrew assumptions or hidden environment variables for this canonical product flow. AI-SDLC is an optional public developer-framework dependency materialized only by `make bootstrap-agents`.
 
 ## Generated and fixture data
 

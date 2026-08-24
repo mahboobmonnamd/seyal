@@ -13,6 +13,9 @@
 		A10000000000000000000004 /* AppKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* AppKit.framework */; };
 		A10000000000000000000005 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* Metal.framework */; };
 		A10000000000000000000006 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007 /* QuartzCore.framework */; };
+		A10000000000000000000007 /* UI-REF-001-MULTILINE-COMPOSER.png in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* UI-REF-001-MULTILINE-COMPOSER.png */; };
+		A10000000000000000000008 /* UI-REF-002-APPROVED-LIGHT-WORKSPACE.png in Resources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000A /* UI-REF-002-APPROVED-LIGHT-WORKSPACE.png */; };
+		A10000000000000000000009 /* UI-REF-003-APPROVED-LIGHT-COMPONENT-BOARD.png in Resources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000B /* UI-REF-003-APPROVED-LIGHT-COMPONENT-BOARD.png */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -24,6 +27,9 @@
 		A20000000000000000000006 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		A20000000000000000000007 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		A20000000000000000000008 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A20000000000000000000009 /* UI-REF-001-MULTILINE-COMPOSER.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; name = UI-REF-001-MULTILINE-COMPOSER.png; path = ../../docs/architecture/ui/references/UI-REF-001-MULTILINE-COMPOSER.png; sourceTree = SOURCE_ROOT; };
+		A2000000000000000000000A /* UI-REF-002-APPROVED-LIGHT-WORKSPACE.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; name = UI-REF-002-APPROVED-LIGHT-WORKSPACE.png; path = ../../docs/architecture/ui/references/UI-REF-002-APPROVED-LIGHT-WORKSPACE.png; sourceTree = SOURCE_ROOT; };
+		A2000000000000000000000B /* UI-REF-003-APPROVED-LIGHT-COMPONENT-BOARD.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; name = UI-REF-003-APPROVED-LIGHT-COMPONENT-BOARD.png; path = ../../docs/architecture/ui/references/UI-REF-003-APPROVED-LIGHT-COMPONENT-BOARD.png; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -45,6 +51,7 @@
 			children = (
 				A40000000000000000000002 /* Sources */,
 				A20000000000000000000008 /* Info.plist */,
+				A40000000000000000000005 /* Preview References */,
 				A40000000000000000000003 /* Frameworks */,
 				A40000000000000000000004 /* Products */,
 			);
@@ -76,6 +83,16 @@
 				A20000000000000000000004 /* Seyal.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		A40000000000000000000005 /* Preview References */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000009 /* UI-REF-001-MULTILINE-COMPOSER.png */,
+				A2000000000000000000000A /* UI-REF-002-APPROVED-LIGHT-WORKSPACE.png */,
+				A2000000000000000000000B /* UI-REF-003-APPROVED-LIGHT-COMPONENT-BOARD.png */,
+			);
+			name = "Preview References";
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -136,6 +153,9 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A10000000000000000000007 /* UI-REF-001-MULTILINE-COMPOSER.png in Resources */,
+				A10000000000000000000008 /* UI-REF-002-APPROVED-LIGHT-WORKSPACE.png in Resources */,
+				A10000000000000000000009 /* UI-REF-003-APPROVED-LIGHT-COMPONENT-BOARD.png in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

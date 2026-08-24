@@ -4,7 +4,7 @@ These images are the user-approved visual references for Seyal UI work. They are
 
 ## UI-REF-001 — Multiline command composer
 
-![Multiline command composer](UI-REF-001-MULTILINE-COMPOSER.webp)
+![Multiline command composer](UI-REF-001-MULTILINE-COMPOSER.png)
 
 Visual authority for the composer geometry and controls when composer mode is eligible: multiline auto-growing editor, prompt/input area, utility row, working-directory/shell controls and Run action.
 
@@ -12,7 +12,7 @@ Runtime correctness still wins: unsupported/ambiguous shell states, raw interact
 
 ## UI-REF-002 — Light workspace composition
 
-![Light workspace composition](UI-REF-002-LIGHT-WORKSPACE.webp)
+![Light workspace composition](UI-REF-002-APPROVED-LIGHT-WORKSPACE.png)
 
 Broader workspace direction showing the approved relationships between larger workspace navigation, tabs, block-based terminal panes, per-pane multiline composers, pane split controls, a collapsible utility surface and the actionable agent-attention popover.
 
@@ -20,11 +20,11 @@ Features outside the active M001 scope remain future work; this image does not a
 
 ## UI-REF-003 — Light component reference board
 
-![Light component reference board](UI-REF-003-LIGHT-COMPONENT-BOARD.webp)
+![Light component reference board](UI-REF-003-APPROVED-LIGHT-COMPONENT-BOARD.png)
 
 Component-level visual reference for adaptive/scrollable tabs, workspace navigation, Command Palette entry, pane headers/split controls, adaptive execution Blocks, per-pane multiline composer, agent-attention stack and utility pane.
 
-This checked-in copy is a documentation-optimized rendering of the approved reference; the component relationships and visual intent are authoritative, not individual raster pixels.
+The PNG assets in this branch are the exact approved design-review references used by the native preview harness. Older WebP copies remain legacy documentation exports only.
 
 ## Approved clarifications
 

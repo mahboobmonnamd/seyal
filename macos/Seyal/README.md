@@ -36,3 +36,11 @@ open target/macos-derived-data/Build/Products/Debug/Seyal.app
 ```
 
 The CI smoke path runs the bundle executable with `--smoke-test`; it validates that the process launches and Metal can supply a device/layer without starting the AppKit event loop.
+
+The design-review branch also provides a preview-only harness that opens the approved PNG reference boards inside the app:
+
+```sh
+make design-preview
+```
+
+That harness is review scaffolding only; it does not change the production terminal/runtime architecture or claim that the component implementation is complete.

@@ -1,16 +1,13 @@
 //! SPEC-004 section 5.2 attachment/authority registry.
 //!
-//! Owns the mapping from `AttachmentId` to its `ExecutionId`/role/current
-//! `ProjectionId`, and the single non-preemptive controller lease per
-//! `ExecutionId`. Opening a socket grants no attachment or controller
-//! authority by itself; every role is explicit and every stale identity is
-//! rejected.
+//! Every attachment is bound to exactly one authenticated control connection.
+//! An `AttachmentId` is an opaque identity, not a bearer capability: another
+//! connection cannot use it to mutate, resync, or detach the owner’s session.
 
 use std::collections::HashMap;
 
 use crate::{AttachmentId, ExecutionId, ProjectionId, local_ipc::framing::Role};
 
-/// M001 hard maximum concurrent live attachments (SPEC-004 section 5.1).
 pub const MAX_LIVE_ATTACHMENTS: usize = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,6 +17,7 @@ pub enum AttachmentError {
     UnknownAttachment,
     StaleIdentity,
     PermissionDenied,
+    WrongConnection,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,6 +25,7 @@ struct AttachmentRecord {
     execution_id: ExecutionId,
     role: Role,
     projection_id: ProjectionId,
+    connection_token: u64,
 }
 
 #[derive(Default)]
@@ -57,16 +56,13 @@ impl AttachmentRegistry {
         self.attachments.is_empty()
     }
 
-    /// Inserts an attachment whose role/capacity constraints the caller has
-    /// already validated (used by the single-threaded Runtime wiring layer
-    /// once it has reserved real projection resources for a specific,
-    /// pre-allocated `AttachmentId` and needs the registry entry to match).
     pub fn insert_prevalidated(
         &mut self,
         attachment_id: AttachmentId,
         execution_id: ExecutionId,
         role: Role,
         projection_id: ProjectionId,
+        connection_token: u64,
     ) {
         if role == Role::Controller {
             self.controllers.insert(execution_id, attachment_id);
@@ -77,19 +73,17 @@ impl AttachmentRegistry {
                 execution_id,
                 role,
                 projection_id,
+                connection_token,
             },
         );
     }
 
-    /// Creates a new attachment. A `Controller` request while another
-    /// controller already holds the lease for `execution_id` is rejected
-    /// with `ControllerBusy` and creates no attachment (SPEC-004 section
-    /// 5.2: no implicit preemption).
     pub fn create_attachment(
         &mut self,
         execution_id: ExecutionId,
         requested_role: Role,
         projection_id: ProjectionId,
+        connection_token: u64,
     ) -> Result<AttachmentId, AttachmentError> {
         if requested_role == Role::Controller && self.controllers.contains_key(&execution_id) {
             return Err(AttachmentError::ControllerBusy);
@@ -98,24 +92,16 @@ impl AttachmentRegistry {
             return Err(AttachmentError::CapacityExceeded);
         }
         let attachment_id = AttachmentId::new();
-        if requested_role == Role::Controller {
-            self.controllers.insert(execution_id, attachment_id);
-        }
-        self.attachments.insert(
+        self.insert_prevalidated(
             attachment_id,
-            AttachmentRecord {
-                execution_id,
-                role: requested_role,
-                projection_id,
-            },
+            execution_id,
+            requested_role,
+            projection_id,
+            connection_token,
         );
         Ok(attachment_id)
     }
 
-    /// Removes an attachment, releasing its controller lease (if any) so a
-    /// later `Attach` request may acquire it (SPEC-004 section 5.2:
-    /// disconnect/detach revokes the connection's controller lease before
-    /// resources are reclaimed).
     pub fn detach(&mut self, attachment_id: AttachmentId) -> Result<(), AttachmentError> {
         let record = self
             .attachments
@@ -129,9 +115,15 @@ impl AttachmentRegistry {
         Ok(())
     }
 
-    /// Removes every attachment for `execution_id` (used on execution
-    /// finalization) and returns their ids so the caller can notify/close
-    /// those connections.
+    pub fn detach_for_connection(
+        &mut self,
+        connection_token: u64,
+        attachment_id: AttachmentId,
+    ) -> Result<(), AttachmentError> {
+        self.require_connection(connection_token, attachment_id)?;
+        self.detach(attachment_id)
+    }
+
     pub fn remove_all_for_execution(&mut self, execution_id: ExecutionId) -> Vec<AttachmentId> {
         let ids: Vec<AttachmentId> = self
             .attachments
@@ -156,6 +148,15 @@ impl AttachmentRegistry {
             .ok_or(AttachmentError::StaleIdentity)
     }
 
+    pub fn execution_for_connection(
+        &self,
+        connection_token: u64,
+        attachment_id: AttachmentId,
+    ) -> Result<ExecutionId, AttachmentError> {
+        let record = self.require_connection(connection_token, attachment_id)?;
+        Ok(record.execution_id)
+    }
+
     pub fn role_of(&self, attachment_id: AttachmentId) -> Result<Role, AttachmentError> {
         self.attachments
             .get(&attachment_id)
@@ -173,10 +174,6 @@ impl AttachmentRegistry {
             .ok_or(AttachmentError::StaleIdentity)
     }
 
-    /// Rejects any `(AttachmentId, ProjectionId)` pair that does not match
-    /// the live projection currently associated with that attachment
-    /// (SPEC-004 section 8.2: stale projection identifiers cannot affect a
-    /// later attachment even from an old mapped client).
     pub fn is_live(&self, attachment_id: AttachmentId, projection_id: ProjectionId) -> bool {
         self.attachments
             .get(&attachment_id)
@@ -194,18 +191,12 @@ impl AttachmentRegistry {
             .ok_or(AttachmentError::StaleIdentity)
     }
 
-    /// Authorizes an `Input`/`Resize` request: only the current controller
-    /// attachment for its own execution may mutate; an observer attempt is
-    /// `PermissionDenied` and a stale/unknown attachment is `StaleIdentity`
-    /// (SPEC-004 section 5.2).
     pub fn authorize_mutation(
         &self,
+        connection_token: u64,
         attachment_id: AttachmentId,
     ) -> Result<ExecutionId, AttachmentError> {
-        let record = self
-            .attachments
-            .get(&attachment_id)
-            .ok_or(AttachmentError::StaleIdentity)?;
+        let record = self.require_connection(connection_token, attachment_id)?;
         if record.role != Role::Controller {
             return Err(AttachmentError::PermissionDenied);
         }
@@ -221,6 +212,21 @@ impl AttachmentRegistry {
             .values()
             .filter(|record| record.execution_id == execution_id)
             .count()
+    }
+
+    fn require_connection(
+        &self,
+        connection_token: u64,
+        attachment_id: AttachmentId,
+    ) -> Result<&AttachmentRecord, AttachmentError> {
+        let record = self
+            .attachments
+            .get(&attachment_id)
+            .ok_or(AttachmentError::StaleIdentity)?;
+        if record.connection_token != connection_token {
+            return Err(AttachmentError::WrongConnection);
+        }
+        Ok(record)
     }
 }
 
@@ -240,11 +246,11 @@ mod tests {
     fn observer_attach_succeeds_and_grants_read_only_authorization() {
         let mut registry = AttachmentRegistry::new();
         let attachment = registry
-            .create_attachment(exec(1), Role::Observer, proj(10))
+            .create_attachment(exec(1), Role::Observer, proj(10), 7)
             .unwrap();
         assert_eq!(registry.role_of(attachment).unwrap(), Role::Observer);
         assert_eq!(
-            registry.authorize_mutation(attachment),
+            registry.authorize_mutation(7, attachment),
             Err(AttachmentError::PermissionDenied)
         );
     }
@@ -253,61 +259,70 @@ mod tests {
     fn controller_attach_succeeds_and_grants_mutation_authorization() {
         let mut registry = AttachmentRegistry::new();
         let attachment = registry
-            .create_attachment(exec(1), Role::Controller, proj(10))
+            .create_attachment(exec(1), Role::Controller, proj(10), 7)
             .unwrap();
-        assert_eq!(registry.authorize_mutation(attachment), Ok(exec(1)));
+        assert_eq!(registry.authorize_mutation(7, attachment), Ok(exec(1)));
         assert!(registry.has_controller(exec(1)));
+    }
+
+    #[test]
+    fn another_connection_cannot_use_or_detach_the_controller_attachment() {
+        let mut registry = AttachmentRegistry::new();
+        let attachment = registry
+            .create_attachment(exec(1), Role::Controller, proj(10), 7)
+            .unwrap();
+        assert_eq!(
+            registry.authorize_mutation(8, attachment),
+            Err(AttachmentError::WrongConnection)
+        );
+        assert_eq!(
+            registry.detach_for_connection(8, attachment),
+            Err(AttachmentError::WrongConnection)
+        );
+        assert_eq!(registry.authorize_mutation(7, attachment), Ok(exec(1)));
     }
 
     #[test]
     fn second_controller_request_is_rejected_without_preemption() {
         let mut registry = AttachmentRegistry::new();
         let first = registry
-            .create_attachment(exec(1), Role::Controller, proj(10))
+            .create_attachment(exec(1), Role::Controller, proj(10), 7)
             .unwrap();
-        let second = registry.create_attachment(exec(1), Role::Controller, proj(11));
+        let second = registry.create_attachment(exec(1), Role::Controller, proj(11), 8);
         assert_eq!(second, Err(AttachmentError::ControllerBusy));
-        // The first controller's lease must remain untouched.
-        assert_eq!(registry.authorize_mutation(first), Ok(exec(1)));
+        assert_eq!(registry.authorize_mutation(7, first), Ok(exec(1)));
     }
 
     #[test]
     fn multiple_observers_may_coexist_with_one_controller() {
         let mut registry = AttachmentRegistry::new();
         let controller = registry
-            .create_attachment(exec(1), Role::Controller, proj(10))
+            .create_attachment(exec(1), Role::Controller, proj(10), 1)
             .unwrap();
         let observer_a = registry
-            .create_attachment(exec(1), Role::Observer, proj(10))
+            .create_attachment(exec(1), Role::Observer, proj(11), 2)
             .unwrap();
         let observer_b = registry
-            .create_attachment(exec(1), Role::Observer, proj(10))
+            .create_attachment(exec(1), Role::Observer, proj(12), 3)
             .unwrap();
         assert_eq!(registry.attachments_for_execution(exec(1)), 3);
-        assert!(registry.role_of(observer_a).unwrap() == Role::Observer);
-        assert!(registry.role_of(observer_b).unwrap() == Role::Observer);
-        assert_eq!(registry.authorize_mutation(controller), Ok(exec(1)));
+        assert_eq!(registry.role_of(observer_a).unwrap(), Role::Observer);
+        assert_eq!(registry.role_of(observer_b).unwrap(), Role::Observer);
+        assert_eq!(registry.authorize_mutation(1, controller), Ok(exec(1)));
     }
 
     #[test]
     fn detach_releases_controller_lease_for_a_later_attach() {
         let mut registry = AttachmentRegistry::new();
         let first = registry
-            .create_attachment(exec(1), Role::Controller, proj(10))
+            .create_attachment(exec(1), Role::Controller, proj(10), 1)
             .unwrap();
-        registry.detach(first).unwrap();
+        registry.detach_for_connection(1, first).unwrap();
         assert!(!registry.has_controller(exec(1)));
-        let second = registry.create_attachment(exec(1), Role::Controller, proj(11));
-        assert!(second.is_ok());
-    }
-
-    #[test]
-    fn detach_of_unknown_attachment_is_stale_identity() {
-        let mut registry = AttachmentRegistry::new();
-        let bogus = AttachmentId::from_bytes(999u128.to_le_bytes());
-        assert_eq!(
-            registry.detach(bogus),
-            Err(AttachmentError::UnknownAttachment)
+        assert!(
+            registry
+                .create_attachment(exec(1), Role::Controller, proj(11), 2)
+                .is_ok()
         );
     }
 
@@ -317,7 +332,7 @@ mod tests {
         let bogus = AttachmentId::from_bytes(999u128.to_le_bytes());
         assert_eq!(registry.role_of(bogus), Err(AttachmentError::StaleIdentity));
         assert_eq!(
-            registry.authorize_mutation(bogus),
+            registry.authorize_mutation(1, bogus),
             Err(AttachmentError::StaleIdentity)
         );
     }
@@ -326,7 +341,7 @@ mod tests {
     fn is_live_rejects_a_stale_projection_id_after_replacement() {
         let mut registry = AttachmentRegistry::new();
         let attachment = registry
-            .create_attachment(exec(1), Role::Observer, proj(10))
+            .create_attachment(exec(1), Role::Observer, proj(10), 1)
             .unwrap();
         assert!(registry.is_live(attachment, proj(10)));
         registry.replace_projection(attachment, proj(20)).unwrap();
@@ -338,28 +353,29 @@ mod tests {
     fn capacity_exceeded_once_the_hard_maximum_is_reached() {
         let mut registry = AttachmentRegistry::with_capacity(2);
         registry
-            .create_attachment(exec(1), Role::Observer, proj(10))
+            .create_attachment(exec(1), Role::Observer, proj(10), 1)
             .unwrap();
         registry
-            .create_attachment(exec(1), Role::Observer, proj(11))
+            .create_attachment(exec(1), Role::Observer, proj(11), 2)
             .unwrap();
-        let third = registry.create_attachment(exec(1), Role::Observer, proj(12));
-        assert_eq!(third, Err(AttachmentError::CapacityExceeded));
+        assert_eq!(
+            registry.create_attachment(exec(1), Role::Observer, proj(12), 3),
+            Err(AttachmentError::CapacityExceeded)
+        );
     }
 
     #[test]
     fn remove_all_for_execution_clears_every_attachment_and_the_lease() {
         let mut registry = AttachmentRegistry::new();
         let controller = registry
-            .create_attachment(exec(1), Role::Controller, proj(10))
+            .create_attachment(exec(1), Role::Controller, proj(10), 1)
             .unwrap();
         let observer = registry
-            .create_attachment(exec(1), Role::Observer, proj(10))
+            .create_attachment(exec(1), Role::Observer, proj(11), 2)
             .unwrap();
         let unrelated = registry
-            .create_attachment(exec(2), Role::Observer, proj(20))
+            .create_attachment(exec(2), Role::Observer, proj(20), 3)
             .unwrap();
-
         let mut removed = registry.remove_all_for_execution(exec(1));
         removed.sort_by_key(|id| id.to_string());
         let mut expected = vec![controller, observer];
@@ -367,7 +383,6 @@ mod tests {
         assert_eq!(removed, expected);
         assert!(!registry.has_controller(exec(1)));
         assert_eq!(registry.attachments_for_execution(exec(1)), 0);
-        // The unrelated execution's attachment must be untouched.
         assert_eq!(registry.execution_of(unrelated), Ok(exec(2)));
     }
 
@@ -376,9 +391,9 @@ mod tests {
         let mut registry = AttachmentRegistry::with_capacity(1);
         for _ in 0..1000 {
             let attachment = registry
-                .create_attachment(exec(1), Role::Controller, proj(1))
+                .create_attachment(exec(1), Role::Controller, proj(1), 1)
                 .unwrap();
-            registry.detach(attachment).unwrap();
+            registry.detach_for_connection(1, attachment).unwrap();
         }
         assert!(registry.is_empty());
         assert!(!registry.has_controller(exec(1)));

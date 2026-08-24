@@ -1,11 +1,12 @@
 use std::{
     io::{Read, Write},
+    os::fd::AsRawFd,
     process::Stdio,
     time::{Duration, Instant},
 };
 
 use crate::{
-    ChildExit, CommandSpec, ExecError, Readiness, TerminationPolicy, WindowSize,
+    ChildExit, CommandSpec, ExecError, Readiness, SignalDisposition, TerminationPolicy, WindowSize,
     child::ChildLifecycle,
     platform,
     readiness::{Interest, wait},
@@ -54,6 +55,10 @@ impl TerminalEndpoint {
 
     pub(crate) fn child_id(&self) -> u32 {
         self.child.id()
+    }
+
+    pub(crate) fn master_fd(&self) -> i32 {
+        self.master.as_raw_fd()
     }
 
     pub(crate) fn read(&mut self, buffer: &mut [u8]) -> Result<ReadOutcome, ExecError> {
@@ -128,6 +133,14 @@ impl TerminalEndpoint {
 
     pub(crate) fn try_wait(&mut self) -> Result<Option<ChildExit>, ExecError> {
         self.child.try_wait()
+    }
+
+    pub(crate) fn signal_terminate(&mut self) -> Result<SignalDisposition, ExecError> {
+        self.child.signal_terminate()
+    }
+
+    pub(crate) fn signal_kill(&mut self) -> Result<SignalDisposition, ExecError> {
+        self.child.signal_kill()
     }
 
     pub(crate) fn terminate(&mut self, policy: TerminationPolicy) -> Result<ChildExit, ExecError> {

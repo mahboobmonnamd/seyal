@@ -18,7 +18,7 @@ An Issue or PR cannot override architecture/specification. Existing code is neve
 
 ## Non-negotiable architecture invariants
 
-- Runtime owns the authoritative `TerminalState`; the GUI never mirrors a second VT/grid authority.
+- Each `TerminalExecution` owns its one authoritative `TerminalState`; Runtime owns registry/composition/lifecycle authority, and the GUI never mirrors a second VT/grid authority.
 - One independent `TerminalExecution` owns one terminal endpoint/PTY and one canonical terminal state.
 - `BlockTimeline` is Runtime/workspace metadata keyed by `ExecutionId`; Blocks own no PTY, VT, grid, child, renderer, or copied output.
 - No synchronous IPC ping-pong, JSON, agents, persistence, cloud, licensing, telemetry, Lua, or Block semantics in terminal hot paths.

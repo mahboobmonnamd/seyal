@@ -90,18 +90,27 @@ The endpoint owns `TIOCSWINSZ`/`TIOCGWINSZ`. Valid sizes have nonzero rows and
 columns. The normal kernel SIGWINCH behavior is preserved; no renderer-owned
 dimension authority is introduced.
 
-Resize is one **logical Runtime operation** even though it crosses two physical
-state holders: kernel PTY geometry and canonical `TerminalState`. The accepted
-foundation ordering describes authority/presentation flow, not a requirement to
-publish partially applied state.
+Resize follows the canonical Foundation §5.4 transaction. It is one **logical
+Runtime operation** across kernel PTY geometry and canonical `TerminalState`:
+
+```text
+validate resize authority + WindowSize
+→ prepare all locally rejectable/infallible resize inputs
+→ apply fallible PTY TIOCSWINSZ
+→ commit canonical TerminalState resize/reflow
+→ expose damage/projection
+```
 
 For macOS M001 the implementation validates `WindowSize`, applies the fallible
 PTY `TIOCSWINSZ`, and only after that succeeds resizes the canonical
-`TerminalState`. This ordering avoids publishing/reflowing canonical state when
-the kernel refuses the resize. With a validated nonzero `WindowSize`, the current
-M001 `TerminalState::resize` has no recoverable failure other than invalid size;
-if that contract changes, resize must be redesigned as an explicit prepare/commit
-operation before retaining endpoint-first ordering.
+`TerminalState`. This avoids publishing/reflowing canonical state when the
+kernel refuses the resize. Physical endpoint-first commit does not make the PTY
+semantic authority; `TerminalState` remains the one canonical terminal state.
+
+With a validated nonzero `WindowSize`, the current M001 `TerminalState::resize`
+has no recoverable failure other than invalid size. If that contract changes,
+resize must be redesigned as an explicit prepare/commit/rollback transaction so
+endpoint and canonical state cannot diverge after a partial commit.
 
 No renderer projection/damage consumer may observe a successful new geometry
 until the canonical `TerminalState` resize is complete.
@@ -184,8 +193,8 @@ timeout.
 - no production raw-line-discipline toggle used to support tests;
 - unsafe code is isolated to one Darwin module;
 - PTY bytes feed Seyal's existing authoritative `TerminalState`;
-- resize treats kernel + terminal geometry as one logical operation and does not
-  publish canonical damage until kernel resize succeeds.
+- resize follows the canonical prepare → endpoint commit → TerminalState commit
+  transaction and exposes no damage until both physical states agree.
 
 ### Rejected / deferred
 

@@ -93,7 +93,7 @@ pub(crate) fn register_process_exit(
     pid: i32,
     token: u64,
 ) -> Result<(), ExecError> {
-    change(
+    let result = change(
         kqueue,
         pid as usize,
         libc::EVFILT_PROC,
@@ -101,7 +101,20 @@ pub(crate) fn register_process_exit(
         libc::NOTE_EXIT,
         token,
         false,
-    )
+    );
+
+    // A child may exit between spawn and EVFILT_PROC registration. Darwin can
+    // report ESRCH once that PID is no longer registerable. Treat that narrow
+    // race as registration-complete so Runtime can immediately reconcile the
+    // still-owned std::process::Child with try_wait before publishing it live.
+    // Any other registration error remains a real partial-create failure.
+    if matches!(
+        &result,
+        Err(ExecError::Io(error)) if error.raw_os_error() == Some(libc::ESRCH)
+    ) {
+        return Ok(());
+    }
+    result
 }
 
 pub(crate) fn deregister_read(kqueue: &KqueueHandle, fd: i32) -> Result<(), ExecError> {

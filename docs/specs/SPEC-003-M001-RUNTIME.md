@@ -148,14 +148,15 @@ On exit readiness the Runtime calls the existing safe child-lifecycle authority 
 
 M001 defines primary-child exit as the execution's logical process-completion boundary. PTY EOF/HUP is not allowed to keep an execution alive indefinitely because descendants may retain a PTY slave after the primary child exits.
 
-Finalization requirements:
+After primary reap, the execution enters `DrainingAfterPrimaryExit`:
 
-1. classify/reap the primary child; normal exit and signal exit remain distinct;
-2. perform a bounded final nonblocking drain of bytes already available on the PTY master so output queued before exit is committed to the authoritative `TerminalState`;
-3. do not wait indefinitely for PTY EOF if descendants still hold the slave;
-4. deregister PTY/process filters;
-5. remove the registry entry;
-6. drop `TerminalExecution`, closing the PTY master.
+1. stop accepting new input/resize requests for that execution;
+2. continue normal fair, nonblocking PTY reads across reactor dispatches;
+3. if a read reaches `WouldBlock`, EOF or HUP, drain is complete;
+4. also arm a configured/testable finalization deadline so continuous descendant output cannot keep the execution alive forever;
+5. when drain completes or that deadline expires, deregister PTY/process filters, remove the registry entry, and drop `TerminalExecution`, closing the PTY master.
+
+The per-dispatch fairness quantum remains in force while draining; primary exit does not allow one execution to monopolize the reactor. The Runtime must not truncate final command output merely because more than one dispatch quantum was queued at exit, and it must not let a continuously writing descendant extend execution lifetime without bound.
 
 Output produced by arbitrary descendants after primary completion is not guaranteed by M001. A future product requirement to keep such a terminal execution alive would require a separate lifecycle decision.
 
@@ -170,7 +171,8 @@ The observable lifecycle is:
 ```text
 Running
 → TerminatingGraceful
-→ Exited
+→ DrainingAfterPrimaryExit
+→ Finalized
 ```
 
 or, after the configured graceful deadline:
@@ -178,7 +180,8 @@ or, after the configured graceful deadline:
 ```text
 TerminatingGraceful
 → TerminatingForced
-→ Exited
+→ DrainingAfterPrimaryExit
+→ Finalized
 ```
 
 or, if bounded forced reap does not complete:
@@ -194,9 +197,9 @@ Requirements:
 - SIGTERM is sent first;
 - SIGKILL is sent only after the graceful deadline expires;
 - the shared Runtime reactor thread does not sleep/wait for either deadline;
-- nearest pending deadline bounds the next reactor wait;
+- nearest pending termination/finalization deadline bounds the next reactor wait;
 - no signal is sent after primary reap;
-- after primary reap, finalization follows §10, including bounded final PTY drain and master closure;
+- after primary reap, finalization follows §10;
 - a termination timeout/failure is observable and does not silently remove ownership bookkeeping;
 - a shell job placed in a distinct job-control process group must not keep Runtime terminal registrations/resources alive after the primary execution is finalized.
 
@@ -262,6 +265,7 @@ Abrupt Runtime crash/kill remains outside M001 survival guarantees.
 - One execution's full input queue cannot stall other execution output.
 - One continuously ready PTY cannot monopolize the event loop indefinitely.
 - A full control queue produces explicit backpressure instead of unbounded allocation.
+- Continuous descendant output after primary exit cannot bypass the finalization deadline.
 - Runtime-wide reactor failure must surface as a Runtime failure; it must not move terminal ownership into the GUI.
 - Runtime process crash survival of arbitrary live PTYs remains out of M001.
 
@@ -294,15 +298,16 @@ At minimum:
 8. A bursty/hot PTY cannot starve another ready PTY.
 9. Pending input drains after writable readiness and writable interest becomes inactive when empty.
 10. Input/control queue bounds produce explicit backpressure without corrupting accepted order.
-11. Primary child exit is observed/reaped even if a descendant retains the slave; final already-buffered output is committed and the Runtime does not wait forever for descendant EOF.
-12. SIGTERM → deadline → SIGKILL termination progresses without blocking unrelated execution output.
-13. A shell job in a distinct job-control process group cannot keep Runtime terminal resources/registrations alive after primary execution finalization.
-14. Repeated create/remove does not accumulate descriptors, registrations or zombies.
-15. Stale registration generation cannot target a new execution after FD/PID reuse.
-16. Runtime-only descriptors, including kqueue/singleton descriptors, are not inherited by spawned commands.
-17. Controlled Runtime shutdown progresses all live executions without blocking the reactor and does not report success with owned live resources remaining.
-18. No RILL identifiers/daemon/socket coupling are introduced.
-19. No GUI/Swift dependency enters Runtime or PTY/VT byte progress.
+11. Primary child exit is observed/reaped even if a descendant retains the slave; final output spanning more than one dispatch quantum is committed before the first `WouldBlock`/EOF/HUP or configured finalization deadline.
+12. A continuously writing descendant cannot keep `DrainingAfterPrimaryExit` alive past the configured finalization deadline.
+13. SIGTERM → deadline → SIGKILL termination progresses without blocking unrelated execution output.
+14. A shell job in a distinct job-control process group cannot keep Runtime terminal resources/registrations alive after primary execution finalization.
+15. Repeated create/remove does not accumulate descriptors, registrations or zombies.
+16. Stale registration generation cannot target a new execution after FD/PID reuse.
+17. Runtime-only descriptors, including kqueue/singleton descriptors, are not inherited by spawned commands.
+18. Controlled Runtime shutdown progresses all live executions without blocking the reactor and does not report success with owned live resources remaining.
+19. No RILL identifiers/daemon/socket coupling are introduced.
+20. No GUI/Swift dependency enters Runtime or PTY/VT byte progress.
 
 ## 20. Explicitly deferred
 

@@ -48,17 +48,17 @@ notes = "Exact-byte evidence for carriage return/line feed, 1-based cursor posit
 [[fixtures]]
 id = "m001-ecma48-erase-save"
 classification = "supported"
-evidence_kind = "authoritative-spec"
+evidence_kind = "independent-reference"
 cols = 5
 rows = 2
 input = "tests/fixtures/vt/m001-ecma48-erase-save.input"
 expected = "tests/fixtures/vt/m001-ecma48-erase-save.expected.txt"
-source = "ECMA-48 Control Functions for Coded Character Sets, Fifth Edition"
-source_reference = "ECMA-48 (June 1991): CSI CUP, EL and save/restore cursor control-function family; fixture expectation independently authored for Seyal"
-license_or_terms = "ECMA standard consulted as normative reference; no source text or implementation copied"
+source = "ECMA-48 Fifth Edition and XTerm Control Sequences"
+source_reference = "ECMA-48 (June 1991): CSI CUP and EL; xterm ctlseqs: CSI s/u (SCOSC/SCORC, also ANSI.SYS); fixture expectation independently authored for Seyal"
+license_or_terms = "Public standards/control-sequence documentation consulted as behavioral references; no source text or implementation copied"
 recorded_at = "2026-08-24"
 owner_issue = "#88"
-notes = "Exact-byte evidence for cursor positioning, erase-in-line mode 0 and CSI save/restore. Style/background-specific erase behavior remains additionally covered by Seyal unit tests because it is a narrower product invariant."
+notes = "Exact-byte evidence for cursor positioning, erase-in-line mode 0, and CSI save/restore. ECMA-48 is authority for CUP/EL; CSI s/u is independently grounded in xterm ctlseqs rather than attributed to ECMA-48. Style/background-specific erase behavior remains additionally covered by Seyal unit tests because it is a product invariant."
 
 [[fixtures]]
 id = "m001-xterm-private"

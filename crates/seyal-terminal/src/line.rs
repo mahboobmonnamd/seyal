@@ -33,7 +33,7 @@ impl LineIdAllocator {
     }
 
     #[cfg(test)]
-    fn with_next(next: Option<u64>) -> Self {
+    pub(crate) fn with_next(next: Option<u64>) -> Self {
         Self { next }
     }
 }

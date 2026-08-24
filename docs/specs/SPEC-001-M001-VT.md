@@ -49,6 +49,8 @@ M001 semantics:
 | LF/VT/FF | line feed; at bottom row perform full-screen upward scroll |
 | CR | move to column 0 |
 
+When full-screen line feed or pending-wrap scroll creates a new bottom row, the row is blanked using the current pen background color and otherwise default cell attributes. This matches the erase/blanking color model and prevents scrolling from exposing default-background cells inside an active background rendition.
+
 Other C0 controls may be consumed with no visible mutation unless later specified.
 
 ## 5. Printable output and wrap
@@ -136,9 +138,11 @@ Other private modes are deferred and must not corrupt parser continuity.
 ## 11. Primary and alternate screens
 
 - Primary screen is preserved while alternate screen is active.
-- Entering `?1049h` creates a clean alternate screen with the same dimensions and a separate line-identity namespace.
+- Entering `?1049h` has xterm-compatible save/switch/clear semantics for the M001 subset: the primary cursor/rendition state remains saved, a clean alternate screen with the same dimensions and a separate line-identity namespace is activated, and the alternate screen begins with the active saved pen rendition rather than resetting SGR state merely because the buffer changed.
+- Blank cells in the newly cleared alternate screen use the active pen background and otherwise default cell attributes.
+- Rendition changes made while alternate is active belong to that alternate-screen lifetime and do not leak into the restored primary state on `?1049l`.
 - Re-entering while already active is idempotent.
-- Leaving `?1049l` discards the alternate buffer and reveals the unchanged primary buffer.
+- Leaving `?1049l` discards the alternate buffer and reveals the unchanged primary buffer with its saved cursor/rendition state.
 - Leaving while already on primary is idempotent.
 - Resize while alternate is active resizes both primary and alternate buffers so leaving alternate does not reveal stale dimensions.
 
@@ -212,5 +216,7 @@ Historical implementation evidence reviewed for this contract comes from RILL co
 - `crates/vt-engine/tests/t_chip1_slice*.rs`
 
 RILL behavior is not normative. Where RILL and this specification differ, this specification and current Seyal architecture win.
+
+Issue #68 re-audited two blanking/rendition behaviors against the retained RILL evidence and xterm 1049 save/switch/clear semantics before making them normative here. The resulting regression tests are Seyal-owned and do not import RILL module architecture.
 
 Acceptance requires exact-byte tests for chunk boundaries, controls, CSI/SGR/color, alternate screen, resize, malformed/deferred recovery, line identity and damage, plus fuzz invariants once the VT fuzz target is activated.

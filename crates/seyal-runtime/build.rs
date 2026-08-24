@@ -1,4 +1,4 @@
-use std::{env, fs, path::PathBuf, process::Command};
+use std::{env, fs, path::{Path, PathBuf}, process::Command};
 
 fn main() {
     println!("cargo:rerun-if-changed=../../resources/terminfo/seyal-m001.src");
@@ -30,8 +30,8 @@ fn main() {
     );
 }
 
-fn find_entry(root: &PathBuf) -> Option<PathBuf> {
-    let mut pending = vec![root.clone()];
+fn find_entry(root: &Path) -> Option<PathBuf> {
+    let mut pending = vec![root.to_path_buf()];
     while let Some(directory) = pending.pop() {
         for item in fs::read_dir(directory).ok()? {
             let item = item.ok()?;

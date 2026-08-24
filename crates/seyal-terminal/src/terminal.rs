@@ -382,3 +382,51 @@ fn param_one(params: &[u16], index: usize) -> u16 {
 fn param_zero(params: &[u16], index: usize) -> u16 {
     params.get(index).copied().unwrap_or(0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn line_identity_exhaustion_is_explicit_and_does_not_duplicate_scroll_id() {
+        let mut terminal = TerminalState::new(2, 1).expect("valid terminal");
+        terminal.core.line_ids = LineIdAllocator::with_next(Some(u64::MAX));
+
+        terminal
+            .feed(b"A\r\n")
+            .expect("last available line id may be allocated once");
+        let last = terminal.line_id(0).expect("visible line has id");
+        assert_eq!(last, LineId(u64::MAX));
+
+        assert_eq!(
+            terminal.feed(b"\r\n"),
+            Err(TerminalError::LineIdentityExhausted)
+        );
+        assert_eq!(terminal.line_id(0), Some(last));
+        assert_eq!(
+            terminal.feed(b"ignored after fault"),
+            Err(TerminalError::LineIdentityExhausted)
+        );
+        assert_eq!(terminal.line_id(0), Some(last));
+    }
+
+    #[test]
+    fn resize_preflights_line_identity_for_primary_and_alternate_atomically() {
+        let mut terminal = TerminalState::new(2, 1).expect("valid terminal");
+        terminal.core.line_ids = LineIdAllocator::with_next(Some(u64::MAX));
+        terminal
+            .feed(b"\x1b[?1049h")
+            .expect("alternate consumes final available id");
+        assert!(terminal.modes().alternate_screen);
+
+        assert_eq!(
+            terminal.resize(2, 2),
+            Err(TerminalError::LineIdentityExhausted)
+        );
+        assert_eq!((terminal.cols(), terminal.rows()), (2, 1));
+        terminal
+            .feed(b"\x1b[?1049l")
+            .expect("leaving alternate needs no new id");
+        assert_eq!((terminal.cols(), terminal.rows()), (2, 1));
+    }
+}

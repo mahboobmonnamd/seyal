@@ -64,11 +64,7 @@ pub(crate) fn create_kqueue() -> Result<KqueueHandle, ExecError> {
     Ok(handle)
 }
 
-pub(crate) fn register_read(
-    kqueue: &KqueueHandle,
-    fd: i32,
-    token: u64,
-) -> Result<(), ExecError> {
+pub(crate) fn register_read(kqueue: &KqueueHandle, fd: i32, token: u64) -> Result<(), ExecError> {
     change(
         kqueue,
         fd as usize,
@@ -80,11 +76,7 @@ pub(crate) fn register_read(
     )
 }
 
-pub(crate) fn register_write(
-    kqueue: &KqueueHandle,
-    fd: i32,
-    token: u64,
-) -> Result<(), ExecError> {
+pub(crate) fn register_write(kqueue: &KqueueHandle, fd: i32, token: u64) -> Result<(), ExecError> {
     change(
         kqueue,
         fd as usize,
@@ -136,10 +128,7 @@ pub(crate) fn deregister_write(kqueue: &KqueueHandle, fd: i32) -> Result<(), Exe
     )
 }
 
-pub(crate) fn deregister_process_exit(
-    kqueue: &KqueueHandle,
-    pid: i32,
-) -> Result<(), ExecError> {
+pub(crate) fn deregister_process_exit(kqueue: &KqueueHandle, pid: i32) -> Result<(), ExecError> {
     change(
         kqueue,
         pid as usize,
@@ -256,10 +245,9 @@ fn change(
     }
     let error = io::Error::last_os_error();
     if allow_gone
-        && matches!(
-            error.raw_os_error(),
-            Some(libc::ENOENT | libc::EBADF | libc::ESRCH)
-        )
+        && error
+            .raw_os_error()
+            .is_some_and(|code| matches!(code, libc::ENOENT | libc::EBADF | libc::ESRCH))
     {
         return Ok(());
     }

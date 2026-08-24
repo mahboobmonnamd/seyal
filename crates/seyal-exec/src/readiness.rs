@@ -1,5 +1,32 @@
-//! Nonblocking PTY readiness and bounded read/write coordination.
-//!
-//! This module will own the poll/readiness mechanics needed by M001. It must
-//! not force one thread per PTY, busy-wait, serialize bytes or cross into Swift
-//! on the terminal I/O hot path.
+use std::time::Duration;
+
+use crate::{ExecError, platform};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Readiness {
+    pub ready: bool,
+    pub hangup: bool,
+}
+
+impl Readiness {
+    pub(crate) fn timeout() -> Self {
+        Self {
+            ready: false,
+            hangup: false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Interest {
+    Read,
+    Write,
+}
+
+pub(crate) fn wait(
+    endpoint: &platform::MasterHandle,
+    interest: Interest,
+    timeout: Duration,
+) -> Result<Readiness, ExecError> {
+    platform::wait(endpoint, interest, timeout)
+}

@@ -1,13 +1,23 @@
-//! Seyal terminal-execution ownership boundary.
+//! Seyal-owned local terminal execution boundary.
 //!
-//! Issue #28 creates this crate before PTY behavior is implemented so the
-//! permanent dependency and module boundaries exist first. The scaffold does
-//! not expose placeholder endpoint/process APIs. Each module gains public
-//! surface only when its behavior is specified, tested and implemented.
+//! `TerminalExecution` owns one PTY endpoint/child lifecycle and one
+//! authoritative `seyal_terminal::TerminalState`. The macOS PTY implementation
+//! is internal; raw descriptors, GUI state, Blocks and Runtime orchestration do
+//! not enter this crate's public surface.
 
 mod child;
+mod command;
 mod endpoint;
+mod error;
 mod execution;
 mod platform;
 mod readiness;
 mod winsize;
+
+pub use child::{ChildExit, TerminationPolicy};
+pub use command::CommandSpec;
+pub use endpoint::{ReadOutcome, TerminalEndpoint, WriteOutcome};
+pub use error::ExecError;
+pub use execution::TerminalExecution;
+pub use readiness::Readiness;
+pub use winsize::WindowSize;

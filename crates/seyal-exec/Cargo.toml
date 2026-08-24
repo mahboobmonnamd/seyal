@@ -10,5 +10,12 @@ publish = false
 [dependencies]
 seyal-terminal = { path = "../seyal-terminal" }
 
-[lints]
-workspace = true
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2.189"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[[bench]]
+name = "pty_io"
+harness = false

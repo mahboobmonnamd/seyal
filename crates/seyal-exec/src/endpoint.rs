@@ -1,9 +1,11 @@
 use std::{
     io::{Read, Write},
-    os::fd::AsRawFd,
     process::Stdio,
     time::{Duration, Instant},
 };
+
+#[cfg(target_os = "macos")]
+use std::os::fd::AsRawFd;
 
 use crate::{
     ChildExit, CommandSpec, ExecError, Readiness, SignalDisposition, TerminationPolicy, WindowSize,
@@ -57,6 +59,7 @@ impl TerminalEndpoint {
         self.child.id()
     }
 
+    #[cfg(target_os = "macos")]
     pub(crate) fn master_fd(&self) -> i32 {
         self.master.as_raw_fd()
     }

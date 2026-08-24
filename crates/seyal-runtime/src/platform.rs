@@ -10,7 +10,7 @@ pub(crate) fn try_lock_exclusive(fd: RawFd) -> io::Result<bool> {
         return Ok(true);
     }
     let error = io::Error::last_os_error();
-    if matches!(error.raw_os_error(), Some(libc::EWOULDBLOCK | libc::EAGAIN)) {
+    if error.raw_os_error() == Some(libc::EWOULDBLOCK) {
         return Ok(false);
     }
     Err(error)

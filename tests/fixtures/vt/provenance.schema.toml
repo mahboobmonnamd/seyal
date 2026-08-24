@@ -1,11 +1,17 @@
-version = 1
+version = 2
 required = [
   "id",
   "classification",
+  "evidence_kind",
   "source",
   "source_reference",
   "license_or_terms",
   "recorded_at",
   "owner_issue",
   "notes",
+]
+allowed_evidence_kinds = [
+  "project-regression",
+  "authoritative-spec",
+  "independent-reference",
 ]

@@ -29,13 +29,17 @@ fn main() {
     // Warm the production path without publishing a performance claim from
     // initialization/cache effects.
     for _ in 0..100 {
-        terminal.feed(black_box(WORKLOAD));
+        terminal
+            .feed(black_box(WORKLOAD))
+            .expect("benchmark feed succeeds");
     }
     let _ = terminal.take_damage();
 
     let started = Instant::now();
     for _ in 0..iterations {
-        terminal.feed(black_box(WORKLOAD));
+        terminal
+            .feed(black_box(WORKLOAD))
+            .expect("benchmark feed succeeds");
     }
     let elapsed = started.elapsed();
 

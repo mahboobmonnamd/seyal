@@ -42,6 +42,14 @@ The M001 benchmark harness contract lives under `benches/`. `benches/environment
 
 Future measured workloads must replace `not-applicable` smoke fields with real terminal dimensions, font/scale, shell, workload, run count and percentile method. Generated benchmark records stay out of production modules and should be retained as explicit CI/release artifacts when a measurement Issue requires them.
 
+For M001 Pass 5 transport evidence, run:
+
+```bash
+cargo bench -p seyal-runtime --bench runtime_scalability -- --nocapture
+```
+
+The benchmark emits paired `runtime_resource` records for `transport=socket-only` and `transport=hybrid` at required populations (`1/10/50/100`) plus representative geometry/screen scenarios. Records marked `classification=PLATFORM_LIMITED` are host-ceiling evidence and must be reported, not filtered out.
+
 ## CI strategy
 
 Fast PR checks use stable smoke benchmarks or guardrails only where noise is controlled. Broader benchmark matrices run scheduled/release and on performance-sensitive changes. A noisy benchmark must not become a fake gate; investigate measurement quality instead.

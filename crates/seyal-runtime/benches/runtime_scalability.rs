@@ -4,9 +4,34 @@ use std::{env, process::Command, time::Instant};
 #[cfg(target_os = "macos")]
 use seyal_exec::{CommandSpec, WindowSize};
 #[cfg(target_os = "macos")]
-use seyal_runtime::{Runtime, RuntimeConfig};
+use seyal_runtime::{LocalIpcMode, Runtime, RuntimeConfig};
 #[cfg(target_os = "macos")]
 use std::{fs, process, thread, time::Duration};
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy)]
+enum TransportMode {
+    SocketOnly,
+    HybridProjection,
+}
+
+#[cfg(target_os = "macos")]
+impl TransportMode {
+    fn from_arg(value: &str) -> Self {
+        match value {
+            "socket-only" => Self::SocketOnly,
+            "hybrid" => Self::HybridProjection,
+            _ => panic!("unknown transport mode {value}"),
+        }
+    }
+
+    fn as_arg(self) -> &'static str {
+        match self {
+            Self::SocketOnly => "socket-only",
+            Self::HybridProjection => "hybrid",
+        }
+    }
+}
 
 fn main() {
     #[cfg(not(target_os = "macos"))]
@@ -27,36 +52,48 @@ fn run_macos() {
         return;
     }
 
-    println!("seyal-runtime Pass 4 resource benchmark; performance_claim=false");
-    println!("method=fresh_worker_per_population release_bench_profile=true");
+    println!("seyal-runtime Pass 5 transport comparator benchmark; performance_claim=false");
+    println!("method=fresh_worker_per_population_and_transport release_bench_profile=true");
     println!("profile=80x24 primary-active alternate-inactive minimal-scrollback");
     print_host_metadata();
 
     let executable = env::current_exe().expect("current benchmark executable");
-    for population in [0usize, 1, 10, 50, 100, 250, 500] {
-        let status = Command::new(&executable)
-            .args(["--worker", &population.to_string(), "80", "24", "primary"])
-            .status()
-            .expect("launch fresh benchmark worker");
-        assert!(status.success(), "runtime benchmark worker failed");
+    for transport in [TransportMode::SocketOnly, TransportMode::HybridProjection] {
+        for population in [1usize, 10, 50, 100] {
+            let status = Command::new(&executable)
+                .args([
+                    "--worker",
+                    &population.to_string(),
+                    "80",
+                    "24",
+                    "primary",
+                    transport.as_arg(),
+                ])
+                .status()
+                .expect("launch fresh benchmark worker");
+            assert!(status.success(), "runtime benchmark worker failed");
+        }
     }
 
-    for (columns, rows, screen) in [
-        (120, 40, "primary"),
-        (200, 60, "primary"),
-        (80, 24, "alternate"),
-    ] {
-        let status = Command::new(&executable)
-            .args([
-                "--worker",
-                "1",
-                &columns.to_string(),
-                &rows.to_string(),
-                screen,
-            ])
-            .status()
-            .expect("launch representative geometry worker");
-        assert!(status.success(), "representative geometry worker failed");
+    for transport in [TransportMode::SocketOnly, TransportMode::HybridProjection] {
+        for (columns, rows, screen) in [
+            (120, 40, "primary"),
+            (200, 60, "primary"),
+            (80, 24, "alternate"),
+        ] {
+            let status = Command::new(&executable)
+                .args([
+                    "--worker",
+                    "1",
+                    &columns.to_string(),
+                    &rows.to_string(),
+                    screen,
+                    transport.as_arg(),
+                ])
+                .status()
+                .expect("launch representative geometry worker");
+            assert!(status.success(), "representative geometry worker failed");
+        }
     }
 }
 
@@ -67,12 +104,26 @@ fn worker() {
     let columns = args[3].parse::<u16>().expect("columns");
     let rows = args[4].parse::<u16>().expect("rows");
     let alternate = args[5] == "alternate";
+    let transport = TransportMode::from_arg(&args[6]);
 
     let mut config = RuntimeConfig::m001().expect("bundled capability policy");
     config.singleton_path = env::temp_dir().join(format!(
         "seyal-runtime-bench-{}-{requested}-{columns}x{rows}.lock",
         process::id()
     ));
+    let local_ipc_runtime_dir = match transport {
+        TransportMode::SocketOnly => None,
+        TransportMode::HybridProjection => Some(env::temp_dir().join(format!(
+            "seyal-runtime-bench-ipc-{}-{requested}-{columns}x{rows}",
+            process::id()
+        ))),
+    };
+    config.local_ipc = match &local_ipc_runtime_dir {
+        None => LocalIpcMode::Disabled,
+        Some(path) => LocalIpcMode::Enabled {
+            runtime_dir_override: Some(path.clone()),
+        },
+    };
     config.max_executions = requested.max(1);
     let mut runtime = Runtime::new(config).expect("headless Runtime");
     let baseline = process_metrics(&runtime);
@@ -141,7 +192,8 @@ fn worker() {
         "PLATFORM_LIMITED"
     };
     println!(
-        "runtime_resource population_requested={requested} population_created={} geometry={}x{} screen={} classification={classification} create_us={creation_us} teardown_us={teardown_us} registry_100x_us={registry_us} control_to_state_us={:?} rss_baseline_kib={} rss_populated_kib={} rss_final_kib={} incremental_runtime_kib={} child_rss_kib={} idle_cpu_percent={} threads_baseline={} threads_populated={} threads_final={} fd_baseline={} fd_populated={} fd_final={} pending_final={} shutdown_ok={} platform_error={:?}",
+        "runtime_resource transport={} population_requested={requested} population_created={} geometry={}x{} screen={} classification={classification} create_us={creation_us} teardown_us={teardown_us} registry_100x_us={registry_us} control_to_state_us={:?} rss_baseline_kib={} rss_populated_kib={} rss_final_kib={} incremental_runtime_kib={} child_rss_kib={} idle_cpu_percent={} threads_baseline={} threads_populated={} threads_final={} fd_baseline={} fd_populated={} fd_final={} pending_final={} shutdown_ok={} platform_error={:?}",
+        transport.as_arg(),
         ids.len(),
         columns,
         rows,
@@ -164,6 +216,9 @@ fn worker() {
         platform_limit,
     );
     shutdown.expect("controlled Runtime teardown");
+    if let Some(runtime_dir) = local_ipc_runtime_dir {
+        let _ = fs::remove_dir_all(runtime_dir);
+    }
 }
 
 #[cfg(target_os = "macos")]

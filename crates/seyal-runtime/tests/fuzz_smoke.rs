@@ -49,10 +49,12 @@ fn shared_projection_validation_seed() {
     if bytes.len() >= SLOT_HEADER_LEN {
         let _ = SlotHeader::decode(&bytes[..SLOT_HEADER_LEN], 256, 512);
     }
-    for chunk in bytes.chunks_exact(CELL_LEN) {
+    let (cell_chunks, _) = bytes.as_chunks::<CELL_LEN>();
+    for chunk in cell_chunks {
         let _ = CellRecord::decode(chunk);
     }
-    for chunk in bytes.chunks_exact(DAMAGE_LEN) {
+    let (damage_chunks, _) = bytes.as_chunks::<DAMAGE_LEN>();
+    for chunk in damage_chunks {
         let _ = DamageRecord::decode(chunk, 256);
     }
 }

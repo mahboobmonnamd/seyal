@@ -3,7 +3,8 @@
 **Status:** Design refinement for M001  
 **Issue:** #73  
 **Authority:** Subordinate to `SEYAL-UI-ARCHITECTURE-001.md`, foundation architecture, accepted ADRs, and `MILESTONE-001.md`  
-**Source visual:** user-provided 1586×992 RILL concept screenshot; visual mood/reference only, not implementation authority
+**Source visual:** user-provided 1586×992 RILL concept screenshot; visual mood/reference only, not implementation authority  
+**Approved visual references:** [`references/README.md`](references/README.md) and its checked-in UI reference images
 
 ## 1. Goal
 
@@ -49,7 +50,7 @@ Seyal must **not** copy Warp's terminal-state architecture or visual identity. I
 | Input | first-class editor; configurable position | bottom composer only when reliable structured command-entry eligibility is known; direct terminal input is the safe/default path whenever state is unknown or shell semantics matter |
 | Large command output | continuous Block list with navigation/sticky command affordances | each Block grows intrinsically only to configured max height, then its output scrolls internally with explicit parent-scroll chaining |
 | TUI/alt screen | full-screen app presentation | same concept, but explicitly the same `ExecutionId`/PTY/VT/alternate grid with Block/composer chrome yielding |
-| Error styling | can color the Block strongly by exit state | avoid painting the whole Block as an error card; use restrained rail/status treatment from real metadata |
+| Error styling | can color the Block strongly by exit state | use restrained local status text/icon/border treatment from real metadata; no full-Block error fill |
 | Rich agent content | rich content can live in the same Block list | deferred from M001; future agent/artifact/attention views reference runtime identities without redefining terminal history |
 | UI stack | Rust custom WarpUI/GPU framework | native Swift/AppKit host + Seyal Metal renderer; portable terminal/runtime authority remains Rust |
 
@@ -57,29 +58,30 @@ Seyal must **not** copy Warp's terminal-state architecture or visual identity. I
 
 The first Seyal UI should not look like "Warp with different colors".
 
-Seyal uses an **execution stream** visual model rather than a stack of boxed command cards:
+Seyal uses **lightweight execution Blocks** over one canonical terminal history:
 
 ```text
+┌─ command ───────────────────────────────────────────────────┐
+│ output...                                                   │
+│ output...                                                   │
+└─────────────────────────────────────────────────────────────┘
+
+┌─ next command ──────────────────────────────────────────────┐
+│ output...                                                   │
+└─────────────────────────────────────────────────────────────┘
+
 ┌─────────────────────────────────────────────────────────────┐
-│  │ command                                                  │
-│  │ output...                                                │
-│  │ output...                                                │
-│  ● completed                                               │
-│                                                             │
-│  │ next command                                             │
-│  │ output...                                                │
-│                                                             │
-├─────────────────────────────────────────────────────────────┤
-│  > command composer (only when eligible)               run  │
+│ > command composer (only when eligible)                run  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 The exact glyphs are illustrative only. The design intent is:
 
-- a thin **execution rail/gutter** provides Block identity, focus and status;
-- command/output content sits primarily on the shared terminal canvas, not inside heavy cards;
-- Block separation comes from spacing, rail anchors and subtle surface changes rather than full rectangular borders around every command;
-- semantic failure/success uses a compact rail marker/status accent, not a large red/green Block background;
+- Blocks use lightweight boundaries/surfaces only where they improve command/output grouping, navigation, actions or focus;
+- there is **no persistent execution rail/gutter** and no decorative left timestamp rail;
+- Block identity, focus and status use compact local chrome such as command/header metadata, border/surface treatment or a small status indicator when real metadata exists;
+- command/output content remains visually primary; Block chrome stays subordinate and must earn its space;
+- semantic failure/success uses compact status text/icon/border treatment, not a large red/green Block background;
 - when eligible, the bottom composer feels like a **command dock integrated into the execution surface**, not a detached IDE panel;
 - when composer eligibility is unknown or unsafe, direct terminal input wins and the dock must not intercept shell/editor semantics;
 - when a TUI takes over, the dock retracts and the terminal surface expands cleanly; there is no nested "TUI inside a Block" effect;
@@ -99,23 +101,23 @@ Reviewed as competitive evidence, not Seyal authority:
 
 ## 3. Visual direction
 
-The provided screenshot establishes mood, not pixel geometry. Warp establishes useful product patterns, not visual authority.
+The provided screenshot establishes mood, not pixel geometry. Warp establishes useful product patterns, not visual authority. The checked-in approved references in `references/` establish the current component-level visual direction.
 
 Use:
 
-- dark, low-noise workspace background;
-- one continuous execution canvas rather than repeated heavy cards;
+- both light and dark appearances as first-class product surfaces;
+- a calm, low-noise workspace background derived from the active Seyal appearance/theme;
+- lightweight Block surfaces/boundaries that make command/output grouping clear without turning the workspace into a stack of heavy cards;
 - restrained translucent/material-like surfaces only where they do not hurt render cost;
-- a narrow execution rail/gutter for Block anchors/status/focus;
-- thin separators and subtle depth rather than boxed command cards;
+- thin separators and subtle depth where they improve hierarchy;
 - one accent/focus treatment at a time;
 - dense terminal information with generous structural spacing;
 - minimal chrome around commands and output;
 - typography hierarchy driven primarily by terminal text, command identity, and state.
 
-Do not copy the screenshot's left sidebar, right inspector, tabs, agent controls, notification stack, or multi-pane composition into the first UI.
+Do not copy the screenshot's left sidebar, right inspector, tabs, agent controls, notification stack, or multi-pane composition into the first UI simply because they appear in a reference. Those broader workspace features land only in their owning milestones.
 
-Do not copy Warp's distinctive Block-card treatment, sticky-command presentation, strong whole-Block error backgrounds, configurable top/reverse input layouts, or agent-rich Block stream into M001.
+Do not copy Warp's distinctive heavy Block-card treatment, sticky-command presentation, strong whole-Block error backgrounds, configurable top/reverse input layouts, or agent-rich Block stream into M001.
 
 Futuristic means calm, spatially clear, fast, and context-aware. It does not mean animation-heavy or decorative rendering.
 
@@ -250,7 +252,10 @@ This deliberately differs from a continuous unbounded large-Block presentation: 
 
 ```text
 BlockView
-├─ ExecutionRailAnchor
+├─ BlockChrome (lightweight, derived metadata only)
+│  ├─ command/context identity
+│  ├─ optional status
+│  └─ optional actions
 ├─ CommandLine
 │  ├─ prompt/context seam
 │  └─ command text
@@ -260,7 +265,7 @@ BlockView
 
 Optional execution state such as running/completed/failed may be represented minimally when real metadata exists. Do not synthesize status from scraped raw text.
 
-The rail marker is application chrome; terminal colors/content remain inside terminal-derived output.
+There is no required persistent execution rail or timestamp gutter. Block chrome is application presentation only; terminal colors/content remain inside terminal-derived output.
 
 ### 6.3 Overflow and nested-scroll behavior
 
@@ -270,7 +275,7 @@ Rules:
 
 - short output: no internal scrollbar;
 - long output: clip to max height + internal vertical scroll;
-- internal scrolling is visually subordinate; prefer a thin overlay/rail-adjacent indicator over a heavy permanent scroll gutter where native behavior permits;
+- internal scrolling is visually subordinate; prefer a thin overlay/edge indicator over a heavy permanent scroll gutter where native behavior permits;
 - a capped Block must visibly indicate that additional output exists;
 - trackpad/wheel scrolling over a scrollable Block consumes motion only while that Block can continue scrolling in the gesture direction;
 - when the Block reaches its top/bottom boundary, remaining gesture motion chains naturally to the parent execution stream instead of trapping the user in a nested scroll container;
@@ -420,7 +425,7 @@ Forbidden synchronous work on terminal hot paths:
 
 Block height calculation should use already-derived layout/history information and be bounded to visible/near-visible Blocks.
 
-The execution rail and Block chrome must remain O(visible/near-visible Blocks), not O(total history), during normal paint/layout.
+Block chrome must remain O(visible/near-visible Blocks), not O(total history), during normal paint/layout.
 
 Composer eligibility updates must be coarse state changes derived from already available Runtime/shell-integration evidence; terminal keystrokes must not synchronously invoke semantic classification, agents or shell-output scraping to decide where input goes.
 
@@ -428,13 +433,13 @@ Composer eligibility updates must be coarse state changes derived from already a
 
 These are design intentions, not frozen numeric API values.
 
-- window background: near-black neutral;
-- execution canvas: continuous, with only slight tonal separation between command regions where needed;
-- execution rail: narrow, low-contrast by default, stronger only for focus/status;
+- window background: theme-derived neutral appropriate to the selected light/dark appearance;
+- execution canvas: calm and low-noise, with only slight tonal separation where needed;
+- Block surface: lightweight border/surface treatment; no persistent execution rail or timestamp gutter;
 - composer surface: visually distinct from output but integrated with the pane rather than a bright card when present;
 - separators: 1-pixel/backing-aware hairlines where appropriate;
-- corner treatment: restrained radius for composer/utility chrome; avoid rounding every Block into a card;
-- focus: one clear accent rail/outline treatment, subtle enough not to compete with terminal colors;
+- corner treatment: restrained radius for Blocks/composer/utility chrome; avoid oversized card treatment;
+- focus: one clear accent border/outline/surface treatment, subtle enough not to compete with terminal colors;
 - status colors: reserve semantic red/amber/green for real metadata and small indicators only;
 - typography: terminal monospaced font dominates; application labels use native legible hierarchy;
 - motion: short spatial transitions only when they explain composer/TUI/direct-input takeover/return.
@@ -445,15 +450,16 @@ A first-glance comparison with Warp must show Seyal's own visual model.
 
 M001 should satisfy all of these:
 
-- no stack of prominent rounded command cards;
+- no stack of visually heavy/prominent rounded command cards;
+- lightweight Block boundaries/surfaces may be used when they improve grouping, focus, actions or navigation;
+- no persistent execution rail/gutter or decorative left timestamp rail;
 - no full-Block red/green status backgrounds;
 - no Warp-like sticky command header as a default visual primitive;
 - no top/reverse input-position modes in the first MVP;
 - no agent conversation/rich-content Blocks in the first terminal stream;
-- a visible execution rail/gutter and continuous terminal canvas establish Seyal identity;
 - when eligible, the bottom composer is visually integrated as a command dock; when unsafe/unknown, it yields to direct terminal input rather than imitating shell editing;
 - capped long Blocks with local scrolling and parent-scroll chaining are a first-class Seyal behavior;
-- TUI takeover visibly removes/retracts normal Flow chrome rather than appearing inside a Block.
+- TUI takeover visibly removes/retracts normal Flow chrome and makes the full pane the live TUI rather than appearing inside a Block.
 
 These are M001 visual guardrails, not claims that Seyal can never add different navigation or richer views later.
 
@@ -463,18 +469,18 @@ Controlled native screenshot matrix:
 
 1. eligible structured command-entry state with focused composer;
 2. direct-input shell state with composer absent/non-interactive;
-3. one short command + one-line output Block/rail anchor;
+3. one short command + one-line output Block with lightweight boundary/surface treatment;
 4. multiline Block below max height;
 5. long Block at max height with local overflow/scroll indicator visible;
 6. expanded/open-full-output presentation for that same Block history range;
-7. failed command with restrained status marker but no full-card error fill;
+7. failed command with restrained status treatment but no full-card error fill;
 8. raw terminal fallback;
-9. live TUI takeover with composer absent/non-interactive;
+9. live TUI takeover with composer absent/non-interactive and the TUI occupying the full pane;
 10. return from TUI with composer eligibility re-evaluated;
 11. window resize at minimum and representative large size;
 12. high-contrast/accessibility appearance where applicable.
 
-The provided RILL screenshot and Warp screenshots are not pixel-diff targets for these states.
+The provided RILL screenshot and Warp screenshots are not pixel-diff targets for these states. The checked-in approved references in `references/` are the current visual input for component implementation, subject to the architecture and milestone authority above them.
 
 ## 15. Functional acceptance for later implementation
 

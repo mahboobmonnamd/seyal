@@ -166,10 +166,12 @@ impl TerminalCore {
         if enabled {
             let cols = self.primary.cols();
             let rows = self.primary.rows();
+            let pen = self.primary.pen();
             let namespace = self.next_screen_namespace;
             self.next_screen_namespace = self.next_screen_namespace.saturating_add(1);
             match Screen::new(cols, rows, namespace) {
-                Ok(screen) => {
+                Ok(mut screen) => {
+                    screen.inherit_pen_for_clean_buffer(pen);
                     self.alternate = Some(screen);
                     self.modes.alternate_screen = true;
                     self.apply(Mutation::full(rows));

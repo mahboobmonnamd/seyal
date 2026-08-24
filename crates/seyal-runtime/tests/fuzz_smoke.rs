@@ -19,10 +19,6 @@ fn input() -> Vec<u8> {
     fs::read(path).expect("read retained fuzz seed")
 }
 
-/// Activates the `local-binary-protocol-decode` target against the real
-/// SPEC-004 wire decoder (`FrameHeader::decode` + `decode_message`), never
-/// a no-op copy. A crash, panic or unsafe-arithmetic overflow on any byte
-/// sequence fails the retained seed.
 #[test]
 #[ignore = "executed by fuzz/targets/local-binary-protocol-decode with a retained seed"]
 fn local_binary_protocol_decode_seed() {
@@ -43,9 +39,6 @@ fn local_binary_protocol_decode_seed() {
     let _ = decode_message(&header, payload);
 }
 
-/// Activates the `shared-projection-validation` target against the real
-/// SPEC-004 projection ABI validators (`RegionHeader`/`SlotHeader`/
-/// `CellRecord`/`DamageRecord::decode`), never a no-op copy.
 #[test]
 #[ignore = "executed by fuzz/targets/shared-projection-validation with a retained seed"]
 fn shared_projection_validation_seed() {
@@ -64,12 +57,6 @@ fn shared_projection_validation_seed() {
     }
 }
 
-/// Activates the `reconnect-resync-state-machine` target against the real
-/// SPEC-004 connection state machine (`ConnectionState::validate_incoming`)
-/// and attachment/authority registry (`AttachmentRegistry`), driving a
-/// byte-derived sequence of attach/detach/resync/reconnect operations.
-/// Never a no-op copy: every operation below calls into production
-/// decision logic, not a fuzz-only reimplementation.
 #[test]
 #[ignore = "executed by fuzz/targets/reconnect-resync-state-machine with a retained seed"]
 fn reconnect_resync_state_machine_seed() {
@@ -78,12 +65,13 @@ fn reconnect_resync_state_machine_seed() {
     let mut state = ConnectionState::AwaitHello;
     let mut current_attachment: Option<AttachmentId> = None;
     let mut current_execution: Option<ExecutionId> = None;
+    let mut connection_token = 1u64;
 
     for chunk in bytes.chunks(3) {
         if chunk.len() < 3 {
             break;
         }
-        let op = chunk[0] % 6;
+        let op = chunk[0] % 7;
         let execution_id = ExecutionId::from_bytes((chunk[1] as u128).to_le_bytes());
         let projection_id = ProjectionId::from_bytes((chunk[2] as u128).to_le_bytes());
 
@@ -99,7 +87,12 @@ fn reconnect_resync_state_machine_seed() {
                     } else {
                         Role::Controller
                     };
-                    if let Ok(id) = registry.create_attachment(execution_id, role, projection_id) {
+                    if let Ok(id) = registry.create_attachment(
+                        execution_id,
+                        role,
+                        projection_id,
+                        connection_token,
+                    ) {
                         current_attachment = Some(id);
                         current_execution = Some(execution_id);
                         state = ConnectionState::Attached;
@@ -110,7 +103,7 @@ fn reconnect_resync_state_machine_seed() {
                 if let Some(id) = current_attachment
                     && state.validate_incoming(MessageType::Detach).is_ok()
                 {
-                    let _ = registry.detach(id);
+                    let _ = registry.detach_for_connection(connection_token, id);
                     current_attachment = None;
                     state = ConnectionState::Ready;
                 }
@@ -118,20 +111,29 @@ fn reconnect_resync_state_machine_seed() {
             3 => {
                 if let Some(id) = current_attachment {
                     let _ = state.validate_incoming(MessageType::Resync);
-                    let _ = registry.execution_of(id);
+                    let _ = registry.execution_for_connection(connection_token, id);
                     let _ = registry.is_live(id, projection_id);
                 }
             }
             4 => {
-                // Reconnect: this connection is gone; a fresh connection
-                // for the same execution must be able to attach again.
+                // Reconnect revokes the old connection's authority before a
+                // fresh token is introduced.
                 if let Some(id) = current_attachment {
-                    let _ = registry.detach(id);
+                    let _ = registry.detach_for_connection(connection_token, id);
                 }
                 current_attachment = None;
+                connection_token = connection_token.wrapping_add(1).max(1);
                 state = ConnectionState::AwaitHello;
                 if let Some(execution_id) = current_execution {
                     let _ = registry.attachments_for_execution(execution_id);
+                }
+            }
+            5 => {
+                if let Some(id) = current_attachment {
+                    // A different authenticated connection must never gain
+                    // mutation authority merely by knowing the opaque id.
+                    let attacker = connection_token.wrapping_add(1).max(1);
+                    let _ = registry.authorize_mutation(attacker, id);
                 }
             }
             _ => {
@@ -141,8 +143,5 @@ fn reconnect_resync_state_machine_seed() {
         }
     }
 
-    // Invariants that must hold regardless of the fuzzed operation
-    // sequence: the registry never exceeds its configured capacity, and
-    // reaching this point at all means no operation above panicked.
     assert!(registry.len() <= 4);
 }

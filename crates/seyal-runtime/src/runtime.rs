@@ -277,7 +277,9 @@ pub struct Runtime {
 impl Runtime {
     pub fn new(config: RuntimeConfig) -> Result<Self, RuntimeError> {
         let singleton = SingletonGuard::acquire(&config.singleton_path)?;
-        let mut reactor = ExecutionReactor::new()?;
+        let reactor = ExecutionReactor::new()?;
+        #[cfg(target_os = "macos")]
+        let mut reactor = reactor;
         let (control_tx, control_rx) = sync_channel(config.control_queue_capacity);
         #[cfg(target_os = "macos")]
         let local_ipc = match &config.local_ipc {
@@ -1455,17 +1457,20 @@ impl Runtime {
             let Some(state) = self.local_ipc.as_mut() else {
                 return;
             };
-            let attachment_ids = state.attachments.remove_all_for_execution(execution_id);
-            let mut notifications = Vec::with_capacity(attachment_ids.len());
-            for attachment_id in attachment_ids {
+            let attachment_connections = state
+                .attachments
+                .attachments_with_connections_for_execution(execution_id);
+            let _ = state.attachments.remove_all_for_execution(execution_id);
+            let mut notifications = Vec::with_capacity(attachment_connections.len());
+            for (attachment_id, connection_token) in attachment_connections {
                 if let Some(projection) = state.projections.remove(&attachment_id) {
                     state.aggregate_projection_bytes = state
                         .aggregate_projection_bytes
                         .saturating_sub(projection.region.region_bytes());
-                    notifications.push(projection.connection_token);
-                    if let Some(meta) = state.connections.get_mut(&projection.connection_token) {
-                        meta.attachment = None;
-                    }
+                }
+                notifications.push(connection_token);
+                if let Some(meta) = state.connections.get_mut(&connection_token) {
+                    meta.attachment = None;
                 }
             }
             notifications

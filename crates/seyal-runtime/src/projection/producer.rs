@@ -1,26 +1,24 @@
-//! Bridges canonical `seyal_terminal::TerminalState` into the SPEC-004
-//! projection wire representation. This is the single sanctioned producer:
-//! it reads the canonical visible state and calls
-//! `TerminalExecution::take_damage()` (never a second/independent
-//! consumer), then builds a bounded, fully owned [`SnapshotWrite`].
+//! Converts the owned projection-neutral snapshot exposed by `seyal-exec`
+//! into the SPEC-004 shared-projection wire representation.
+//!
+//! `seyal-runtime` deliberately does not depend directly on `seyal-terminal`.
+//! `TerminalExecution` remains the sole owner of canonical terminal state and
+//! the single consumer of canonical damage; Runtime only receives an owned
+//! snapshot suitable for fanout to attached projections.
 
-use seyal_terminal::{Color, TerminalState};
+use seyal_exec::{ProjectionColor, TerminalProjectionSnapshot};
 
 use crate::projection::layout::{CellRecord, DamageRecord, ModeFlags, WireAttributes, WireColor};
 use crate::projection::writer::SnapshotWrite;
 
-fn convert_color(color: Color) -> WireColor {
+fn convert_color(color: ProjectionColor) -> WireColor {
     match color {
-        Color::Default => WireColor::Default,
-        Color::Indexed(index) => WireColor::Indexed(index),
-        Color::Rgb { r, g, b } => WireColor::Rgb { r, g, b },
+        ProjectionColor::Default => WireColor::Default,
+        ProjectionColor::Indexed(index) => WireColor::Indexed(index),
+        ProjectionColor::Rgb { r, g, b } => WireColor::Rgb { r, g, b },
     }
 }
 
-/// A fully owned, bounded snapshot ready to hand to
-/// [`crate::projection::writer::Writer::publish`]. Owning the buffers here
-/// (rather than borrowing from `TerminalState`) keeps the borrow of the
-/// canonical state as short as possible.
 pub struct OwnedSnapshot {
     pub rows: u16,
     pub columns: u16,
@@ -52,72 +50,87 @@ impl OwnedSnapshot {
     }
 }
 
-/// Builds a full visible-snapshot [`OwnedSnapshot`] from `terminal`.
-///
-/// ABI 1.0 slots always carry a complete snapshot (SPEC-004 section 9.3),
-/// so this always walks every visible cell; `damage` narrows only the
-/// renderer-guidance damage descriptor, never which cells are included.
-pub fn full_snapshot(terminal: &TerminalState, source_damage_generation: u64) -> OwnedSnapshot {
-    let rows = terminal.rows();
-    let columns = terminal.cols();
-    let cursor = terminal.cursor();
-    let modes = terminal.modes();
-
-    let mut cells = Vec::with_capacity(rows as usize * columns as usize);
-    for row in 0..rows {
-        for col in 0..columns {
-            let cell = terminal.cell(col, row).unwrap_or_default();
-            cells.push(CellRecord {
-                scalar: cell.character,
-                foreground: convert_color(cell.style.fg),
-                background: convert_color(cell.style.bg),
-                attributes: WireAttributes {
-                    bold: cell.style.bold,
-                    underline: cell.style.underline,
-                    inverse: cell.style.inverse,
-                },
-            });
-        }
-    }
+/// Converts one owned execution snapshot into ABI 1.0's required complete
+/// visible-state projection. Damage is redraw guidance only; every slot still
+/// contains every visible cell, so missed generations remain recoverable.
+pub fn from_execution(snapshot: TerminalProjectionSnapshot) -> OwnedSnapshot {
+    let cells = snapshot
+        .cells
+        .into_iter()
+        .map(|cell| CellRecord {
+            scalar: cell.scalar,
+            foreground: convert_color(cell.foreground),
+            background: convert_color(cell.background),
+            attributes: WireAttributes {
+                bold: cell.attributes.bold,
+                underline: cell.attributes.underline,
+                inverse: cell.attributes.inverse,
+            },
+        })
+        .collect();
 
     OwnedSnapshot {
-        rows,
-        columns,
-        cursor_row: cursor.row,
-        cursor_col: cursor.col,
-        cursor_visible: cursor.visible,
+        rows: snapshot.rows,
+        columns: snapshot.columns,
+        cursor_row: snapshot.cursor_row,
+        cursor_col: snapshot.cursor_col,
+        cursor_visible: snapshot.cursor_visible,
         mode_flags: ModeFlags {
-            alternate_screen: modes.alternate_screen,
-            cursor_visible: cursor.visible,
+            alternate_screen: snapshot.alternate_screen,
+            cursor_visible: snapshot.cursor_visible,
         },
         cells,
         damages: vec![DamageRecord {
             first_row: 0,
-            last_row: rows.saturating_sub(1),
+            last_row: snapshot.rows.saturating_sub(1),
             full: true,
         }],
         full_snapshot: true,
-        source_damage_generation,
+        source_damage_generation: snapshot.source_damage_generation,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use seyal_exec::{ProjectionAttributes, ProjectionCell};
 
     #[test]
-    fn full_snapshot_covers_every_visible_cell_with_a_full_damage_descriptor() {
-        let mut terminal = TerminalState::new(4, 2).unwrap();
-        terminal.feed(b"hi").unwrap();
-        let snapshot = full_snapshot(&terminal, 3);
-        assert_eq!(snapshot.rows, 2);
-        assert_eq!(snapshot.columns, 4);
-        assert_eq!(snapshot.cells.len(), 8);
-        assert_eq!(snapshot.cells[0].scalar, 'h');
-        assert_eq!(snapshot.cells[1].scalar, 'i');
-        assert!(snapshot.full_snapshot);
-        assert_eq!(snapshot.damages.len(), 1);
-        assert!(snapshot.damages[0].full);
-        assert_eq!(snapshot.damages[0].last_row, 1);
+    fn conversion_covers_every_visible_cell_with_full_damage_guidance() {
+        let snapshot = TerminalProjectionSnapshot {
+            rows: 1,
+            columns: 2,
+            cursor_row: 0,
+            cursor_col: 1,
+            cursor_visible: true,
+            alternate_screen: false,
+            source_damage_generation: 3,
+            cells: vec![
+                ProjectionCell {
+                    scalar: 'h',
+                    foreground: ProjectionColor::Default,
+                    background: ProjectionColor::Default,
+                    attributes: ProjectionAttributes::default(),
+                },
+                ProjectionCell {
+                    scalar: 'i',
+                    foreground: ProjectionColor::Indexed(4),
+                    background: ProjectionColor::Default,
+                    attributes: ProjectionAttributes {
+                        bold: true,
+                        underline: false,
+                        inverse: false,
+                    },
+                },
+            ],
+        };
+        let owned = from_execution(snapshot);
+        assert_eq!(owned.cells.len(), 2);
+        assert_eq!(owned.cells[0].scalar, 'h');
+        assert_eq!(owned.cells[1].scalar, 'i');
+        assert!(owned.full_snapshot);
+        assert_eq!(owned.damages.len(), 1);
+        assert!(owned.damages[0].full);
+        assert_eq!(owned.source_damage_generation, 3);
     }
 }

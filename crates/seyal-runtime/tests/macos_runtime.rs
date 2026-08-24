@@ -7,7 +7,9 @@ use std::{
 };
 
 use seyal_exec::{CommandSpec, WindowSize};
-use seyal_runtime::{ExecutionLifecycle, Runtime, RuntimeConfig, RuntimeError};
+use seyal_runtime::{
+    ExecutionLifecycle, LocalIpcMode, Runtime, RuntimeConfig, RuntimeError,
+};
 
 fn config(test: &str) -> RuntimeConfig {
     let mut config = RuntimeConfig::m001().expect("bundled capability profile");
@@ -16,6 +18,12 @@ fn config(test: &str) -> RuntimeConfig {
         std::process::id(),
         unique_suffix()
     ));
+    // Retained Pass-4 Runtime tests exercise headless execution ownership,
+    // lifecycle, fairness, TERM/terminfo and in-process logical attachments.
+    // Pass-5 local IPC has its own real-socket integration suite; keeping it
+    // disabled here prevents parallel Pass-4 test Runtimes from competing for
+    // the production single per-user control socket.
+    config.local_ipc = LocalIpcMode::Disabled;
     config.graceful_termination = Duration::from_millis(50);
     config.forced_reap = Duration::from_millis(250);
     config.final_drain = Duration::from_millis(100);

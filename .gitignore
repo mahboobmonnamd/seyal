@@ -1,1 +1,40 @@
+# Rust
 /target/
+**/target/
+
+# Swift / Xcode
+.build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xccheckout
+*.xcscmblueprint
+
+# Documentation / Node tooling
+node_modules/
+.astro/
+dist/
+.cache/
+
+# Coverage / test output
+coverage/
+*.profraw
+*.profdata
+
+# Local environment / secrets
+.env
+.env.*
+!.env.example
+
+# Logs / temporary files
+*.log
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/

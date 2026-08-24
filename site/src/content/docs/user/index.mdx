@@ -1,0 +1,24 @@
+---
+title: User Guide
+description: Learn how to use Seyal without needing to understand its internals.
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+The User Guide is task-oriented. It will grow with the product and should describe **observable, released behavior**, not internal implementation details.
+
+<CardGrid>
+  <Card title="Getting started" icon="rocket">
+    Set up the development build today; installation packages and release channels will be documented when they exist.
+  </Card>
+  <Card title="Terminal workflows" icon="terminal">
+    Shells, tabs, panes, Blocks, SSH, agents, approvals, configuration, and persistence will receive dedicated guides as each surface becomes real.
+  </Card>
+  <Card title="Troubleshooting" icon="warning">
+    User-visible failure modes and recovery steps belong here once they are reproducible and supported.
+  </Card>
+</CardGrid>
+
+## Documentation rule
+
+A feature may appear here as **available** only when the implementation is merged, tested, and demonstrable. Planned capabilities must be labelled clearly as planned or under development.

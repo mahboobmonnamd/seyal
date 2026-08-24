@@ -1,0 +1,24 @@
+project:
+  name: "Seyal"
+  repository: "mahboobmonnamd/seyal"
+
+schema:
+  version: "0.1"
+  format: "yaml"
+
+framework:
+  name: "ai-sdlc"
+  source: ".sdlc/framework"
+  pinned_revision: "3a5bf20feb6c890d2d94af949fa82679223dd922"
+
+profile:
+  active: "high_rigor"
+  rationale: "Seyal is systems software with terminal correctness, performance, fuzzing, security and architecture quality gates."
+
+bootstrap:
+  agent_instructions: "AGENTS.md"
+  derived_index: ".sdlc/graph/context-index.json"
+
+# Authority rule:
+# .sdlc context/index data is navigation/provenance support only.
+# Accepted architecture, specifications, code, tests and approved decisions remain authoritative.

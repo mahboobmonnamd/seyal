@@ -16,6 +16,9 @@ node_modules/
 dist/
 .cache/
 
+# AI-SDLC developer framework (materialized by make bootstrap-agents)
+/.sdlc/framework/
+
 # Coverage / test output
 coverage/
 *.profraw

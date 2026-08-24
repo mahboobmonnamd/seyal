@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: bootstrap bootstrap-agents build test check bench governance-check
+.PHONY: bootstrap bootstrap-agents build test check bench governance-check docs docs-install docs-build docs-check
 
 bootstrap:
 	@bash scripts/task.sh bootstrap
@@ -22,3 +22,15 @@ bench:
 
 governance-check:
 	@bash scripts/validate-governance.sh
+
+docs-install:
+	@npm --prefix site install --no-package-lock --no-audit --no-fund
+
+docs: docs-install
+	@npm --prefix site run dev
+
+docs-build: docs-install
+	@npm --prefix site run build
+
+docs-check: docs-install
+	@npm --prefix site run check

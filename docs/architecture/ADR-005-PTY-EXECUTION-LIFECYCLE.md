@@ -51,7 +51,20 @@ Detach is a later Runtime attachment transition. It does not close the
 execution-owned PTY and does not signal the child. The Runtime must keep the
 `TerminalExecution` alive while zero GUI clients are attached.
 
-Dropping the actual execution owner is therefore not the detach API.
+Dropping the actual execution owner is therefore **not** the detach API.
+
+Issue #28 deliberately does not invent a hidden `Drop` termination timeout. Explicit
+termination requires a caller-supplied policy and detach must preserve the live
+execution. The later Runtime owner is therefore required to hold each live
+`TerminalExecution` until it has either observed/reaped natural exit or performed
+explicit policy-driven termination. Runtime implementation must provide a
+supervised reap/cleanup path so a programmer error cannot turn dropped ownership
+into an intentional detach contract.
+
+Until that Runtime owner exists, tests and examples must explicitly reap or
+terminate every spawned execution before the owning value leaves scope. A future
+Runtime PR must add failure tests for owner shutdown/crash paths; this PTY slice
+must not pretend that object destruction is persistent-session management.
 
 ### Nonblocking I/O
 
@@ -76,6 +89,22 @@ mirror.
 The endpoint owns `TIOCSWINSZ`/`TIOCGWINSZ`. Valid sizes have nonzero rows and
 columns. The normal kernel SIGWINCH behavior is preserved; no renderer-owned
 dimension authority is introduced.
+
+Resize is one **logical Runtime operation** even though it crosses two physical
+state holders: kernel PTY geometry and canonical `TerminalState`. The accepted
+foundation ordering describes authority/presentation flow, not a requirement to
+publish partially applied state.
+
+For macOS M001 the implementation validates `WindowSize`, applies the fallible
+PTY `TIOCSWINSZ`, and only after that succeeds resizes the canonical
+`TerminalState`. This ordering avoids publishing/reflowing canonical state when
+the kernel refuses the resize. With a validated nonzero `WindowSize`, the current
+M001 `TerminalState::resize` has no recoverable failure other than invalid size;
+if that contract changes, resize must be redesigned as an explicit prepare/commit
+operation before retaining endpoint-first ordering.
+
+No renderer projection/damage consumer may observe a successful new geometry
+until the canonical `TerminalState` resize is complete.
 
 ### macOS platform seam and unsafe policy
 
@@ -154,7 +183,9 @@ timeout.
 - no hard-coded `TERM`;
 - no production raw-line-discipline toggle used to support tests;
 - unsafe code is isolated to one Darwin module;
-- PTY bytes feed Seyal's existing authoritative `TerminalState`.
+- PTY bytes feed Seyal's existing authoritative `TerminalState`;
+- resize treats kernel + terminal geometry as one logical operation and does not
+  publish canonical damage until kernel resize succeeds.
 
 ### Rejected / deferred
 
@@ -164,6 +195,7 @@ timeout.
 - mutation features/test hooks in production code;
 - Linux/Windows implementation;
 - Runtime attachment/reconnect/persistence behavior;
+- hidden `Drop` termination policy in the PTY layer;
 - renderer/Blocks/agent behavior.
 
 ## Consequences
@@ -172,6 +204,10 @@ timeout.
 module becomes a small audited unsafe boundary, while all execution-facing APIs
 remain safe Rust. Runtime and native UI can later compose this crate without
 becoming PTY owners.
+
+The Runtime milestone inherits an explicit lifecycle obligation: it must own
+live executions across client detach and provide supervised reap/termination on
+actual Runtime shutdown/ownership release.
 
 ## Reopen conditions
 

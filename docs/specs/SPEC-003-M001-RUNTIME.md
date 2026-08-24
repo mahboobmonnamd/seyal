@@ -1,8 +1,8 @@
 # SPEC-003 — M001 headless Runtime and multi-execution supervision
 
-- **Status:** Active when ADR-006 is accepted/merged
+- **Status:** Active
 - **Date:** 2026-08-24
-- **Issue:** #70
+- **Issue:** #70, hardened by #80
 - **Architecture:** Foundation Architecture + ADR-005 + ADR-006
 
 ## 1. Purpose
@@ -85,11 +85,13 @@ Pass 4 attachment is a Runtime-owned logical reference, not a network/socket/pro
 - GUI close is logical detach, not Runtime shutdown and not execution termination.
 - transport authentication, controller/observer protocol roles and shared projection are Pass 5.
 
-## 7. Reactor registration and immediate-exit race
+## 7. Reactor registration, event identity and teardown
 
 On macOS, each live execution is registered with the ADR-006 `ExecutionReactor`.
 
-Registration returns an opaque generation-bearing token allocated by the reactor. The Runtime associates the token with `ExecutionId`; the token is routing metadata only and is not exposed as durable execution identity.
+Registration returns an opaque generation-bearing `RegistrationToken` allocated by the reactor. The Runtime associates the token with `ExecutionId`; the token is routing metadata only and is not exposed as durable execution identity.
+
+Darwin `kevent.udata` may carry the token only as a by-value opaque integer/generation encoding (or equivalent non-owning integer representation). It must never contain a pointer/reference to a registry entry, `TerminalExecution`, queue node, or any other movable/freed Rust allocation. FD/PID values also remain kernel lookup inputs, not execution identity.
 
 A successful create transaction is:
 
@@ -105,7 +107,7 @@ The immediate reconciliation is mandatory so a command that exits between spawn 
 
 If registration, reconciliation or registry insertion fails, the operation must roll back safely: remove any partial filters, reap/finalize the created execution as required, close owned descriptors, and leave no untracked live execution.
 
-Removal performs deregistration before the execution owner is destroyed. Stale events from an already-deregistered generation are ignored safely.
+Removal performs deregistration before the execution owner is destroyed. Deregistration is idempotent: expected already-gone FD/PID/filter conditions caused by concurrent kernel teardown are accepted as completed cleanup, while unexpected reactor failures remain diagnosable. Stale events from an already-deregistered generation are ignored safely even if the underlying numeric FD/PID has been reused.
 
 ## 8. Output/read fairness
 
@@ -115,28 +117,38 @@ For one dispatch:
 
 - bytes are read into a reusable bounded buffer;
 - successful bytes feed the same authoritative `TerminalState` synchronously;
-- reading stops on `WouldBlock`, EOF/HUP, or the Runtime's per-dispatch byte/work quantum;
+- reading stops on `WouldBlock`, EOF/HUP, or the Runtime's per-dispatch read byte/work quantum;
 - after the quantum is consumed the Runtime returns to the shared event loop before servicing more of that execution.
 
 One continuously producing execution must not starve another ready execution or Runtime control work. If the quantum is reached while the level-triggered PTY remains readable, it remains eligible for a later dispatch.
 
 No per-byte heap allocation, JSON, serialization, renderer acknowledgement or cross-language callback is permitted in this path. Reactor event/change buffers are bounded and reusable rather than allocated per wait/event.
 
-## 9. Input, writable readiness and control ownership
+## 9. Input, writable readiness, aggregate backpressure and control ownership
 
-The Runtime maintains a bounded FIFO input queue per execution and a bounded Runtime control queue.
+The Runtime maintains a bounded FIFO input queue per execution, a bounded Runtime-wide pending-input byte budget across all executions, and a bounded Runtime control queue.
 
 Only the Runtime reactor owner performs PTY writes. A producer outside that owner may enqueue typed input/control work and trigger the Runtime wake event; it may not call `TerminalExecution` directly.
+
+An input submission is accepted only if both of these remain within configured/testable limits:
+
+```text
+pending bytes for that execution <= per-execution limit
+sum(pending bytes for all executions) <= Runtime-wide input budget
+```
+
+The aggregate budget is authoritative regardless of how many executions exist. Rejecting/backpressuring a new submission must not discard, reorder, or silently truncate already accepted bytes.
 
 On the reactor owner, input handling:
 
 1. attempts direct nonblocking PTY write;
 2. preserves unwritten bytes in order;
 3. arms writable readiness only while pending bytes remain;
-4. on writable readiness continues bounded draining;
-5. disarms writable readiness when the queue becomes empty.
+4. on writable readiness drains only up to the per-dispatch write byte/work quantum or until `WouldBlock`/empty;
+5. returns to the shared event loop when the write quantum is consumed so readable PTYs and control work can progress;
+6. disarms writable readiness when the queue becomes empty.
 
-If accepting new bytes would exceed the configured per-execution queue bound, the Runtime returns explicit backpressure/error. It does not block the shared reactor and does not discard/reorder already accepted input.
+If accepting new bytes would exceed either the per-execution or aggregate Runtime input bound, the Runtime returns explicit backpressure/error. It does not block the shared reactor.
 
 If the bounded Runtime control queue is full, new control work is rejected/backpressured explicitly rather than growing memory without bound. Wake notifications may coalesce; queue state, not wake-event count, is authoritative.
 
@@ -154,7 +166,7 @@ After primary reap, the execution enters `DrainingAfterPrimaryExit`:
 2. continue normal fair, nonblocking PTY reads across reactor dispatches;
 3. if a read reaches `WouldBlock`, EOF or HUP, drain is complete;
 4. also arm a configured/testable finalization deadline so continuous descendant output cannot keep the execution alive forever;
-5. when drain completes or that deadline expires, deregister PTY/process filters, remove the registry entry, and drop `TerminalExecution`, closing the PTY master.
+5. when drain completes or that deadline expires, deregister PTY/process filters idempotently, remove the registry entry, and drop `TerminalExecution`, closing the PTY master.
 
 The per-dispatch fairness quantum remains in force while draining; primary exit does not allow one execution to monopolize the reactor. The Runtime must not truncate final command output merely because more than one dispatch quantum was queued at exit, and it must not let a continuously writing descendant extend execution lifetime without bound.
 
@@ -261,9 +273,13 @@ Abrupt Runtime crash/kill remains outside M001 survival guarantees.
 - Reactor registration failure leaves no published partial execution.
 - Immediate child exit during create/register is reconciled and cannot become a stuck registry entry.
 - A stale/unknown reactor token is ignored and diagnosed safely.
+- Event routing never dereferences a Rust pointer sourced from `kevent.udata`.
+- Expected already-gone FD/PID/filter conditions during deregistration are idempotent cleanup; unexpected reactor errors remain visible.
 - PTY read error is isolated to the affected execution unless it indicates a Runtime-wide reactor failure.
 - One execution's full input queue cannot stall other execution output.
+- Aggregate pending-input memory cannot exceed the configured Runtime-wide budget even when many executions are individually below their own limits.
 - One continuously ready PTY cannot monopolize the event loop indefinitely.
+- One continuously writable execution with a large queued input cannot monopolize the event loop indefinitely.
 - A full control queue produces explicit backpressure instead of unbounded allocation.
 - Continuous descendant output after primary exit cannot bypass the finalization deadline.
 - Runtime-wide reactor failure must surface as a Runtime failure; it must not move terminal ownership into the GUI.
@@ -277,10 +293,12 @@ Pass 4 is not complete without reproducible measurements, including environment 
 - idle CPU with 1/10/50/100 live idle executions;
 - Runtime RSS with 1/10/50/100 live idle executions;
 - Runtime thread count with 1/10/50/100 live idle executions;
-- one hot-output execution plus other ready/idle executions, proving fairness;
+- one hot-output execution plus other ready/idle executions, proving read fairness;
+- one large writable backlog alongside readable/control work, proving write fairness;
 - PTY-ready event → committed `TerminalState` generation latency;
-- bounded input/control queue behavior;
-- repeated create/register/remove cycles and descriptor/registration leak checks.
+- per-execution and aggregate Runtime pending-input backpressure;
+- bounded control queue behavior;
+- repeated create/register/remove cycles and descriptor/registration leak checks, including teardown races.
 
 Long-term architecture targets remain targets until measured; Pass 4 must not relabel them as achieved.
 
@@ -293,21 +311,25 @@ At minimum:
 3. Create/list returns stable unique `ExecutionId`s.
 4. Capacity limit rejects excess creation without leaks.
 5. An immediately exiting command cannot be missed between spawn and reactor registration.
-6. Last logical attachment detaches while a live primary execution remains alive.
-7. Multiple PTYs make progress on one Runtime reactor without thread-per-PTY.
-8. A bursty/hot PTY cannot starve another ready PTY.
-9. Pending input drains after writable readiness and writable interest becomes inactive when empty.
-10. Input/control queue bounds produce explicit backpressure without corrupting accepted order.
-11. Primary child exit is observed/reaped even if a descendant retains the slave; final output spanning more than one dispatch quantum is committed before the first `WouldBlock`/EOF/HUP or configured finalization deadline.
-12. A continuously writing descendant cannot keep `DrainingAfterPrimaryExit` alive past the configured finalization deadline.
-13. SIGTERM → deadline → SIGKILL termination progresses without blocking unrelated execution output.
-14. A shell job in a distinct job-control process group cannot keep Runtime terminal resources/registrations alive after primary execution finalization.
-15. Repeated create/remove does not accumulate descriptors, registrations or zombies.
-16. Stale registration generation cannot target a new execution after FD/PID reuse.
-17. Runtime-only descriptors, including kqueue/singleton descriptors, are not inherited by spawned commands.
-18. Controlled Runtime shutdown progresses all live executions without blocking the reactor and does not report success with owned live resources remaining.
-19. No RILL identifiers/daemon/socket coupling are introduced.
-20. No GUI/Swift dependency enters Runtime or PTY/VT byte progress.
+6. Reactor events route through by-value generation-bearing tokens; `kevent.udata` is never a Rust object pointer/reference.
+7. Last logical attachment detaches while a live primary execution remains alive.
+8. Multiple PTYs make progress on one Runtime reactor without thread-per-PTY.
+9. A bursty/hot PTY cannot starve another ready PTY.
+10. Pending input drains after writable readiness and writable interest becomes inactive when empty.
+11. A single execution with a large writable backlog cannot starve another readable PTY or bounded Runtime control work.
+12. Per-execution input/control queue bounds produce explicit backpressure without corrupting accepted order.
+13. Aggregate Runtime pending-input budget is enforced across many executions even when no individual execution exceeds its own limit; already accepted bytes remain ordered/intact.
+14. Primary child exit is observed/reaped even if a descendant retains the slave; final output spanning more than one dispatch quantum is committed before the first `WouldBlock`/EOF/HUP or configured finalization deadline.
+15. A continuously writing descendant cannot keep `DrainingAfterPrimaryExit` alive past the configured finalization deadline.
+16. SIGTERM → deadline → SIGKILL termination progresses without blocking unrelated execution output.
+17. A shell job in a distinct job-control process group cannot keep Runtime terminal resources/registrations alive after primary execution finalization.
+18. Repeated create/remove does not accumulate descriptors, registrations or zombies.
+19. Removal/deregistration remains idempotent when process/filter/descriptor disappearance races with teardown.
+20. Stale registration generation cannot target a new execution after FD/PID reuse.
+21. Runtime-only descriptors, including kqueue/singleton descriptors, are not inherited by spawned commands.
+22. Controlled Runtime shutdown progresses all live executions without blocking the reactor and does not report success with owned live resources remaining.
+23. No RILL identifiers/daemon/socket coupling are introduced.
+24. No GUI/Swift dependency enters Runtime or PTY/VT byte progress.
 
 ## 20. Explicitly deferred
 

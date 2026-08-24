@@ -48,7 +48,13 @@ For M001 Pass 5 transport evidence, run:
 cargo bench -p seyal-runtime --bench runtime_scalability -- --nocapture
 ```
 
-The benchmark emits paired `runtime_resource` records for `transport=socket-only` and `transport=hybrid` at required populations (`1/10/50/100`) plus representative geometry/screen scenarios. Records marked `classification=PLATFORM_LIMITED` are host-ceiling evidence and must be reported, not filtered out.
+The Pass-5 comparator is intentionally an **equivalent display-delivery** comparison, not “IPC disabled” versus “IPC enabled”. `transport=socket-only` is a benchmark-only reference path that encodes the same fixed-width visible `CellRecord`/`DamageRecord` state and actually copies the complete snapshot through a nonblocking Unix stream. `transport=hybrid` uses the production control UDS, `SCM_RIGHTS`, read-only shared memory and `GenerationWake`. Both paths assert that the delivered state equals a snapshot of the same canonical `TerminalExecution` before their measurements are accepted.
+
+The benchmark emits paired `runtime_resource` records at required populations (`1/10/50/100`) plus representative geometry/screen scenarios. It records visible attachment count separately from total execution population because SPEC-004 currently caps live attachments at 16. It reports display setup, update-to-readable and signal-to-readable timing, copied/projection bytes, socket write count, resync, reconnect, Runtime/child RSS, CPU, threads, fds and teardown state.
+
+Records marked `classification=PLATFORM_LIMITED` are host-ceiling evidence and must be reported, not filtered out. In particular, a host PTY allocation ceiling is not evidence that the Runtime only scales to that population, and it must not be silently converted into a Pass-5 performance claim.
+
+The comparator source and contributor/debugging notes are documented in `docs/engineering/LOCAL-ATTACHMENT.md`. Benchmark output is evidence only for the exact commit/build/environment that produced it; the benchmark's startup banner deliberately keeps `performance_claim=false` until reviewed results are recorded in the owning PR/milestone evidence.
 
 ## CI strategy
 

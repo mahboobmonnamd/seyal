@@ -19,3 +19,7 @@ unsafe_code = "deny"
 [[bench]]
 name = "pty_io"
 harness = false
+
+[[bench]]
+name = "execution_scalability"
+harness = false

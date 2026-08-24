@@ -26,4 +26,20 @@ A retained performance result must be paired with the environment metadata contr
 
 Future benchmark workloads belong here or in a justified harness package. Generated measurements belong under ignored build/artifact locations, not committed production modules.
 
+## Pre-Pass-4 execution scalability evidence
+
+The `seyal-exec` scalability harness measures the real production `TerminalExecution` path: one PTY and one canonical `TerminalState` per live execution. It does not create a Runtime, scheduler, replacement PTY, or alternate terminal representation.
+
+Run it on macOS from the repository root:
+
+```sh
+cargo bench -p seyal-exec --bench execution_scalability --locked
+```
+
+The default run repeats each case three times. Set `SEYAL_SCALABILITY_REPEATS=1` for a quick smoke pass. The canonical profile covers `80x24` populations of `1/10/50/100/250/500/750`; representative geometry and alternate-screen cases run at population 1. Raw CSV and a generated Markdown summary are written to `target/benchmarks/`.
+
+The report separates benchmark-process RSS from summed child-process RSS and records creation/teardown time, idle CPU sample, thread count, file descriptors, PTY count, dimensions, alternate-screen state, build mode, commit, macOS version and hardware model. A host PTY-capacity failure is recorded as evidence and produces a RED decision; it must not be hidden by reducing the requested population.
+
+This harness establishes headroom for the existing execution/PTY/terminal-state foundation only. It cannot prove the future Runtime reactor, registry overhead, kqueue fairness, or bounded control/input scheduling.
+
 Do not claim latency, CPU, RSS, throughput superiority or zero-copy results from the harness smoke. Real measurements must identify workload, hardware/OS/build mode, commit, terminal dimensions, font/scale, shell, run count and percentile method as required by `docs/engineering/PERFORMANCE.md` and M001.

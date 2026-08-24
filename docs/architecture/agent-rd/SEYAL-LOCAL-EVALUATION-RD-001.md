@@ -76,6 +76,8 @@ Outcome = accepted | rejected | unresolved | abandoned
 
 A WorkItem can be `unresolved` after a clean AgentRun termination. A failed first Attempt followed by an accepted second Attempt remains one WorkItem with two Attempts.
 
+Outcome accounting must retain all terminal states in cohort denominators. Failed, rejected, unresolved and abandoned WorkItems do not disappear merely because cost-per-accepted-work calculations use accepted outcomes as one denominator.
+
 ## Cost and effort events
 
 `CostEvent` records facts, not forecasts:
@@ -84,22 +86,46 @@ A WorkItem can be `unresolved` after a clean AgentRun termination. A failed firs
 - provider-reported monetary charge when available;
 - local/remote compute duration/resource class;
 - wall elapsed duration;
-- human intervention/attention start and resolution times;
+- attention request opened/resolved timestamps;
+- explicit user interaction intervals where Seyal can measure them without invasive surveillance;
 - explicit user-entered labor-cost assumptions only for derived ROI views.
 
 Store raw usage units and pricing-source/version separately. Never bake today's provider price into an immutable historical token event.
 
+### Human attention is not approval wait time
+
+Do **not** infer human labor from the time between `AttentionItem` creation and resolution. An engineer may be doing unrelated work for most of that interval.
+
+Keep at least these concepts separate:
+
+```text
+attention_wait_duration
+human_active_interaction_duration
+elapsed_work_duration
+```
+
+- `attention_wait_duration` is factual queue/blocking latency from request to resolution.
+- `human_active_interaction_duration` is recorded only from defensible local interaction evidence or explicit user/customer input and must identify its measurement method.
+- `elapsed_work_duration` is end-to-end wall time and is not labor time.
+
+When reliable active-interaction measurement is unavailable, report it as missing/unknown instead of substituting attention wait time. Commercial ROI models may use a customer-supplied approximation, but it must remain a modeled assumption rather than a raw event.
+
 Derived local metrics:
 
 ```text
-first_attempt_success_rate
+first_attempt_acceptance_rate
 attempts_per_accepted_work_item
 ai_cost_per_accepted_work_item
+ai_cost_per_all_work_items
 elapsed_time_per_accepted_work_item
-human_attention_minutes_per_accepted_work_item
+attention_wait_minutes_per_work_item
+human_active_interaction_minutes_per_accepted_work_item?   # only when measured/model provenance is explicit
+rejected_unresolved_abandoned_rate
 uncached_input_tokens_per_accepted_work_item
 cache_tokens_per_accepted_work_item
 ```
+
+All costs from failed/rejected/abandoned Attempts remain attributed to their WorkItem and included when computing cohort total cost. A route that cheaply succeeds on a few tasks while abandoning expensive failures must not appear artificially efficient.
 
 `total engineering cost` is a derived model requiring explicit labor/compute assumptions; it must be labeled modeled rather than provider-billed fact.
 
@@ -136,7 +162,9 @@ Initial corpus must include:
 - cancelled run with partial artifact;
 - retry after evaluation failure;
 - cache-enabled vs cache-disabled comparison;
-- same task across two harness/model choices.
+- same task across two harness/model choices;
+- expensive failed/abandoned WorkItems to verify cohort denominator/cost accounting;
+- long approval wait with near-zero active human interaction to verify wait time is not counted as labor.
 
 ## Evaluator trust threats
 
@@ -152,6 +180,8 @@ Mitigations: bind observations to exact input/worktree/artifact fingerprints, pr
 
 #55 may consume only measured/derived fields whose provenance is known. Sparse local history is not evidence for confident routing; the router must surface insufficient evidence rather than manufacture a success probability.
 
+Any routing objective that uses human-time savings must distinguish measured active interaction from attention waiting and modeled labor assumptions.
+
 ## OSS/commercial boundary
 
 **OSS:** schemas, local evaluator interface, fixture format, local history/metrics/cost visibility and comparisons.  
@@ -159,13 +189,13 @@ Mitigations: bind observations to exact input/worktree/artifact fingerprints, pr
 
 ## Success / kill criteria
 
-Pass when retained fixtures distinguish run completion from accepted outcome, bind evidence to exact inputs, reproduce deterministic evaluator results, and compare two routes without an agent grading itself.
+Pass when retained fixtures distinguish run completion from accepted outcome, bind evidence to exact inputs, reproduce deterministic evaluator results, compare two routes without an agent grading itself, preserve failed/abandoned cost in cohort accounting, and do not mislabel approval wait time as human labor.
 
-Reject designs where the model/harness is the sole success judge, pricing assumptions overwrite raw usage, or evaluation blocks terminal I/O.
+Reject designs where the model/harness is the sole success judge, pricing assumptions overwrite raw usage, failed tasks disappear from economics, attention wait is silently converted into labor cost, or evaluation blocks terminal I/O.
 
 ## ADR/spec before implementation
 
 - shared Agent Platform lifecycle/ownership ADR;
 - RunEvent/EvaluationObservation/Outcome/CostEvent schema spec;
 - evaluation fixture/evaluator trust spec;
-- metric-definition document with denominators and missing-data rules.
+- metric-definition document with denominators, failed/abandoned accounting, attention-vs-active-interaction semantics and missing-data rules.

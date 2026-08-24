@@ -130,11 +130,9 @@ fn bursty_output_is_not_truncated_by_execution_path() {
     }
 
     assert_eq!(output.len(), expected_len);
-    assert!(
-        output
-            .chunks_exact(16)
-            .all(|chunk| chunk == b"0123456789abcdef")
-    );
+    let (chunks, remainder) = output.as_chunks::<16>();
+    assert!(remainder.is_empty());
+    assert!(chunks.iter().all(|chunk| chunk == b"0123456789abcdef"));
     assert_eq!(
         wait_exit(&mut execution, IO_TIMEOUT).expect("child exit"),
         ChildExit::Exited(0)

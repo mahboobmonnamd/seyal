@@ -197,7 +197,7 @@ impl ReadOnlyMapping {
         }
         // SAFETY: successful `fstat` initialized the value.
         let stat = unsafe { stat.assume_init() };
-        if stat.st_size < 0 || stat.st_size as usize < len {
+        if stat.st_size < 0 || (stat.st_size as usize) < len {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "projection descriptor is smaller than the control-frame region",

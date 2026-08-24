@@ -39,6 +39,26 @@ fn production_source_contains_no_rill_identifiers_and_unsafe_is_platform_scoped(
 }
 
 #[test]
+fn command_spec_debug_redacts_process_and_environment_values() {
+    use seyal_exec::CommandSpec;
+
+    const SECRET: &str = "seyal-secret-regression-token";
+    let command = CommandSpec::new(format!("/private/{SECRET}/tool"))
+        .arg(format!("--token={SECRET}"))
+        .current_dir(format!("/private/{SECRET}/workspace"))
+        .clear_environment()
+        .env("SEYAL_SECRET_KEY", SECRET);
+
+    let debug = format!("{command:?}");
+    assert!(!debug.contains(SECRET));
+    assert!(!debug.contains("SEYAL_SECRET_KEY"));
+    assert!(debug.contains("arg_count: 1"));
+    assert!(debug.contains("has_current_dir: true"));
+    assert!(debug.contains("clear_environment: true"));
+    assert!(debug.contains("environment_override_count: 1"));
+}
+
+#[test]
 fn window_size_rejects_zero_cell_dimensions() {
     use seyal_exec::WindowSize;
 

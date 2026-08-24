@@ -3,8 +3,8 @@ use std::time::Duration;
 use seyal_terminal::TerminalState;
 
 use crate::{
-    ChildExit, CommandSpec, ExecError, ReadOutcome, Readiness, SignalDisposition, TerminationPolicy,
-    WindowSize, WriteOutcome, endpoint::TerminalEndpoint,
+    ChildExit, CommandSpec, ExecError, ReadOutcome, Readiness, SignalDisposition,
+    TerminationPolicy, WindowSize, WriteOutcome, endpoint::TerminalEndpoint,
 };
 
 pub struct TerminalExecution {

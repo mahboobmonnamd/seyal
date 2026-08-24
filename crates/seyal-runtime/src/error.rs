@@ -33,9 +33,16 @@ impl fmt::Display for RuntimeError {
             Self::InputBackpressure => f.write_str("accepted-but-unwritten input budget is full"),
             Self::ControlQueueFull => f.write_str("Runtime control queue is full"),
             Self::ControlQueueClosed => f.write_str("Runtime control queue is closed"),
-            Self::AcceptedButWakeFailed(error) => write!(f, "input accepted but reactor wake failed: {error}"),
-            Self::ChildExitedBeforePublication(exit) => write!(f, "primary child exited before Runtime publication: {exit:?}"),
-            Self::ShutdownIncomplete => f.write_str("controlled Runtime shutdown did not fully finalize all executions"),
+            Self::AcceptedButWakeFailed(error) => {
+                write!(f, "input accepted but reactor wake failed: {error}")
+            }
+            Self::ChildExitedBeforePublication(exit) => write!(
+                f,
+                "primary child exited before Runtime publication: {exit:?}"
+            ),
+            Self::ShutdownIncomplete => {
+                f.write_str("controlled Runtime shutdown did not fully finalize all executions")
+            }
             Self::Exec(error) => write!(f, "execution error: {error}"),
             Self::Io(error) => write!(f, "Runtime I/O error: {error}"),
             Self::Terminfo(message) => write!(f, "terminfo error: {message}"),

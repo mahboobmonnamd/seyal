@@ -185,10 +185,7 @@ pub(crate) fn wait_events(
         return Err(error.into());
     }
 
-    for (destination, source) in out
-        .iter_mut()
-        .zip(buffer.events[..count as usize].iter())
-    {
+    for (destination, source) in out.iter_mut().zip(buffer.events[..count as usize].iter()) {
         let filter = if source.filter == libc::EVFILT_READ {
             NativeFilter::Read
         } else if source.filter == libc::EVFILT_WRITE {

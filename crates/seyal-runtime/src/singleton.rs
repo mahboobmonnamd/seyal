@@ -3,7 +3,10 @@ use std::{fs::File, path::Path};
 #[cfg(target_os = "macos")]
 use std::{
     fs::{DirBuilder, OpenOptions},
-    os::{fd::AsRawFd, unix::fs::{DirBuilderExt, OpenOptionsExt}},
+    os::{
+        fd::AsRawFd,
+        unix::fs::{DirBuilderExt, OpenOptionsExt},
+    },
 };
 
 use crate::RuntimeError;

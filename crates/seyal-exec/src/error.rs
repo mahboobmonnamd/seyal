@@ -29,7 +29,9 @@ impl fmt::Display for ExecError {
             Self::TerminationTimedOut => {
                 f.write_str("owned child did not reap within the supplied termination policy")
             }
-            Self::StaleRegistrationToken => f.write_str("stale execution reactor registration token"),
+            Self::StaleRegistrationToken => {
+                f.write_str("stale execution reactor registration token")
+            }
         }
     }
 }

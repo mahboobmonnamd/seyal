@@ -18,7 +18,10 @@ fn main() {
         .arg(&source)
         .status()
         .expect("M001 macOS build requires the system tic compiler");
-    assert!(status.success(), "tic failed to compile seyal-m001 terminfo");
+    assert!(
+        status.success(),
+        "tic failed to compile seyal-m001 terminfo"
+    );
 
     let entry = find_entry(&destination).expect("tic did not emit seyal-m001 entry");
     println!(

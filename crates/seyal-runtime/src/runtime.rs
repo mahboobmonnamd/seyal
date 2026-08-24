@@ -10,12 +10,13 @@ use std::{
 };
 
 use seyal_exec::{
-    ChildExit, CommandSpec, ExecutionReactor, ReactorEvent, ReactorEventKind, RegistrationToken,
-    SignalDisposition, TerminalExecution, WindowSize, WriteOutcome, ReadOutcome,
+    ChildExit, CommandSpec, ExecutionReactor, ReactorEvent, ReactorEventKind, ReadOutcome,
+    RegistrationToken, SignalDisposition, TerminalExecution, WindowSize, WriteOutcome,
 };
 
 use crate::{
-    AttachmentId, CapabilityPolicy, ExecutionId, InputIngress, RuntimeError, RuntimeId, WorkspaceId,
+    AttachmentId, CapabilityPolicy, ExecutionId, InputIngress, RuntimeError, RuntimeId,
+    WorkspaceId,
     input::{AcceptedInput, ControlMessage},
     singleton::SingletonGuard,
 };
@@ -78,16 +79,9 @@ pub struct ExecutionSummary {
 #[derive(Clone, Copy, Debug)]
 enum Lifecycle {
     Running,
-    TerminatingGraceful {
-        deadline: Instant,
-    },
-    TerminatingForced {
-        deadline: Instant,
-    },
-    DrainingAfterPrimaryExit {
-        deadline: Instant,
-        exit: ChildExit,
-    },
+    TerminatingGraceful { deadline: Instant },
+    TerminatingForced { deadline: Instant },
+    DrainingAfterPrimaryExit { deadline: Instant, exit: ChildExit },
     TerminationFailed,
 }
 
@@ -261,7 +255,10 @@ impl Runtime {
     }
 
     pub fn input_ingress(&self, id: ExecutionId) -> Result<InputIngress, RuntimeError> {
-        let entry = self.entries.get(&id).ok_or(RuntimeError::UnknownExecution)?;
+        let entry = self
+            .entries
+            .get(&id)
+            .ok_or(RuntimeError::UnknownExecution)?;
         if !entry.lifecycle.accepts_input() {
             return Err(RuntimeError::ExecutionNotRunning);
         }
@@ -278,7 +275,10 @@ impl Runtime {
     }
 
     pub fn attach(&mut self, id: ExecutionId) -> Result<AttachmentId, RuntimeError> {
-        let entry = self.entries.get_mut(&id).ok_or(RuntimeError::UnknownExecution)?;
+        let entry = self
+            .entries
+            .get_mut(&id)
+            .ok_or(RuntimeError::UnknownExecution)?;
         let attachment = AttachmentId::new();
         entry.attachments.insert(attachment);
         Ok(attachment)
@@ -289,7 +289,10 @@ impl Runtime {
         id: ExecutionId,
         attachment: AttachmentId,
     ) -> Result<(), RuntimeError> {
-        let entry = self.entries.get_mut(&id).ok_or(RuntimeError::UnknownExecution)?;
+        let entry = self
+            .entries
+            .get_mut(&id)
+            .ok_or(RuntimeError::UnknownExecution)?;
         if !entry.attachments.remove(&attachment) {
             return Err(RuntimeError::UnknownAttachment);
         }
@@ -297,7 +300,10 @@ impl Runtime {
     }
 
     pub fn resize(&mut self, id: ExecutionId, size: WindowSize) -> Result<(), RuntimeError> {
-        let entry = self.entries.get_mut(&id).ok_or(RuntimeError::UnknownExecution)?;
+        let entry = self
+            .entries
+            .get_mut(&id)
+            .ok_or(RuntimeError::UnknownExecution)?;
         if !matches!(entry.lifecycle, Lifecycle::Running) {
             return Err(RuntimeError::ExecutionNotRunning);
         }
@@ -307,7 +313,10 @@ impl Runtime {
 
     pub fn request_termination(&mut self, id: ExecutionId) -> Result<(), RuntimeError> {
         let now = Instant::now();
-        let entry = self.entries.get_mut(&id).ok_or(RuntimeError::UnknownExecution)?;
+        let entry = self
+            .entries
+            .get_mut(&id)
+            .ok_or(RuntimeError::UnknownExecution)?;
         if !matches!(entry.lifecycle, Lifecycle::Running) {
             return Ok(());
         }
@@ -359,19 +368,28 @@ impl Runtime {
                     processed += self.drain_control()?;
                 }
                 ReactorEventKind::Readable => {
-                    if let Some(id) = event.token.and_then(|token| self.by_token.get(&token).copied()) {
+                    if let Some(id) = event
+                        .token
+                        .and_then(|token| self.by_token.get(&token).copied())
+                    {
                         self.service_reads(id)?;
                         processed += 1;
                     }
                 }
                 ReactorEventKind::Writable => {
-                    if let Some(id) = event.token.and_then(|token| self.by_token.get(&token).copied()) {
+                    if let Some(id) = event
+                        .token
+                        .and_then(|token| self.by_token.get(&token).copied())
+                    {
                         self.service_writes(id)?;
                         processed += 1;
                     }
                 }
                 ReactorEventKind::PrimaryExited => {
-                    if let Some(id) = event.token.and_then(|token| self.by_token.get(&token).copied()) {
+                    if let Some(id) = event
+                        .token
+                        .and_then(|token| self.by_token.get(&token).copied())
+                    {
                         self.observe_primary_exit(id)?;
                         processed += 1;
                     }
@@ -425,8 +443,13 @@ impl Runtime {
             let remaining = self.config.read_dispatch_bytes - consumed;
             let read_len = remaining.min(self.read_buffer.len());
             let outcome = {
-                let entry = self.entries.get_mut(&id).ok_or(RuntimeError::UnknownExecution)?;
-                entry.execution.read_output(&mut self.read_buffer[..read_len])?
+                let entry = self
+                    .entries
+                    .get_mut(&id)
+                    .ok_or(RuntimeError::UnknownExecution)?;
+                entry
+                    .execution
+                    .read_output(&mut self.read_buffer[..read_len])?
             };
             match outcome {
                 ReadOutcome::Bytes(0) | ReadOutcome::WouldBlock | ReadOutcome::Eof => {
@@ -450,7 +473,10 @@ impl Runtime {
         let token;
         let pending;
         {
-            let entry = self.entries.get_mut(&id).ok_or(RuntimeError::UnknownExecution)?;
+            let entry = self
+                .entries
+                .get_mut(&id)
+                .ok_or(RuntimeError::UnknownExecution)?;
             if !entry.lifecycle.accepts_input() {
                 entry.pending_input.clear();
                 token = entry.token;
@@ -484,7 +510,10 @@ impl Runtime {
 
     fn observe_primary_exit(&mut self, id: ExecutionId) -> Result<(), RuntimeError> {
         let exit = {
-            let entry = self.entries.get_mut(&id).ok_or(RuntimeError::UnknownExecution)?;
+            let entry = self
+                .entries
+                .get_mut(&id)
+                .ok_or(RuntimeError::UnknownExecution)?;
             entry.execution.try_wait()?
         };
         if let Some(exit) = exit {
@@ -495,7 +524,10 @@ impl Runtime {
     }
 
     fn enter_drain(&mut self, id: ExecutionId, exit: ChildExit) -> Result<(), RuntimeError> {
-        let entry = self.entries.get_mut(&id).ok_or(RuntimeError::UnknownExecution)?;
+        let entry = self
+            .entries
+            .get_mut(&id)
+            .ok_or(RuntimeError::UnknownExecution)?;
         entry.ingress_active.store(false, Ordering::Release);
         entry.pending_input.clear();
         self.reactor.set_writable(entry.token, false)?;
@@ -518,7 +550,10 @@ impl Runtime {
             match lifecycle {
                 Some(Lifecycle::TerminatingGraceful { .. }) => {
                     let exit = {
-                        let entry = self.entries.get_mut(&id).ok_or(RuntimeError::UnknownExecution)?;
+                        let entry = self
+                            .entries
+                            .get_mut(&id)
+                            .ok_or(RuntimeError::UnknownExecution)?;
                         entry.execution.try_wait()?
                     };
                     if let Some(exit) = exit {
@@ -526,7 +561,10 @@ impl Runtime {
                         self.service_reads(id)?;
                         continue;
                     }
-                    let entry = self.entries.get_mut(&id).ok_or(RuntimeError::UnknownExecution)?;
+                    let entry = self
+                        .entries
+                        .get_mut(&id)
+                        .ok_or(RuntimeError::UnknownExecution)?;
                     match entry.execution.signal_kill()? {
                         SignalDisposition::AlreadyReaped(exit) => {
                             entry.lifecycle = Lifecycle::DrainingAfterPrimaryExit {
@@ -543,7 +581,10 @@ impl Runtime {
                 }
                 Some(Lifecycle::TerminatingForced { .. }) => {
                     let exit = {
-                        let entry = self.entries.get_mut(&id).ok_or(RuntimeError::UnknownExecution)?;
+                        let entry = self
+                            .entries
+                            .get_mut(&id)
+                            .ok_or(RuntimeError::UnknownExecution)?;
                         entry.execution.try_wait()?
                     };
                     if let Some(exit) = exit {
@@ -584,10 +625,7 @@ impl Runtime {
             .min()
             .map(|deadline| deadline.saturating_duration_since(now));
         let rollback = (!self.rollback_reap.is_empty()).then_some(ROLLBACK_REAP_TICK);
-        [requested, lifecycle, rollback]
-            .into_iter()
-            .flatten()
-            .min()
+        [requested, lifecycle, rollback].into_iter().flatten().min()
     }
 
     fn kill_unpublished(&mut self, mut execution: TerminalExecution) {

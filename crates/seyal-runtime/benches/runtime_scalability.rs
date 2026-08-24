@@ -8,7 +8,9 @@ use seyal_runtime::{Runtime, RuntimeConfig};
 fn main() {
     #[cfg(not(target_os = "macos"))]
     {
-        println!("seyal-runtime scalability: PLATFORM_LIMITED target_os!=macos; no performance claim");
+        println!(
+            "seyal-runtime scalability: PLATFORM_LIMITED target_os!=macos; no performance claim"
+        );
     }
 
     #[cfg(target_os = "macos")]
@@ -33,10 +35,9 @@ fn run_macos() {
         let mut created = 0usize;
         for _ in 0..population {
             let command = CommandSpec::new("/bin/sh").args(["-c", "sleep 30"]);
-            match runtime.create_execution(
-                command,
-                WindowSize::new(80, 24, 0, 0).expect("valid size"),
-            ) {
+            match runtime
+                .create_execution(command, WindowSize::new(80, 24, 0, 0).expect("valid size"))
+            {
                 Ok(_) => created += 1,
                 Err(error) => {
                     println!(

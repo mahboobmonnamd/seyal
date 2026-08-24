@@ -195,8 +195,7 @@ fn read_quantum_prevents_noisy_execution_from_starving_quiet_execution() {
     let mut runtime = Runtime::new(config).expect("Runtime");
     let noisy = runtime
         .create_execution(
-            CommandSpec::new("/bin/sh")
-                .args(["-c", "yes N | head -c 1048576; sleep 30"]),
+            CommandSpec::new("/bin/sh").args(["-c", "yes N | head -c 1048576; sleep 30"]),
             size(),
         )
         .expect("noisy execution");
@@ -321,10 +320,7 @@ fn runtime_internal_descriptors_are_not_inherited_by_child() {
 fn resize_and_new_input_are_rejected_after_termination_begins() {
     let mut runtime = Runtime::new(config("post-exit-admission")).expect("Runtime");
     let id = runtime
-        .create_execution(
-            CommandSpec::new("/bin/sh").args(["-c", "sleep 30"]),
-            size(),
-        )
+        .create_execution(CommandSpec::new("/bin/sh").args(["-c", "sleep 30"]), size())
         .expect("execution");
     let ingress = runtime.input_ingress(id).unwrap();
     runtime
@@ -348,10 +344,7 @@ fn repeated_create_and_controlled_terminate_returns_registry_and_budget_to_zero(
     let mut runtime = Runtime::new(config("repeated-cleanup")).expect("Runtime");
     for _ in 0..20 {
         let id = runtime
-            .create_execution(
-                CommandSpec::new("/bin/sh").args(["-c", "sleep 30"]),
-                size(),
-            )
+            .create_execution(CommandSpec::new("/bin/sh").args(["-c", "sleep 30"]), size())
             .expect("execution");
         runtime.request_termination(id).unwrap();
         wait_until(

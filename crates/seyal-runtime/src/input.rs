@@ -83,11 +83,7 @@ impl Drop for InputReservation {
     }
 }
 
-fn reserve_counter(
-    counter: &AtomicUsize,
-    limit: usize,
-    amount: usize,
-) -> Result<(), RuntimeError> {
+fn reserve_counter(counter: &AtomicUsize, limit: usize, amount: usize) -> Result<(), RuntimeError> {
     let mut current = counter.load(Ordering::Acquire);
     loop {
         let Some(next) = current.checked_add(amount) else {
@@ -192,14 +188,9 @@ mod tests {
         let global = Arc::new(AtomicUsize::new(0));
         let local = Arc::new(AtomicUsize::new(0));
         {
-            let mut reservation = InputReservation::reserve(
-                Arc::clone(&global),
-                32,
-                Arc::clone(&local),
-                16,
-                12,
-            )
-            .unwrap();
+            let mut reservation =
+                InputReservation::reserve(Arc::clone(&global), 32, Arc::clone(&local), 16, 12)
+                    .unwrap();
             reservation.consume(5);
             assert_eq!(global.load(std::sync::atomic::Ordering::Acquire), 7);
             assert_eq!(local.load(std::sync::atomic::Ordering::Acquire), 7);
@@ -213,14 +204,7 @@ mod tests {
         let global = Arc::new(AtomicUsize::new(0));
         let local = Arc::new(AtomicUsize::new(15));
         assert!(
-            InputReservation::reserve(
-                Arc::clone(&global),
-                32,
-                Arc::clone(&local),
-                16,
-                2,
-            )
-            .is_err()
+            InputReservation::reserve(Arc::clone(&global), 32, Arc::clone(&local), 16, 2,).is_err()
         );
         assert_eq!(global.load(std::sync::atomic::Ordering::Acquire), 0);
         assert_eq!(local.load(std::sync::atomic::Ordering::Acquire), 15);

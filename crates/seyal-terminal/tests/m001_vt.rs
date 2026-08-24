@@ -214,6 +214,7 @@ fn allocated_line_ids_do_not_repeat_across_scroll_resize_and_alternate_lifetimes
         assert!(seen.insert(terminal.line_id(row).unwrap()));
     }
 
+    feed(&mut terminal, b"\x1b[2;1H");
     for _ in 0..128 {
         feed(&mut terminal, b"\r\n");
         assert!(seen.insert(terminal.line_id(terminal.rows() - 1).unwrap()));

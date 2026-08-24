@@ -6,12 +6,17 @@ use crate::{ExecError, TerminalExecution};
 pub struct RegistrationToken(u64);
 
 impl RegistrationToken {
+    #[cfg(any(target_os = "macos", test))]
     const fn new(slot: u32, generation: u32) -> Self {
         Self(((generation as u64) << 32) | (slot as u64 + 1))
     }
 
+    #[cfg(any(target_os = "macos", test))]
     fn decode(self) -> (usize, u32) {
-        (((self.0 as u32).saturating_sub(1)) as usize, (self.0 >> 32) as u32)
+        (
+            ((self.0 as u32).saturating_sub(1)) as usize,
+            (self.0 >> 32) as u32,
+        )
     }
 
     pub fn opaque_value(self) -> u64 {
@@ -68,6 +73,7 @@ impl ReactorWaker {
     }
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Clone, Copy, Debug)]
 struct Slot {
     generation: u32,
@@ -77,6 +83,7 @@ struct Slot {
     writable: bool,
 }
 
+#[cfg(target_os = "macos")]
 impl Slot {
     const fn vacant() -> Self {
         Self {
@@ -118,7 +125,10 @@ impl ExecutionReactor {
         }
     }
 
-    pub fn register(&mut self, execution: &TerminalExecution) -> Result<RegistrationToken, ExecError> {
+    pub fn register(
+        &mut self,
+        execution: &TerminalExecution,
+    ) -> Result<RegistrationToken, ExecError> {
         let fd = execution.reactor_fd();
         let pid = execution.child_id() as i32;
         let token = self.allocate_slot(fd, pid);
@@ -297,7 +307,10 @@ impl ExecutionReactor {
         ReactorWaker
     }
 
-    pub fn register(&mut self, _execution: &TerminalExecution) -> Result<RegistrationToken, ExecError> {
+    pub fn register(
+        &mut self,
+        _execution: &TerminalExecution,
+    ) -> Result<RegistrationToken, ExecError> {
         Err(ExecError::UnsupportedPlatform(
             "ExecutionReactor is implemented for macOS only in M001",
         ))

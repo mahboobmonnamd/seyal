@@ -1,5 +1,9 @@
-use std::{fs::File, process::Command, time::Duration};
+use std::fs::File;
 
+#[cfg(not(target_os = "macos"))]
+use std::{process::Command, time::Duration};
+
+#[cfg(not(target_os = "macos"))]
 use crate::{
     ExecError, WindowSize,
     readiness::{Interest, Readiness},
@@ -18,6 +22,7 @@ pub(crate) enum Signal {
     Kill,
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SignalOutcome {
     Delivered,
@@ -59,10 +64,7 @@ pub(crate) fn wait(
 }
 
 #[cfg(not(target_os = "macos"))]
-pub(crate) fn set_winsize(
-    _master: &MasterHandle,
-    _size: WindowSize,
-) -> Result<(), ExecError> {
+pub(crate) fn set_winsize(_master: &MasterHandle, _size: WindowSize) -> Result<(), ExecError> {
     Err(ExecError::UnsupportedPlatform(
         "local PTY execution is implemented for macOS only in M001",
     ))

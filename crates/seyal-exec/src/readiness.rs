@@ -9,6 +9,7 @@ pub struct Readiness {
 }
 
 impl Readiness {
+    #[cfg(target_os = "macos")]
     pub(crate) fn timeout() -> Self {
         Self {
             ready: false,

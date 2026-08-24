@@ -5,18 +5,15 @@ use std::{
 };
 
 #[cfg(target_os = "macos")]
-use seyal_exec::{
-    CommandSpec, ReadOutcome, TerminalEndpoint, TerminationPolicy, WindowSize,
-};
+use seyal_exec::{CommandSpec, ReadOutcome, TerminalEndpoint, TerminationPolicy, WindowSize};
 
 #[cfg(target_os = "macos")]
 fn main() {
     const ITERATIONS: u64 = 256;
     const PAYLOAD: &[u8] = b"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     let command = CommandSpec::new("/bin/sh").args(["-c", "stty raw -echo; cat"]);
-    let mut endpoint =
-        TerminalEndpoint::spawn(&command, WindowSize::cells(120, 40).expect("size"))
-            .expect("spawn benchmark PTY");
+    let mut endpoint = TerminalEndpoint::spawn(&command, WindowSize::cells(120, 40).expect("size"))
+        .expect("spawn benchmark PTY");
 
     let started = Instant::now();
     let mut received = 0_u128;

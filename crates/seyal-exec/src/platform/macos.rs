@@ -20,7 +20,7 @@ use crate::{
 pub(crate) fn open_pty(size: WindowSize) -> Result<PtyPair, ExecError> {
     let mut master_fd = -1;
     let mut slave_fd = -1;
-    let winsize = to_native_winsize(size);
+    let mut winsize = to_native_winsize(size);
 
     // SAFETY: openpty initializes the two descriptor outputs on success. The
     // termios pointer is null so the kernel's normal interactive discipline is
@@ -30,8 +30,8 @@ pub(crate) fn open_pty(size: WindowSize) -> Result<PtyPair, ExecError> {
             &mut master_fd,
             &mut slave_fd,
             ptr::null_mut(),
-            ptr::null(),
-            &winsize,
+            ptr::null_mut(),
+            &mut winsize,
         )
     };
     if rc != 0 {
@@ -227,8 +227,5 @@ fn remaining_timeout_ms(deadline: Instant) -> i32 {
     if remaining.is_zero() {
         return 0;
     }
-    remaining
-        .as_millis()
-        .max(1)
-        .min(i32::MAX as u128) as i32
+    remaining.as_millis().max(1).min(i32::MAX as u128) as i32
 }

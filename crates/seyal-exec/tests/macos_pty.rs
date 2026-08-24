@@ -99,9 +99,8 @@ fn real_command_spawn_and_byte_round_trip() {
 fn bursty_output_is_not_truncated_by_endpoint() {
     let _guard = TEST_LOCK.lock().expect("test lock");
     let size = WindowSize::cells(80, 24).expect("valid size");
-    let command = sh(
-        "i=0; while [ \"$i\" -lt 4096 ]; do printf 0123456789abcdef; i=$((i+1)); done",
-    );
+    let command =
+        sh("i=0; while [ \"$i\" -lt 4096 ]; do printf 0123456789abcdef; i=$((i+1)); done");
     let mut endpoint = TerminalEndpoint::spawn(&command, size).expect("spawn PTY");
     let expected_len = 4096 * 16;
     let deadline = Instant::now() + IO_TIMEOUT;
@@ -121,7 +120,11 @@ fn bursty_output_is_not_truncated_by_endpoint() {
     }
 
     assert_eq!(output.len(), expected_len);
-    assert!(output.chunks_exact(16).all(|chunk| chunk == b"0123456789abcdef"));
+    assert!(
+        output
+            .chunks_exact(16)
+            .all(|chunk| chunk == b"0123456789abcdef")
+    );
     assert_eq!(
         wait_exit(&mut endpoint, IO_TIMEOUT).expect("child exit"),
         ChildExit::Exited(0)
@@ -133,9 +136,7 @@ fn resize_is_kernel_visible_and_preserves_child_identity() {
     let _guard = TEST_LOCK.lock().expect("test lock");
     let initial = WindowSize::cells(80, 24).expect("initial size");
     let resized = WindowSize::new(100, 33, 1000, 660).expect("resized");
-    let command = sh(
-        "trap 'stty size; exit 0' WINCH; printf ready; while :; do sleep 1; done",
-    );
+    let command = sh("trap 'stty size; exit 0' WINCH; printf ready; while :; do sleep 1; done");
     let mut endpoint = TerminalEndpoint::spawn(&command, initial).expect("spawn PTY");
     let child_id = endpoint.child_id();
 
@@ -312,11 +313,9 @@ fn invalid_command_does_not_leak_descriptors() {
 #[test]
 fn terminal_execution_feeds_the_single_authoritative_terminal_state() {
     let _guard = TEST_LOCK.lock().expect("test lock");
-    let mut execution = TerminalExecution::spawn(
-        &sh("printf abc"),
-        WindowSize::cells(80, 24).expect("size"),
-    )
-    .expect("spawn execution");
+    let mut execution =
+        TerminalExecution::spawn(&sh("printf abc"), WindowSize::cells(80, 24).expect("size"))
+            .expect("spawn execution");
     let deadline = Instant::now() + IO_TIMEOUT;
     let mut buffer = [0_u8; 128];
 

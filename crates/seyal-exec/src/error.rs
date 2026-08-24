@@ -16,9 +16,7 @@ pub enum ExecError {
 impl fmt::Display for ExecError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidWindowSize => {
-                f.write_str("PTY rows and columns must both be non-zero")
-            }
+            Self::InvalidWindowSize => f.write_str("PTY rows and columns must both be non-zero"),
             Self::UnsupportedPlatform(message) => f.write_str(message),
             Self::Io(error) => write!(f, "execution I/O error: {error}"),
             Self::Terminal(error) => write!(f, "terminal state error: {error}"),

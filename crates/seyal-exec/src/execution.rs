@@ -3,8 +3,8 @@ use std::time::Duration;
 use seyal_terminal::TerminalState;
 
 use crate::{
-    ChildExit, CommandSpec, ExecError, ReadOutcome, Readiness, TerminalEndpoint,
-    TerminationPolicy, WindowSize, WriteOutcome,
+    ChildExit, CommandSpec, ExecError, ReadOutcome, Readiness, TerminalEndpoint, TerminationPolicy,
+    WindowSize, WriteOutcome,
 };
 
 pub struct TerminalExecution {
@@ -67,10 +67,7 @@ impl TerminalExecution {
         self.endpoint.try_wait()
     }
 
-    pub fn terminate(
-        &mut self,
-        policy: TerminationPolicy,
-    ) -> Result<ChildExit, ExecError> {
+    pub fn terminate(&mut self, policy: TerminationPolicy) -> Result<ChildExit, ExecError> {
         self.endpoint.terminate(policy)
     }
 }

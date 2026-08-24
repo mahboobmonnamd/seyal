@@ -84,11 +84,7 @@ impl TerminalEndpoint {
         }
     }
 
-    pub fn write_all_bounded(
-        &mut self,
-        bytes: &[u8],
-        timeout: Duration,
-    ) -> Result<(), ExecError> {
+    pub fn write_all_bounded(&mut self, bytes: &[u8], timeout: Duration) -> Result<(), ExecError> {
         let deadline = Instant::now() + timeout;
         let mut written = 0;
 
@@ -130,10 +126,7 @@ impl TerminalEndpoint {
         self.child.try_wait()
     }
 
-    pub fn terminate(
-        &mut self,
-        policy: TerminationPolicy,
-    ) -> Result<ChildExit, ExecError> {
+    pub fn terminate(&mut self, policy: TerminationPolicy) -> Result<ChildExit, ExecError> {
         self.child.terminate(policy)
     }
 }

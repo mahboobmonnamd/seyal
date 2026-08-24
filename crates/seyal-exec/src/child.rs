@@ -72,10 +72,7 @@ impl ChildLifecycle {
         }
     }
 
-    pub(crate) fn terminate(
-        &mut self,
-        policy: TerminationPolicy,
-    ) -> Result<ChildExit, ExecError> {
+    pub(crate) fn terminate(&mut self, policy: TerminationPolicy) -> Result<ChildExit, ExecError> {
         if let Some(exit) = self.try_wait()? {
             return Ok(exit);
         }

@@ -82,7 +82,7 @@ fn worker() {
     let mut platform_limit = None;
     for index in 0..requested {
         let command = if alternate && index == 0 {
-            CommandSpec::new("/bin/sh").args(["-c", "printf '\033[?1049hALT'; exec /bin/cat"])
+            CommandSpec::new("/bin/sh").args(["-c", "printf '\x1b[?1049hALT'; exec /bin/cat"])
         } else {
             CommandSpec::new("/bin/cat")
         };

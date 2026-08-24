@@ -41,7 +41,7 @@ impl SingletonGuard {
             if !crate::platform::try_lock_exclusive(file.as_raw_fd())? {
                 return Err(RuntimeError::AlreadyRunning);
             }
-            return Ok(Self { file });
+            Ok(Self { file })
         }
         #[cfg(not(target_os = "macos"))]
         {

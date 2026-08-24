@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 520" role="img" aria-labelledby="title desc">
+  <title id="title">Seyal architecture overview</title>
+  <desc id="desc">Runtime owns terminal execution and state, feeding the Metal renderer while blocks, persistence and agents remain off the terminal hot path.</desc>
+  <rect width="1200" height="520" rx="24" fill="#0b1020"/>
+  <g font-family="-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif" fill="#f5f7ff">
+    <text x="60" y="62" font-size="28" font-weight="700">Seyal authoritative execution path</text>
+    <g font-size="20" text-anchor="middle">
+      <g><rect x="55" y="120" width="145" height="72" rx="14" fill="#17213c"/><text x="127" y="164">PTY</text></g>
+      <g><rect x="230" y="120" width="175" height="72" rx="14" fill="#17213c"/><text x="317" y="151">VT parser</text><text x="317" y="177">+ state</text></g>
+      <g><rect x="435" y="120" width="180" height="72" rx="14" fill="#17213c"/><text x="525" y="151">Terminal</text><text x="525" y="177">grid/state</text></g>
+      <g><rect x="645" y="120" width="180" height="72" rx="14" fill="#17213c"/><text x="735" y="151">Damage</text><text x="735" y="177">tracking</text></g>
+      <g><rect x="855" y="120" width="200" height="72" rx="14" fill="#17213c"/><text x="955" y="151">Metal</text><text x="955" y="177">renderer</text></g>
+    </g>
+    <g stroke="#8aa0ff" stroke-width="4" fill="none">
+      <path d="M200 156h30"/><path d="M405 156h30"/><path d="M615 156h30"/><path d="M825 156h30"/>
+    </g>
+    <text x="60" y="260" font-size="22" font-weight="700">Runtime-owned side systems — never synchronous terminal dependencies</text>
+    <g font-size="18" text-anchor="middle">
+      <g><rect x="70" y="305" width="210" height="78" rx="14" fill="#132a2b"/><text x="175" y="338">Blocks / activity</text><text x="175" y="364">metadata</text></g>
+      <g><rect x="330" y="305" width="210" height="78" rx="14" fill="#132a2b"/><text x="435" y="338">Persistence /</text><text x="435" y="364">reconnect</text></g>
+      <g><rect x="590" y="305" width="210" height="78" rx="14" fill="#132a2b"/><text x="695" y="338">Agents /</text><text x="695" y="364">approvals</text></g>
+      <g><rect x="850" y="305" width="260" height="78" rx="14" fill="#132a2b"/><text x="980" y="338">Cloud / licensing /</text><text x="980" y="364">collaboration</text></g>
+    </g>
+    <text x="60" y="458" font-size="18" fill="#b8c1dc">One authoritative terminal state. Blocks own no PTY or VT engine. Commercial capabilities compose above OSS.</text>
+  </g>
+</svg>

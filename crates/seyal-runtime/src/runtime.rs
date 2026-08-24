@@ -15,11 +15,16 @@ use seyal_exec::{
 };
 
 use crate::{
-    AttachmentId, CapabilityPolicy, ExecutionId, InputIngress, ProjectionId, RuntimeError,
-    RuntimeId, WorkspaceId,
+    AttachmentId, CapabilityPolicy, ExecutionId, InputIngress, RuntimeError, RuntimeId, WorkspaceId,
     input::{AcceptedInput, ControlMessage},
+    singleton::SingletonGuard,
+};
+
+#[cfg(target_os = "macos")]
+use crate::{
+    ProjectionId,
     local_ipc::{
-        attachment::AttachmentRegistry,
+        attachment::{AttachmentError, AttachmentRegistry, MAX_LIVE_ATTACHMENTS},
         connection::{ConnectionState as LocalIpcConnState, LocalIpcServer, ServerEvent},
         discovery,
         framing::{
@@ -29,32 +34,24 @@ use crate::{
         },
     },
     projection::{
-        layout::{MAX_CAPACITY_COLS, MAX_CAPACITY_ROWS, REGION_HEADER_LEN, RegionHeader},
+        layout::{MAX_CAPACITY_COLS, MAX_CAPACITY_ROWS, MAX_REGION_BYTES, REGION_HEADER_LEN, RegionHeader},
         lifecycle::ProjectionRegion,
         producer,
         writer::Writer,
     },
-    singleton::SingletonGuard,
 };
 
 const EVENT_CAPACITY: usize = 128;
 const READ_BUFFER_SIZE: usize = 16 * 1024;
 const CONTROL_DISPATCH_QUANTUM: usize = 64;
 const ROLLBACK_REAP_TICK: Duration = Duration::from_millis(10);
-/// Poll interval used only while at least one local control connection is
-/// open, so control-plane messages are serviced with bounded latency
-/// without busy-polling an idle Runtime that has no local clients at all.
-/// See the module-level note on `Runtime::bound_wait_by_deadline` for the
-/// known limitation this works around (two independent kqueues).
-const LOCAL_IPC_POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+#[cfg(target_os = "macos")]
+const MAX_AGGREGATE_PROJECTION_BYTES: usize = 128 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub enum LocalIpcMode {
-    /// SPEC-004 local attachment protocol/projection is not started.
     Disabled,
-    /// Bind the SPEC-004 control socket. `runtime_dir_override` lets tests
-    /// avoid colliding on the real per-user discovery path the same way
-    /// `RuntimeConfig::singleton_path` already does for the Pass-4 lock.
     Enabled {
         runtime_dir_override: Option<PathBuf>,
     },
@@ -148,34 +145,41 @@ impl Lifecycle {
     }
 }
 
+#[cfg(target_os = "macos")]
 struct ConnectionMeta {
     attachment: Option<AttachmentId>,
+    reactor_token: RegistrationToken,
 }
 
+#[cfg(target_os = "macos")]
 struct ProjectionEntry {
     execution_id: ExecutionId,
-    token: u64,
-    region: ProjectionRegion,
+    connection_token: u64,
     writer: Writer,
+    region: ProjectionRegion,
     projection_id: ProjectionId,
     capacity_rows: u16,
     capacity_cols: u16,
 }
 
-/// SPEC-004 local attachment protocol/projection state. This is entirely
-/// best-effort/optional relative to Pass 1-4 terminal execution: a bind
-/// failure here never prevents `Runtime::new` from succeeding, and no
-/// method on this type ever blocks or is consulted on the PTY hot path.
+#[cfg(target_os = "macos")]
 struct LocalIpcState {
     server: LocalIpcServer,
     socket_path: PathBuf,
+    listener_reactor_token: RegistrationToken,
     attachments: AttachmentRegistry,
     connections: HashMap<u64, ConnectionMeta>,
+    reactor_connections: HashMap<RegistrationToken, u64>,
     projections: HashMap<AttachmentId, ProjectionEntry>,
+    aggregate_projection_bytes: usize,
 }
 
+#[cfg(target_os = "macos")]
 impl LocalIpcState {
-    fn bind(runtime_dir_override: Option<PathBuf>) -> Result<Self, RuntimeError> {
+    fn bind(
+        reactor: &mut ExecutionReactor,
+        runtime_dir_override: Option<PathBuf>,
+    ) -> Result<Self, RuntimeError> {
         let runtime_dir = match runtime_dir_override {
             Some(dir) => dir,
             None => discovery::darwin_user_runtime_dir().map_err(|_| {
@@ -190,24 +194,37 @@ impl LocalIpcState {
         let socket_path = discovery::control_socket_path(&runtime_dir).map_err(|_| {
             RuntimeError::Io(std::io::Error::other("local IPC socket path invalid"))
         })?;
-        discovery::verify_stale_socket_before_unlink(&socket_path).map_err(|_| {
+        discovery::remove_verified_stale_socket(&socket_path).map_err(|_| {
             RuntimeError::Io(std::io::Error::other(
-                "stale local IPC socket verification failed",
+                "local IPC stale socket validation failed",
             ))
         })?;
-        let _ = std::fs::remove_file(&socket_path);
-        let server =
-            LocalIpcServer::bind(&socket_path, crate::local_ipc::connection::MAX_CONNECTIONS)?;
+        let server = LocalIpcServer::bind(
+            &socket_path,
+            crate::local_ipc::connection::MAX_CONNECTIONS,
+        )?;
+        let listener_reactor_token = match reactor.register_auxiliary(server.listener_fd()) {
+            Ok(token) => token,
+            Err(error) => {
+                drop(server);
+                let _ = std::fs::remove_file(&socket_path);
+                return Err(error.into());
+            }
+        };
         Ok(Self {
             server,
             socket_path,
+            listener_reactor_token,
             attachments: AttachmentRegistry::new(),
             connections: HashMap::new(),
+            reactor_connections: HashMap::new(),
             projections: HashMap::new(),
+            aggregate_projection_bytes: 0,
         })
     }
 }
 
+#[cfg(target_os = "macos")]
 impl Drop for LocalIpcState {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.socket_path);
@@ -252,26 +269,24 @@ pub struct Runtime {
     read_buffer: [u8; READ_BUFFER_SIZE],
     shutting_down: bool,
     rollback_reap: Vec<TerminalExecution>,
+    #[cfg(target_os = "macos")]
     local_ipc: Option<LocalIpcState>,
 }
 
 impl Runtime {
     pub fn new(config: RuntimeConfig) -> Result<Self, RuntimeError> {
         let singleton = SingletonGuard::acquire(&config.singleton_path)?;
-        let reactor = ExecutionReactor::new()?;
+        let mut reactor = ExecutionReactor::new()?;
         let (control_tx, control_rx) = sync_channel(config.control_queue_capacity);
+        #[cfg(target_os = "macos")]
         let local_ipc = match &config.local_ipc {
             LocalIpcMode::Disabled => None,
             LocalIpcMode::Enabled {
                 runtime_dir_override,
-            } => {
-                // Best-effort: a bind failure (permissions, sandboxed CI,
-                // etc.) never prevents Pass 1-4 terminal execution from
-                // working. `local_ipc_socket_path()` reports `None` in
-                // that case so callers/tests can detect and skip Pass-5
-                // behavior explicitly rather than silently hanging.
-                LocalIpcState::bind(runtime_dir_override.clone()).ok()
-            }
+            } => Some(LocalIpcState::bind(
+                &mut reactor,
+                runtime_dir_override.clone(),
+            )?),
         };
         Ok(Self {
             id: RuntimeId::new(),
@@ -288,16 +303,23 @@ impl Runtime {
             read_buffer: [0; READ_BUFFER_SIZE],
             shutting_down: false,
             rollback_reap: Vec::new(),
+            #[cfg(target_os = "macos")]
             local_ipc,
         })
     }
 
-    /// The bound SPEC-004 control-socket path, if local attachment is
-    /// enabled and successfully bound.
     pub fn local_ipc_socket_path(&self) -> Option<&Path> {
-        self.local_ipc
-            .as_ref()
-            .map(|state| state.socket_path.as_path())
+        #[cfg(target_os = "macos")]
+        {
+            return self
+                .local_ipc
+                .as_ref()
+                .map(|state| state.socket_path.as_path());
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            None
+        }
     }
 
     pub fn id(&self) -> RuntimeId {
@@ -529,11 +551,19 @@ impl Runtime {
                         processed += 1;
                     }
                 }
+                ReactorEventKind::AuxiliaryReadable | ReactorEventKind::AuxiliaryWritable => {
+                    #[cfg(target_os = "macos")]
+                    if let Some(token) = event.token {
+                        self.service_local_reactor_event(token, event.kind, event.hangup)?;
+                        processed += 1;
+                    }
+                }
             }
         }
         self.process_deadlines()?;
         self.reap_failed_creations()?;
-        self.service_local_ipc()?;
+        #[cfg(target_os = "macos")]
+        self.publish_projection_updates();
         Ok(processed)
     }
 
@@ -562,8 +592,7 @@ impl Runtime {
                     }
                     handled += 1;
                 }
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => break,
+                Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
             }
         }
         if handled == CONTROL_DISPATCH_QUANTUM {
@@ -749,6 +778,7 @@ impl Runtime {
         self.by_token.remove(&entry.token);
         self.reactor.deregister(entry.token)?;
         drop(entry);
+        #[cfg(target_os = "macos")]
         self.notify_local_ipc_execution_finalized(id);
         Ok(())
     }
@@ -762,16 +792,7 @@ impl Runtime {
             .min()
             .map(|deadline| deadline.saturating_duration_since(now));
         let rollback = (!self.rollback_reap.is_empty()).then_some(ROLLBACK_REAP_TICK);
-        // See the `LOCAL_IPC_POLL_INTERVAL` doc comment: this bounds the
-        // otherwise-indefinite PTY reactor wait only while a local client
-        // is actually connected, so control-plane messages are serviced
-        // promptly without waking an idle, client-less Runtime at all.
-        let local_ipc = self
-            .local_ipc
-            .as_ref()
-            .filter(|state| state.server.connection_count() > 0)
-            .map(|_| LOCAL_IPC_POLL_INTERVAL);
-        [requested, lifecycle, rollback, local_ipc]
+        [requested, lifecycle, rollback]
             .into_iter()
             .flatten()
             .min()
@@ -802,96 +823,201 @@ impl Runtime {
     }
 }
 
-/// SPEC-004 local attachment/projection wiring. Kept in its own `impl`
-/// block for readability; every method here is additive to Pass 1-4 and
-/// never gates PTY progress on client behavior.
+#[cfg(target_os = "macos")]
 impl Runtime {
-    fn take_execution_damage(&mut self, id: ExecutionId) -> Option<seyal_terminal::Damage> {
-        self.entries.get_mut(&id)?.execution.take_damage()
-    }
-
-    fn send_error(&mut self, token: u64, code: ErrorCode, offending: u16) {
-        if let Some(state) = self.local_ipc.as_mut() {
-            let message = framing::ErrorMessage {
-                error_code: code as u16,
-                offending_message_type: offending,
-                detail_code: 0,
-            };
-            let frame = framing::encode_frame(MessageType::Error, &message.encode());
-            let _ = state.server.enqueue(token, frame, None);
-        }
-    }
-
-    fn release_connection_attachment(&mut self, token: u64) {
-        let Some(state) = self.local_ipc.as_mut() else {
-            return;
-        };
-        if let Some(meta) = state.connections.remove(&token)
-            && let Some(attachment_id) = meta.attachment
-        {
-            let _ = state.attachments.detach(attachment_id);
-            state.projections.remove(&attachment_id);
-        }
-    }
-
-    /// Notifies every live attachment of `execution_id` that it finalized
-    /// and reclaims their projection resources. Client disconnect never
-    /// affects the execution; this is the reverse direction only.
-    fn notify_local_ipc_execution_finalized(&mut self, execution_id: ExecutionId) {
-        let Some(state) = self.local_ipc.as_mut() else {
-            return;
-        };
-        let attachment_ids = state.attachments.remove_all_for_execution(execution_id);
-        for attachment_id in attachment_ids {
-            if let Some(projection) = state.projections.remove(&attachment_id) {
-                let message = framing::LifecycleMessage {
-                    execution_id,
-                    lifecycle: framing::Lifecycle::Finalized,
-                };
-                let frame = framing::encode_frame(MessageType::Lifecycle, &message.encode());
-                let _ = state.server.enqueue(projection.token, frame, None);
-                if let Some(meta) = state.connections.get_mut(&projection.token) {
-                    meta.attachment = None;
-                }
-            }
-        }
-    }
-
-    fn service_local_ipc(&mut self) -> Result<(), RuntimeError> {
-        if self.local_ipc.is_none() {
+    fn service_local_reactor_event(
+        &mut self,
+        reactor_token: RegistrationToken,
+        kind: ReactorEventKind,
+        hangup: bool,
+    ) -> Result<(), RuntimeError> {
+        let listener = self
+            .local_ipc
+            .as_ref()
+            .is_some_and(|state| state.listener_reactor_token == reactor_token);
+        if listener {
+            self.accept_local_connections()?;
             return Ok(());
         }
+
+        let connection_token = self
+            .local_ipc
+            .as_ref()
+            .and_then(|state| state.reactor_connections.get(&reactor_token).copied());
+        let Some(connection_token) = connection_token else {
+            return Ok(());
+        };
+
         let events = {
-            let state = self.local_ipc.as_mut().unwrap();
-            match state.server.poll(Some(Duration::ZERO)) {
-                Ok(events) => events,
-                Err(_) => return Ok(()),
+            let Some(state) = self.local_ipc.as_mut() else {
+                return Ok(());
+            };
+            match kind {
+                ReactorEventKind::AuxiliaryReadable => {
+                    state.server.service_read(connection_token, hangup)
+                }
+                ReactorEventKind::AuxiliaryWritable => {
+                    state.server.service_write(connection_token)
+                }
+                _ => Vec::new(),
             }
+        };
+        self.handle_local_server_events(events);
+        if self.local_connection_exists(connection_token) {
+            self.sync_local_writable(connection_token);
+        }
+        Ok(())
+    }
+
+    fn accept_local_connections(&mut self) -> Result<(), RuntimeError> {
+        let events = {
+            let Some(state) = self.local_ipc.as_mut() else {
+                return Ok(());
+            };
+            state.server.accept_ready()?
         };
         for event in events {
             match event {
                 ServerEvent::Connected { token } => {
-                    if let Some(state) = self.local_ipc.as_mut() {
-                        state
-                            .connections
-                            .insert(token, ConnectionMeta { attachment: None });
+                    let fd = self
+                        .local_ipc
+                        .as_ref()
+                        .and_then(|state| state.server.connection_fd(token));
+                    let Some(fd) = fd else {
+                        continue;
+                    };
+                    match self.reactor.register_auxiliary(fd) {
+                        Ok(reactor_token) => {
+                            if let Some(state) = self.local_ipc.as_mut() {
+                                state.connections.insert(
+                                    token,
+                                    ConnectionMeta {
+                                        attachment: None,
+                                        reactor_token,
+                                    },
+                                );
+                                state.reactor_connections.insert(reactor_token, token);
+                            }
+                        }
+                        Err(_) => {
+                            if let Some(state) = self.local_ipc.as_mut() {
+                                state.server.close(token);
+                            }
+                        }
                     }
                 }
                 ServerEvent::PeerRejected => {}
+                other => self.handle_local_server_events(vec![other]),
+            }
+        }
+        Ok(())
+    }
+
+    fn handle_local_server_events(&mut self, events: Vec<ServerEvent>) {
+        for event in events {
+            match event {
+                ServerEvent::Connected { .. } | ServerEvent::PeerRejected => {}
                 ServerEvent::FramingError { token } | ServerEvent::Disconnected { token } => {
-                    self.release_connection_attachment(token);
+                    self.close_local_connection(token);
                 }
                 ServerEvent::Frame {
                     token,
                     message_type,
                     payload,
-                } => {
-                    self.dispatch_local_ipc_frame(token, message_type, &payload);
-                }
+                } => self.dispatch_local_ipc_frame(token, message_type, &payload),
             }
         }
-        self.publish_projection_updates();
-        Ok(())
+    }
+
+    fn local_connection_exists(&self, token: u64) -> bool {
+        self.local_ipc
+            .as_ref()
+            .is_some_and(|state| state.connections.contains_key(&token) && state.server.contains(token))
+    }
+
+    fn sync_local_writable(&mut self, token: u64) -> bool {
+        let values = self.local_ipc.as_ref().and_then(|state| {
+            let meta = state.connections.get(&token)?;
+            Some((meta.reactor_token, state.server.wants_write(token)))
+        });
+        let Some((reactor_token, wants_write)) = values else {
+            return false;
+        };
+        if self.reactor.set_writable(reactor_token, wants_write).is_err() {
+            self.close_local_connection(token);
+            return false;
+        }
+        true
+    }
+
+    fn close_local_connection(&mut self, token: u64) {
+        let (reactor_token, attachment) = {
+            let Some(state) = self.local_ipc.as_mut() else {
+                return;
+            };
+            state.server.close(token);
+            let Some(meta) = state.connections.remove(&token) else {
+                return;
+            };
+            state.reactor_connections.remove(&meta.reactor_token);
+            (meta.reactor_token, meta.attachment)
+        };
+
+        if let Some(attachment_id) = attachment {
+            self.release_local_attachment(attachment_id);
+        }
+        let _ = self.reactor.deregister(reactor_token);
+    }
+
+    fn release_local_attachment(&mut self, attachment_id: AttachmentId) {
+        let Some(state) = self.local_ipc.as_mut() else {
+            return;
+        };
+        let _ = state.attachments.detach(attachment_id);
+        if let Some(projection) = state.projections.remove(&attachment_id) {
+            state.aggregate_projection_bytes = state
+                .aggregate_projection_bytes
+                .saturating_sub(projection.region.region_bytes());
+        }
+    }
+
+    fn send_mandatory_frame(
+        &mut self,
+        token: u64,
+        bytes: Vec<u8>,
+        fd: Option<std::os::fd::OwnedFd>,
+    ) -> bool {
+        let sent = self
+            .local_ipc
+            .as_mut()
+            .is_some_and(|state| state.server.enqueue_mandatory(token, bytes, fd).is_ok());
+        if !sent {
+            self.close_local_connection(token);
+            return false;
+        }
+        self.sync_local_writable(token)
+    }
+
+    fn send_wake_frame(&mut self, token: u64, bytes: Vec<u8>) -> bool {
+        let sent = self
+            .local_ipc
+            .as_mut()
+            .is_some_and(|state| state.server.enqueue_wake(token, bytes).is_ok());
+        if !sent {
+            self.close_local_connection(token);
+            return false;
+        }
+        self.sync_local_writable(token)
+    }
+
+    fn send_error(&mut self, token: u64, code: ErrorCode, offending: u16) {
+        let message = framing::ErrorMessage {
+            error_code: code as u16,
+            offending_message_type: offending,
+            detail_code: 0,
+        };
+        let frame = framing::encode_frame(MessageType::Error, &message.encode());
+        let _ = self.send_mandatory_frame(token, frame, None);
     }
 
     fn dispatch_local_ipc_frame(&mut self, token: u64, message_type: u16, payload: &[u8]) {
@@ -912,49 +1038,53 @@ impl Runtime {
         }
         match kind {
             MessageType::ClientHello => self.handle_hello(token, payload),
-            MessageType::ListExecutions => self.handle_list_executions(token),
+            MessageType::ListExecutions => self.handle_list_executions(token, payload),
             MessageType::Attach => self.handle_attach(token, payload),
             MessageType::Detach => self.handle_detach(token, payload),
             MessageType::Input => self.handle_input(token, payload),
             MessageType::Resize => self.handle_resize(token, payload),
             MessageType::Resync => self.handle_resync(token, payload),
             MessageType::Goodbye => {
-                self.release_connection_attachment(token);
-                if let Some(state) = self.local_ipc.as_mut() {
-                    let mut dummy = Vec::new();
-                    state.server.close(token, &mut dummy);
+                if !payload.is_empty() {
+                    self.send_error(token, ErrorCode::MalformedPayload, message_type);
+                    return;
                 }
+                self.close_local_connection(token);
             }
             _ => self.send_error(token, ErrorCode::InvalidState, message_type),
         }
     }
 
     fn handle_hello(&mut self, token: u64, payload: &[u8]) {
-        if framing::ClientHello::decode(payload).is_err() {
-            self.send_error(
-                token,
-                ErrorCode::MalformedPayload,
-                MessageType::ClientHello as u16,
-            );
-            return;
-        }
-        let Some(state) = self.local_ipc.as_mut() else {
+        let Ok(hello) = framing::ClientHello::decode(payload) else {
+            self.send_error(token, ErrorCode::MalformedPayload, MessageType::ClientHello as u16);
             return;
         };
-        let hello = framing::ServerHello {
-            runtime_id: 0,
+        if hello.client_capabilities != 0 {
+            self.send_error(token, ErrorCode::MalformedPayload, MessageType::ClientHello as u16);
+            return;
+        }
+        let response = framing::ServerHello {
+            runtime_id: u128::from_le_bytes(self.id.to_bytes()),
             server_capabilities: 0b11,
             max_frame_payload: framing::MAX_FRAME_PAYLOAD,
             max_input_payload: framing::MAX_INPUT_BYTES,
         };
-        let frame = framing::encode_frame(MessageType::ServerHello, &hello.encode());
-        let _ = state.server.enqueue(token, frame, None);
-        state.server.set_state(token, LocalIpcConnState::Ready);
+        let frame = framing::encode_frame(MessageType::ServerHello, &response.encode());
+        if self.send_mandatory_frame(token, frame, None)
+            && let Some(state) = self.local_ipc.as_mut()
+        {
+            state.server.set_state(token, LocalIpcConnState::Ready);
+        }
     }
 
-    fn handle_list_executions(&mut self, token: u64) {
+    fn handle_list_executions(&mut self, token: u64, payload: &[u8]) {
+        if !payload.is_empty() {
+            self.send_error(token, ErrorCode::MalformedPayload, MessageType::ListExecutions as u16);
+            return;
+        }
         let summaries = self.list();
-        let Some(state) = self.local_ipc.as_mut() else {
+        let Some(state) = self.local_ipc.as_ref() else {
             return;
         };
         let entries = summaries
@@ -970,229 +1100,182 @@ impl Runtime {
                 attachment_count: state.attachments.attachments_for_execution(summary.id) as u16,
             })
             .collect();
-        let list = ExecutionList { entries };
-        let frame = framing::encode_frame(MessageType::ExecutionList, &list.encode());
-        let _ = state.server.enqueue(token, frame, None);
+        let frame = framing::encode_frame(
+            MessageType::ExecutionList,
+            &ExecutionList { entries }.encode(),
+        );
+        let _ = self.send_mandatory_frame(token, frame, None);
     }
 
     fn handle_attach(&mut self, token: u64, payload: &[u8]) {
         let Ok(attach) = WireAttach::decode(payload) else {
-            self.send_error(
-                token,
-                ErrorCode::MalformedPayload,
-                MessageType::Attach as u16,
-            );
+            self.send_error(token, ErrorCode::MalformedPayload, MessageType::Attach as u16);
             return;
         };
-        if self.lookup(attach.execution_id).is_none() {
-            self.send_error(
-                token,
-                ErrorCode::InvalidExecution,
-                MessageType::Attach as u16,
-            );
+        let Some(entry) = self.entries.get(&attach.execution_id) else {
+            self.send_error(token, ErrorCode::InvalidExecution, MessageType::Attach as u16);
             return;
-        }
+        };
         let Some(state) = self.local_ipc.as_ref() else {
             return;
         };
+        if state.attachments.len() >= MAX_LIVE_ATTACHMENTS {
+            self.send_error(token, ErrorCode::CapacityExceeded, MessageType::Attach as u16);
+            return;
+        }
         if attach.requested_role == Role::Controller
             && state.attachments.has_controller(attach.execution_id)
         {
             self.send_error(token, ErrorCode::ControllerBusy, MessageType::Attach as u16);
             return;
         }
-        if state.attachments.len() >= crate::local_ipc::attachment::MAX_LIVE_ATTACHMENTS {
-            self.send_error(
-                token,
-                ErrorCode::CapacityExceeded,
-                MessageType::Attach as u16,
-            );
+        if state
+            .connections
+            .get(&token)
+            .and_then(|meta| meta.attachment)
+            .is_some()
+        {
+            self.send_error(token, ErrorCode::InvalidState, MessageType::Attach as u16);
             return;
         }
 
-        let Some(entry) = self.entries.get(&attach.execution_id) else {
-            self.send_error(
-                token,
-                ErrorCode::InvalidExecution,
-                MessageType::Attach as u16,
-            );
-            return;
-        };
-        let rows = entry.execution.terminal().rows();
-        let cols = entry.execution.terminal().cols();
+        let snapshot = producer::from_execution(entry.execution.projection_snapshot());
         let attachment_id = AttachmentId::new();
-        // Drain any damage already pending for this execution so the
-        // per-tick `publish_projection_updates` sweep below does not
-        // immediately re-publish (and send a redundant `GenerationWake`)
-        // for the exact same content this attach's initial snapshot
-        // already captured.
-        self.take_execution_damage(attach.execution_id);
-        let Some(entry) = self.entries.get(&attach.execution_id) else {
-            self.send_error(
-                token,
-                ErrorCode::InvalidExecution,
-                MessageType::Attach as u16,
-            );
+        let Ok((mut projection, committed_generation)) =
+            build_projection(attachment_id, attach.execution_id, token, &snapshot)
+        else {
+            self.send_error(token, ErrorCode::ProjectionUnavailable, MessageType::Attach as u16);
             return;
         };
+        let new_bytes = projection.region.region_bytes();
+        if !self.projection_budget_allows(0, new_bytes) {
+            self.send_error(token, ErrorCode::CapacityExceeded, MessageType::Attach as u16);
+            return;
+        }
+        let Some(reader_fd) = projection.region.take_reader_fd() else {
+            self.send_error(token, ErrorCode::InternalFailure, MessageType::Attach as u16);
+            return;
+        };
+        let attached = WireAttached {
+            execution_id: attach.execution_id,
+            attachment_id,
+            projection_id: projection.projection_id,
+            granted_role: attach.requested_role,
+            committed_generation,
+            region_bytes: new_bytes as u64,
+            capacity_rows: projection.capacity_rows,
+            capacity_cols: projection.capacity_cols,
+        };
+        let frame = framing::encode_frame(MessageType::Attached, &attached.encode());
+        if !self.send_mandatory_frame(token, frame, Some(reader_fd)) {
+            return;
+        }
 
-        match build_projection(
+        let Some(state) = self.local_ipc.as_mut() else {
+            return;
+        };
+        if !state.connections.contains_key(&token) {
+            return;
+        }
+        state.attachments.insert_prevalidated(
             attachment_id,
             attach.execution_id,
-            rows,
-            cols,
-            entry.execution.terminal(),
-        ) {
-            Ok((mut projection_entry, committed_generation)) => {
-                let Some(reader_fd) = projection_entry.region.take_reader_fd() else {
-                    self.send_error(
-                        token,
-                        ErrorCode::InternalFailure,
-                        MessageType::Attach as u16,
-                    );
-                    return;
-                };
-                let region_bytes = projection_entry.region.region_bytes() as u64;
-                let capacity_rows = projection_entry.capacity_rows;
-                let capacity_cols = projection_entry.capacity_cols;
-                let projection_id = projection_entry.projection_id;
-                projection_entry.token = token;
-
-                let Some(state) = self.local_ipc.as_mut() else {
-                    return;
-                };
-                state.attachments.insert_prevalidated(
-                    attachment_id,
-                    attach.execution_id,
-                    attach.requested_role,
-                    projection_id,
-                );
-                state.projections.insert(attachment_id, projection_entry);
-                state
-                    .connections
-                    .entry(token)
-                    .or_insert(ConnectionMeta { attachment: None })
-                    .attachment = Some(attachment_id);
-
-                let attached = WireAttached {
-                    execution_id: attach.execution_id,
-                    attachment_id,
-                    projection_id,
-                    granted_role: attach.requested_role,
-                    committed_generation,
-                    region_bytes,
-                    capacity_rows,
-                    capacity_cols,
-                };
-                let frame = framing::encode_frame(MessageType::Attached, &attached.encode());
-                let _ = state.server.enqueue(token, frame, Some(reader_fd));
-                state.server.set_state(token, LocalIpcConnState::Attached);
-            }
-            Err(()) => {
-                self.send_error(
-                    token,
-                    ErrorCode::InternalFailure,
-                    MessageType::Attach as u16,
-                );
-            }
+            attach.requested_role,
+            projection.projection_id,
+            token,
+        );
+        state.aggregate_projection_bytes += new_bytes;
+        state.projections.insert(attachment_id, projection);
+        if let Some(meta) = state.connections.get_mut(&token) {
+            meta.attachment = Some(attachment_id);
         }
+        state.server.set_state(token, LocalIpcConnState::Attached);
     }
 
     fn handle_detach(&mut self, token: u64, payload: &[u8]) {
         let Ok(detach) = framing::Detach::decode(payload) else {
-            self.send_error(
-                token,
-                ErrorCode::MalformedPayload,
-                MessageType::Detach as u16,
-            );
+            self.send_error(token, ErrorCode::MalformedPayload, MessageType::Detach as u16);
             return;
         };
-        let Some(state) = self.local_ipc.as_mut() else {
-            return;
-        };
-        if state.attachments.detach(detach.attachment_id).is_err() {
-            self.send_error(token, ErrorCode::StaleIdentity, MessageType::Detach as u16);
-            return;
+        let result = self
+            .local_ipc
+            .as_mut()
+            .map(|state| state.attachments.detach_for_connection(token, detach.attachment_id));
+        match result {
+            Some(Ok(())) => {}
+            Some(Err(AttachmentError::WrongConnection)) => {
+                self.send_error(token, ErrorCode::StaleIdentity, MessageType::Detach as u16);
+                return;
+            }
+            _ => {
+                self.send_error(token, ErrorCode::StaleIdentity, MessageType::Detach as u16);
+                return;
+            }
         }
-        state.projections.remove(&detach.attachment_id);
-        if let Some(meta) = state.connections.get_mut(&token) {
-            meta.attachment = None;
+        if let Some(state) = self.local_ipc.as_mut() {
+            if let Some(projection) = state.projections.remove(&detach.attachment_id) {
+                state.aggregate_projection_bytes = state
+                    .aggregate_projection_bytes
+                    .saturating_sub(projection.region.region_bytes());
+            }
+            if let Some(meta) = state.connections.get_mut(&token) {
+                meta.attachment = None;
+            }
+            state.server.set_state(token, LocalIpcConnState::Ready);
         }
         let response = framing::Detached {
             attachment_id: detach.attachment_id,
         };
         let frame = framing::encode_frame(MessageType::Detached, &response.encode());
-        let _ = state.server.enqueue(token, frame, None);
-        state.server.set_state(token, LocalIpcConnState::Ready);
+        let _ = self.send_mandatory_frame(token, frame, None);
     }
 
     fn handle_input(&mut self, token: u64, payload: &[u8]) {
         let Ok(input) = framing::InputRef::decode(payload) else {
-            self.send_error(
-                token,
-                ErrorCode::MalformedPayload,
-                MessageType::Input as u16,
-            );
+            self.send_error(token, ErrorCode::MalformedPayload, MessageType::Input as u16);
             return;
         };
-        let Some(state) = self.local_ipc.as_ref() else {
-            return;
-        };
-        let execution_id = match state.attachments.authorize_mutation(input.attachment_id) {
-            Ok(id) => id,
-            Err(crate::local_ipc::attachment::AttachmentError::PermissionDenied) => {
-                self.send_error(
-                    token,
-                    ErrorCode::PermissionDenied,
-                    MessageType::Input as u16,
-                );
+        let authorization = self
+            .local_ipc
+            .as_ref()
+            .map(|state| state.attachments.authorize_mutation(token, input.attachment_id));
+        let execution_id = match authorization {
+            Some(Ok(id)) => id,
+            Some(Err(AttachmentError::PermissionDenied)) => {
+                self.send_error(token, ErrorCode::PermissionDenied, MessageType::Input as u16);
                 return;
             }
-            Err(_) => {
+            _ => {
                 self.send_error(token, ErrorCode::StaleIdentity, MessageType::Input as u16);
                 return;
             }
         };
-        let bytes = input.bytes.to_vec();
         match self.input_ingress(execution_id) {
             Ok(ingress) => {
-                if ingress.try_submit(bytes).is_err() {
+                if ingress.try_submit(input.bytes.to_vec()).is_err() {
                     self.send_error(token, ErrorCode::Backpressure, MessageType::Input as u16);
                 }
             }
-            Err(_) => {
-                self.send_error(
-                    token,
-                    ErrorCode::InvalidExecution,
-                    MessageType::Input as u16,
-                );
-            }
+            Err(_) => self.send_error(token, ErrorCode::InvalidExecution, MessageType::Input as u16),
         }
     }
 
     fn handle_resize(&mut self, token: u64, payload: &[u8]) {
         let Ok(resize) = WireResize::decode(payload) else {
-            self.send_error(
-                token,
-                ErrorCode::MalformedPayload,
-                MessageType::Resize as u16,
-            );
+            self.send_error(token, ErrorCode::MalformedPayload, MessageType::Resize as u16);
             return;
         };
-        let Some(state) = self.local_ipc.as_ref() else {
-            return;
-        };
-        let execution_id = match state.attachments.authorize_mutation(resize.attachment_id) {
-            Ok(id) => id,
-            Err(crate::local_ipc::attachment::AttachmentError::PermissionDenied) => {
-                self.send_error(
-                    token,
-                    ErrorCode::PermissionDenied,
-                    MessageType::Resize as u16,
-                );
+        let authorization = self
+            .local_ipc
+            .as_ref()
+            .map(|state| state.attachments.authorize_mutation(token, resize.attachment_id));
+        let execution_id = match authorization {
+            Some(Ok(id)) => id,
+            Some(Err(AttachmentError::PermissionDenied)) => {
+                self.send_error(token, ErrorCode::PermissionDenied, MessageType::Resize as u16);
                 return;
             }
-            Err(_) => {
+            _ => {
                 self.send_error(token, ErrorCode::StaleIdentity, MessageType::Resize as u16);
                 return;
             }
@@ -1202,173 +1285,324 @@ impl Runtime {
             || resize.rows > MAX_CAPACITY_ROWS
             || resize.columns > MAX_CAPACITY_COLS
         {
-            self.send_error(
-                token,
-                ErrorCode::InvalidGeometry,
-                MessageType::Resize as u16,
-            );
+            self.send_error(token, ErrorCode::InvalidGeometry, MessageType::Resize as u16);
             return;
         }
         let Ok(size) = WindowSize::cells(resize.columns, resize.rows) else {
-            self.send_error(
-                token,
-                ErrorCode::InvalidGeometry,
-                MessageType::Resize as u16,
-            );
+            self.send_error(token, ErrorCode::InvalidGeometry, MessageType::Resize as u16);
             return;
         };
         if self.resize(execution_id, size).is_err() {
-            self.send_error(
-                token,
-                ErrorCode::InvalidExecution,
-                MessageType::Resize as u16,
-            );
+            self.send_error(token, ErrorCode::InvalidExecution, MessageType::Resize as u16);
         }
     }
 
     fn handle_resync(&mut self, token: u64, payload: &[u8]) {
         let Ok(resync) = framing::Resync::decode(payload) else {
-            self.send_error(
-                token,
-                ErrorCode::MalformedPayload,
-                MessageType::Resync as u16,
-            );
+            self.send_error(token, ErrorCode::MalformedPayload, MessageType::Resync as u16);
             return;
         };
-        let Some(state) = self.local_ipc.as_ref() else {
-            return;
+        let execution = self.local_ipc.as_ref().map(|state| {
+            state
+                .attachments
+                .execution_for_connection(token, resync.attachment_id)
+        });
+        let execution_id = match execution {
+            Some(Ok(id)) => id,
+            _ => {
+                self.send_error(token, ErrorCode::StaleIdentity, MessageType::Resync as u16);
+                return;
+            }
         };
-        let Ok(execution_id) = state.attachments.execution_of(resync.attachment_id) else {
-            self.send_error(token, ErrorCode::StaleIdentity, MessageType::Resync as u16);
-            return;
-        };
-        // Draining any pending damage here (rather than only reading its
-        // generation) prevents the per-tick `publish_projection_updates`
-        // sweep from immediately re-publishing the same content this
-        // explicit resync already captures.
-        self.take_execution_damage(execution_id);
         let Some(entry) = self.entries.get(&execution_id) else {
-            self.send_error(
-                token,
-                ErrorCode::InvalidExecution,
-                MessageType::Resync as u16,
-            );
+            self.send_error(token, ErrorCode::InvalidExecution, MessageType::Resync as u16);
             return;
         };
-        let damage_generation = entry.execution.terminal().damage_generation();
-        let snapshot = producer::full_snapshot(entry.execution.terminal(), damage_generation);
+        let snapshot = producer::from_execution(entry.execution.projection_snapshot());
 
-        let Some(state) = self.local_ipc.as_mut() else {
-            return;
-        };
-        let Some(projection) = state.projections.get_mut(&resync.attachment_id) else {
-            self.send_error(
-                token,
-                ErrorCode::ProjectionUnavailable,
-                MessageType::Resync as u16,
-            );
-            return;
-        };
-        if let Ok(generation) = projection.writer.publish(&snapshot.as_snapshot_write()) {
-            let wake = WireGenerationWake {
-                attachment_id: resync.attachment_id,
-                projection_id: projection.projection_id,
-                committed_generation: generation,
+        let can_publish = self.local_ipc.as_ref().is_some_and(|state| {
+            state
+                .projections
+                .get(&resync.attachment_id)
+                .is_some_and(|projection| {
+                    snapshot.rows <= projection.capacity_rows
+                        && snapshot.columns <= projection.capacity_cols
+                })
+        });
+        if can_publish {
+            let published = {
+                let state = self.local_ipc.as_mut().unwrap();
+                let projection = state.projections.get_mut(&resync.attachment_id).unwrap();
+                projection
+                    .writer
+                    .publish(&snapshot.as_snapshot_write())
+                    .ok()
+                    .map(|generation| (generation, projection.projection_id))
             };
-            let frame = framing::encode_frame(MessageType::GenerationWake, &wake.encode());
-            let _ = state.server.enqueue(token, frame, None);
+            if let Some((generation, projection_id)) = published {
+                let wake = WireGenerationWake {
+                    attachment_id: resync.attachment_id,
+                    projection_id,
+                    committed_generation: generation,
+                };
+                let frame = framing::encode_frame(MessageType::GenerationWake, &wake.encode());
+                let _ = self.send_wake_frame(token, frame);
+                return;
+            }
+        }
+
+        if !self.install_projection_replacement(
+            resync.attachment_id,
+            execution_id,
+            token,
+            &snapshot,
+        ) && self.local_connection_exists(token)
+        {
+            self.mark_projection_unavailable(resync.attachment_id);
+            self.send_error(token, ErrorCode::ProjectionUnavailable, MessageType::Resync as u16);
         }
     }
 
-    /// Once per tick: for every execution with at least one live
-    /// projection, consumes at most one damage generation and republishes
-    /// every attached projection from the current canonical visible state.
-    /// A capacity-exceeded publish (canonical resize grew beyond the
-    /// current region) triggers `ProjectionReplaced` instead.
-    fn publish_projection_updates(&mut self) {
-        let Some(state) = self.local_ipc.as_ref() else {
-            return;
-        };
-        let execution_ids: Vec<ExecutionId> = state
-            .projections
-            .values()
-            .map(|projection| projection.execution_id)
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect();
-
-        for execution_id in execution_ids {
-            let Some(damage) = self.take_execution_damage(execution_id) else {
-                continue;
-            };
-            let Some(entry) = self.entries.get(&execution_id) else {
-                continue;
-            };
-            let snapshot = producer::full_snapshot(entry.execution.terminal(), damage.generation);
-            let rows = snapshot.rows;
-            let cols = snapshot.columns;
-
+    fn notify_local_ipc_execution_finalized(&mut self, execution_id: ExecutionId) {
+        let notifications = {
             let Some(state) = self.local_ipc.as_mut() else {
                 return;
             };
-            let attachment_ids: Vec<AttachmentId> = state
-                .projections
-                .iter()
-                .filter(|(_, projection)| projection.execution_id == execution_id)
-                .map(|(id, _)| *id)
-                .collect();
-
+            let attachment_ids = state.attachments.remove_all_for_execution(execution_id);
+            let mut notifications = Vec::with_capacity(attachment_ids.len());
             for attachment_id in attachment_ids {
-                let needs_replacement =
-                    state
-                        .projections
-                        .get(&attachment_id)
-                        .is_some_and(|projection| {
-                            rows > projection.capacity_rows || cols > projection.capacity_cols
-                        });
-                if needs_replacement {
-                    replace_projection(state, attachment_id, execution_id, rows, cols, &snapshot);
-                    continue;
+                if let Some(projection) = state.projections.remove(&attachment_id) {
+                    state.aggregate_projection_bytes = state
+                        .aggregate_projection_bytes
+                        .saturating_sub(projection.region.region_bytes());
+                    notifications.push(projection.connection_token);
+                    if let Some(meta) = state.connections.get_mut(&projection.connection_token) {
+                        meta.attachment = None;
+                    }
                 }
-                let Some(projection) = state.projections.get_mut(&attachment_id) else {
+            }
+            notifications
+        };
+        for token in notifications {
+            let message = framing::LifecycleMessage {
+                execution_id,
+                lifecycle: framing::Lifecycle::Finalized,
+            };
+            let frame = framing::encode_frame(MessageType::Lifecycle, &message.encode());
+            if self.send_mandatory_frame(token, frame, None)
+                && let Some(state) = self.local_ipc.as_mut()
+            {
+                state.server.set_state(token, LocalIpcConnState::Ready);
+            }
+        }
+    }
+
+    fn publish_projection_updates(&mut self) {
+        let mut execution_ids = [None; MAX_LIVE_ATTACHMENTS];
+        let mut execution_count = 0usize;
+        if let Some(state) = self.local_ipc.as_ref() {
+            for projection in state.projections.values() {
+                if !execution_ids[..execution_count]
+                    .iter()
+                    .any(|value| *value == Some(projection.execution_id))
+                    && execution_count < execution_ids.len()
+                {
+                    execution_ids[execution_count] = Some(projection.execution_id);
+                    execution_count += 1;
+                }
+            }
+        }
+
+        for execution_id in execution_ids[..execution_count].iter().flatten().copied() {
+            let update = self
+                .entries
+                .get_mut(&execution_id)
+                .and_then(|entry| entry.execution.take_projection_update());
+            let Some(update) = update else {
+                continue;
+            };
+            let snapshot = producer::from_execution(update);
+            let mut attachment_ids = [None; MAX_LIVE_ATTACHMENTS];
+            let mut attachment_count = 0usize;
+            if let Some(state) = self.local_ipc.as_ref() {
+                for (&attachment_id, projection) in &state.projections {
+                    if projection.execution_id == execution_id
+                        && attachment_count < attachment_ids.len()
+                    {
+                        attachment_ids[attachment_count] = Some(attachment_id);
+                        attachment_count += 1;
+                    }
+                }
+            }
+
+            for attachment_id in attachment_ids[..attachment_count].iter().flatten().copied() {
+                let projection_meta = self.local_ipc.as_ref().and_then(|state| {
+                    state.projections.get(&attachment_id).map(|projection| {
+                        (
+                            projection.connection_token,
+                            projection.capacity_rows,
+                            projection.capacity_cols,
+                            projection.projection_id,
+                        )
+                    })
+                });
+                let Some((token, capacity_rows, capacity_cols, projection_id)) = projection_meta else {
                     continue;
                 };
-                if let Ok(generation) = projection.writer.publish(&snapshot.as_snapshot_write()) {
+                if snapshot.rows > capacity_rows || snapshot.columns > capacity_cols {
+                    if !self.install_projection_replacement(
+                        attachment_id,
+                        execution_id,
+                        token,
+                        &snapshot,
+                    ) {
+                        self.mark_projection_unavailable(attachment_id);
+                    }
+                    continue;
+                }
+                let generation = self.local_ipc.as_mut().and_then(|state| {
+                    state
+                        .projections
+                        .get_mut(&attachment_id)
+                        .and_then(|projection| {
+                            projection
+                                .writer
+                                .publish(&snapshot.as_snapshot_write())
+                                .ok()
+                        })
+                });
+                if let Some(generation) = generation {
                     let wake = WireGenerationWake {
                         attachment_id,
-                        projection_id: projection.projection_id,
+                        projection_id,
                         committed_generation: generation,
                     };
                     let frame = framing::encode_frame(MessageType::GenerationWake, &wake.encode());
-                    let _ = state.server.enqueue(projection.token, frame, None);
+                    let _ = self.send_wake_frame(token, frame);
                 }
             }
         }
     }
+
+    fn projection_budget_allows(&self, replaced_bytes: usize, new_bytes: usize) -> bool {
+        let current = self
+            .local_ipc
+            .as_ref()
+            .map_or(0, |state| state.aggregate_projection_bytes);
+        current
+            .saturating_sub(replaced_bytes)
+            .checked_add(new_bytes)
+            .is_some_and(|total| total <= MAX_AGGREGATE_PROJECTION_BYTES)
+    }
+
+    fn install_projection_replacement(
+        &mut self,
+        attachment_id: AttachmentId,
+        execution_id: ExecutionId,
+        token: u64,
+        snapshot: &producer::OwnedSnapshot,
+    ) -> bool {
+        let old_bytes = self
+            .local_ipc
+            .as_ref()
+            .and_then(|state| state.projections.get(&attachment_id))
+            .map_or(0, |projection| projection.region.region_bytes());
+        let Ok((mut projection, committed_generation)) =
+            build_projection(attachment_id, execution_id, token, snapshot)
+        else {
+            return false;
+        };
+        let new_bytes = projection.region.region_bytes();
+        if !self.projection_budget_allows(old_bytes, new_bytes) {
+            return false;
+        }
+        let Some(reader_fd) = projection.region.take_reader_fd() else {
+            return false;
+        };
+        let message = WireProjectionReplaced {
+            execution_id,
+            attachment_id,
+            projection_id: projection.projection_id,
+            committed_generation,
+            region_bytes: new_bytes as u64,
+            capacity_rows: projection.capacity_rows,
+            capacity_cols: projection.capacity_cols,
+        };
+        let frame = framing::encode_frame(MessageType::ProjectionReplaced, &message.encode());
+        if !self.send_mandatory_frame(token, frame, Some(reader_fd)) {
+            return false;
+        }
+        let Some(state) = self.local_ipc.as_mut() else {
+            return false;
+        };
+        if state
+            .attachments
+            .replace_projection(attachment_id, projection.projection_id)
+            .is_err()
+        {
+            return false;
+        }
+        let replaced = state.projections.insert(attachment_id, projection);
+        if let Some(old) = replaced {
+            state.aggregate_projection_bytes = state
+                .aggregate_projection_bytes
+                .saturating_sub(old.region.region_bytes());
+        }
+        state.aggregate_projection_bytes += new_bytes;
+        true
+    }
+
+    fn mark_projection_unavailable(&mut self, attachment_id: AttachmentId) {
+        let Some(state) = self.local_ipc.as_mut() else {
+            return;
+        };
+        if let Some(old) = state.projections.remove(&attachment_id) {
+            state.aggregate_projection_bytes = state
+                .aggregate_projection_bytes
+                .saturating_sub(old.region.region_bytes());
+        }
+    }
 }
 
-fn align_up(value: usize, alignment: usize) -> usize {
-    value.div_ceil(alignment) * alignment
+#[cfg(target_os = "macos")]
+fn align_up(value: usize, alignment: usize) -> Option<usize> {
+    value.checked_add(alignment - 1).map(|v| v / alignment * alignment)
 }
 
-fn slot_stride_for(capacity_rows: u16, capacity_cols: u16) -> u64 {
+#[cfg(target_os = "macos")]
+fn projection_geometry(rows: u16, cols: u16) -> Result<(u16, u16, u64, u64), ()> {
     use crate::projection::layout::{CELL_LEN, DAMAGE_LEN, SLOT_HEADER_LEN};
-    let cell_bytes = capacity_rows as usize * capacity_cols as usize * CELL_LEN;
-    let damage_bytes = capacity_rows as usize * DAMAGE_LEN;
-    align_up(SLOT_HEADER_LEN + cell_bytes + damage_bytes, 64) as u64
+    if rows == 0 || cols == 0 || rows > MAX_CAPACITY_ROWS || cols > MAX_CAPACITY_COLS {
+        return Err(());
+    }
+    let cell_bytes = (rows as usize)
+        .checked_mul(cols as usize)
+        .and_then(|count| count.checked_mul(CELL_LEN))
+        .ok_or(())?;
+    let damage_bytes = (rows as usize).checked_mul(DAMAGE_LEN).ok_or(())?;
+    let stride = SLOT_HEADER_LEN
+        .checked_add(cell_bytes)
+        .and_then(|value| value.checked_add(damage_bytes))
+        .and_then(|value| align_up(value, 64))
+        .ok_or(())?;
+    let region_bytes = REGION_HEADER_LEN
+        .checked_add(stride.checked_mul(2).ok_or(())?)
+        .ok_or(())?;
+    if region_bytes as u64 > MAX_REGION_BYTES {
+        return Err(());
+    }
+    Ok((rows, cols, stride as u64, region_bytes as u64))
 }
 
+#[cfg(target_os = "macos")]
 fn build_projection(
     attachment_id: AttachmentId,
     execution_id: ExecutionId,
-    rows: u16,
-    cols: u16,
-    terminal: &seyal_terminal::TerminalState,
+    connection_token: u64,
+    snapshot: &producer::OwnedSnapshot,
 ) -> Result<(ProjectionEntry, u64), ()> {
-    let capacity_rows = rows.clamp(1, MAX_CAPACITY_ROWS);
-    let capacity_cols = cols.clamp(1, MAX_CAPACITY_COLS);
-    let slot_stride = slot_stride_for(capacity_rows, capacity_cols);
-    let region_bytes = REGION_HEADER_LEN as u64 + 2 * slot_stride;
+    let (capacity_rows, capacity_cols, slot_stride, region_bytes) =
+        projection_geometry(snapshot.rows, snapshot.columns)?;
     let projection_id = ProjectionId::new();
     let region_header = RegionHeader {
         region_bytes,
@@ -1383,95 +1617,19 @@ fn build_projection(
     let region = ProjectionRegion::create(&region_header).map_err(|_| ())?;
     let memory = region.writer_memory();
     let mut writer = Writer::new(memory, region_header).map_err(|_| ())?;
-    let damage_generation = terminal.damage_generation();
-    let snapshot = producer::full_snapshot(terminal, damage_generation);
     let generation = writer
         .publish(&snapshot.as_snapshot_write())
         .map_err(|_| ())?;
     Ok((
         ProjectionEntry {
             execution_id,
-            token: 0,
-            region,
+            connection_token,
             writer,
+            region,
             projection_id,
             capacity_rows,
             capacity_cols,
         },
         generation,
     ))
-}
-
-fn replace_projection(
-    state: &mut LocalIpcState,
-    attachment_id: AttachmentId,
-    execution_id: ExecutionId,
-    rows: u16,
-    cols: u16,
-    snapshot: &producer::OwnedSnapshot,
-) {
-    let Some(existing) = state.projections.get(&attachment_id) else {
-        return;
-    };
-    let token = existing.token;
-    let capacity_rows = rows.clamp(1, MAX_CAPACITY_ROWS);
-    let capacity_cols = cols.clamp(1, MAX_CAPACITY_COLS);
-    let slot_stride = slot_stride_for(capacity_rows, capacity_cols);
-    let region_bytes = REGION_HEADER_LEN as u64 + 2 * slot_stride;
-    let projection_id = ProjectionId::new();
-    let region_header = RegionHeader {
-        region_bytes,
-        execution_id: u128::from_le_bytes(execution_id.to_bytes()),
-        attachment_id: u128::from_le_bytes(attachment_id.to_bytes()),
-        projection_id: u128::from_le_bytes(projection_id.to_bytes()),
-        slot_stride,
-        slot0_offset: REGION_HEADER_LEN as u64,
-        capacity_rows,
-        capacity_cols,
-    };
-    let Ok(region) = ProjectionRegion::create(&region_header) else {
-        let _ = state
-            .attachments
-            .replace_projection(attachment_id, projection_id);
-        return;
-    };
-    let memory = region.writer_memory();
-    let Ok(mut writer) = Writer::new(memory, region_header) else {
-        return;
-    };
-    let Ok(committed_generation) = writer.publish(&snapshot.as_snapshot_write()) else {
-        return;
-    };
-    let mut region = region;
-    let Some(reader_fd) = region.take_reader_fd() else {
-        return;
-    };
-
-    let _ = state
-        .attachments
-        .replace_projection(attachment_id, projection_id);
-    state.projections.insert(
-        attachment_id,
-        ProjectionEntry {
-            execution_id,
-            token,
-            region,
-            writer,
-            projection_id,
-            capacity_rows,
-            capacity_cols,
-        },
-    );
-
-    let message = WireProjectionReplaced {
-        execution_id,
-        attachment_id,
-        projection_id,
-        committed_generation,
-        region_bytes,
-        capacity_rows,
-        capacity_cols,
-    };
-    let frame = framing::encode_frame(MessageType::ProjectionReplaced, &message.encode());
-    let _ = state.server.enqueue(token, frame, Some(reader_fd));
 }

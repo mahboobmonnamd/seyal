@@ -136,11 +136,7 @@ impl ExecutionReactor {
         &mut self,
         execution: &TerminalExecution,
     ) -> Result<RegistrationToken, ExecError> {
-        self.register_identifiers(
-            execution.reactor_fd(),
-            execution.child_id() as i32,
-            true,
-        )
+        self.register_identifiers(execution.reactor_fd(), execution.child_id() as i32, true)
     }
 
     fn register_identifiers(
@@ -460,11 +456,7 @@ mod tests {
             let mut reactor = ExecutionReactor::new().unwrap();
             let mut execution = spawn_sleep();
             let fd = execution.reactor_fd();
-            assert!(
-                reactor
-                    .register_identifiers(fd, i32::MAX, false)
-                    .is_err()
-            );
+            assert!(reactor.register_identifiers(fd, i32::MAX, false).is_err());
             assert!(reactor.slots.iter().all(|slot| !slot.active));
 
             let token = reactor.register(&execution).unwrap();

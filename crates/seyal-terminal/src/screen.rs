@@ -368,10 +368,7 @@ impl Screen {
         Mutation::row(row)
     }
 
-    fn line_feed(
-        &mut self,
-        line_ids: &mut LineIdAllocator,
-    ) -> Result<Mutation, TerminalError> {
+    fn line_feed(&mut self, line_ids: &mut LineIdAllocator) -> Result<Mutation, TerminalError> {
         let old = self.cursor.row;
         self.cursor.pending_wrap = false;
         if self.cursor.row < self.rows - 1 {

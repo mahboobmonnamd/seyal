@@ -87,6 +87,7 @@ impl TerminalExecution {
         self.endpoint.terminate(policy)
     }
 
+    #[cfg(target_os = "macos")]
     pub(crate) fn reactor_fd(&self) -> i32 {
         self.endpoint.master_fd()
     }

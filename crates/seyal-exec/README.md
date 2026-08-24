@@ -1,26 +1,53 @@
-# `seyal-exec`
+# seyal-exec
 
-`seyal-exec` is the M001 ownership boundary for terminal execution: PTY/endpoint ownership, child lifecycle and the future `TerminalExecution` composition that consumes the authoritative `seyal-terminal::TerminalState`.
+`seyal-exec` is Seyal OSS's terminal-execution ownership boundary.
 
-This crate is created by Issue #28 because PTY/process ownership is now a real physical boundary. The initial scaffold intentionally contains **no fake PTY implementation, no placeholder public API and no no-op tests**. Public types and executable behavior tests are added only with the behavior they implement.
+For M001 it owns:
 
-## Dependency direction
+- one macOS POSIX PTY endpoint/master;
+- the primary child/session/process-group lifecycle;
+- nonblocking byte I/O and poll-based readiness;
+- PTY window-size operations;
+- explicit bounded termination/reap behavior;
+- `TerminalExecution`, which couples that endpoint to exactly one authoritative
+  `seyal_terminal::TerminalState`.
 
-```text
-seyal-terminal
-      ↑
-  seyal-exec
-```
+It deliberately does **not** own a second parser/grid, renderer state, Blocks,
+GUI lifetime, Runtime attachment orchestration, persistence, cloud/licensing or
+commercial behavior.
 
-`seyal-terminal` must never depend on `seyal-exec`. `seyal-exec` must not depend on renderer, workspace, runtime, GUI, commercial or agent code.
+## Platform and unsafe boundary
 
-## Module responsibilities
+M001 production PTY support is macOS-only. Direct Darwin/POSIX FFI is confined
+to `src/platform/macos.rs`, which is the only production module allowed to use
+unsafe code. The public and ownership layers above it are safe Rust.
 
-- `execution` — future composition boundary for endpoint + child lifecycle + authoritative terminal state; no duplicate VT/grid.
-- `endpoint` — PTY master ownership and descriptor encapsulation.
-- `child` — child/session/process-group lifecycle, wait/reap and exit classification.
-- `readiness` — nonblocking readiness and bounded read/write coordination; no busy wait.
-- `winsize` — PTY size contract and resize behavior.
-- `platform` — smallest internal OS-specific syscall seam; macOS first.
+The only external dependency added for this boundary is the Rust `libc` binding
+crate. It is used for Darwin/POSIX ABI definitions; it is not a terminal engine,
+runtime framework or event loop.
 
-The exact implementation mechanism is intentionally not scaffolded. RILL remains behavioral evidence only; the implementation must be revalidated against ADR-005, SPEC-002 and current macOS/POSIX behavior before code is salvaged.
+## Environment
+
+`CommandSpec` inherits the caller environment by default or can clear it
+explicitly and add selected values. Seyal does not silently inject `TERM`,
+`SEYAL_INSIDE`, legacy `RILL_*` variables or shell configuration.
+
+A future TERM capability claim must be justified by the VT compatibility
+milestone rather than hidden in the PTY layer.
+
+## I/O
+
+The master is nonblocking. `read`/`write` expose partial progress and
+would-block explicitly. `write_all_bounded` requires the caller to supply its
+timeout. Readiness uses `poll`, never `select`, and the master descriptor is
+never exposed as public API.
+
+## Lifecycle
+
+Natural exit and signal exit are represented separately. Explicit termination
+requires a caller-supplied `TerminationPolicy`; it first targets the verified
+owned process group with SIGTERM, then escalates to SIGKILL only after the
+supplied grace period, and uses a separate supplied reap bound.
+
+Detach is not represented by dropping this execution. The later Runtime keeps
+`TerminalExecution` alive while GUI/client attachments come and go.

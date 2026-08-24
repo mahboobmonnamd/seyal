@@ -1,111 +1,180 @@
 # ADR-005 — PTY endpoint and child lifecycle ownership
 
-- **Status:** Accepted for M001 implementation
+- **Status:** Accepted
 - **Date:** 2026-08-24
 - **Issue:** #28
 - **Scope:** local terminal execution ownership on macOS
 
 ## Context
 
-M001 now has a permanent `seyal-terminal` VT/state implementation. The next vertical slice must add the real POSIX terminal endpoint and child lifecycle without reintroducing the architectural failures that Seyal is explicitly avoiding: GUI-owned PTYs, duplicate terminal engines, synchronous language/process round trips, accidental terminate-on-detach behavior, or a large RILL-derived kernel module copied wholesale.
+M001 has Seyal's permanent `seyal-terminal` VT/state implementation. The next
+slice needs a real PTY and child lifecycle without recreating RILL's kernel
+coupling, GUI-owned lifetime, duplicate terminal state, synchronous language
+round trips, or oversized PTY modules.
 
-RILL is useful evidence for individual PTY behaviors, but it is not architectural authority. Seyal owns the production execution architecture.
+RILL is reviewed behavior evidence only. Seyal architecture and SPEC-002 are
+authority.
 
 ## Decision
 
-Create `seyal-exec` as the physical ownership boundary for terminal execution.
-
-The authoritative ownership chain for a local terminal execution is:
+Create `seyal-exec` as the physical execution boundary:
 
 ```text
 TerminalExecution
   ├─ exactly one TerminalEndpoint / PTY master
-  ├─ exactly one owned child lifecycle
+  ├─ exactly one primary child/session/process-group lifecycle
   └─ exactly one authoritative seyal-terminal::TerminalState
 ```
 
-`seyal-exec` consumes `seyal-terminal`. `seyal-terminal` never depends on process/PTY ownership.
+`seyal-exec → seyal-terminal` is allowed. The reverse dependency is forbidden.
 
-### 1. Endpoint ownership
+### Endpoint ownership
 
-The execution side owns the PTY master for the full live-execution lifetime. The GUI, renderer, Block system and attachments do not own or duplicate it.
+The execution owner retains the PTY master for the whole live execution.
+Attachments, GUI, renderer and Blocks never own it. The descriptor is private;
+public callers receive operations and value state, not a raw-fd escape hatch.
 
-The raw master descriptor remains encapsulated inside the endpoint implementation. Public callers receive operations/value state, not an unrestricted descriptor escape hatch.
+### Child/session ownership
 
-### 2. Child lifecycle
+The child calls `setsid` and acquires the PTY slave as controlling terminal
+before `exec`. The resulting session/process group is owned by the
+`TerminalExecution`. Natural exit and signal exit remain distinct and reap is
+idempotent.
 
-The execution side owns child identity, session/process-group state, wait/reap state and exit classification.
+Before explicit group signaling, Seyal verifies that the live child's process
+group still matches the group created for the execution. Once the child is
+reaped, signaling is never attempted again.
 
-Natural exit, signaled exit and explicit termination remain distinguishable. Signaling must be based on currently owned lifecycle identity; code must not blindly signal a stale/reused PID or process group after ownership has ended.
+### Detach is not terminate
 
-### 3. Detach is not terminate
+Detach is a later Runtime attachment transition. It does not close the
+execution-owned PTY and does not signal the child. The Runtime must keep the
+`TerminalExecution` alive while zero GUI clients are attached.
 
-A client/GUI detach removes an attachment to a live `TerminalExecution`; it does not drop execution ownership and it does not signal the child.
+Dropping the actual execution owner is therefore not the detach API.
 
-Closing the execution-owned PTY is therefore **not** the detach mechanism. The later Runtime keeps the execution object alive while attachments come and go.
+### Nonblocking I/O
 
-Explicit termination is a separate operation and must be intentional, bounded and followed by correct reap/exit handling.
+The master is nonblocking. Reads and writes represent partial progress and
+would-block. Readiness uses `poll`, never `select`, so descriptor numbers above
+`FD_SETSIZE` remain valid.
 
-### 4. Nonblocking I/O and readiness
+No permanent thread per PTY is required. No JSON, serialization, Swift callback,
+agent, persistence, cloud, licensing or Block operation participates in byte
+progress.
 
-The PTY master is nonblocking. Read/write progress uses OS readiness rather than busy waiting and must not rely on `select`/`FD_SETSIZE` assumptions.
+A bounded write helper is allowed only when the caller supplies the timeout.
 
-The execution abstraction must not require one permanent thread per PTY. It must remain compatible with the later Runtime event loop/worker strategy without embedding that Runtime now.
+### Terminal-state relationship
 
-No JSON, serialization, agent call, persistence call, cloud/licensing check, Block semantic extraction or Swift callback may be inserted into PTY byte progress.
+PTY output bytes feed the existing `seyal-terminal::TerminalState` directly.
+`seyal-exec` does not create a parser, grid, transcript engine or renderer
+mirror.
 
-### 5. Terminal-state relationship
+### Resize
 
-PTY output bytes are delivered to the already authoritative `seyal-terminal::TerminalState`. `seyal-exec` must not own another parser, grid, transcript engine or renderer state.
+The endpoint owns `TIOCSWINSZ`/`TIOCGWINSZ`. Valid sizes have nonzero rows and
+columns. The normal kernel SIGWINCH behavior is preserved; no renderer-owned
+dimension authority is introduced.
 
-The execution layer may coordinate byte delivery and lifecycle; terminal semantics stay in `seyal-terminal`.
+### macOS platform seam and unsafe policy
 
-### 6. Resize
+M001 implements macOS only. Direct Darwin/POSIX FFI is confined to
+`src/platform/macos.rs`. That module is the sole production unsafe-code
+exception in `seyal-exec`; the crate remains `unsafe_code = "deny"` everywhere
+else.
 
-PTY resize belongs to the execution endpoint. The contract is that the kernel/child observes the requested terminal size and conventional resize signaling behavior required by SPEC-002. The renderer does not own PTY dimensions.
+This narrow exception is justified because controlling-terminal setup requires
+operations such as `openpty`, `setsid`, `ioctl`, `poll`, `fcntl`, `getpgid` and
+`kill`. Hiding them behind a larger PTY/runtime framework would add a stronger
+dependency and obscure ownership without removing the underlying OS contract.
 
-### 7. Platform seam
+The implementation uses the Rust `libc` binding crate only for ABI declarations
+and constants. It is not a terminal engine or architecture dependency.
 
-macOS is implemented first. The platform seam remains internal and narrow: endpoint creation, controlling-terminal/session setup, nonblocking flags/readiness, window size, signaling and wait/reap operations.
+### PTY creation choice
 
-Do not create a cross-platform PTY framework before another platform is active. Future Linux may share POSIX code where evidence supports it; Windows/ConPTY is a separate platform implementation.
+Use Darwin `openpty` for the macOS M001 implementation, followed by explicit
+close-on-exec and nonblocking configuration of the master. The slave retains
+normal interactive line discipline; production code does not expose RILL's
+test-oriented `Raw` discipline switch.
 
-### 8. Implementation mechanism is not fixed by scaffolding
+This is intentionally macOS-local. Do not create a generic POSIX abstraction
+until Linux is an active target.
 
-This ADR does **not** preselect `openpty` vs `posix_openpt`, a specific syscall wrapper crate, or a spawn/fork helper before the RILL salvage review and macOS API review. Those are implementation choices unless they alter the ownership, detach, lifecycle, safety or performance decisions above.
+### Environment choice
 
-The workspace currently forbids unsafe code in Seyal crates. If direct unsafe FFI is proposed, the Issue must explicitly justify a change to that policy. Prefer a reviewed safe syscall abstraction when it satisfies the required semantics without hidden architecture cost.
+The PTY layer does not hard-code `TERM` and does not inject `SEYAL_INSIDE` or
+legacy `RILL_*` markers. `CommandSpec` explicitly chooses inherited vs cleared
+environment and optional overrides.
 
-## Rejected alternatives
+A TERM value becomes a product compatibility claim and belongs to the VT/shell
+compatibility milestone, not to PTY creation convenience.
 
-### PTY owned by the Swift/macOS host
+### Termination policy
 
-Rejected. GUI close/detach would become entangled with execution lifetime, headless operation becomes harder, and terminal progress would cross the language boundary unnecessarily.
+Explicit termination is separate from detach and requires a caller-supplied
+`TerminationPolicy` containing:
 
-### PTY owned by `seyal-terminal`
+- SIGTERM grace duration;
+- post-SIGKILL reap duration.
 
-Rejected. VT/grid semantics and process/descriptor ownership are different responsibilities and portability boundaries.
+No hidden two-second or other arbitrary product timeout is embedded in the PTY
+layer. During termination only, a short bounded sleep is used between
+nonblocking `try_wait` checks; this is not a terminal I/O hot-path loop.
 
-### PTY owned by a Block/session presentation object
+The verified owned process group receives SIGTERM first. If it does not exit
+inside the supplied grace period, the same verified group receives SIGKILL.
+The child is then reaped within the supplied bound or termination reports a
+timeout.
 
-Rejected. Blocks are presentations/history metadata over the same execution and must never create or own another PTY.
+## RILL salvage decisions
 
-### Copy RILL PTY/kernel module wholesale
+### Preserved after validation
 
-Rejected. We salvage validated behavior only. Seyal uses its own names, ownership, error model, module decomposition and tests; known `select`, timeout, teardown or daemon-coupling assumptions are not inherited automatically.
+- execution side owns the PTY;
+- `setsid` + controlling-terminal setup;
+- nonblocking master I/O;
+- `poll` instead of `select`;
+- signal-aware child exit classification;
+- explicit termination distinct from detach;
+- bounded termination/reap;
+- kernel PTY window-size operations;
+- no public master descriptor.
 
-### Drop means terminate
+### Corrected / redesigned
 
-Rejected. It conflicts with the persistence/detach wedge and makes attachment/UI lifetime unsafe as an execution lifetime signal.
+- split endpoint, child, readiness, winsize, command, execution and platform
+  responsibilities instead of one PTY/kernel module;
+- no `poll_with_extras` API that couples the PTY to future Runtime socket
+  polling;
+- no hard-coded two-second write timeout;
+- no immediate unconditional SIGKILL;
+- verify the owned process group before signaling;
+- no hard-coded `TERM`;
+- no production raw-line-discipline toggle used to support tests;
+- unsafe code is isolated to one Darwin module;
+- PTY bytes feed Seyal's existing authoritative `TerminalState`.
+
+### Rejected / deferred
+
+- RILL names and `RILL_INSIDE`;
+- RILL `Session`/daemon/socket ownership;
+- cwd vnode taps;
+- mutation features/test hooks in production code;
+- Linux/Windows implementation;
+- Runtime attachment/reconnect/persistence behavior;
+- renderer/Blocks/agent behavior.
 
 ## Consequences
 
-- `crates/seyal-exec` becomes the second physical Rust production crate in M001.
-- The crate depends downward on `seyal-terminal` only among current Seyal production crates.
-- PTY behavior tests must be real macOS/process tests, not mocked green scaffolding.
-- Runtime/daemon/attachment orchestration remains out of scope; this ADR leaves a clean ownership seam for it.
-- The implementation PR must list RILL behavior preserved, corrected, deferred and rejected.
+`seyal-exec` is the second physical production Rust crate in M001. The platform
+module becomes a small audited unsafe boundary, while all execution-facing APIs
+remain safe Rust. Runtime and native UI can later compose this crate without
+becoming PTY owners.
 
 ## Reopen conditions
 
-Revisit this ADR only if measured/correctness evidence shows the ownership boundary itself is wrong, or a target platform fundamentally cannot preserve the same execution semantics. Library/API convenience alone is not sufficient.
+Revisit only if correctness/performance/platform evidence shows that this
+ownership or syscall boundary cannot satisfy a real target. Library convenience
+alone is not sufficient.

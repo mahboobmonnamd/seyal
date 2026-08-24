@@ -31,9 +31,9 @@ if not isinstance(members, list) or not members:
 if len(members) != len(set(members)):
     fail("workspace members must be unique")
 if "crates/seyal-terminal" not in members:
-    fail("seyal-terminal must be the first physical M001 ownership boundary")
+    fail("seyal-terminal must be a physical M001 ownership boundary")
 if "crates/seyal-exec" not in members:
-    fail("seyal-exec must be present once Issue #28 creates the PTY/child ownership boundary")
+    fail("Issue #28 requires seyal-exec as the PTY/child ownership boundary")
 
 for member in members:
     member_manifest = ROOT / member / "Cargo.toml"
@@ -57,7 +57,7 @@ terminal_package = terminal_data.get("package", {})
 if terminal_package.get("name") != "seyal-terminal":
     fail("terminal package must be named seyal-terminal")
 if terminal_package.get("publish") is not False:
-    fail("M001 scaffold crates must not be publishable packages")
+    fail("M001 crates must not be publishable packages")
 
 if not EXEC_MANIFEST.is_file():
     fail("missing crates/seyal-exec/Cargo.toml")
@@ -66,14 +66,29 @@ exec_package = exec_data.get("package", {})
 if exec_package.get("name") != "seyal-exec":
     fail("execution package must be named seyal-exec")
 if exec_package.get("publish") is not False:
-    fail("M001 scaffold crates must not be publishable packages")
+    fail("M001 crates must not be publishable packages")
 
-exec_terminal = exec_data.get("dependencies", {}).get("seyal-terminal")
-if not isinstance(exec_terminal, dict) or exec_terminal.get("path") != "../seyal-terminal":
-    fail("seyal-exec must consume seyal-terminal through the local downward dependency")
+exec_dependencies = exec_data.get("dependencies", {})
+if set(exec_dependencies) != {"seyal-terminal"}:
+    fail("seyal-exec must depend on exactly seyal-terminal among portable dependencies")
+terminal_dependency = exec_dependencies["seyal-terminal"]
+if not isinstance(terminal_dependency, dict) or terminal_dependency.get("path") != "../seyal-terminal":
+    fail("seyal-exec must consume seyal-terminal through the local workspace path")
 
-terminal_dependencies = terminal_data.get("dependencies", {})
-if "seyal-exec" in terminal_dependencies:
-    fail("seyal-terminal must never depend on seyal-exec")
+macos_dependencies = exec_data.get("target", {}).get("cfg(target_os = \"macos\")", {}).get(
+    "dependencies", {}
+)
+if set(macos_dependencies) != {"libc"}:
+    fail("seyal-exec macOS platform boundary may depend only on libc in M001")
+if macos_dependencies["libc"] != "0.2.189":
+    fail("seyal-exec must pin the reviewed libc 0.2.189 dependency requirement")
+
+exec_src = ROOT / "crates" / "seyal-exec" / "src"
+if not exec_src.is_dir():
+    fail("seyal-exec source directory is missing")
+for path in sorted(exec_src.rglob("*.rs")):
+    text = path.read_text(encoding="utf-8")
+    if "RILL_" in text:
+        fail(f"legacy RILL environment identifier found in {path.relative_to(ROOT)}")
 
 print("[seyal workspace test] workspace ownership scaffold invariants passed.")

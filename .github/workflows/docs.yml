@@ -1,0 +1,39 @@
+name: Docs
+
+on:
+  pull_request:
+    paths:
+      - 'site/**'
+      - '.agents/skills/docs-authoring/**'
+      - '.agents/skills/docs-validation/**'
+      - '.github/workflows/docs.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'site/**'
+      - '.agents/skills/docs-authoring/**'
+      - '.agents/skills/docs-validation/**'
+      - '.github/workflows/docs.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+          cache: npm
+          cache-dependency-path: site/package.json
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Build documentation
+        run: npm run check

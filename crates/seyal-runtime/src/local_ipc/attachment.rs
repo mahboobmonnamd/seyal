@@ -124,6 +124,17 @@ impl AttachmentRegistry {
         self.detach(attachment_id)
     }
 
+    pub fn attachments_with_connections_for_execution(
+        &self,
+        execution_id: ExecutionId,
+    ) -> Vec<(AttachmentId, u64)> {
+        self.attachments
+            .iter()
+            .filter(|(_, record)| record.execution_id == execution_id)
+            .map(|(id, record)| (*id, record.connection_token))
+            .collect()
+    }
+
     pub fn remove_all_for_execution(&mut self, execution_id: ExecutionId) -> Vec<AttachmentId> {
         let ids: Vec<AttachmentId> = self
             .attachments
@@ -362,6 +373,26 @@ mod tests {
             registry.create_attachment(exec(1), Role::Observer, proj(12), 3),
             Err(AttachmentError::CapacityExceeded)
         );
+    }
+
+    #[test]
+    fn attachment_connection_enumeration_survives_missing_projection_state() {
+        let mut registry = AttachmentRegistry::new();
+        let controller = registry
+            .create_attachment(exec(1), Role::Controller, proj(10), 7)
+            .unwrap();
+        let observer = registry
+            .create_attachment(exec(1), Role::Observer, proj(11), 8)
+            .unwrap();
+        let unrelated = registry
+            .create_attachment(exec(2), Role::Observer, proj(20), 9)
+            .unwrap();
+        let mut found = registry.attachments_with_connections_for_execution(exec(1));
+        found.sort_by_key(|(id, _)| id.to_string());
+        let mut expected = vec![(controller, 7), (observer, 8)];
+        expected.sort_by_key(|(id, _)| id.to_string());
+        assert_eq!(found, expected);
+        assert_eq!(registry.execution_of(unrelated), Ok(exec(2)));
     }
 
     #[test]

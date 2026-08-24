@@ -25,7 +25,8 @@ The accepted terminal architecture remains unchanged.
 | Term | Meaning | Important non-meaning |
 |---|---|---|
 | `WorkItem` | Durable statement of an intended engineering outcome. May be decomposed. | Not a process, terminal, prompt or model call. |
-| `Attempt` | One bounded try to satisfy a WorkItem under a routing decision and retry budget. | Not an upstream harness session identity. |
+| `Attempt` | One bounded try to satisfy a WorkItem under a routing decision and retry budget. | Not an upstream harness session identity and not the durable final outcome. |
+| `AttemptDisposition` | Evaluation-policy disposition of one Attempt, for example `accepted_candidate`, `rejected`, `inconclusive`, `cancelled`, `interrupted`, or `superseded`. | Not the final WorkItem Outcome; retries never overwrite prior Attempt dispositions. |
 | `AgentRun` | One Seyal-observed execution of an agent/harness for an Attempt. Owns run lifecycle metadata and references executions/events. | Does not own PTY/VT/grid/render state. |
 | `AgentProfile` | Optional user-defined role/configuration such as reviewer or tester. | A mandatory anthropomorphic `Agent` entity is deliberately rejected for the foundation. |
 | `HarnessAdapter` | Seyal integration with an external/local agent harness. | Not the agent process itself. |
@@ -40,8 +41,8 @@ The accepted terminal architecture remains unchanged.
 | `Artifact` | Versioned output/reference produced by work: diff, patch, file, report, log summary, etc. | Does not imply acceptance or success. |
 | `RunEvent` | Versioned event envelope describing lifecycle, tool/approval/artifact/usage observations. | No single global total order is required. |
 | `EvaluationObservation` | Evidence from an evaluator, test, CI, reviewer, process or provider with provenance/trust. | Agent self-report is not authoritative success. |
-| `Evaluation` | Verdict over one or more observations, allowed to be inconclusive. | Not identical to run completion. |
-| `Outcome` | Accepted result state of a WorkItem/Attempt after evaluation policy. | `completed` process state is not automatically `successful`. |
+| `Evaluation` | Verdict over one or more observations, allowed to be inconclusive. | Not identical to run completion or WorkItem acceptance. |
+| `Outcome` | Final durable state of a WorkItem after acceptance policy, for example `accepted`, `rejected`, `unresolved`, or `abandoned`, with references to decisive Attempts/Evaluations where applicable. | An individual Attempt does not own a WorkItem Outcome; `completed` process state is not automatically `accepted`. |
 | `CostEvent` | Factual resource/usage record such as tokens, cache tokens, compute duration or provider-reported cost. | Not a marketing ROI estimate. |
 | `RoutingDecision` | Candidate set, hard filters, precedence, scores/reasons, chosen route and fallback chain. | Not necessarily ML/LLM based. |
 | `Workflow` | Versioned local DAG definition. | Not an organization fleet service. |
@@ -60,9 +61,11 @@ Current coding harnesses disagree about what an "agent" is: a CLI process, a res
 
 ```text
 WorkItem
+  ├─ Outcome 0..1                 # final durable WorkItem state
   └─ Attempt 1..N
+       ├─ AttemptDisposition      # per-attempt disposition; never overwrites siblings
        └─ RoutingDecision
-            └─ AgentRun 1..N          # N permits deliberate parallel candidates
+            └─ AgentRun 1..N      # N permits deliberate parallel candidates
                  ├─ HarnessSessionRef
                  ├─ ExecutionRef 0..N
                  ├─ RunEvent*
@@ -82,8 +85,10 @@ Rules:
 2. Upstream session IDs are adapter-scoped opaque references and may change format without changing Seyal IDs.
 3. Retry creates a new `Attempt`; reconnect/resume of the same upstream work does not create a retry merely because a client process restarted.
 4. Parallel candidate runs are explicit and budgeted; they are not hidden retries.
-5. Lifecycle state and outcome state are separate. A run can terminate normally while its WorkItem outcome is rejected.
-6. Event ordering is idempotent and monotonic per run/entity where supported; there is no expensive global serializing clock.
+5. Run termination, Evaluation, AttemptDisposition and WorkItem Outcome are separate state dimensions.
+6. Only the WorkItem owns the final `Outcome`. An Attempt may become an `accepted_candidate`, but WorkItem acceptance policy decides whether/when the durable WorkItem becomes `accepted` and records the decisive Attempt/Evaluation references.
+7. A later retry or parallel candidate never rewrites the evidence or disposition of an earlier Attempt.
+8. Event ordering is idempotent and monotonic per run/entity where supported; there is no expensive global serializing clock.
 
 ## Event envelope
 
@@ -216,9 +221,10 @@ This shared model passes R&D when:
 - TerminalExecution remains the only terminal-bearing authority;
 - adapter-specific session IDs remain opaque;
 - event schemas can preserve vendor-specific optional information;
-- commercial services can consume the OSS model without reverse dependency.
+- commercial services can consume the OSS model without reverse dependency;
+- retry/parallel-run evidence remains immutable while one final WorkItem Outcome is derived from explicit acceptance policy.
 
-Rework the model if a child study requires duplicate authoritative state, cannot represent resume/retry/parallel-run distinction, or requires provider-specific fields in core identities.
+Rework the model if a child study requires duplicate authoritative state, cannot represent resume/retry/parallel-run distinction, conflates per-Attempt disposition with WorkItem acceptance, or requires provider-specific fields in core identities.
 
 ## ADR/spec consequence
 

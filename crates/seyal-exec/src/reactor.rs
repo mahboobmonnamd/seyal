@@ -29,6 +29,8 @@ pub enum ReactorEventKind {
     Readable,
     Writable,
     PrimaryExited,
+    AuxiliaryReadable,
+    AuxiliaryWritable,
     Control,
 }
 
@@ -79,6 +81,9 @@ struct Slot {
     generation: u32,
     active: bool,
     fd: i32,
+    /// Primary child PID for an execution registration. `-1` marks a
+    /// Runtime-owned auxiliary descriptor such as the Pass-5 local IPC
+    /// listener/client socket. The reactor never owns or closes either kind.
     pid: i32,
     writable: bool,
 }
@@ -93,6 +98,10 @@ impl Slot {
             pid: -1,
             writable: false,
         }
+    }
+
+    const fn is_auxiliary(self) -> bool {
+        self.pid < 0
     }
 }
 
@@ -125,18 +134,23 @@ impl ExecutionReactor {
         }
     }
 
-    /// Registers the resources of one owned TerminalExecution.
-    ///
-    /// Darwin may report ESRCH if the owned primary exits between spawn and
-    /// EVFILT_PROC registration. In that one case the read registration/token
-    /// is retained so Runtime can perform the mandatory immediate `try_wait`
-    /// reconciliation before publishing the execution. Arbitrary identifier
-    /// registration never receives this exception.
     pub fn register(
         &mut self,
         execution: &TerminalExecution,
     ) -> Result<RegistrationToken, ExecError> {
         self.register_identifiers(execution.reactor_fd(), execution.child_id() as i32, true)
+    }
+
+    /// Registers a Runtime-owned nonblocking descriptor on the same kqueue
+    /// used for PTY/process/control readiness. The reactor only tracks
+    /// readiness; descriptor ownership remains with the Runtime transport.
+    pub fn register_auxiliary(&mut self, fd: i32) -> Result<RegistrationToken, ExecError> {
+        let token = self.allocate_slot(fd, -1);
+        if let Err(error) = crate::platform::register_read(&self.kqueue, fd, token.0) {
+            self.release_slot(token);
+            return Err(error);
+        }
+        Ok(token)
     }
 
     fn register_identifiers(
@@ -201,7 +215,8 @@ impl ExecutionReactor {
         {
             first_error = Some(error);
         }
-        if let Err(error) = crate::platform::deregister_process_exit(&self.kqueue, slot.pid)
+        if !slot.is_auxiliary()
+            && let Err(error) = crate::platform::deregister_process_exit(&self.kqueue, slot.pid)
             && first_error.is_none()
         {
             first_error = Some(error);
@@ -239,16 +254,25 @@ impl ExecutionReactor {
                 continue;
             }
             let token = RegistrationToken(native.token);
-            if self.current_index(token).is_none() {
+            let Some(index) = self.current_index(token) else {
                 continue;
-            }
+            };
+            let slot = self.slots[index];
             let kind = match native.filter {
+                crate::platform::NativeFilter::Read if slot.is_auxiliary() => {
+                    ReactorEventKind::AuxiliaryReadable
+                }
+                crate::platform::NativeFilter::Write if slot.is_auxiliary() => {
+                    ReactorEventKind::AuxiliaryWritable
+                }
                 crate::platform::NativeFilter::Read => ReactorEventKind::Readable,
                 crate::platform::NativeFilter::Write => ReactorEventKind::Writable,
-                crate::platform::NativeFilter::ProcessExit => ReactorEventKind::PrimaryExited,
-                crate::platform::NativeFilter::Control | crate::platform::NativeFilter::Other => {
-                    continue;
+                crate::platform::NativeFilter::ProcessExit if !slot.is_auxiliary() => {
+                    ReactorEventKind::PrimaryExited
                 }
+                crate::platform::NativeFilter::ProcessExit
+                | crate::platform::NativeFilter::Control
+                | crate::platform::NativeFilter::Other => continue,
             };
             output[written] = ReactorEvent {
                 token: Some(token),
@@ -337,6 +361,12 @@ impl ExecutionReactor {
         ))
     }
 
+    pub fn register_auxiliary(&mut self, _fd: i32) -> Result<RegistrationToken, ExecError> {
+        Err(ExecError::UnsupportedPlatform(
+            "ExecutionReactor is implemented for macOS only in M001",
+        ))
+    }
+
     pub fn set_writable(
         &mut self,
         _token: RegistrationToken,
@@ -379,7 +409,7 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     mod macos {
-        use std::time::Duration;
+        use std::{os::fd::AsRawFd, os::unix::net::UnixStream, time::Duration};
 
         use crate::{
             CommandSpec, ExecError, ExecutionReactor, ReactorEvent, ReactorEventKind,
@@ -414,6 +444,24 @@ mod tests {
                     .iter()
                     .any(|event| event.kind == ReactorEventKind::Control)
             );
+        }
+
+        #[test]
+        fn auxiliary_socket_readiness_uses_the_same_kqueue_without_polling() {
+            use std::io::Write;
+            let mut reactor = ExecutionReactor::new().unwrap();
+            let (reader, mut writer) = UnixStream::pair().unwrap();
+            reader.set_nonblocking(true).unwrap();
+            writer.write_all(b"x").unwrap();
+            let token = reactor.register_auxiliary(reader.as_raw_fd()).unwrap();
+            let mut events = [ReactorEvent::EMPTY; 8];
+            let count = reactor
+                .wait(&mut events, Some(Duration::from_secs(1)))
+                .unwrap();
+            assert!(events[..count].iter().any(|event| {
+                event.token == Some(token) && event.kind == ReactorEventKind::AuxiliaryReadable
+            }));
+            reactor.deregister(token).unwrap();
         }
 
         #[test]
@@ -458,7 +506,6 @@ mod tests {
             let fd = execution.reactor_fd();
             assert!(reactor.register_identifiers(fd, i32::MAX, false).is_err());
             assert!(reactor.slots.iter().all(|slot| !slot.active));
-
             let token = reactor.register(&execution).unwrap();
             assert!(reactor.is_current(token));
             reactor.deregister(token).unwrap();

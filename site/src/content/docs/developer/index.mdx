@@ -1,0 +1,30 @@
+---
+title: Developer Guide
+description: Orientation for contributors working on Seyal.
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+The Developer Guide explains **how to navigate and contribute to Seyal**. It does not replace accepted ADRs, specifications, milestone definitions, or engineering policy.
+
+<CardGrid>
+  <Card title="Architecture" icon="seti:config">
+    Understand ownership boundaries, hot-path invariants, runtime state, PTY/VT/rendering responsibilities, persistence, Blocks, and the OSS/commercial boundary.
+  </Card>
+  <Card title="Contributing" icon="github">
+    Follow the Issue → isolated branch/worktree → tests → PR → independent validation workflow.
+  </Card>
+  <Card title="Quality" icon="approve-check-circle">
+    Terminal correctness, performance, fuzzing, security, deterministic builds, and reproducible verification are completion gates.
+  </Card>
+</CardGrid>
+
+## Start here
+
+1. Read the repository `AGENTS.md`.
+2. Read `docs/architecture/README.md`.
+3. Read the applicable ADR/spec/milestone.
+4. Read `docs/engineering/DEVELOPMENT.md` and `docs/engineering/ISSUE-PROTOCOL.md`.
+5. Work only from a GitHub Issue that has passed the Ready gate.
+
+When this guide conflicts with an accepted source-of-truth document, the source-of-truth document wins and this guide must be corrected.

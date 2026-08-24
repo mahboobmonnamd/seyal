@@ -7,7 +7,7 @@
 
 ## Decision
 
-Separate process/run lifecycle from evidence and accepted outcome.
+Separate process/run lifecycle, evaluator verdict, per-Attempt disposition and durable WorkItem outcome.
 
 ```text
 AgentRun terminates
@@ -18,6 +18,8 @@ EvaluationObservations
       ↓ evaluator policy
 Evaluation { pass | fail | inconclusive }
       ↓
+AttemptDisposition
+      ↓ WorkItem acceptance policy across one or more Attempts
 WorkItem Outcome
 ```
 
@@ -71,10 +73,15 @@ Do not overload one boolean `success`.
 ```text
 RunTermination = completed | cancelled | interrupted | crashed
 Evaluation = pass | fail | inconclusive
-Outcome = accepted | rejected | unresolved | abandoned
+AttemptDisposition = accepted_candidate | rejected | inconclusive | cancelled | interrupted | superseded
+Outcome = accepted | rejected | unresolved | abandoned     # WorkItem only
 ```
 
-A WorkItem can be `unresolved` after a clean AgentRun termination. A failed first Attempt followed by an accepted second Attempt remains one WorkItem with two Attempts.
+`AttemptDisposition` is immutable/auditable per Attempt except through an explicit append-only correction/revision event. A retry creates a new Attempt and never rewrites the earlier Attempt's evidence/disposition. Parallel candidate Attempts may each finish differently.
+
+Only the durable WorkItem owns `Outcome`. An `accepted_candidate` Attempt identifies work eligible for WorkItem acceptance policy; it does not by itself overwrite the WorkItem Outcome. The final Outcome records decisive Attempt/Evaluation references when applicable.
+
+A WorkItem can be `unresolved` after a clean AgentRun termination. A failed first Attempt followed by an accepted second Attempt remains one WorkItem with two Attempts and two retained dispositions.
 
 Outcome accounting must retain all terminal states in cohort denominators. Failed, rejected, unresolved and abandoned WorkItems do not disappear merely because cost-per-accepted-work calculations use accepted outcomes as one denominator.
 
@@ -133,7 +140,7 @@ All costs from failed/rejected/abandoned Attempts remain attributed to their Wor
 
 Use idempotent EventIds and per-source/run sequence numbers where available. Do not serialize every agent/evaluator event through one global order.
 
-Late observations are allowed. An Outcome may be revised from `unresolved` to `accepted/rejected` when stronger evidence arrives; the revision is append-only/auditable rather than rewriting prior evidence.
+Late observations are allowed. Stronger evidence may append a revised Evaluation/AttemptDisposition and can revise a WorkItem Outcome from `unresolved` to `accepted/rejected` according to policy. Revisions are append-only/auditable rather than rewriting prior evidence or pretending an earlier Attempt never existed.
 
 ## Repeatable evaluation fixture
 
@@ -160,7 +167,8 @@ Initial corpus must include:
 - agent claims success but tests fail;
 - tests pass but forbidden file changes exist;
 - cancelled run with partial artifact;
-- retry after evaluation failure;
+- retry after evaluation failure preserving the first AttemptDisposition;
+- parallel candidates where one is superseded and one becomes the accepted WorkItem result;
 - cache-enabled vs cache-disabled comparison;
 - same task across two harness/model choices;
 - expensive failed/abandoned WorkItems to verify cohort denominator/cost accounting;
@@ -189,13 +197,13 @@ Any routing objective that uses human-time savings must distinguish measured act
 
 ## Success / kill criteria
 
-Pass when retained fixtures distinguish run completion from accepted outcome, bind evidence to exact inputs, reproduce deterministic evaluator results, compare two routes without an agent grading itself, preserve failed/abandoned cost in cohort accounting, and do not mislabel approval wait time as human labor.
+Pass when retained fixtures distinguish run completion from Evaluation, per-Attempt disposition and final WorkItem Outcome; bind evidence to exact inputs; reproduce deterministic evaluator results; compare two routes without an agent grading itself; preserve failed/abandoned cost in cohort accounting; and do not mislabel approval wait time as human labor.
 
-Reject designs where the model/harness is the sole success judge, pricing assumptions overwrite raw usage, failed tasks disappear from economics, attention wait is silently converted into labor cost, or evaluation blocks terminal I/O.
+Reject designs where the model/harness is the sole success judge, Attempt disposition is conflated with durable WorkItem acceptance, pricing assumptions overwrite raw usage, failed tasks disappear from economics, attention wait is silently converted into labor cost, or evaluation blocks terminal I/O.
 
 ## ADR/spec before implementation
 
 - shared Agent Platform lifecycle/ownership ADR;
-- RunEvent/EvaluationObservation/Outcome/CostEvent schema spec;
+- RunEvent/EvaluationObservation/AttemptDisposition/Outcome/CostEvent schema spec;
 - evaluation fixture/evaluator trust spec;
 - metric-definition document with denominators, failed/abandoned accounting, attention-vs-active-interaction semantics and missing-data rules.

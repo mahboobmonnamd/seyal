@@ -65,10 +65,7 @@ fn read_until(
     }
 }
 
-fn wait_exit(
-    execution: &mut TerminalExecution,
-    timeout: Duration,
-) -> Result<ChildExit, ExecError> {
+fn wait_exit(execution: &mut TerminalExecution, timeout: Duration) -> Result<ChildExit, ExecError> {
     let deadline = Instant::now() + timeout;
     loop {
         if let Some(exit) = execution.try_wait()? {
@@ -238,8 +235,8 @@ fn child_exit_eventually_becomes_master_eof_or_hangup() {
 fn explicit_terminate_reaps_only_the_owned_process_group() {
     let _guard = test_guard();
     let size = WindowSize::default();
-    let mut execution = TerminalExecution::spawn(&sh("while :; do sleep 1; done"), size)
-        .expect("spawn PTY");
+    let mut execution =
+        TerminalExecution::spawn(&sh("while :; do sleep 1; done"), size).expect("spawn PTY");
 
     let exit = execution
         .terminate(termination_policy())
@@ -258,8 +255,8 @@ fn repeated_spawn_terminate_does_not_accumulate_fds() {
     let size = WindowSize::default();
 
     for _ in 0..16 {
-        let mut execution = TerminalExecution::spawn(&sh("while :; do sleep 1; done"), size)
-            .expect("spawn");
+        let mut execution =
+            TerminalExecution::spawn(&sh("while :; do sleep 1; done"), size).expect("spawn");
         execution
             .terminate(termination_policy())
             .expect("terminate and reap");
@@ -300,8 +297,8 @@ fn readiness_works_above_select_fd_limit() {
         }
     }
 
-    let mut execution = TerminalExecution::spawn(&sh("printf highfd"), WindowSize::default())
-        .expect("spawn PTY");
+    let mut execution =
+        TerminalExecution::spawn(&sh("printf highfd"), WindowSize::default()).expect("spawn PTY");
     let output = read_until(&mut execution, b"highfd", IO_TIMEOUT).expect("high fd output");
     assert!(output.windows(6).any(|window| window == b"highfd"));
     assert_eq!(

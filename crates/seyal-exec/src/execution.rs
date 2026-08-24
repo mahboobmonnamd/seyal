@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use seyal_terminal::TerminalState;
+use seyal_terminal::{Damage, TerminalState};
 
 use crate::{
     ChildExit, CommandSpec, ExecError, ReadOutcome, Readiness, SignalDisposition,
@@ -25,6 +25,19 @@ impl TerminalExecution {
 
     pub fn terminal(&self) -> &TerminalState {
         &self.terminal
+    }
+
+    /// Consumes and returns the canonical terminal's coalesced pending
+    /// damage, if any, since the last call.
+    ///
+    /// This is the single sanctioned mutable-consumption seam for a Runtime
+    /// projection producer: exactly one caller may destructively drain
+    /// damage from canonical state per `TerminalExecution` (SPEC-004
+    /// section 11.1 forbids multiple independent consumers of
+    /// `take_damage()`). It never touches PTY I/O and has no effect on
+    /// `TerminalState` content, only on its damage-tracking bookkeeping.
+    pub fn take_damage(&mut self) -> Option<Damage> {
+        self.terminal.take_damage()
     }
 
     pub fn read_output(&mut self, buffer: &mut [u8]) -> Result<ReadOutcome, ExecError> {

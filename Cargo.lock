@@ -22,6 +22,7 @@ version = "0.0.0"
 dependencies = [
  "libc",
  "seyal-exec",
+ "seyal-terminal",
 ]
 
 [[package]]

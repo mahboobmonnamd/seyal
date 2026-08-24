@@ -10,6 +10,7 @@ build = "build.rs"
 
 [dependencies]
 seyal-exec = { path = "../seyal-exec" }
+seyal-terminal = { path = "../seyal-terminal" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "=0.2.189"

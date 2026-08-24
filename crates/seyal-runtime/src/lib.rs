@@ -8,14 +8,16 @@ mod capability;
 mod error;
 mod ids;
 mod input;
+pub mod local_ipc;
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 mod platform;
+pub mod projection;
 mod runtime;
 mod singleton;
 
 pub use capability::{CapabilityPolicy, m001_term_name};
 pub use error::RuntimeError;
-pub use ids::{AttachmentId, ExecutionId, RuntimeId, WorkspaceId};
+pub use ids::{AttachmentId, ExecutionId, ProjectionId, RuntimeId, WorkspaceId};
 pub use input::InputIngress;
-pub use runtime::{ExecutionLifecycle, ExecutionSummary, Runtime, RuntimeConfig};
+pub use runtime::{ExecutionLifecycle, ExecutionSummary, LocalIpcMode, Runtime, RuntimeConfig};

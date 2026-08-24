@@ -20,6 +20,9 @@ child lifecycle. VT semantics remain owned by `seyal-terminal`.
 4. Detach is not terminate.
 5. Raw master descriptors are not public API.
 6. `seyal-terminal` never depends on `seyal-exec`.
+7. The actual execution owner is retained until natural exit is reaped or
+   explicit policy-driven termination completes; dropping owner state is not a
+   detach operation.
 
 ## 3. Command and environment
 
@@ -89,9 +92,23 @@ to its owned `TerminalState::feed`.
 
 There is no second parser/grid/state mirror in `seyal-exec`.
 
-Resize updates the PTY first and then the same authoritative terminal state. A
-valid `WindowSize` guarantees the terminal resize cannot fail because of zero
-rows/columns.
+Resize is one logical operation spanning the kernel PTY geometry and canonical
+terminal state. For macOS M001:
+
+1. `WindowSize` has already validated nonzero rows/columns;
+2. apply `TIOCSWINSZ` to the owned PTY;
+3. only after the kernel accepts the size, resize the same authoritative
+   `TerminalState`;
+4. only then may new terminal damage/projection be observed as the successful
+   geometry.
+
+This physical ordering prevents a failed kernel resize from publishing a
+canonical resize/reflow that the child did not receive. With a validated
+`WindowSize`, current M001 `TerminalState::resize` has no recoverable failure
+other than invalid size. If terminal resize later gains a recoverable failure
+(for example fallible allocation semantics), this contract must be redesigned
+as an explicit prepare/commit transaction rather than permitting split-brain
+geometry.
 
 ## 7. Window size
 
@@ -100,6 +117,8 @@ Rows and columns must be nonzero. Pixel dimensions may be zero.
 `set_window_size` must make `window_size` report the requested values and must
 preserve the same child/PTY identity. Normal kernel resize notification behavior
 must remain observable by the child.
+
+A failed PTY resize leaves canonical terminal geometry unchanged.
 
 ## 8. Child exit
 
@@ -131,14 +150,31 @@ Termination:
 
 No signal is sent after a terminal child result has already been reaped.
 
-## 10. Detach
+## 10. Detach and execution-owner lifetime
 
-Issue #28 does not implement Runtime attachments. Its contract is structural:
-nothing in the PTY API requires a GUI/client reference to keep the execution
-alive, and there is no detach operation implemented as PTY close or child
-signal.
+Issue #28 does not implement Runtime attachments. Its detach contract is
+structural:
 
-End-to-end GUI-close survival is a later Runtime milestone.
+- nothing in the PTY API requires a GUI/client reference to keep the execution
+  alive;
+- there is no detach operation implemented as PTY close or child signal;
+- a future client-facing attachment object must be independently droppable while
+  the Runtime retains `TerminalExecution`.
+
+The actual `TerminalExecution` owner is **not** such a client-facing wrapper.
+This slice does not add an implicit `Drop` termination timeout because explicit
+termination requires a caller-supplied `TerminationPolicy` and detach must not
+terminate.
+
+Until the Runtime owner/reaper milestone exists, every test/example that spawns a
+live execution must explicitly observe/reap natural exit or call `terminate`
+before the owning value leaves scope. The Runtime implementation must later add
+supervised shutdown/reaper behavior and GUI/client detach tests without changing
+PTY ownership.
+
+End-to-end GUI-close survival remains a Runtime integration milestone; Issue #28
+establishes the ownership seam required for it without falsely claiming that a
+journal or object drop provides persistence.
 
 ## 11. EOF/HUP
 
@@ -154,7 +190,9 @@ EOF is accepted.
 - no external terminal engine is used;
 - no cross-language callback exists in byte progress;
 - no commercial code/dependency enters this crate;
-- repeated spawn/terminate must not accumulate descriptors or zombies.
+- repeated spawn/terminate must not accumulate descriptors or zombies;
+- no test/example may intentionally abandon a live child by dropping the actual
+  execution owner and call that detach.
 
 ## 13. Tests required in PR #40
 
@@ -171,7 +209,13 @@ macOS executable tests cover:
 9. operation with PTY descriptor above traditional `FD_SETSIZE`;
 10. invalid executable cleanup;
 11. direct PTY-byte delivery into authoritative `TerminalState`;
-12. environment behavior and absence of RILL marker injection.
+12. environment behavior and absence of RILL marker injection;
+13. all spawned test executions are explicitly reaped/terminated before owner
+    scope ends.
+
+A client-wrapper detach test belongs to the Runtime/attachment issue where such a
+wrapper actually exists; Issue #28 must not add a fake wrapper solely to satisfy
+a test name.
 
 Portable source/value checks run on Linux and macOS where they do not fake PTY
 behavior.
@@ -187,7 +231,8 @@ locally with `make bench` before PR #40 is merged.
 
 ## 15. Deferred
 
-- Runtime daemon/attachment/reconnect;
+- Runtime daemon/attachment/reconnect and client-wrapper detach test;
+- Runtime supervised owner shutdown/reaper behavior;
 - persistence/crash/reboot recovery;
 - Linux and ConPTY implementations;
 - renderer/Metal;

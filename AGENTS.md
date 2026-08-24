@@ -26,6 +26,17 @@ An Issue or PR cannot override architecture/specification. Existing code is neve
 - Headless Runtime exists from M001; GUI detach/crash must not kill the execution.
 - Terminal fundamentals stay license/cloud independent.
 
+## Production vs POC guardrail
+
+- `master` and every mergeable production PR contain only **production-intent** code on Seyal's accepted permanent architecture.
+- An MVP may be deliberately small, incomplete in feature breadth, or visually minimal, but every merged code path must be the real production path: tested, reviewable, and intended to remain/evolve rather than be discarded.
+- If the architecture, dependency frontier, or owning milestone pass is not Ready, **do not implement the feature** merely to show progress.
+- Never merge fake UI, fake terminal data, temporary renderer/VT/runtime paths, duplicate state engines, alternate implementations, compatibility shims, hidden feature-flag POCs, or parallel "old/new" production paths whose purpose is experimentation.
+- A spike/prototype/POC is evidence gathering, not production implementation. It must live on an explicitly isolated, **non-mergeable** branch/worktree or equivalent environment and must never be promoted wholesale into `master`.
+- Useful experimental findings may graduate as documentation, measurements, ADR/decision evidence, fixtures, or independently valid tests. Production code is then implemented cleanly from accepted architecture/specification after `development-readiness` passes.
+- A replacement/migration must not create competing authorities. If temporary coexistence is genuinely unavoidable, the accepted Issue/ADR must define why, which path is authoritative at each step, the removal boundary, and tests proving no split-brain behavior.
+- Legitimate product presentations such as Flow, Raw, and live TUI are not competing terminal engines: they must remain views over the same `ExecutionId`, PTY, VT, and authoritative state.
+
 ## Module cohesion and design patterns
 
 - Prefer single-responsibility modules with explicit ownership and lifecycle boundaries.
@@ -46,10 +57,11 @@ An Issue or PR cannot override architecture/specification. Existing code is neve
 3. Read every linked/retrieved architecture/spec/milestone document that materially governs the work.
 4. Verify dependencies are complete and ownership/module boundary is explicit.
 5. If architecture is missing or contradictory: **STOP** and use the `architecture-change` skill. Do not invent a workaround.
-6. Use one Issue → one assignee/agent → one isolated worktree → one branch → one PR.
-7. Core behavior is test-first. Do not weaken tests to make code pass.
-8. Do not refactor unrelated code. Create/link another Issue instead.
-9. If an approved screenshot/mockup is visual authority for native UI, run the `image-to-code` skill before implementation. Complete its forensic design/component inventory and issue plan first; split the work into multiple Issues when the visual spans independently reviewable boundaries.
+6. Confirm the requested work is production implementation rather than a spike/POC. If it is exploratory, isolate it on a non-mergeable path and do not open a mergeable production PR from that code.
+7. Use one Issue → one assignee/agent → one isolated worktree → one branch → one PR.
+8. Core behavior is test-first. Do not weaken tests to make code pass.
+9. Do not refactor unrelated code. Create/link another Issue instead.
+10. If an approved screenshot/mockup is visual authority for native UI, run the `image-to-code` skill before implementation. Complete its forensic design/component inventory and issue plan first; split the work into multiple Issues when the visual spans independently reviewable boundaries.
 
 ## Repository map
 
@@ -85,5 +97,7 @@ Until production scaffolding exists, `make check` validates governance/documenta
 ## Pull requests
 
 Every implementation PR links its Issue, stays inside scope, cites architecture/spec authority, includes required tests and measurable evidence, states security/docs implications, and gives a reproducible verification procedure. CI evidence is required. Core/high-risk changes require independent review; implementers do not self-approve.
+
+A mergeable implementation PR must contain only production-intent code. Exploratory branches may be useful, but their code is not a merge candidate until the work is explicitly reclassified as production, re-refined, and implemented under normal production gates.
 
 See `docs/engineering/ISSUE-PROTOCOL.md` for Ready/Done rules and `.agents/skills/implement-issue/SKILL.md` for the mandatory execution workflow.

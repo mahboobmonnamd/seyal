@@ -26,6 +26,32 @@ Backlog → Refinement → Ready → In Progress → In Review → Validation �
 
 Only **Ready** items may be picked up by implementation agents.
 
+## Production implementation vs POC
+
+A small MVP is valid production work. A POC/spike/prototype is not.
+
+```text
+MVP
+= deliberately small production scope
++ accepted permanent architecture
++ normal tests/review/evidence
++ mergeable when Done gates pass
+
+POC / spike / prototype
+= uncertainty-reduction experiment
++ isolated non-mergeable branch/worktree/environment
++ evidence may be retained
++ exploratory code never merges to master
+```
+
+Rules:
+
+- If the permanent implementation is not Ready because architecture/dependencies are unresolved, do not create a temporary production implementation.
+- Do not merge fake UI/data, temporary VT/renderer/runtime paths, duplicate state authorities, alternate implementations, feature-flag POCs, compatibility shims, or parallel old/new production paths merely to demonstrate progress.
+- Useful experimental findings may become docs, measurements, ADR evidence, fixtures, or independently valid tests. Production code starts cleanly from accepted architecture/specification after readiness passes.
+- If an experiment is later intended to ship, first reclassify/refine it as production work and run the full Ready/implementation/review/verification flow. Do not treat a successful POC branch as a merge candidate by default.
+- Legitimate product presentations such as Flow/Raw/TUI may coexist only as presentations over the same authoritative terminal execution/state; they are not permission for competing terminal engines.
+
 ## Required implementation-Issue fields
 
 Every implementation Issue must state:
@@ -61,6 +87,7 @@ An Issue is Ready only when all are true:
 - [ ] performance/security requirements are identified
 - [ ] documentation impact is classified
 - [ ] no unresolved architecture question remains
+- [ ] the mergeable implementation is a permanent production path, not a POC/spike/temporary parallel implementation
 
 If any item is false, return the Issue to Refinement or Blocked. An agent must not silently fill the gap.
 
@@ -81,6 +108,7 @@ Done means applicable evidence exists, not merely that the feature appears to wo
 - documentation validation (`make docs-check` / `make docs-build`) when site docs changed
 - CI evidence
 - reproducible demo/verification
+- no exploratory/temporary/duplicate production path remains in the merge candidate
 
 Documentation is not considered complete merely because an Issue originally said `N/A`; implementation evidence can change the documentation impact and must be re-assessed before Done.
 
@@ -103,6 +131,8 @@ Architecture, VT/parser, persistence/process-lifetime, security-boundary and per
 ```text
 implementation agent → CI → independent human/review agent → merge
 ```
+
+Review must block a merge candidate that contains POC/spike code, a disposable alternate implementation, or a second authoritative path that was not explicitly accepted as a production migration.
 
 ## M001
 

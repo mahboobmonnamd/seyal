@@ -6,13 +6,14 @@ The tooling set is intentionally minimal: do not add generic developer tools mer
 
 ## Canonical skills
 
-`.agents/skills/` is the single source of truth for Seyal-owned workflows. `.claude/skills/` contains thin Claude-specific adapters only.
+`.agents/skills/` is the single source of truth for Seyal-owned workflows and thin discovery adapters. `.claude/skills/` contains thin Claude-specific adapters only.
 
 Codex and GitHub Copilot CLI both discover project skills directly from `.agents/skills/`; do not create duplicate Codex or Copilot skill trees.
 
 | Capability | Canonical Seyal skill / authority |
 | --- | --- |
 | Seyal architecture | `AGENTS.md` + `architecture-change` |
+| Project-context retrieval | thin `project-context` adapter → pinned AI-SDLC generic skill |
 | Native macOS design | `macos-native-design` |
 | Native macOS UI testing | `macos-ui-testing` |
 | macOS accessibility | `macos-accessibility` |
@@ -29,6 +30,30 @@ Codex and GitHub Copilot CLI both discover project skills directly from `.agents
 | Issue decomposition | `issue-refinement` |
 
 Equivalent existing skills are intentionally reused rather than creating duplicate aliases with competing instructions. Seyal does not install generic external design skills; native AppKit/Metal work is governed by the project skills above and current Apple platform evidence.
+
+## AI-SDLC generic capability boundary
+
+Generic software-engineering procedures that are useful across unrelated products belong in the public `ai-sdlc` project rather than being independently reimplemented in Seyal. Seyal is a reference consumer, not the authority for those generic procedures.
+
+The first consumed capability is `project-context`:
+
+```text
+ai-sdlc
+  skills/project-context/SKILL.md
+  tools/project_context.py
+        ↓ exact reviewed pin materialized by make bootstrap-agents
+Seyal/.sdlc/framework/
+        ↓
+Seyal thin .agents/skills/project-context adapter
+        ↓
+Seyal-owned .sdlc context/index + authoritative ADR/spec/code/test sources
+```
+
+Seyal owns project knowledge and domain-specific workflows. AI-SDLC owns generic SDLC mechanism. Terminal-specific skills such as `vt-tdd`, `terminal-conformance`, `metal-renderer`, native macOS rules, and Seyal architecture invariants remain in this repository.
+
+Do not migrate all existing skills mechanically. A skill moves to AI-SDLC only when its procedure is genuinely product-agnostic, has a stable generic contract/evaluation, and Seyal can retain any required domain constraints through project context or a thin adapter without weakening quality gates.
+
+AI-SDLC is pinned by exact commit in `scripts/bootstrap-dev.sh`; `.sdlc/framework/` is local generated developer state and is not committed. Updating the pin requires a normal Seyal Issue/PR. The generic framework is never a product/runtime dependency.
 
 ## Approved MCP/tool matrix
 
@@ -56,11 +81,24 @@ Then, when local coding-agent/MCP provisioning is wanted, run:
 make bootstrap-agents
 ```
 
-The agent bootstrap configures the approved project-required MCPs for each supported coding-agent CLI that is already installed. It does not install Claude Code, Codex or GitHub Copilot CLI themselves.
+The agent bootstrap materializes the reviewed AI-SDLC pin and configures the approved project-required MCPs for each supported coding-agent CLI that is already installed. It does not install Claude Code, Codex or GitHub Copilot CLI themselves.
 
 The agent bootstrap may provision only the approved project-required tooling above and may mutate supported coding-agent configuration. It must not be required for `make build`, `make test`, `make check`, `make bench`, CI, or terminal/runtime operation. It must not write credentials to the repository.
 
 When `seyal-commercial` invokes the pinned OSS `bootstrap-agents` target from its own bootstrap, the same minimal tooling policy applies.
+
+## Project-context use
+
+Seyal's tracked `.sdlc/graph/context-index.json` is a compact derived navigation index. It never overrides accepted architecture, ADRs, specifications, milestone contracts, code, tests, or approved decisions.
+
+After `make bootstrap-agents`, validate/query it with the pinned generic tool:
+
+```sh
+python3 .sdlc/framework/tools/project_context.py --root . validate
+python3 .sdlc/framework/tools/project_context.py --root . query TerminalExecution Blocks
+```
+
+A stale/missing source or dangling graph relationship makes the derived index untrustworthy. Agents must fall back to the authoritative source and refresh the index rather than guessing from cached summaries.
 
 ## Screenshot-to-native work
 

@@ -3,7 +3,8 @@ use std::{env, hint::black_box, process::Command, time::Instant};
 use seyal_terminal::TerminalState;
 
 const DEFAULT_ITERATIONS: u64 = 10_000;
-const CONTENT: &[u8] = b"scroll-heavy terminal output payload 0123456789 abcdefghijklmnopqrstuvwxyz";
+const CONTENT: &[u8] =
+    b"scroll-heavy terminal output payload 0123456789 abcdefghijklmnopqrstuvwxyz";
 
 fn iterations() -> u64 {
     env::var("SEYAL_VT_SCROLL_BENCH_ITERATIONS")
@@ -36,11 +37,23 @@ fn metadata() {
         .unwrap_or_else(|_| "unknown".to_owned());
     let shell = env::var("SHELL").unwrap_or_else(|_| "unknown".to_owned());
 
-    println!("[seyal vt scroll benchmark] machine_model={}", command_output("sysctl", &["-n", "hw.model"]));
-    println!("[seyal vt scroll benchmark] chip={}", command_output("sysctl", &["-n", "machdep.cpu.brand_string"]));
-    println!("[seyal vt scroll benchmark] os_version={}", command_output("sw_vers", &["-productVersion"]));
+    println!(
+        "[seyal vt scroll benchmark] machine_model={}",
+        command_output("sysctl", &["-n", "hw.model"])
+    );
+    println!(
+        "[seyal vt scroll benchmark] chip={}",
+        command_output("sysctl", &["-n", "machdep.cpu.brand_string"])
+    );
+    println!(
+        "[seyal vt scroll benchmark] os_version={}",
+        command_output("sw_vers", &["-productVersion"])
+    );
     println!("[seyal vt scroll benchmark] target_os={}", env::consts::OS);
-    println!("[seyal vt scroll benchmark] target_arch={}", env::consts::ARCH);
+    println!(
+        "[seyal vt scroll benchmark] target_arch={}",
+        env::consts::ARCH
+    );
     println!("[seyal vt scroll benchmark] build_mode={build_mode}");
     println!("[seyal vt scroll benchmark] commit={commit}");
     println!("[seyal vt scroll benchmark] shell={shell}");
@@ -73,7 +86,10 @@ fn run_case(cols: u16, rows: u16, iterations: u64, scroll: bool) -> u128 {
         .expect("positioning feed succeeds");
 
     let workload = workload(scroll);
-    assert!(CONTENT.len() < usize::from(cols), "content must not wrap by width");
+    assert!(
+        CONTENT.len() < usize::from(cols),
+        "content must not wrap by width"
+    );
 
     for _ in 0..100 {
         terminal
@@ -98,12 +114,19 @@ fn run_case(cols: u16, rows: u16, iterations: u64, scroll: bool) -> u128 {
     let nanos = elapsed.as_nanos().max(1);
     let iterations_per_second = u128::from(iterations).saturating_mul(1_000_000_000) / nanos;
     let bytes_per_second = total_bytes.saturating_mul(1_000_000_000) / nanos;
-    let workload_name = if scroll { "full-screen-scroll" } else { "matched-bottom-row-overwrite" };
+    let workload_name = if scroll {
+        "full-screen-scroll"
+    } else {
+        "matched-bottom-row-overwrite"
+    };
 
     println!("[seyal vt scroll benchmark] workload={workload_name}");
     println!("[seyal vt scroll benchmark] dimensions={cols}x{rows}");
     println!("[seyal vt scroll benchmark] iterations={iterations}");
-    println!("[seyal vt scroll benchmark] workload_bytes={}", workload.len());
+    println!(
+        "[seyal vt scroll benchmark] workload_bytes={}",
+        workload.len()
+    );
     println!("[seyal vt scroll benchmark] total_bytes={total_bytes}");
     println!("[seyal vt scroll benchmark] elapsed_ns={nanos}");
     println!("[seyal vt scroll benchmark] iterations_per_second={iterations_per_second}");
@@ -128,6 +151,8 @@ fn main() {
         println!("[seyal vt scroll benchmark] full_scroll_elapsed_ns={scroll_ns}");
         println!("[seyal vt scroll benchmark] incremental_scroll_elapsed_ns={incremental_ns}");
         println!("[seyal vt scroll benchmark] scroll_to_overwrite_ratio_milli={ratio_milli}");
-        println!("[seyal vt scroll benchmark] comparison_note=matched aggregate baseline, not cycle-accurate parser decomposition");
+        println!(
+            "[seyal vt scroll benchmark] comparison_note=matched aggregate baseline, not cycle-accurate parser decomposition"
+        );
     }
 }

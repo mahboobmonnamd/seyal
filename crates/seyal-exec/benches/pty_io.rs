@@ -20,7 +20,10 @@ fn main() {
     let ready_deadline = Instant::now() + Duration::from_secs(2);
     let mut ready = Vec::new();
     while Instant::now() < ready_deadline {
-        match execution.read_output(&mut buffer).expect("benchmark ready read") {
+        match execution
+            .read_output(&mut buffer)
+            .expect("benchmark ready read")
+        {
             ReadOutcome::Bytes(count) => {
                 ready.extend_from_slice(&buffer[..count]);
                 if ready.windows(5).any(|window| window == b"ready") {

@@ -9,6 +9,7 @@ import tomllib
 ROOT = Path(os.environ.get("SEYAL_VALIDATION_ROOT", Path(__file__).resolve().parents[1])).resolve()
 WORKSPACE_MANIFEST = ROOT / "Cargo.toml"
 TERMINAL_MANIFEST = ROOT / "crates" / "seyal-terminal" / "Cargo.toml"
+EXEC_MANIFEST = ROOT / "crates" / "seyal-exec" / "Cargo.toml"
 
 
 def fail(message: str) -> None:
@@ -31,6 +32,8 @@ if len(members) != len(set(members)):
     fail("workspace members must be unique")
 if "crates/seyal-terminal" not in members:
     fail("seyal-terminal must be the first physical M001 ownership boundary")
+if "crates/seyal-exec" not in members:
+    fail("seyal-exec must be present once Issue #28 creates the PTY/child ownership boundary")
 
 for member in members:
     member_manifest = ROOT / member / "Cargo.toml"
@@ -50,10 +53,27 @@ for key, expected in expected_defaults.items():
 if not TERMINAL_MANIFEST.is_file():
     fail("missing crates/seyal-terminal/Cargo.toml")
 terminal_data = tomllib.loads(TERMINAL_MANIFEST.read_text(encoding="utf-8"))
-package = terminal_data.get("package", {})
-if package.get("name") != "seyal-terminal":
+terminal_package = terminal_data.get("package", {})
+if terminal_package.get("name") != "seyal-terminal":
     fail("terminal package must be named seyal-terminal")
-if package.get("publish") is not False:
+if terminal_package.get("publish") is not False:
     fail("M001 scaffold crates must not be publishable packages")
+
+if not EXEC_MANIFEST.is_file():
+    fail("missing crates/seyal-exec/Cargo.toml")
+exec_data = tomllib.loads(EXEC_MANIFEST.read_text(encoding="utf-8"))
+exec_package = exec_data.get("package", {})
+if exec_package.get("name") != "seyal-exec":
+    fail("execution package must be named seyal-exec")
+if exec_package.get("publish") is not False:
+    fail("M001 scaffold crates must not be publishable packages")
+
+exec_terminal = exec_data.get("dependencies", {}).get("seyal-terminal")
+if not isinstance(exec_terminal, dict) or exec_terminal.get("path") != "../seyal-terminal":
+    fail("seyal-exec must consume seyal-terminal through the local downward dependency")
+
+terminal_dependencies = terminal_data.get("dependencies", {})
+if "seyal-exec" in terminal_dependencies:
+    fail("seyal-terminal must never depend on seyal-exec")
 
 print("[seyal workspace test] workspace ownership scaffold invariants passed.")

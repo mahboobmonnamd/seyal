@@ -57,7 +57,7 @@ def main() -> None:
             "Broken local Markdown links:",
         )
 
-        layering = base / "layering"
+        layering = base / "layering-terminal"
         write(
             layering / "crates/seyal-terminal/Cargo.toml",
             '[package]\nname = "seyal-terminal"\nversion = "0.0.0"\n\n[dependencies]\nseyal-runtime = { path = "../seyal-runtime" }\n',
@@ -66,6 +66,17 @@ def main() -> None:
             ["python3", str(ROOT / "scripts/check-layering.py")],
             layering,
             "seyal-terminal has forbidden dependencies: seyal-runtime",
+        )
+
+        exec_layering = base / "layering-exec"
+        write(
+            exec_layering / "crates/seyal-exec/Cargo.toml",
+            '[package]\nname = "seyal-exec"\nversion = "0.0.0"\n\n[dependencies]\nseyal-runtime = { path = "../seyal-runtime" }\n',
+        )
+        run_negative(
+            ["python3", str(ROOT / "scripts/check-layering.py")],
+            exec_layering,
+            "seyal-exec has forbidden dependencies: seyal-runtime",
         )
 
         workspace = base / "workspace"

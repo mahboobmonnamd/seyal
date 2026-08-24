@@ -3,5 +3,12 @@
 version = 4
 
 [[package]]
+name = "seyal-exec"
+version = "0.0.0"
+dependencies = [
+ "seyal-terminal",
+]
+
+[[package]]
 name = "seyal-terminal"
 version = "0.0.0"

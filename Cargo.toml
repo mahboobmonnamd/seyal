@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/seyal-terminal"]
+members = ["crates/seyal-terminal", "crates/seyal-exec"]
 resolver = "3"
 
 [workspace.package]

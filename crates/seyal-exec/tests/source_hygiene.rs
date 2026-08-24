@@ -27,8 +27,8 @@ fn production_source_contains_no_rill_identifiers_and_unsafe_is_platform_scoped(
             path.display()
         );
 
-        let is_macos_ffi = path.ends_with("platform/macos.rs")
-            || path.ends_with("platform/macos_reactor.rs");
+        let is_macos_ffi =
+            path.ends_with("platform/macos.rs") || path.ends_with("platform/macos_reactor.rs");
         if !is_macos_ffi {
             assert!(
                 !content.contains("unsafe {"),

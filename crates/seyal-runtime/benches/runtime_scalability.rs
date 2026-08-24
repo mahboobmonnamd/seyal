@@ -1,11 +1,11 @@
 use std::{env, process::Command, time::Instant};
 
 #[cfg(target_os = "macos")]
-use std::{fs, process, thread, time::Duration};
-#[cfg(target_os = "macos")]
 use seyal_exec::{CommandSpec, WindowSize};
 #[cfg(target_os = "macos")]
 use seyal_runtime::{Runtime, RuntimeConfig};
+#[cfg(target_os = "macos")]
+use std::{fs, process, thread, time::Duration};
 
 fn main() {
     #[cfg(not(target_os = "macos"))]
@@ -193,7 +193,9 @@ fn process_metrics(runtime: &Runtime) -> Metrics {
         .filter_map(|summary| runtime.execution(summary.id))
         .map(|execution| rss_for_pid(execution.child_id()))
         .sum();
-    let fds = fs::read_dir("/dev/fd").map(|entries| entries.count()).unwrap_or(0);
+    let fds = fs::read_dir("/dev/fd")
+        .map(|entries| entries.count())
+        .unwrap_or(0);
     Metrics {
         rss_kib,
         child_rss_kib,

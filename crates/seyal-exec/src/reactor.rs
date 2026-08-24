@@ -389,9 +389,11 @@ mod tests {
             let count = reactor
                 .wait(&mut events, Some(Duration::from_secs(1)))
                 .unwrap();
-            assert!(events[..count]
-                .iter()
-                .any(|event| event.kind == ReactorEventKind::Control));
+            assert!(
+                events[..count]
+                    .iter()
+                    .any(|event| event.kind == ReactorEventKind::Control)
+            );
         }
 
         #[test]

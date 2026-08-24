@@ -27,10 +27,7 @@ fn size() -> WindowSize {
 
 fn live_shell(runtime: &mut Runtime) -> seyal_runtime::ExecutionId {
     runtime
-        .create_execution(
-            CommandSpec::new("/bin/sh").args(["-c", "sleep 30"]),
-            size(),
-        )
+        .create_execution(CommandSpec::new("/bin/sh").args(["-c", "sleep 30"]), size())
         .unwrap()
 }
 
@@ -69,7 +66,10 @@ fn multiple_attachments_are_independent_and_duplicate_detach_is_rejected() {
     ));
     runtime.detach(id, second).unwrap();
     assert_eq!(runtime.lookup(id).unwrap().attachment_count, 0);
-    assert_eq!(runtime.lookup(id).unwrap().lifecycle, ExecutionLifecycle::Running);
+    assert_eq!(
+        runtime.lookup(id).unwrap().lifecycle,
+        ExecutionLifecycle::Running
+    );
     shutdown(&mut runtime);
 }
 

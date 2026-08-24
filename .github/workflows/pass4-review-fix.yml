@@ -1,15 +1,15 @@
 name: Pass 4 Review Fix
 
 on:
-  push:
-    branches: [issue/99-m001-pass-4-headless-runtime]
+  pull_request:
+    types: [synchronize]
 
 permissions:
   contents: write
 
 jobs:
   fix:
-    if: github.actor != 'github-actions[bot]'
+    if: github.head_ref == 'issue/99-m001-pass-4-headless-runtime'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -56,13 +56,19 @@ jobs:
           if old not in text:
               raise SystemExit('expected headless attachment block not found')
           path.write_text(text.replace(old, new, 1))
+
+          path = Path('crates/seyal-runtime/build.rs')
+          text = path.read_text()
+          text = text.replace('use std::{env, fs, path::PathBuf, process::Command};', 'use std::{env, fs, path::{Path, PathBuf}, process::Command};')
+          text = text.replace('fn find_entry(root: &PathBuf) -> Option<PathBuf> {\n    let mut pending = vec![root.clone()];', 'fn find_entry(root: &Path) -> Option<PathBuf> {\n    let mut pending = vec![root.to_path_buf()];')
+          path.write_text(text)
           PY
-          cargo +1.98.0 fmt --all || true
+          cargo +1.98.0 fmt --all
           git rm .github/workflows/pass4-review-fix.yml
       - name: Commit production review fixes
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add crates .github/workflows/pass4-review-fix.yml
-          git commit -m 'fix: close Pass 4 review rollback gaps'
+          git commit -m 'fix: close Pass 4 final review blockers'
           git push origin HEAD:issue/99-m001-pass-4-headless-runtime

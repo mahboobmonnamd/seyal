@@ -45,12 +45,15 @@ impl ProjectionRegion {
         }
         let name = unique_shm_name();
 
+        // macOS shm_open(2) does not accept O_CLOEXEC. Create the object with
+        // only the supported POSIX shm flags, then enforce FD_CLOEXEC with
+        // fcntl before the descriptor can escape this function.
         // SAFETY: valid NUL-terminated name; successful descriptor becomes
         // uniquely owned below.
         let writer_raw = unsafe {
             libc::shm_open(
                 name.as_ptr(),
-                libc::O_CREAT | libc::O_EXCL | libc::O_RDWR | libc::O_CLOEXEC,
+                libc::O_CREAT | libc::O_EXCL | libc::O_RDWR,
                 0o600,
             )
         };
@@ -103,7 +106,8 @@ impl ProjectionRegion {
         }
 
         // SAFETY: same live shared-memory name, independently opened read-only.
-        let reader_raw = unsafe { libc::shm_open(name.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
+        // As above, apply FD_CLOEXEC explicitly after shm_open succeeds.
+        let reader_raw = unsafe { libc::shm_open(name.as_ptr(), libc::O_RDONLY, 0) };
         if reader_raw < 0 {
             let error = io::Error::last_os_error();
             // SAFETY: exact mapping created above, not yet owned by a
@@ -275,9 +279,7 @@ fn ensure_close_on_exec(fd: &OwnedFd) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::projection::layout::{
-        CellRecord, ModeFlags, WireAttributes, WireColor,
-    };
+    use crate::projection::layout::{CellRecord, ModeFlags, WireAttributes, WireColor};
     use crate::projection::writer::{SnapshotWrite, Writer, read_latest, read_region_header};
 
     fn sample_header(region_bytes: u64) -> RegionHeader {

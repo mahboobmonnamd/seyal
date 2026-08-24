@@ -36,6 +36,16 @@ Prefer least privilege, explicit ownership, bounded inputs/resources, versioned 
 
 The canonical `docs/milestones/MILESTONE-001.md` requires a focused review before Pass 5 acceptance covering socket permissions/discovery, same-user authorization, controller/observer authority, protocol bounds, shared-memory ownership/lifetime/generation validation, stale identifiers, crash cleanup and denial-of-service limits.
 
+Pass 5 treats a same-effective-UID peer as part of the same OS-user trust domain; this is **not** a sandbox boundary. Opening `control.sock` grants no execution authority. An attachment is bound to the authenticated connection that created it, an `AttachmentId` is not a bearer capability, observers cannot input/resize, and only one controller may exist for an execution.
+
+The per-user runtime directory is owner-only and `control.sock` is explicitly `0600`. Symlink/non-socket/insecure discovery paths fail closed, and a connectable active socket is never unlinked as stale. Local socket and projection descriptors are close-on-exec.
+
+Shared projection memory has one Runtime writer. The client receives an independently opened `O_RDONLY` descriptor through `SCM_RIGHTS`; the receiver revalidates read-only access, ABI-bounded logical length and `FD_CLOEXEC` before mapping. The shm name is unlinked before publication. Shared concurrently accessed words use the defined atomic publication protocol rather than ordinary Rust references over mutable mapped memory.
+
+Protocol frames, receive buffers, input, attachment count, outbound queues and projection memory are explicitly bounded. `GenerationWake` is advisory and coalesced so a slow client cannot accumulate an unbounded generation history. A stalled or malformed client may be disconnected without blocking PTY/VT progress.
+
+Contributor implementation/debugging guidance lives in `docs/engineering/LOCAL-ATTACHMENT.md`; normative behavior remains SPEC-004 and its accepted ADRs.
+
 ## Reporting vulnerabilities
 
 Do not ask users to disclose exploitable vulnerabilities, secrets, credentials or customer data in public Issues. The repository should configure a private security-reporting path before public launch. Until that owner-managed channel exists, security Issue forms are for non-sensitive security engineering/R&D only and must direct suspected vulnerabilities to the repository's private reporting mechanism once configured.

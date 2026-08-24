@@ -126,18 +126,30 @@ No per-byte heap allocation, JSON, serialization, renderer acknowledgement or cr
 
 ## 9. Input, writable readiness, aggregate backpressure and control ownership
 
-The Runtime maintains a bounded FIFO input queue per execution, a bounded Runtime-wide pending-input byte budget across all executions, and a bounded Runtime control queue.
+The Runtime maintains a bounded FIFO input queue per execution, a bounded Runtime-wide accepted-but-unwritten input byte budget across all executions and ingress queues, and a bounded Runtime control queue.
 
 Only the Runtime reactor owner performs PTY writes. A producer outside that owner may enqueue typed input/control work and trigger the Runtime wake event; it may not call `TerminalExecution` directly.
 
 An input submission is accepted only if both of these remain within configured/testable limits:
 
 ```text
-pending bytes for that execution <= per-execution limit
-sum(pending bytes for all executions) <= Runtime-wide input budget
+accepted-but-unwritten bytes for that execution <= per-execution limit
+sum(accepted-but-unwritten bytes across ingress + execution queues) <= Runtime-wide input budget
 ```
 
-The aggregate budget is authoritative regardless of how many executions exist. Rejecting/backpressuring a new submission must not discard, reorder, or silently truncate already accepted bytes.
+The aggregate budget is authoritative from the instant ownership of a submission is accepted, not only after the reactor transfers it into a per-execution queue. The admission sequence is:
+
+```text
+validate execution/per-execution capacity
+→ atomically reserve aggregate bytes
+→ accept/enqueue payload
+→ transfer payload between ingress and execution queues without changing the reservation
+→ release reservation exactly once as bytes are successfully written or explicitly discarded during teardown/finalization
+```
+
+If enqueue fails after a reservation is acquired, that reservation is rolled back before returning failure. Concurrent producers therefore cannot collectively create accepted-but-unwritten payload memory beyond the configured Runtime-wide budget merely because the reactor has not yet processed their ingress work.
+
+Rejecting/backpressuring a new submission must not discard, reorder, or silently truncate already accepted bytes.
 
 On the reactor owner, input handling:
 
@@ -146,9 +158,12 @@ On the reactor owner, input handling:
 3. arms writable readiness only while pending bytes remain;
 4. on writable readiness drains only up to the per-dispatch write byte/work quantum or until `WouldBlock`/empty;
 5. returns to the shared event loop when the write quantum is consumed so readable PTYs and control work can progress;
-6. disarms writable readiness when the queue becomes empty.
+6. releases aggregate reservation only for bytes that were successfully written;
+7. disarms writable readiness when the queue becomes empty.
 
-If accepting new bytes would exceed either the per-execution or aggregate Runtime input bound, the Runtime returns explicit backpressure/error. It does not block the shared reactor.
+If accepting new bytes would exceed either the per-execution or aggregate Runtime input bound, the Runtime returns explicit backpressure/error before accepting ownership of those bytes. It does not block the shared reactor.
+
+Execution removal/finalization releases any reservation for accepted bytes that are explicitly discarded as part of teardown. Reservation accounting must not leak across execution removal and must never be released twice.
 
 If the bounded Runtime control queue is full, new control work is rejected/backpressured explicitly rather than growing memory without bound. Wake notifications may coalesce; queue state, not wake-event count, is authoritative.
 
@@ -277,7 +292,8 @@ Abrupt Runtime crash/kill remains outside M001 survival guarantees.
 - Expected already-gone FD/PID/filter conditions during deregistration are idempotent cleanup; unexpected reactor errors remain visible.
 - PTY read error is isolated to the affected execution unless it indicates a Runtime-wide reactor failure.
 - One execution's full input queue cannot stall other execution output.
-- Aggregate pending-input memory cannot exceed the configured Runtime-wide budget even when many executions are individually below their own limits.
+- Aggregate accepted-but-unwritten input memory cannot exceed the configured Runtime-wide budget even when producers submit concurrently and payloads are still in ingress/control queues.
+- Input reservation rollback/release is exact: failed enqueue, successful writes and execution teardown cannot leak or double-release budget.
 - One continuously ready PTY cannot monopolize the event loop indefinitely.
 - One continuously writable execution with a large queued input cannot monopolize the event loop indefinitely.
 - A full control queue produces explicit backpressure instead of unbounded allocation.
@@ -296,7 +312,7 @@ Pass 4 is not complete without reproducible measurements, including environment 
 - one hot-output execution plus other ready/idle executions, proving read fairness;
 - one large writable backlog alongside readable/control work, proving write fairness;
 - PTY-ready event → committed `TerminalState` generation latency;
-- per-execution and aggregate Runtime pending-input backpressure;
+- per-execution and aggregate Runtime accepted-but-unwritten input backpressure, including concurrent-producer ingress accounting;
 - bounded control queue behavior;
 - repeated create/register/remove cycles and descriptor/registration leak checks, including teardown races.
 
@@ -318,7 +334,7 @@ At minimum:
 10. Pending input drains after writable readiness and writable interest becomes inactive when empty.
 11. A single execution with a large writable backlog cannot starve another readable PTY or bounded Runtime control work.
 12. Per-execution input/control queue bounds produce explicit backpressure without corrupting accepted order.
-13. Aggregate Runtime pending-input budget is enforced across many executions even when no individual execution exceeds its own limit; already accepted bytes remain ordered/intact.
+13. Concurrent producers cannot collectively accept more unwritten input than the Runtime-wide byte budget even when payloads are still waiting in ingress/control queues; moving payloads between queues does not double-count or temporarily unreserve them, and reservation is released exactly once on successful write, failed-enqueue rollback or execution teardown.
 14. Primary child exit is observed/reaped even if a descendant retains the slave; final output spanning more than one dispatch quantum is committed before the first `WouldBlock`/EOF/HUP or configured finalization deadline.
 15. A continuously writing descendant cannot keep `DrainingAfterPrimaryExit` alive past the configured finalization deadline.
 16. SIGTERM → deadline → SIGKILL termination progresses without blocking unrelated execution output.

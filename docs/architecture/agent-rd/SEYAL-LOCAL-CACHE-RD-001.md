@@ -24,14 +24,14 @@ provider prompt cache (when supported)
 | Namespace | Example key inputs | Notes |
 |---|---|---|
 | `source-content` | normalized source bytes hash | immutable/shareable by content |
-| `repo-metadata` | repository identity + revision + dirty-state fingerprint + indexer version | stateful |
+| `repo-metadata` | repository identity + revision + dirty/untracked-state fingerprint + indexer version | stateful |
 | `symbol-index` | content hash + parser/indexer version | shareable for identical blobs |
 | `embedding` | chunk hash + embedding model/provider/version/config | optional |
 | `retrieval` | task/query fingerprint + eligible ContextItem set fingerprint + retriever config + policy scope | worktree/policy sensitive |
 | `selection` | candidate/result hashes + ranking/budget config | records deterministic selection |
 | `summary` | ordered source hashes + summarizer model/config/prompt version | derived only |
 | `context-bundle` | ordered selected item versions + budget + renderer/layout policy | exact deterministic bundle |
-| `evaluation` | artifact/worktree/test/evaluator/config hashes | only deterministic/replay-safe evaluators |
+| `evaluation` | complete deterministic evaluator-input fingerprint | **opt-in memoization only for proven replay-safe evaluators; never final outcome truth** |
 | `provider-cache-metadata` | provider/model/session + reported cache identity/usage | observations, not local cache entries |
 
 ## Fingerprints
@@ -44,12 +44,43 @@ For a dirty worktree:
 WorktreeFingerprint =
   repo identity
   + base revision
-  + changed path set
-  + content hash for each dirty path
+  + tracked changed path set
+  + non-ignored untracked path set
+  + content hash for each dirty/untracked path
+  + symlink/submodule boundary fingerprints where eligible
   + relevant instruction/policy fingerprints
 ```
 
 Do not key dirty-state caches by branch name or mtime alone.
+
+## Evaluation cache is deliberately narrow
+
+An evaluation cache can create false confidence if "same test" is reused under a different toolchain, dependency graph or environment. Therefore evaluation memoization is **disabled by default per evaluator** and may be enabled only when the evaluator declares and proves deterministic/replay-safe inputs.
+
+A reusable deterministic evaluation fingerprint includes every input that can materially change the result, at minimum when applicable:
+
+```text
+artifact/source/worktree content fingerprints
+exact evaluator command + arguments + evaluator implementation/version/hash
+configuration/policy version
+OS + architecture where behavior can differ
+toolchain/compiler/runtime versions
+dependency lockfile/resolution fingerprints
+relevant environment-variable allowlist + values/fingerprints
+fixture/test-data fingerprints
+external immutable snapshot/service version identity, if any
+```
+
+Rules:
+
+- Human review, model/LLM review, provider self-report, live remote CI state and other nondeterministic/externally mutable evaluations are **observations**, not reusable cached verdicts.
+- A deterministic evaluator that depends on mutable external state is non-cacheable unless that state is captured by a versioned immutable identity and the evaluator contract proves replay equivalence.
+- A cached evaluator result retains evidence provenance and input fingerprint; it never becomes the authoritative `WorkItem Outcome` by itself.
+- Any unknown/missing material input makes the evaluation a cache miss. "Probably unchanged" is not sufficient.
+- Environment variables are deny-by-default for key omission: an evaluator specification declares which environment can affect behavior, and secret values are fingerprinted with policy-safe handling rather than persisted in plaintext cache metadata.
+- Toolchain/dependency/schema changes invalidate prior deterministic evaluator entries even if repository bytes are unchanged.
+
+This namespace should remain small. If implementation cannot enumerate a deterministic evaluator's complete material inputs, do not cache its verdict.
 
 ## Invalidation
 
@@ -64,6 +95,8 @@ source changed
 ```
 
 Policy/sensitivity changes invalidate any cache whose eligible-source set changes even if file bytes do not.
+
+Evaluation entries additionally invalidate when any evaluator/toolchain/dependency/environment/fixture input fingerprint changes.
 
 Cache corruption or unreadable schema is a miss, not a reason to block terminal or agent execution.
 
@@ -101,7 +134,7 @@ Encryption at rest may reduce disk exposure but does **not** make cross-user/cro
 
 ## Cache poisoning controls
 
-- namespace keys include adapter/indexer/model/config versions;
+- namespace keys include adapter/indexer/model/evaluator/config/schema versions;
 - provenance is stored with every derived object;
 - untrusted provider/harness output cannot overwrite source-content entries;
 - no executable object deserialization from cache;
@@ -119,7 +152,8 @@ Separate eviction classes:
 1. cheap/rebuildable retrieval/selection entries — shortest retention;
 2. expensive embeddings/summaries — retain by LRU/value while dependencies remain valid;
 3. content/index metadata — retain while repository active, with global bounds;
-4. sensitive entries — shorter policy-controlled retention and explicit clear.
+4. deterministic evaluation memoization — retain only while every declared input fingerprint remains valid;
+5. sensitive entries — shorter policy-controlled retention and explicit clear.
 
 Exact byte limits are deferred to #57 resource-budget measurements; architecture requires per-workspace and global quotas, inspect/clear commands, and low-disk emergency eviction.
 
@@ -130,11 +164,13 @@ Record by namespace:
 - hit/miss/invalid/corrupt counts;
 - bytes and entries;
 - build/lookup latency;
-- work avoided (index/chunk/summary operations);
+- work avoided (index/chunk/summary/evaluator operations);
 - ContextBundle tokens reused;
 - provider cached vs uncached tokens when reported;
 - provider cost avoided using contemporaneous published rate metadata, clearly separated from actual charged cost;
 - cache correctness failures (target: zero accepted stale/wrong-scope reuse).
+
+Evaluation-cache metrics must distinguish "evaluator execution avoided" from "Outcome accepted"; a memoized deterministic check is not a business outcome.
 
 Do not label local retrieval hits as provider prompt-cache hits.
 
@@ -148,6 +184,8 @@ C. all deterministic local caches;
 D. deterministic caches + summaries/embeddings;  
 E. provider cache-aware prefix layout where supported.
 
+For evaluation memoization, separately test toolchain/dependency/env/fixture mutation and prove every such material change produces a miss. Include a negative fixture where repository bytes are identical but compiler/runtime/dependency state changes the evaluator result.
+
 Measure latency, CPU, disk, bundle tokens, provider-reported cache tokens and outcome quality. An optimization fails if it improves hit rate but worsens correctness/outcomes.
 
 ## Rejected approaches
@@ -158,6 +196,8 @@ Measure latency, CPU, disk, bundle tokens, provider-reported cache tokens and ou
 - persisting arbitrary prompts/responses indefinitely;
 - shared cache across workspaces without sensitivity/ownership checks;
 - provider cache metadata as local source truth;
+- caching human/model/provider evaluation verdicts as reusable truth;
+- deterministic evaluation keys that omit toolchain/dependency/environment inputs;
 - cache rebuild that blocks PTY/render progress.
 
 ## OSS/commercial boundary
@@ -167,10 +207,10 @@ Measure latency, CPU, disk, bundle tokens, provider-reported cache tokens and ou
 
 ## Success / kill criteria
 
-Pass when identical immutable inputs deterministically reuse derivatives, dirty worktrees never cross-contaminate selection/bundles, policy changes invalidate affected entries, corrupted entries degrade to misses, and terminal benchmarks show no cache/index dependency in hot-path progress.
+Pass when identical immutable inputs deterministically reuse derivatives, dirty/untracked worktrees never cross-contaminate selection/bundles, policy changes invalidate affected entries, corrupted entries degrade to misses, deterministic evaluation memoization misses on every material evaluator-input change, and terminal benchmarks show no cache/index dependency in hot-path progress.
 
 Reject commercializing any optimization that cannot beat the same OSS baseline on outcome quality plus measured cost/latency.
 
 ## ADR/spec before implementation
 
-Coordinate one Local Context + Cache ownership/invalidation ADR with #52 rather than separate competing state models. Add a fingerprint/cache behavior spec and retained invalidation/security fixtures before production code.
+Coordinate one Local Context + Cache ownership/invalidation ADR with #52 rather than separate competing state models. Add a fingerprint/cache behavior spec, a deterministic evaluator cacheability contract, and retained invalidation/security fixtures before production code.

@@ -11,5 +11,9 @@ publish = false
 name = "vt_parser_state"
 harness = false
 
+[[bench]]
+name = "vt_scroll_state"
+harness = false
+
 [lints]
 workspace = true

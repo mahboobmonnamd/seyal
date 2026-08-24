@@ -11,8 +11,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .or_else(|| std::env::var_os("SHELL"))
         .unwrap_or_else(|| "/bin/sh".into());
     let command = CommandSpec::new(program).args(args);
-    let execution = runtime.create_execution(command, WindowSize::new(80, 24, 0, 0)?)?;
-    let _attachment = runtime.attach(execution)?;
+    runtime.create_execution(command, WindowSize::new(80, 24, 0, 0)?)?;
 
     while runtime.execution_count() != 0 {
         runtime.poll_once(Some(Duration::from_secs(30)))?;

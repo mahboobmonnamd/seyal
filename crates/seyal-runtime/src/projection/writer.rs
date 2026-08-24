@@ -44,11 +44,27 @@ impl RegionMemory {
         self.len == 0
     }
 
+    /// Copies an aligned byte range out of the mapping using atomic word
+    /// loads. This compatibility seam is intentionally a copy: it never
+    /// creates a Rust slice/reference over shared projection storage.
+    pub fn read_bytes(
+        &self,
+        range: std::ops::Range<usize>,
+    ) -> Result<Vec<u8>, WriterError> {
+        let len = range
+            .end
+            .checked_sub(range.start)
+            .ok_or(WriterError::OutOfBounds)?;
+        self.read_atomic_bytes(range.start, len)
+    }
+
     fn checked_word_range(&self, offset: usize, len: usize) -> Result<(), WriterError> {
         if !offset.is_multiple_of(8) || !len.is_multiple_of(8) {
             return Err(WriterError::UnalignedAccess);
         }
-        let end = offset.checked_add(len).ok_or(WriterError::OutOfBounds)?;
+        let end = offset
+            .checked_add(len)
+            .ok_or(WriterError::OutOfBounds)?;
         if end > self.len {
             return Err(WriterError::OutOfBounds);
         }
@@ -133,8 +149,16 @@ impl Writer {
     pub fn new(memory: RegionMemory, region: RegionHeader) -> Result<Self, WriterError> {
         let slot0 = region.slot_offset(0)? as usize;
         let slot1 = region.slot_offset(1)? as usize;
-        memory.atomic_store(slot0 + SLOT_SEQUENCE_OFFSET, 0, Ordering::Release);
-        memory.atomic_store(slot1 + SLOT_SEQUENCE_OFFSET, 0, Ordering::Release);
+        memory.atomic_store(
+            slot0 + SLOT_SEQUENCE_OFFSET,
+            0,
+            Ordering::Release,
+        );
+        memory.atomic_store(
+            slot1 + SLOT_SEQUENCE_OFFSET,
+            0,
+            Ordering::Release,
+        );
         memory.atomic_store(PUBLICATION_WORD_OFFSET, 0, Ordering::Release);
         Ok(Self {
             memory,
@@ -171,11 +195,24 @@ impl Writer {
         );
 
         let cells_offset = SLOT_HEADER_LEN as u32;
-        let cells_len = snapshot.cells.len() * CELL_LEN;
+        let cells_len = snapshot
+            .cells
+            .len()
+            .checked_mul(CELL_LEN)
+            .ok_or(WriterError::OutOfBounds)?;
         let damages_offset = cells_offset as usize + cells_len;
+        let payload_bytes = cells_len
+            .checked_add(
+                snapshot
+                    .damages
+                    .len()
+                    .checked_mul(DAMAGE_LEN)
+                    .ok_or(WriterError::OutOfBounds)?,
+            )
+            .ok_or(WriterError::OutOfBounds)?;
         let header = SlotHeader {
             generation,
-            payload_bytes: (cells_len + snapshot.damages.len() * DAMAGE_LEN) as u32,
+            payload_bytes: payload_bytes as u32,
             rows: snapshot.rows,
             columns: snapshot.columns,
             cursor_row: snapshot.cursor_row,
@@ -195,19 +232,25 @@ impl Writer {
         self.memory
             .write_atomic_bytes(slot_offset + 8, &header_bytes[8..])?;
 
-        let mut cell_bytes = vec![0u8; cells_len];
+        // Fixed-width records are encoded directly into stack buffers and
+        // copied atomically into the non-committed slot. No per-update encoded
+        // cell/damage Vec is allocated.
         for (index, cell) in snapshot.cells.iter().enumerate() {
-            cell.encode(&mut cell_bytes[index * CELL_LEN..(index + 1) * CELL_LEN])?;
+            let mut encoded = [0u8; CELL_LEN];
+            cell.encode(&mut encoded)?;
+            self.memory.write_atomic_bytes(
+                slot_offset + cells_offset as usize + index * CELL_LEN,
+                &encoded,
+            )?;
         }
-        self.memory
-            .write_atomic_bytes(slot_offset + cells_offset as usize, &cell_bytes)?;
-
-        let mut damage_bytes = vec![0u8; snapshot.damages.len() * DAMAGE_LEN];
         for (index, damage) in snapshot.damages.iter().enumerate() {
-            damage.encode(&mut damage_bytes[index * DAMAGE_LEN..(index + 1) * DAMAGE_LEN])?;
+            let mut encoded = [0u8; DAMAGE_LEN];
+            damage.encode(&mut encoded)?;
+            self.memory.write_atomic_bytes(
+                slot_offset + damages_offset + index * DAMAGE_LEN,
+                &encoded,
+            )?;
         }
-        self.memory
-            .write_atomic_bytes(slot_offset + damages_offset, &damage_bytes)?;
 
         self.memory.atomic_store(
             slot_offset + SLOT_SEQUENCE_OFFSET,
@@ -231,7 +274,9 @@ fn validate_snapshot(
     snapshot: &SnapshotWrite<'_>,
 ) -> Result<(), WriterError> {
     if snapshot.rows > region.capacity_rows || snapshot.columns > region.capacity_cols {
-        return Err(WriterError::InvalidInput(LayoutError::InvalidRowsColumns));
+        return Err(WriterError::InvalidInput(
+            LayoutError::InvalidRowsColumns,
+        ));
     }
     let expected_cells = snapshot.rows as usize * snapshot.columns as usize;
     if snapshot.cells.len() != expected_cells {
@@ -241,7 +286,9 @@ fn validate_snapshot(
         return Err(WriterError::InvalidInput(LayoutError::InvalidDamageCount));
     }
     if !snapshot.full_snapshot {
-        return Err(WriterError::InvalidInput(LayoutError::InvalidSnapshotFlags));
+        return Err(WriterError::InvalidInput(
+            LayoutError::InvalidSnapshotFlags,
+        ));
     }
     let cells_len = expected_cells
         .checked_mul(CELL_LEN)
@@ -278,9 +325,9 @@ impl From<LayoutError> for ReaderError {
 impl From<WriterError> for ReaderError {
     fn from(value: WriterError) -> Self {
         match value {
-            WriterError::OutOfBounds | WriterError::UnalignedAccess | WriterError::GenerationExhausted => {
-                Self::OutOfBounds
-            }
+            WriterError::OutOfBounds
+            | WriterError::UnalignedAccess
+            | WriterError::GenerationExhausted => Self::OutOfBounds,
             WriterError::InvalidInput(layout) => Self::Layout(layout),
         }
     }
@@ -395,7 +442,10 @@ mod tests {
             .write_atomic_bytes(0, &bytes[..PUBLICATION_WORD_OFFSET])
             .unwrap();
         memory
-            .write_atomic_bytes(PUBLICATION_WORD_OFFSET + 8, &bytes[PUBLICATION_WORD_OFFSET + 8..])
+            .write_atomic_bytes(
+                PUBLICATION_WORD_OFFSET + 8,
+                &bytes[PUBLICATION_WORD_OFFSET + 8..],
+            )
             .unwrap();
     }
 
@@ -426,6 +476,15 @@ mod tests {
             };
             rows as usize * columns as usize
         ]
+    }
+
+    #[test]
+    fn atomic_copy_helper_reads_static_aligned_ranges() {
+        let region = small_region_header(2, 2, 4096);
+        let (_storage, memory) = aligned_region(region.region_bytes as usize);
+        initialize_region_header(memory, region);
+        let bytes = memory.read_bytes(0..REGION_HEADER_LEN).unwrap();
+        assert_eq!(RegionHeader::decode(&bytes).unwrap(), region);
     }
 
     #[test]

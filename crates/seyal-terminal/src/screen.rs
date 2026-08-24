@@ -48,6 +48,15 @@ impl Screen {
         self.rows
     }
 
+    pub(crate) fn pen(&self) -> Style {
+        self.pen
+    }
+
+    pub(crate) fn inherit_pen_for_clean_buffer(&mut self, pen: Style) {
+        self.pen = pen;
+        self.cells.fill(Cell::blank(pen.bg));
+    }
+
     pub(crate) fn cursor(&self, visible: bool) -> CursorState {
         CursorState {
             col: self.cursor.col,
@@ -344,7 +353,7 @@ impl Screen {
         let row_width = usize::from(self.cols);
         self.cells.copy_within(row_width.., 0);
         let last_row_start = self.cells.len() - row_width;
-        self.cells[last_row_start..].fill(Cell::default());
+        self.cells[last_row_start..].fill(Cell::blank(self.pen.bg));
         self.line_ids.copy_within(1.., 0);
         let last = self.line_ids.len() - 1;
         self.line_ids[last] = self.line_clock.allocate();

@@ -66,6 +66,7 @@ The Runtime owns:
 - execution lifecycle;
 - PTY transport;
 - child process lifecycle;
+- local child launch/capability environment above the PTY layer;
 - one authoritative `TerminalState` per `TerminalExecution`;
 - VT parser/modes;
 - primary and minimal alternate screen state;
@@ -137,6 +138,8 @@ M001 implements only:
 - one or more `TerminalExecution` objects sufficient to exercise 1/10/50/100 idle-execution measurements;
 - one real macOS PTY per execution;
 - one real shell child per execution;
+- explicit Runtime-owned local terminal capability environment;
+- bundled `seyal-m001` terminfo describing only the M001-tested capability subset;
 - Seyal-owned incremental VT parser/state machine;
 - explicit M001 VT subset in section 7;
 - primary screen;
@@ -189,6 +192,8 @@ runtime-crash PTY survival
 reboot recovery
 production history persistence
 production layout persistence
+stable public TERM/terminfo identity
+SSH/remote terminfo installation or fallback
 ```
 
 These are intentionally deferred, not forgotten.
@@ -203,6 +208,7 @@ These are intentionally deferred, not forgotten.
 | `TerminalExecution` registry | Seyal Runtime | GUI references IDs only |
 | PTY | `TerminalExecution` | exactly one per execution |
 | child process | `TerminalExecution` | survives GUI detach/crash |
+| local `TERM`/terminfo capability advertisement | Runtime/product composition | PTY layer remains policy-neutral; advertise only implemented/tested capabilities |
 | VT parser/modes | `TerminalState` in Runtime | exactly one authority |
 | primary/alternate screen | `TerminalState` in Runtime | GUI projection only |
 | logical line identity | `TerminalState`/history seam | stable, minimal |
@@ -264,17 +270,45 @@ The client must not guess terminal-mode-sensitive encoding from stale mirrored V
 
 ### 6.3 Resize
 
+Resize follows the accepted Foundation §5.4 transaction exactly:
+
 ```text
 window geometry
 → rows/cols proposal
-→ Runtime validates controller authority
-→ canonical TerminalState resize
-→ PTY winsize
+→ Runtime validates controller authority + geometry
+→ Runtime prepares all locally rejectable/infallible resize inputs
+→ apply fallible PTY winsize
+→ commit canonical TerminalState resize/reflow
 → damage generation
 → new projection
 ```
 
+The Runtime must not publish/reflow canonical geometry that the endpoint rejected. If a future canonical resize can fail after endpoint commit, the implementation must add explicit prepare/commit/rollback semantics rather than permit PTY/`TerminalState` divergence.
+
 M001 has one controller, but the authority seam must not require redesign for future observers/controllers.
+
+### 6.4 Local terminal capability environment (`TERM` / terminfo)
+
+`TerminalEndpoint`/PTY creation remains environment-policy neutral. It does not invent `TERM`.
+
+The Runtime/product composition that launches the local M001 shell owns terminal capability advertisement. It must not depend on an arbitrary parent process already having a correct `TERM`, because the headless Runtime/Seyal.app may be launched from Finder/launchd or another non-terminal environment.
+
+M001 also must not advertise `xterm-256color` merely for compatibility: that terminfo entry describes a substantially broader behavior set than Seyal intentionally claims in M001.
+
+For the M001 local vertical slice:
+
+```text
+bundled project-owned terminfo source
+→ compile/package with Seyal development/runtime artifact
+→ Runtime resolves the bundled terminfo database
+→ spawned local shell receives:
+     TERM=seyal-m001
+     TERMINFO/TERMINFO_DIRS as required for that packaged database
+```
+
+The `seyal-m001` entry is deliberately milestone-scoped and advertises only capabilities that are implemented and covered by the M001 conformance/fixture contract. Adding a capability to that entry requires the corresponding terminal behavior to be implemented and tested first.
+
+`seyal-m001` is **not** the promised long-term public terminal identity. A stable public identity (expected to be project-owned, potentially `xterm-seyal` for real-world ecosystem compatibility) is chosen only after Seyal has enough xterm-compatible behavior to justify that advertisement. SSH/remote propagation, automatic terminfo installation, and fallback to a widely installed entry are later compatibility work and are not pulled into M001.
 
 ---
 
@@ -286,6 +320,7 @@ Rules:
 2. Unsupported sequences must be ignored/rejected according to a documented parser policy without being silently treated as correctly implemented semantics.
 3. Parser framing must be permanent and extensible; deferred features add handlers/state, not a replacement parser.
 4. Unknown/private sequences must never corrupt parser state or panic.
+5. The bundled `seyal-m001` terminfo must not advertise a capability outside the supported/tested M001 contract.
 
 ### 7.1 Supported M001
 
@@ -305,7 +340,7 @@ Rules:
 | Cursor | DECTCEM cursor visibility | SUPPORTED M001 |
 | Cursor | save/restore cursor required by shell fixtures | SUPPORTED M001 |
 | Screen | primary screen | SUPPORTED M001 |
-| Screen | minimal alternate-screen enter/leave using xterm-compatible mode used by target fixtures | SUPPORTED M001 |
+| Screen | minimal `CSI ?1049h/l` alternate-screen subset defined by SPEC-001; no broader xterm DECSC/DECRC save-slot compatibility claim | SUPPORTED M001 |
 | Resize | rows/cols mutation + cursor/grid invariants | SUPPORTED M001 |
 | Terminal modes | canonical mode storage needed by implemented input/screen behavior | SUPPORTED M001 |
 | Parser | split/incremental UTF-8 and escape sequence delivery across arbitrary PTY read boundaries | SUPPORTED M001 |
@@ -355,6 +390,8 @@ backspace/editing handled by shell line discipline/readline path
 resize while shell is active
 one explicit alternate-screen fixture/application that uses only the supported subset
 ```
+
+The end-to-end shell fixture must prove that Runtime launch does not rely on inherited terminal metadata: the child sees `TERM=seyal-m001`, the bundled terminfo entry resolves successfully, and its advertised capabilities remain within the tested M001 matrix.
 
 M001 does not claim Vim/Neovim/tmux/htop/Claude Code correctness. Those are M002 workloads.
 
@@ -560,7 +597,8 @@ Requirements:
 - supported behavior is checked against expected reference semantics where practical;
 - regression fixtures are retained in the repository;
 - disagreements between implementation and reference behavior are resolved explicitly rather than silently normalizing the implementation;
-- deferred behavior remains deferred and is not pulled into M001 merely to increase conformance breadth.
+- deferred behavior remains deferred and is not pulled into M001 merely to increase conformance breadth;
+- the bundled `seyal-m001` terminfo capability set is checked against the supported matrix so capability advertisement cannot outrun implementation.
 
 ### 12.4 Property tests
 
@@ -596,7 +634,8 @@ Required:
 - detach while child runs;
 - reconnect to same `ExecutionId`;
 - kill GUI test while child runs;
-- explicit execution termination.
+- explicit execution termination;
+- Runtime-spawned local shell receives the explicit bundled M001 terminfo environment rather than relying on inherited `TERM`.
 
 ### 12.7 Renderer deterministic tests
 
@@ -747,7 +786,8 @@ Required exits:
 - winsize changes work;
 - exit/reap works;
 - integration tests pass;
-- PTY owner is `TerminalExecution`.
+- PTY owner is `TerminalExecution`;
+- PTY layer remains free of product `TERM`/terminfo policy.
 
 ### Pass 4 — Headless Runtime
 
@@ -759,7 +799,9 @@ Required exits:
 - stable runtime identity;
 - execution registry supports create/list/attach/detach/terminate minimum;
 - one execution continues with no GUI attached;
-- Runtime has bounded concurrency architecture, not thread/daemon per execution.
+- Runtime has bounded concurrency architecture, not thread/daemon per execution;
+- Runtime owns local child capability-environment selection above the PTY layer;
+- M001 local shell launch uses bundled `seyal-m001` terminfo rather than inherited/false standard terminal capability claims.
 
 ### Pass 5 — Local attachment/projection
 
@@ -805,7 +847,7 @@ Required exits:
 
 - key event → Runtime → PTY path works;
 - mode-sensitive encoding owned by Runtime;
-- resize updates canonical state and PTY winsize;
+- resize follows validate/prepare → PTY winsize → canonical `TerminalState` commit → damage/projection;
 - focus/IME/accessibility seams are present without replacing Metal surface;
 - latency instrumentation is active.
 
@@ -843,6 +885,7 @@ Required exits:
 
 - all VT/PTY/projection/renderer/detach tests pass;
 - retained VT reference/conformance regression corpus is clean;
+- bundled `seyal-m001` terminfo resolves and advertises no unsupported capability;
 - fuzz regression corpus clean;
 - required measurements captured for 1/10/50/100 execution cases;
 - failure tests include GUI death, malformed projection/protocol input, PTY child exit, reconnect/resync;
@@ -869,7 +912,8 @@ M001 passes only when every item below is demonstrated, not merely represented b
 - [ ] no synchronous IPC request/response ping-pong in terminal hot paths;
 - [ ] no display JSON/transcript serialization;
 - [ ] no daemon/thread/render stack per execution by default;
-- [ ] stable logical line identity exists independently of viewport rows.
+- [ ] stable logical line identity exists independently of viewport rows;
+- [ ] terminal capability advertisement is Runtime/product-owned above the PTY layer.
 
 ### Correctness
 
@@ -879,8 +923,10 @@ M001 passes only when every item below is demonstrated, not merely represented b
 - [ ] no deferred behavior was promoted merely to satisfy corpus breadth;
 - [ ] unsupported/deferred sequences are not silently represented as correct;
 - [ ] real shell works through a real PTY;
-- [ ] resize is canonical and PTY winsize is updated;
-- [ ] minimal alternate-screen enter/leave path works for the scoped fixture;
+- [ ] Runtime-spawned local shell uses resolvable bundled `seyal-m001` terminfo and does not rely on inherited `TERM`;
+- [ ] bundled terminfo advertises no behavior outside the tested M001 matrix;
+- [ ] resize follows the canonical endpoint-first transaction and PTY winsize is updated;
+- [ ] minimal `?1049` alternate-screen subset works for the scoped fixture without claiming broader xterm save-slot compatibility;
 - [ ] malformed/parser-fuzz inputs do not crash or violate invariants.
 
 ### Rendering/input
@@ -930,18 +976,19 @@ The final M001 demo must be reproducible from a clean checkout/build.
 1. Start the headless Seyal Runtime.
 2. Launch Seyal.app and attach/create one `TerminalExecution`.
 3. Show the real shell prompt rendered through Metal.
-4. Type commands and show input reaching the shell through Runtime.
-5. Produce ANSI color and cursor/erase behavior from the supported matrix.
-6. Resize the window and demonstrate canonical resize/winsize behavior.
-7. Run the scoped alternate-screen fixture/application; leave alternate screen and recover primary screen state.
-8. Show the real Block identity and logical start anchor from Runtime/workspace metadata without another PTY/grid.
-9. Start a long-running shell command or counter.
-10. Close Seyal.app; prove the Runtime/execution remains alive.
-11. Reopen Seyal.app; attach to the same `ExecutionId`; show current state from projection snapshot/resync.
-12. Repeat using forced GUI termination/crash; verify the execution still lives.
-13. Explicitly terminate the execution and verify child reap/registry cleanup.
-14. Run/present VT unit/reference/property tests, PTY integration tests, projection tests, renderer tests, fuzz smoke/regression corpus, local attachment security tests, and CI status.
-15. Present benchmark results for startup, latency stages, throughput, CPU, RSS, threads, hidden GPU resources, and the projection comparator.
+4. Verify the spawned local shell receives `TERM=seyal-m001` and resolves the bundled terminfo entry without relying on inherited terminal metadata.
+5. Type commands and show input reaching the shell through Runtime.
+6. Produce ANSI color and cursor/erase behavior from the supported matrix.
+7. Resize the window and demonstrate validate/prepare → PTY winsize → canonical `TerminalState` commit behavior.
+8. Run the scoped `?1049` alternate-screen fixture/application; leave alternate screen and recover primary screen state.
+9. Show the real Block identity and logical start anchor from Runtime/workspace metadata without another PTY/grid.
+10. Start a long-running shell command or counter.
+11. Close Seyal.app; prove the Runtime/execution remains alive.
+12. Reopen Seyal.app; attach to the same `ExecutionId`; show current state from projection snapshot/resync.
+13. Repeat using forced GUI termination/crash; verify the execution still lives.
+14. Explicitly terminate the execution and verify child reap/registry cleanup.
+15. Run/present VT unit/reference/property tests, terminfo capability validation, PTY integration tests, projection tests, renderer tests, fuzz smoke/regression corpus, local attachment security tests, and CI status.
+16. Present benchmark results for startup, latency stages, throughput, CPU, RSS, threads, hidden GPU resources, and the projection comparator.
 
 ---
 
@@ -960,6 +1007,8 @@ The final M001 demo must be reproducible from a clean checkout/build.
 [x] no display JSON
 [x] local projection mechanism is decided
 [x] VT M001 subset is explicit
+[x] resize transaction is aligned with Foundation §5.4
+[x] local TERM/terminfo ownership is explicit and capability-honest
 [x] tests precede supported behavior
 [x] retained reference/conformance corpus is required
 [x] local attachment security gate is required

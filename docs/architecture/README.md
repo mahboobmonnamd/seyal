@@ -12,11 +12,12 @@ This directory is the canonical entry point for Seyal foundation architecture.
 6. [`ADR-005-PTY-EXECUTION-LIFECYCLE.md`](ADR-005-PTY-EXECUTION-LIFECYCLE.md) — accepted M001 PTY endpoint, child lifecycle, detach/terminate, readiness and execution-ownership decision.
 7. [`ADR-006-RUNTIME-REACTOR.md`](ADR-006-RUNTIME-REACTOR.md) — accepted M001 macOS multi-execution reactor, bounded fairness, child-exit and nonblocking Runtime-termination decision.
 8. [`ADR-007-WORKSPACE-PERSISTENCE-AGENT-CONTINUITY.md`](ADR-007-WORKSPACE-PERSISTENCE-AGENT-CONTINUITY.md) — accepted pre-Pass-4 decision separating Workspace/domain ownership, persistence classes, resource tiers and agent work from presentation/provider-chat lifetime.
-9. [`SEYAL-RUNTIME-WORKSPACE-CONTINUITY-RD-001.md`](SEYAL-RUNTIME-WORKSPACE-CONTINUITY-RD-001.md) — focused evidence/alternatives/memory-accounting research behind ADR-007.
-10. [`../milestones/MILESTONE-001.md`](../milestones/MILESTONE-001.md) — authoritative M001 implementation scope, passes, tests, security gates, benchmarks, acceptance criteria, and demo procedure.
-11. [`ui/SEYAL-UI-ARCHITECTURE-001.md`](ui/SEYAL-UI-ARCHITECTURE-001.md) — presentation architecture for Flow/Raw/TUI, history, Blocks, workspace chrome, inspectors, attention/approvals, desktop/mobile continuity, and render priority.
-12. [`SEYAL-AGENT-PLATFORM-RD-PLAN-001.md`](SEYAL-AGENT-PLATFORM-RD-PLAN-001.md) — agent-native OSS foundation research plan; consumes stable Runtime/Workspace identities and remains outside terminal hot-path ownership.
-13. [`source/FOUNDATION-RD-BRIEF.md`](source/FOUNDATION-RD-BRIEF.md) — source requirements that initiated the architecture pass; not an implementation specification.
+9. [`ADR-008-TERMINFO-CAPABILITY-OWNERSHIP.md`](ADR-008-TERMINFO-CAPABILITY-OWNERSHIP.md) — M001 local `TERM`/terminfo capability-advertisement ownership and honesty contract.
+10. [`SEYAL-RUNTIME-WORKSPACE-CONTINUITY-RD-001.md`](SEYAL-RUNTIME-WORKSPACE-CONTINUITY-RD-001.md) — focused evidence/alternatives/memory-accounting research behind ADR-007.
+11. [`../milestones/MILESTONE-001.md`](../milestones/MILESTONE-001.md) — authoritative M001 implementation scope, passes, tests, security gates, benchmarks, acceptance criteria, and demo procedure.
+12. [`ui/SEYAL-UI-ARCHITECTURE-001.md`](ui/SEYAL-UI-ARCHITECTURE-001.md) — presentation architecture for Flow/Raw/TUI, history, Blocks, workspace chrome, inspectors, attention/approvals, desktop/mobile continuity, and render priority.
+13. [`SEYAL-AGENT-PLATFORM-RD-PLAN-001.md`](SEYAL-AGENT-PLATFORM-RD-PLAN-001.md) — agent-native OSS foundation research plan; consumes stable Runtime/Workspace identities and remains outside terminal hot-path ownership.
+14. [`source/FOUNDATION-RD-BRIEF.md`](source/FOUNDATION-RD-BRIEF.md) — source requirements that initiated the architecture pass; not an implementation specification.
 
 ## Authority
 
@@ -30,6 +31,7 @@ This directory is the canonical entry point for Seyal foundation architecture.
 - ADR-005 owns the PTY/child execution boundary: `seyal-exec` owns endpoint/process lifecycle, detach is not terminate, and terminal bytes feed the single `seyal-terminal` authority without a second grid/state model.
 - ADR-006 owns the M001 macOS many-execution readiness composition: one bounded Runtime reactor over execution-owned PTYs, no thread-per-PTY, explicit primary-child exit observation, bounded input/fair output progress, and nonblocking Runtime termination scheduling.
 - ADR-007 owns the Workspace/domain versus presentation boundary, execution→Workspace ownership association, persistence-class separation, memory/resource-tier contract and the rule that future agent work identity is independent of chat/provider-session identity. It does not authorize production persistence or agent implementation.
+- ADR-008 owns local terminal capability advertisement: Runtime/product composition selects the validated `TERM`/terminfo profile, the PTY layer remains policy-neutral, and M001 uses bundled `seyal-m001` without advertising unsupported capabilities.
 - The Agent Platform R&D is subordinate to the terminal/runtime/workspace ownership architecture and must consume stable identities/capabilities without reverse ownership.
 - Source briefs preserve research inputs and historical requirements only.
 - Git history and pull requests preserve superseded wording; duplicate `-v2`, `-final`, `-new`, `-amendment`, or correction documents are not required.

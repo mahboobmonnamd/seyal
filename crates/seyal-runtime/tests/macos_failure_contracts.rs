@@ -3,9 +3,7 @@
 use std::time::{Duration, Instant};
 
 use seyal_exec::{CommandSpec, WindowSize};
-use seyal_runtime::{
-    ExecutionLifecycle, LocalIpcMode, Runtime, RuntimeConfig, RuntimeError,
-};
+use seyal_runtime::{ExecutionLifecycle, LocalIpcMode, Runtime, RuntimeConfig, RuntimeError};
 
 fn config(test: &str) -> RuntimeConfig {
     let mut config = RuntimeConfig::m001().expect("bundled capability profile");

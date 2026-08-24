@@ -1,23 +1,20 @@
 ---
 name: issue-refinement
-description: Turn an accepted Seyal milestone or feature into implementation-ready GitHub Issues without changing architecture or duplicating planning systems.
+description: Seyal facade for AI-SDLC work-item design, adding GitHub Issue, terminal-engine, documentation, and repository-specific readiness rules.
 ---
 
 # Issue refinement
 
-Read `AGENTS.md`, `docs/engineering/ISSUE-PROTOCOL.md`, the applicable architecture/ADR/spec/milestone documents, and existing related Issues.
+Follow the canonical generic procedure in `.sdlc/framework/skills/work-item-design/SKILL.md`. If it is unavailable, run `make bootstrap-agents` first.
 
-For each proposed implementation Issue:
+Apply only these Seyal-specific rules on top of the generic procedure:
 
-1. Define one coherent independently reviewable outcome.
-2. State Goal and Why.
-3. Link exact authority documents/sections.
-4. Define in-scope and explicit out-of-scope work.
-5. Identify native GitHub dependencies/sub-issues and the owning module/state boundary.
-6. Write measurable acceptance criteria.
-7. Define tests first for core behavior; include fixture/conformance/fuzz needs where relevant.
-8. Identify performance, memory, security and documentation impact.
-9. Give a reproducible demo/verification procedure and Definition of Done.
-10. Check parallelizability: do not allow concurrent mutation of the same authoritative subsystem unless independence is proven.
+1. GitHub Issues + Projects are Seyal's execution system; use native dependencies/sub-issues and the required fields in `docs/engineering/ISSUE-PROTOCOL.md`.
+2. Link exact accepted architecture/ADR/spec/milestone authority. Existing code and `.sdlc` summaries are never architectural authority.
+3. Preserve one coherent independently reviewable outcome and the owning module/state boundary. Do not bundle unrelated cleanup or cross-authority work.
+4. For terminal/runtime work, classify required unit/integration/fixture/conformance/fuzz/failure/performance evidence and identify any applicable domain skill such as `vt-tdd`, `terminal-conformance`, `performance-gate`, `metal-renderer`, or `security-review`.
+5. Classify performance, memory, security, and documentation impact. `Documentation impact: none` requires a concrete reason.
+6. Respect the active milestone/dependency frontier; do not pre-create speculative downstream implementation work merely to fill a roadmap.
+7. After the work item is designed, run the `development-readiness` skill. Set Project status to **Ready** only when its generic verdict is `READY` and every Seyal Ready checkbox in `ISSUE-PROTOCOL.md` also passes.
 
-Mark **Ready** only when every readiness checkbox in `ISSUE-PROTOCOL.md` passes. Otherwise leave in Refinement/Blocked and state the missing authority/evidence. Never invent missing architecture or broaden scope to make the Issue executable.
+If generic AI-SDLC behavior is insufficient, record the reusable defect in `ai-sdlc`; do not permanently fork the generic procedure here.

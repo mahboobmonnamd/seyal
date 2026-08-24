@@ -6,14 +6,20 @@ The tooling set is intentionally minimal: do not add generic developer tools mer
 
 ## Canonical skills
 
-`.agents/skills/` is the single source of truth for Seyal-owned workflows and thin discovery adapters. `.claude/skills/` contains thin Claude-specific adapters only.
+`.agents/skills/` is the single source of truth for Seyal-owned workflows and thin discovery adapters/facades. `.claude/skills/` contains thin Claude-specific adapters only.
 
 Codex and GitHub Copilot CLI both discover project skills directly from `.agents/skills/`; do not create duplicate Codex or Copilot skill trees.
 
 | Capability | Canonical Seyal skill / authority |
 | --- | --- |
 | Seyal architecture | `AGENTS.md` + `architecture-change` |
-| Project-context retrieval | thin `project-context` adapter → pinned AI-SDLC generic skill |
+| Project-context retrieval | thin `project-context` adapter → pinned AI-SDLC `project-context` |
+| Development readiness | thin `development-readiness` adapter → pinned AI-SDLC `development-readiness` + Seyal Ready gate |
+| Issue decomposition | `issue-refinement` facade → pinned AI-SDLC `work-item-design` + GitHub/Seyal deltas |
+| Implementation | `implement-issue` facade → pinned AI-SDLC `implementation` + Seyal branch/test/docs gates |
+| PR review | `pr-review` facade → pinned AI-SDLC `code-review` + Seyal architecture/terminal evidence gates |
+| Change verification | thin `verification` adapter → pinned AI-SDLC `verification` + Seyal evidence gates |
+| Milestone validation | `milestone-validation` facade → pinned AI-SDLC `verification` + Seyal aggregate milestone rules |
 | Native macOS design | `macos-native-design` |
 | Native macOS UI testing | `macos-ui-testing` |
 | macOS accessibility | `macos-accessibility` |
@@ -25,9 +31,7 @@ Codex and GitHub Copilot CLI both discover project skills directly from `.agents
 | Metal rendering | `metal-renderer` |
 | Rust/parser fuzzing | `rust-fuzzing` |
 | Security review | `security-review` |
-| PR quality gate | `pr-review` + `milestone-validation` |
 | Current Apple platform docs/HIG | `apple-platform-docs` |
-| Issue decomposition | `issue-refinement` |
 
 Equivalent existing skills are intentionally reused rather than creating duplicate aliases with competing instructions. Seyal does not install generic external design skills; native AppKit/Metal work is governed by the project skills above and current Apple platform evidence.
 
@@ -35,25 +39,40 @@ Equivalent existing skills are intentionally reused rather than creating duplica
 
 Generic software-engineering procedures that are useful across unrelated products belong in the public `ai-sdlc` project rather than being independently reimplemented in Seyal. Seyal is a reference consumer, not the authority for those generic procedures.
 
-The first consumed capability is `project-context`:
+The consumed generic layer is:
 
 ```text
 ai-sdlc
-  skills/project-context/SKILL.md
-  tools/project_context.py
+  project-context
+  development-readiness
+  work-item-design
+  implementation
+  code-review
+  verification
         ↓ exact reviewed pin materialized by make bootstrap-agents
 Seyal/.sdlc/framework/
         ↓
-Seyal thin .agents/skills/project-context adapter
+Seyal thin adapters/facades in .agents/skills/
         ↓
-Seyal-owned .sdlc context/index + authoritative ADR/spec/code/test sources
+Seyal-owned GitHub workflow + ADR/spec/milestone + terminal-domain gates
 ```
 
-Seyal owns project knowledge and domain-specific workflows. AI-SDLC owns generic SDLC mechanism. Terminal-specific skills such as `vt-tdd`, `terminal-conformance`, `metal-renderer`, native macOS rules, and Seyal architecture invariants remain in this repository.
+Seyal owns project knowledge and project/domain policy. AI-SDLC owns the reusable SDLC mechanism.
 
-Do not migrate all existing skills mechanically. A skill moves to AI-SDLC only when its procedure is genuinely product-agnostic, has a stable generic contract/evaluation, and Seyal can retain any required domain constraints through project context or a thin adapter without weakening quality gates.
+Two integration forms are used deliberately:
+
+- **direct adapters** keep the generic capability name when Seyal only adds a narrow local gate (`project-context`, `development-readiness`, `verification`);
+- **Seyal facades** preserve an established Seyal workflow entrypoint while delegating the reusable procedure (`issue-refinement` → `work-item-design`, `implement-issue` → `implementation`, `pr-review` → `code-review`, `milestone-validation` → `verification`).
+
+Do not also add local `work-item-design`, `implementation`, or `code-review` aliases merely to mirror AI-SDLC. That would create overlapping discovery surfaces with the Seyal facades. The generic source remains under `.sdlc/framework/` and the project facade contains only the Seyal-specific delta.
+
+Terminal-specific skills such as `vt-tdd`, `terminal-conformance`, `metal-renderer`, native macOS rules, performance/security specialist gates, and Seyal architecture invariants remain in this repository.
+
+Do not migrate skills mechanically. A procedure belongs in AI-SDLC only when it is genuinely product-agnostic, has a stable generic contract/evaluation, and Seyal can retain required domain constraints through context or a thin adapter without weakening quality gates.
 
 AI-SDLC is pinned by exact commit in `scripts/bootstrap-dev.sh`; `.sdlc/framework/` is local generated developer state and is not committed. Updating the pin requires a normal Seyal Issue/PR. The generic framework is never a product/runtime dependency.
+
+Reference-consumer evidence for this integration is recorded in `docs/engineering/AI-SDLC-REFERENCE-CONSUMER.md`.
 
 ## Approved MCP/tool matrix
 

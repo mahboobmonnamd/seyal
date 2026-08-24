@@ -1,19 +1,21 @@
 ---
 name: milestone-validation
-description: Validate every Seyal milestone acceptance criterion from actual CI, test, benchmark, failure and demo evidence before the next milestone is authorized.
+description: Seyal milestone-level facade over AI-SDLC verification, adding aggregate terminal, benchmark, failure, demo, and milestone-order gates.
 ---
 
 # Milestone validation
 
-Read the accepted milestone, all amendments, linked Issues/PRs, and applicable architecture/specs.
+Use the canonical evidence discipline in `.sdlc/framework/skills/verification/SKILL.md` for each milestone acceptance criterion. If it is unavailable, run `make bootstrap-agents` first.
 
-1. Convert each milestone acceptance checkbox and pass-exit requirement into an evidence item.
-2. Gather CI/test/conformance/fuzz/integration/renderer/security/performance/failure evidence from merged work, not agent assertions.
-3. Run the documented clean-checkout demo procedure.
-4. Compare measured performance/memory results with targets; report target vs measured explicitly.
-5. Check no non-goal leaked into the milestone and no accepted architecture was silently changed.
-6. Check unsupported/deferred terminal behavior is still classified accurately.
-7. Require independent review evidence for core/high-risk changes.
-8. Mark the milestone complete only if every mandatory criterion is evidenced.
+Milestone validation is a Seyal-specific aggregate gate, not a second generic verification procedure. Apply these additional rules:
 
-If any required gate lacks evidence, verdict is not ready; list only concrete blockers. Do not start the next milestone to “make progress” while current acceptance is incomplete.
+1. Read the accepted milestone, amendments, linked Issues/PRs, and governing architecture/specifications.
+2. Expand every milestone acceptance checkbox and pass/exit requirement into criterion-level evidence using the generic verification contract.
+3. Aggregate only evidence from actual merged/reviewed work, CI, tests, conformance/fuzz/integration/renderer/security/performance/failure checks, and reproducible demos; agent assertion is never evidence.
+4. Run the documented clean-checkout/demo procedure and compare measured performance/memory results against explicit targets where applicable.
+5. Confirm milestone non-goals remain deferred, unsupported behavior is classified accurately, and no accepted architecture changed silently.
+6. Require the independent-review evidence mandated by `ISSUE-PROTOCOL.md` for core/high-risk changes.
+7. Mark the milestone complete only when every mandatory criterion is `PASS` under the generic verification semantics.
+8. Do not begin a dependent milestone merely to make progress while the current milestone has failed, inconclusive, or missing mandatory evidence.
+
+Use the direct `verification` skill for individual Issue/change acceptance. Use this facade only for milestone-wide aggregation and sequencing.

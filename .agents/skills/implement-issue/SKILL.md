@@ -1,22 +1,22 @@
 ---
 name: implement-issue
-description: Mandatory workflow for implementing one Ready Seyal GitHub Issue in an isolated branch/worktree with test-first validation, documentation assessment, and a scoped PR.
+description: Seyal facade for AI-SDLC implementation, adding the one-Issue/worktree/PR workflow and terminal-specific engineering gates.
 ---
 
 # Implement Issue
 
-1. Read `AGENTS.md`, `docs/engineering/DEVELOPMENT.md`, the Issue, and every authority reference it links.
-2. Verify Project status is **Ready**, dependencies are complete, and module/state ownership is explicit. Stop if not.
-3. Confirm one Issue → one isolated worktree → `issue/<number>-<short-name>` → one PR.
-4. Write/enable the required failing test, fixture or verification first for core behavior.
-5. Implement only Issue scope. Do not add unrelated cleanup, speculative abstractions, or temporary production VT/render/runtime paths.
-6. If implementation evidence conflicts with architecture/spec: stop; run `architecture-change`; update authority/spec/Issue before resuming.
-7. Before final validation, assess the Issue's **Documentation impact**. Run `docs-authoring` whenever the change adds or alters user-visible behavior, configuration, workflows, troubleshooting, contributor workflow, architecture orientation, screenshots/diagrams, or documentation media. Update the User Guide and/or Developer Guide in the same Issue/PR when applicable. If no documentation is required, record a concrete `N/A` rationale in the PR instead of silently skipping it.
-8. Run the smallest relevant checks continuously, then `make check` and issue-specific integration/fuzz/benchmark/security checks. When documentation changed, also run `make docs-check` and `make docs-build`.
-9. Compare performance/memory baselines when the Issue is performance-sensitive. Do not make unsupported claims.
-10. Open a PR using `.github/pull_request_template.md`; link the Issue, list documentation changed (or the `N/A` rationale), and provide reproducible verification evidence.
-11. Do not self-approve high-risk/core work. Wait for CI and independent review required by `ISSUE-PROTOCOL.md`.
+Follow the canonical generic procedure in `.sdlc/framework/skills/implementation/SKILL.md`. If it is unavailable, run `make bootstrap-agents` first.
 
-Documentation is part of feature completeness, not a default follow-up task. Never document planned behavior as shipped merely to satisfy the documentation gate.
+Apply only these Seyal-specific rules on top of the generic procedure:
 
-Never weaken a valid test to make implementation pass. Never infer architecture from existing code when authority documents say otherwise.
+1. The GitHub Issue must already be **Ready** under `docs/engineering/ISSUE-PROTOCOL.md`. Re-run `development-readiness` if scope, authority, dependencies, or acceptance changed materially.
+2. Use one Issue → one isolated worktree → `issue/<number>-<short-name>` → one scoped PR.
+3. Core behavior is test/evidence-first. Never add a temporary production VT, renderer, runtime, or duplicate-state path to make the Issue pass.
+4. If implementation evidence conflicts with accepted architecture/specification, stop and run `architecture-change`; do not create architecture by precedent.
+5. Invoke Seyal domain skills only when applicable: `vt-tdd`, `terminal-conformance`, `performance-gate`, `metal-renderer`, `rust-fuzzing`, `security-review`, macOS UI/accessibility skills, or others required by the Issue.
+6. Re-assess documentation impact before handoff. Run `docs-authoring` when applicable; otherwise record a concrete `N/A` rationale.
+7. Run the narrow checks continuously, then the required repository gates including `make check`; run issue-specific integration/fuzz/benchmark/security checks and `make docs-check` / `make docs-build` when documentation changed.
+8. Open the PR with `.github/pull_request_template.md`, trace it to the Issue, and provide reproducible evidence. The implementation handoff is **implemented for review**, never final verification.
+9. Do not self-approve core/high-risk work. Route next to `pr-review`, then `verification` as required.
+
+If a reusable implementation-rule defect is found, fix it in `ai-sdlc` rather than expanding this facade into a second generic implementation skill.

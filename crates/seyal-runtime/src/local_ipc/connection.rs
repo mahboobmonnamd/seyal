@@ -39,7 +39,10 @@ impl ConnectionState {
             (self, message_type),
             (Self::AwaitHello, ClientHello)
                 | (Self::Ready, ListExecutions | Attach | Goodbye)
-                | (Self::Attached, Input | Resize | Resync | Detach | Goodbye)
+                | (
+                    Self::Attached,
+                    Input | Resize | Resync | Detach | Goodbye
+                )
         );
         allowed.then_some(()).ok_or(StateError::InvalidState)
     }
@@ -76,16 +79,30 @@ struct Connection {
     pending_wake: Option<Vec<u8>>,
 }
 
+impl Connection {
+    fn queue_wake(&mut self, bytes: Vec<u8>) {
+        // Exactly one not-yet-started wake is retained. A newer generation
+        // replaces the previous pending one instead of growing history.
+        self.pending_wake = Some(bytes);
+    }
+}
+
 #[derive(Debug)]
 pub enum ServerEvent {
-    Connected { token: u64 },
+    Connected {
+        token: u64,
+    },
     Frame {
         token: u64,
         message_type: u16,
         payload: Vec<u8>,
     },
-    FramingError { token: u64 },
-    Disconnected { token: u64 },
+    FramingError {
+        token: u64,
+    },
+    Disconnected {
+        token: u64,
+    },
     PeerRejected,
 }
 
@@ -99,9 +116,8 @@ pub struct LocalIpcServer {
 impl LocalIpcServer {
     pub fn bind(path: &Path, max_connections: usize) -> io::Result<Self> {
         let listener = UnixListener::bind(path)?;
+        set_close_on_exec(listener.as_raw_fd())?;
         listener.set_nonblocking(true)?;
-        // Socket path permissions are an authorization boundary in addition
-        // to kernel peer-UID verification.
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
         Ok(Self {
@@ -137,6 +153,9 @@ impl LocalIpcServer {
         loop {
             match self.listener.accept() {
                 Ok((stream, _)) => {
+                    if set_close_on_exec(stream.as_raw_fd()).is_err() {
+                        continue;
+                    }
                     if auth::verify_same_user_peer(stream.as_raw_fd()).is_err() {
                         events.push(ServerEvent::PeerRejected);
                         continue;
@@ -243,7 +262,10 @@ impl LocalIpcServer {
         fd: Option<OwnedFd>,
     ) -> io::Result<()> {
         let Some(connection) = self.connections.get_mut(&token) else {
-            return Err(io::Error::new(io::ErrorKind::NotConnected, "connection is closed"));
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "connection is closed",
+            ));
         };
         let new_total = connection
             .mandatory_bytes
@@ -251,10 +273,14 @@ impl LocalIpcServer {
             .ok_or_else(|| io::Error::other("mandatory queue length overflow"))?;
         if new_total > MAX_OUTBOUND_QUEUE_BYTES {
             self.connections.remove(&token);
-            return Err(io::Error::other("mandatory outbound queue capacity exceeded"));
+            return Err(io::Error::other(
+                "mandatory outbound queue capacity exceeded",
+            ));
         }
         connection.mandatory_bytes = new_total;
-        connection.mandatory.push_back(OutboundItem::new(bytes, fd));
+        connection
+            .mandatory
+            .push_back(OutboundItem::new(bytes, fd));
         if let Err(error) = flush_outbound(connection) {
             self.connections.remove(&token);
             return Err(error);
@@ -267,13 +293,12 @@ impl LocalIpcServer {
     /// older pending frame; no generation history is accumulated.
     pub fn enqueue_wake(&mut self, token: u64, bytes: Vec<u8>) -> io::Result<()> {
         let Some(connection) = self.connections.get_mut(&token) else {
-            return Err(io::Error::new(io::ErrorKind::NotConnected, "connection is closed"));
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "connection is closed",
+            ));
         };
-        if connection.wake_inflight.is_none() {
-            connection.pending_wake = Some(bytes);
-        } else {
-            connection.pending_wake = Some(bytes);
-        }
+        connection.queue_wake(bytes);
         if let Err(error) = flush_outbound(connection) {
             self.connections.remove(&token);
             return Err(error);
@@ -294,7 +319,9 @@ impl LocalIpcServer {
     }
 
     pub fn state_of(&self, token: u64) -> Option<ConnectionState> {
-        self.connections.get(&token).map(|connection| connection.state)
+        self.connections
+            .get(&token)
+            .map(|connection| connection.state)
     }
 
     pub fn set_state(&mut self, token: u64, state: ConnectionState) {
@@ -380,8 +407,6 @@ fn flush_outbound(connection: &mut Connection) -> io::Result<()> {
             FlushProgress::WouldBlock => return Ok(()),
             FlushProgress::Progress if item.remaining_len() == 0 => {
                 connection.wake_inflight = None;
-                // If a newer wake arrived while this one was in flight,
-                // immediately continue with that single coalesced successor.
                 continue;
             }
             FlushProgress::Progress => return Ok(()),
@@ -410,8 +435,6 @@ fn flush_item(socket: RawFd, item: &mut OutboundItem) -> io::Result<FlushProgres
             if sent > remaining.len() {
                 return Err(io::Error::other("sendmsg reported impossible byte count"));
             }
-            // SCM_RIGHTS is consumed only after at least one byte from this
-            // frame was accepted. EAGAIN/zero never loses the descriptor.
             if sent > 0 && item.sent == 0 {
                 item.fd = None;
             }
@@ -423,11 +446,26 @@ fn flush_item(socket: RawFd, item: &mut OutboundItem) -> io::Result<FlushProgres
     }
 }
 
+fn set_close_on_exec(fd: RawFd) -> io::Result<()> {
+    // SAFETY: `fd` is a live descriptor borrowed from an owning socket.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if flags < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if flags & libc::FD_CLOEXEC == 0 {
+        // SAFETY: same live descriptor and flags returned immediately above.
+        if unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::local_ipc::framing::{ClientHello, GenerationWake, encode_frame};
-    use std::{io::Write, time::Duration};
+    use std::io::Write;
 
     fn bind_test_server() -> (LocalIpcServer, std::path::PathBuf) {
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -437,7 +475,10 @@ mod tests {
             std::process::id() % 10_000
         ));
         let _ = std::fs::remove_file(&path);
-        (LocalIpcServer::bind(&path, MAX_CONNECTIONS).unwrap(), path)
+        (
+            LocalIpcServer::bind(&path, MAX_CONNECTIONS).unwrap(),
+            path,
+        )
     }
 
     fn accept_one(server: &mut LocalIpcServer, path: &Path) -> (UnixStream, u64) {
@@ -473,10 +514,15 @@ mod tests {
     }
 
     #[test]
-    fn accept_reports_connected_and_verifies_same_user_peer() {
+    fn listener_and_accepted_client_are_close_on_exec() {
         let (mut server, path) = bind_test_server();
-        let (_client, _token) = accept_one(&mut server, &path);
-        assert_eq!(server.connection_count(), 1);
+        let (_client, token) = accept_one(&mut server, &path);
+        for fd in [server.listener_fd(), server.connection_fd(token).unwrap()] {
+            // SAFETY: both are live descriptors owned by `server`.
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+            assert!(flags >= 0);
+            assert_ne!(flags & libc::FD_CLOEXEC, 0);
+        }
         std::fs::remove_file(path).ok();
     }
 
@@ -517,10 +563,12 @@ mod tests {
         client.write_all(&frame[..10]).unwrap();
         assert!(server.service_read(token, false).is_empty());
         client.write_all(&frame[10..]).unwrap();
-        assert!(server
-            .service_read(token, false)
-            .iter()
-            .any(|event| matches!(event, ServerEvent::Frame { .. })));
+        assert!(
+            server
+                .service_read(token, false)
+                .iter()
+                .any(|event| matches!(event, ServerEvent::Frame { .. }))
+        );
         std::fs::remove_file(path).ok();
     }
 
@@ -530,9 +578,11 @@ mod tests {
         let (mut client, token) = accept_one(&mut server, &path);
         client.write_all(&[0xff; HEADER_LEN]).unwrap();
         let events = server.service_read(token, false);
-        assert!(events
-            .iter()
-            .any(|event| matches!(event, ServerEvent::FramingError { .. })));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, ServerEvent::FramingError { .. }))
+        );
         assert!(!server.contains(token));
         std::fs::remove_file(path).ok();
     }
@@ -548,35 +598,33 @@ mod tests {
     }
 
     #[test]
-    fn pending_generation_wakes_coalesce_to_latest_without_history_queue() {
+    fn pending_generation_wakes_replace_older_pending_generation() {
         let (mut server, path) = bind_test_server();
-        let (client, token) = accept_one(&mut server, &path);
-        client
-            .set_write_timeout(Some(Duration::from_millis(10)))
-            .unwrap();
-        // A live, writable socket may flush immediately. Force an in-memory
-        // coalescing assertion by pre-installing an in-flight wake marker.
+        let (_client, token) = accept_one(&mut server, &path);
         let connection = server.connections.get_mut(&token).unwrap();
-        connection.wake_inflight = Some(OutboundItem {
-            bytes: vec![1; 64],
-            sent: 1,
-            fd: None,
-        });
-        for generation in [2u64, 3, 99] {
-            let frame = encode_frame(
-                MessageType::GenerationWake,
-                &GenerationWake {
-                    attachment_id: crate::AttachmentId::from_bytes(1u128.to_le_bytes()),
-                    projection_id: crate::ProjectionId::from_bytes(2u128.to_le_bytes()),
-                    committed_generation: generation,
-                }
-                .encode(),
-            );
-            server.enqueue_wake(token, frame).unwrap();
-        }
-        let connection = server.connections.get(&token).unwrap();
-        assert!(connection.pending_wake.is_some());
-        assert_eq!(connection.mandatory.len(), 0);
+
+        let frame_2 = encode_frame(
+            MessageType::GenerationWake,
+            &GenerationWake {
+                attachment_id: crate::AttachmentId::from_bytes(1u128.to_le_bytes()),
+                projection_id: crate::ProjectionId::from_bytes(2u128.to_le_bytes()),
+                committed_generation: 2,
+            }
+            .encode(),
+        );
+        let frame_99 = encode_frame(
+            MessageType::GenerationWake,
+            &GenerationWake {
+                attachment_id: crate::AttachmentId::from_bytes(1u128.to_le_bytes()),
+                projection_id: crate::ProjectionId::from_bytes(2u128.to_le_bytes()),
+                committed_generation: 99,
+            }
+            .encode(),
+        );
+        connection.queue_wake(frame_2);
+        connection.queue_wake(frame_99.clone());
+        assert_eq!(connection.pending_wake.as_deref(), Some(frame_99.as_slice()));
+        assert!(connection.mandatory.is_empty());
         std::fs::remove_file(path).ok();
     }
 }

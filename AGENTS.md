@@ -14,7 +14,7 @@ Read and obey, in order:
 6. This repository's engineering procedures.
 7. Existing implementation.
 
-An Issue or PR cannot override architecture/specification. Existing code is never architectural authority.
+An Issue or PR cannot override architecture/specification. Existing code is never architectural authority. `.sdlc` context/index data is navigation support only and cannot override any authority above.
 
 ## Non-negotiable architecture invariants
 
@@ -42,13 +42,14 @@ An Issue or PR cannot override architecture/specification. Existing code is neve
 ## Before changing code
 
 1. Read the Issue and verify Project status is **Ready**.
-2. Read every linked architecture/spec/milestone document.
-3. Verify dependencies are complete and ownership/module boundary is explicit.
-4. If architecture is missing or contradictory: **STOP** and use the `architecture-change` skill. Do not invent a workaround.
-5. Use one Issue → one assignee/agent → one isolated worktree → one branch → one PR.
-6. Core behavior is test-first. Do not weaken tests to make code pass.
-7. Do not refactor unrelated code. Create/link another Issue instead.
-8. If an approved screenshot/mockup is visual authority for native UI, run the `image-to-code` skill before implementation. Complete its forensic design/component inventory and issue plan first; split the work into multiple Issues when the visual spans independently reviewable boundaries.
+2. When the task needs broader project context than the Issue links provide, use the `project-context` skill to load the smallest relevant node/relationship set, validate it, then read the returned authoritative sources. Do not broadly reread the repository or trust the index summary as authority.
+3. Read every linked/retrieved architecture/spec/milestone document that materially governs the work.
+4. Verify dependencies are complete and ownership/module boundary is explicit.
+5. If architecture is missing or contradictory: **STOP** and use the `architecture-change` skill. Do not invent a workaround.
+6. Use one Issue → one assignee/agent → one isolated worktree → one branch → one PR.
+7. Core behavior is test-first. Do not weaken tests to make code pass.
+8. Do not refactor unrelated code. Create/link another Issue instead.
+9. If an approved screenshot/mockup is visual authority for native UI, run the `image-to-code` skill before implementation. Complete its forensic design/component inventory and issue plan first; split the work into multiple Issues when the visual spans independently reviewable boundaries.
 
 ## Repository map
 
@@ -56,8 +57,11 @@ An Issue or PR cannot override architecture/specification. Existing code is neve
 - `docs/specs/` — observable behavior specifications (when introduced).
 - `docs/milestones/` — bounded vertical milestones and acceptance gates.
 - `docs/engineering/` — development, issue, testing, performance, security, repository and OSS/commercial rules.
-- `docs/engineering/AGENT-TOOLING.md` — canonical skills, external skill pinning and developer MCP/tool policy.
-- `.agents/skills/` — canonical portable agent skills.
+- `docs/engineering/AGENT-TOOLING.md` — canonical skills, generic AI-SDLC pinning and developer MCP/tool policy.
+- `.sdlc/context/` — project-owned portable SDLC metadata/context; never higher authority than source artifacts.
+- `.sdlc/graph/` — compact derived navigation index for low-context agent retrieval.
+- `.sdlc/framework/` — ignored local materialization of the reviewed AI-SDLC developer framework.
+- `.agents/skills/` — Seyal-owned skills plus thin adapters for pinned generic capabilities.
 - `.github/` — issue/PR forms and CI.
 
 Start with `docs/engineering/DEVELOPMENT.md` and `docs/engineering/REPOSITORY-STRUCTURE.md`.
@@ -73,6 +77,8 @@ make test
 make check
 make bench
 ```
+
+`make bootstrap-agents` is optional developer setup for coding-agent/MCP tooling and the pinned AI-SDLC framework; it is never required by terminal/runtime operation.
 
 Until production scaffolding exists, `make check` validates governance/documentation only and implementation commands explain that Pass 1 has not yet created the workspace.
 

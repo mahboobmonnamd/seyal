@@ -28,10 +28,16 @@ fn main() {
     );
 
     let entry = find_entry(&destination).expect("tic did not emit seyal-m001 entry");
+    let bucket = entry
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .expect("compiled terminfo entry must have a UTF-8 bucket directory");
     println!(
         "cargo:rustc-env=SEYAL_M001_TERMINFO_ENTRY={}",
         entry.display()
     );
+    println!("cargo:rustc-env=SEYAL_M001_TERMINFO_BUCKET={bucket}");
 }
 
 fn find_entry(root: &Path) -> Option<PathBuf> {

@@ -34,8 +34,19 @@ pub(crate) enum SignalOutcome {
 mod macos;
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+mod macos_reactor;
+
+#[cfg(target_os = "macos")]
 pub(crate) use macos::{
     configure_child, get_winsize, open_pty, set_winsize, signal_owned_process_group, wait,
+};
+
+#[cfg(target_os = "macos")]
+pub(crate) use macos_reactor::{
+    KqueueHandle, MAX_NATIVE_EVENTS, NativeEvent, NativeEventBuffer, NativeFilter, create_kqueue,
+    deregister_process_exit, deregister_read, deregister_write, register_process_exit,
+    register_read, register_write, trigger_control, wait_events,
 };
 
 #[cfg(not(target_os = "macos"))]

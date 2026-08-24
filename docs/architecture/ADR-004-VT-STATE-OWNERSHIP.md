@@ -41,7 +41,13 @@ OSC/DCS/SOS/PM/APC framing is recognized sufficiently to preserve parser continu
 
 ### Screen ownership
 
-`TerminalState` owns a primary screen and, only while active, one minimal alternate screen. `CSI ?1049h/l` is the M001 alternate-screen path. Entering alternate follows the scoped xterm save/switch/clear contract: the primary cursor/rendition remains saved, the clean alternate buffer begins from the active saved pen rendition, and its blank cells carry that pen background with otherwise default cell attributes. Leaving discards the alternate buffer and reveals the preserved primary cursor/rendition state. No output copy or second terminal engine is created.
+`TerminalState` owns a primary screen and, only while active, one minimal alternate screen. `CSI ?1049h/l` is an explicit **M001 alternate-screen subset**, not a claim that Seyal already implements every xterm DECSC/DECRC interaction associated with mode 1049.
+
+Entering `?1049h` leaves the primary `Screen` object unchanged, including its cursor, active pen and any existing `ESC 7` / `CSI s` saved-cursor slot. Seyal creates a clean same-size alternate `Screen`, initializes its active pen from the current primary pen, and blanks the new grid with that inherited background plus otherwise default cell attributes. Cursor/rendition mutations during the alternate lifetime belong only to that alternate screen.
+
+Leaving `?1049l` discards the alternate screen and reveals the unchanged primary screen. The primary saved-cursor slot is therefore not overwritten by M001 alternate entry/leave. Full xterm-compatible 1049 interaction with DECSC/DECRC save-slot semantics remains deferred until Seyal deliberately implements and conformance-tests that broader behavior.
+
+No output copy or second terminal engine is created.
 
 Full-screen scroll blanking follows the same canonical blank-cell rule: a newly exposed bottom row uses the active pen background and otherwise default attributes. Buffer motion must not accidentally reset visible background color merely because cells were introduced by scrolling rather than ED/EL.
 
@@ -75,6 +81,7 @@ M001 accepts printable Unicode scalar input and incremental UTF-8 correctness. I
 - Renderer, PTY, runtime IPC, Blocks and persistence stay outside the VT mutation hot path.
 - Future projection code can consume cell/state/damage without becoming authoritative terminal state.
 - Scroll/alternate blanking use one background-aware cell rule, avoiding renderer-side repair or a second semantic interpretation.
+- M001 alternate-screen behavior is precise and testable without overstating full xterm DECSC/DECRC compatibility.
 - Line identity allocation is centralized with terminal state, so alternate-screen churn cannot create namespace reuse and long-running scroll cannot silently repeat IDs.
 
 ## RILL salvage review
@@ -97,7 +104,8 @@ M001 accepts printable Unicode scalar input and incremental UTF-8 correctness. I
 - RILL mutation-test production hooks are not imported;
 - deferred behavior is not exposed as supported M001 functionality;
 - logical line identity is made explicit from the start for Block/history compatibility;
-- Issue #68 corrected two rewrite regressions where the initial Seyal salvage accidentally used default rendition/background for scroll-created and alternate-screen cells instead of the active saved pen semantics;
+- Issue #68 corrected two rewrite regressions where the initial Seyal salvage accidentally used default rendition/background for scroll-created and alternate-screen cells instead of the active pen semantics;
+- Issue #78 narrows the normative `?1049` contract to the exact implemented M001 subset and records that existing primary save slots are intentionally untouched rather than claiming unimplemented xterm DECSC/DECRC interaction;
 - Issue #71 removes the initial 32-bit namespace/local-counter packing whose saturating counters could eventually repeat a `LineId`, replacing it with one terminal-owned non-reusing allocator and explicit exhaustion.
 
 ### Rejected/deferred
@@ -105,9 +113,10 @@ M001 accepts printable Unicode scalar input and incremental UTF-8 correctness. I
 - RILL names and type ownership;
 - separate `rill-vt-types` style duplication;
 - broad mouse/application modes, device replies, OSC semantics and scroll-region editing;
+- full xterm `?1049` save-slot compatibility beyond the tested M001 subset;
 - RILL grapheme/East-Asian-width implementation for M001;
 - projection/repaint byte generation inside the VT state boundary.
 
 ## Revisit conditions
 
-Revisit this ADR only if evidence shows that the single-owner parser/state model cannot meet terminal correctness/performance, or if a future platform requires a materially different parser/state ownership model. Adding more VT sequences is not by itself a reason to revisit the decision.
+Revisit this ADR only if evidence shows that the single-owner parser/state model cannot meet terminal correctness/performance, or if a future platform requires a materially different parser/state ownership model. Adding more VT sequences is not by itself a reason to revisit the decision. Expanding `?1049` to full xterm save-slot compatibility requires explicit conformance fixtures and specification work rather than a wording-only change.

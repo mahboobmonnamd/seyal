@@ -15,7 +15,7 @@ fn retained_m001_basic_fixture_matches_canonical_state() {
     let expected = include_str!("../../../tests/fixtures/vt/m001-basic.expected.txt");
     let mut terminal = TerminalState::new(8, 3).expect("fixture dimensions are valid");
 
-    terminal.feed(input);
+    terminal.feed(input).expect("fixture feed succeeds");
 
     assert_eq!(render(&terminal), expected);
     assert_eq!(terminal.cell(0, 1).unwrap().style.fg, Color::Indexed(1));
@@ -29,7 +29,7 @@ fn retained_deferred_osc_fixture_preserves_parser_continuity() {
     let expected = include_str!("../../../tests/fixtures/vt/m001-deferred-osc.expected.txt");
     let mut terminal = TerminalState::new(8, 2).expect("fixture dimensions are valid");
 
-    terminal.feed(input);
+    terminal.feed(input).expect("fixture feed succeeds");
 
     assert_eq!(render(&terminal), expected);
     assert_eq!(terminal.diagnostics().deferred_sequences, 1);

@@ -9,8 +9,8 @@ AI_SDLC_DIR="${ROOT}/.sdlc/framework"
 # Reviewed/pinned developer-tool inputs. Update only through a normal Seyal PR.
 XCODEBUILD_MCP_VERSION="2.7.0"
 AI_SDLC_REPO="https://github.com/mahboobmonnamd/ai-sdlc.git"
-AI_SDLC_SOURCE_REF="issue-1-project-context"
-AI_SDLC_COMMIT="95e9e0ef6aa3880b8ab82a887d2a612c47e99d0f"
+AI_SDLC_SOURCE_REF="main"
+AI_SDLC_COMMIT="3a5bf20feb6c890d2d94af949fa82679223dd922"
 
 info() { printf '[seyal bootstrap] %s\n' "$*"; }
 warn() { printf '[seyal bootstrap] WARN: %s\n' "$*" >&2; }

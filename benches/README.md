@@ -26,4 +26,22 @@ A retained performance result must be paired with the environment metadata contr
 
 Future benchmark workloads belong here or in a justified harness package. Generated measurements belong under ignored build/artifact locations, not committed production modules.
 
+## Pre-Pass-4 execution scalability evidence
+
+The `seyal-exec` scalability harness measures two distinct resources. The state/resource matrix creates canonical `TerminalState` objects at `0/1/10/50/100/250/500/750` without allocating one PTY per object. The real-execution matrix creates `TerminalExecution` plus its production PTY and child at `1/10/50/100/250`, then attempts larger populations to find the largest safe host-supported population. It does not create a Runtime, scheduler, replacement PTY, or alternate terminal representation.
+
+Run it on macOS from the repository root:
+
+```sh
+cargo bench -p seyal-exec --bench execution_scalability --locked
+```
+
+The default run repeats each case three times. Set `SEYAL_SCALABILITY_REPEATS=1` for a quick smoke pass. Every population runs in a fresh worker process, including a zero-execution baseline, so earlier allocations cannot contaminate later RSS measurements. Representative geometry and alternate-screen cases run at population 1. Raw CSV and a generated Markdown summary are written to `target/benchmarks/`.
+
+The report separates benchmark-process RSS from summed child-process RSS and records creation/teardown time, idle CPU sample, thread count, file descriptors, `/dev/ptmx` occupancy before/at peak/after teardown, `kern.tty.ptmx_max`, dimensions, alternate-screen state, build mode, commit, macOS version and hardware model. Host-capacity failures are generated from the run and reported as `PLATFORM_LIMITED`, never as a Seyal memory/performance RED. A RED requires a Seyal-owned resource, lifecycle, or correctness failure within a population the host successfully executes.
+
+The architecture target remains practical 500+ pane/presentation/domain objects; a pane is not assumed to own a PTY. The benchmark therefore does not use requested population as a PTY count and does not infer architecture health from the host's PTY pool.
+
+This harness establishes headroom for the existing execution/PTY/terminal-state foundation only. It cannot prove the future Runtime reactor, registry overhead, kqueue fairness, or bounded control/input scheduling.
+
 Do not claim latency, CPU, RSS, throughput superiority or zero-copy results from the harness smoke. Real measurements must identify workload, hardware/OS/build mode, commit, terminal dimensions, font/scale, shell, run count and percentile method as required by `docs/engineering/PERFORMANCE.md` and M001.

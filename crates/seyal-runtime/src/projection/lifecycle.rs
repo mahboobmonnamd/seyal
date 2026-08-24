@@ -177,10 +177,11 @@ pub struct ReadOnlyMapping {
 unsafe impl Send for ReadOnlyMapping {}
 
 impl ReadOnlyMapping {
-    /// Validates the transferred descriptor itself before mapping: exact
-    /// object size must cover `len`, `len` is ABI-bounded, and the descriptor
-    /// access mode must be read-only. This prevents a client harness from
-    /// trusting only the control-frame length.
+    /// Validates the transferred descriptor itself before mapping: the backing
+    /// object must cover `len`, `len` is ABI-bounded, and the descriptor access
+    /// mode must be read-only. Darwin may report a page-rounded shm extent, so
+    /// an extent larger than the logical ABI region is valid; only `len` bytes
+    /// are mapped and exposed to the projection reader.
     pub fn new(fd: OwnedFd, len: usize) -> io::Result<Self> {
         if len < REGION_HEADER_LEN || len > MAX_REGION_BYTES as usize {
             return Err(io::Error::new(
@@ -196,10 +197,10 @@ impl ReadOnlyMapping {
         }
         // SAFETY: successful `fstat` initialized the value.
         let stat = unsafe { stat.assume_init() };
-        if stat.st_size < 0 || stat.st_size as usize != len {
+        if stat.st_size < 0 || stat.st_size as usize < len {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "projection descriptor size does not match control frame",
+                "projection descriptor is smaller than the control-frame region",
             ));
         }
         // SAFETY: `F_GETFL` only queries the live descriptor.

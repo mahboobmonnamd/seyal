@@ -39,10 +39,7 @@ impl ConnectionState {
             (self, message_type),
             (Self::AwaitHello, ClientHello)
                 | (Self::Ready, ListExecutions | Attach | Goodbye)
-                | (
-                    Self::Attached,
-                    Input | Resize | Resync | Detach | Goodbye
-                )
+                | (Self::Attached, Input | Resize | Resync | Detach | Goodbye)
         );
         allowed.then_some(()).ok_or(StateError::InvalidState)
     }
@@ -278,9 +275,7 @@ impl LocalIpcServer {
             ));
         }
         connection.mandatory_bytes = new_total;
-        connection
-            .mandatory
-            .push_back(OutboundItem::new(bytes, fd));
+        connection.mandatory.push_back(OutboundItem::new(bytes, fd));
         if let Err(error) = flush_outbound(connection) {
             self.connections.remove(&token);
             return Err(error);
@@ -475,10 +470,7 @@ mod tests {
             std::process::id() % 10_000
         ));
         let _ = std::fs::remove_file(&path);
-        (
-            LocalIpcServer::bind(&path, MAX_CONNECTIONS).unwrap(),
-            path,
-        )
+        (LocalIpcServer::bind(&path, MAX_CONNECTIONS).unwrap(), path)
     }
 
     fn accept_one(server: &mut LocalIpcServer, path: &Path) -> (UnixStream, u64) {

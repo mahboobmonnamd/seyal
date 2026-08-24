@@ -623,7 +623,10 @@ mod tests {
         );
         connection.queue_wake(frame_2);
         connection.queue_wake(frame_99.clone());
-        assert_eq!(connection.pending_wake.as_deref(), Some(frame_99.as_slice()));
+        assert_eq!(
+            connection.pending_wake.as_deref(),
+            Some(frame_99.as_slice())
+        );
         assert!(connection.mandatory.is_empty());
         std::fs::remove_file(path).ok();
     }

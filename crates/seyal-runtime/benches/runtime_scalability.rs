@@ -1,5 +1,7 @@
-use std::time::{Duration, Instant};
+use std::{env, process::Command, time::Instant};
 
+#[cfg(target_os = "macos")]
+use std::{fs, process, thread, time::Duration};
 #[cfg(target_os = "macos")]
 use seyal_exec::{CommandSpec, WindowSize};
 #[cfg(target_os = "macos")]
@@ -19,49 +21,210 @@ fn main() {
 
 #[cfg(target_os = "macos")]
 fn run_macos() {
-    let populations = [0usize, 1, 10, 50, 100];
-    println!("seyal-runtime Pass 4 benchmark; performance_claim=false");
-    println!("profile=80x24 primary-active alternate-inactive minimal-scrollback");
+    if env::args().nth(1).as_deref() == Some("--worker") {
+        worker();
+        return;
+    }
 
-    for population in populations {
-        let mut config = RuntimeConfig::m001().expect("bundled capability policy");
-        config.singleton_path = std::env::temp_dir().join(format!(
-            "seyal-runtime-bench-{}-{population}.lock",
-            std::process::id()
-        ));
-        config.max_executions = population.max(1);
-        let mut runtime = Runtime::new(config).expect("headless runtime");
-        let before = Instant::now();
-        let mut created = 0usize;
-        for _ in 0..population {
-            let command = CommandSpec::new("/bin/sh").args(["-c", "sleep 30"]);
-            match runtime
-                .create_execution(command, WindowSize::new(80, 24, 0, 0).expect("valid size"))
-            {
-                Ok(_) => created += 1,
-                Err(error) => {
-                    println!(
-                        "population={population} created={created} classification=PLATFORM_LIMITED error={error}"
-                    );
-                    break;
-                }
+    println!("seyal-runtime Pass 4 resource benchmark; performance_claim=false");
+    println!("method=fresh_worker_per_population release_bench_profile=true");
+    println!("profile=80x24 primary-active alternate-inactive minimal-scrollback");
+    print_host_metadata();
+
+    let executable = env::current_exe().expect("current benchmark executable");
+    for population in [0usize, 1, 10, 50, 100, 250, 500] {
+        let status = Command::new(&executable)
+            .args(["--worker", &population.to_string(), "80", "24", "primary"])
+            .status()
+            .expect("launch fresh benchmark worker");
+        assert!(status.success(), "runtime benchmark worker failed");
+    }
+
+    for (columns, rows, screen) in [(120, 40, "primary"), (200, 60, "primary"), (80, 24, "alternate")] {
+        let status = Command::new(&executable)
+            .args([
+                "--worker",
+                "1",
+                &columns.to_string(),
+                &rows.to_string(),
+                screen,
+            ])
+            .status()
+            .expect("launch representative geometry worker");
+        assert!(status.success(), "representative geometry worker failed");
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn worker() {
+    let args = env::args().collect::<Vec<_>>();
+    let requested = args[2].parse::<usize>().expect("population");
+    let columns = args[3].parse::<u16>().expect("columns");
+    let rows = args[4].parse::<u16>().expect("rows");
+    let alternate = args[5] == "alternate";
+
+    let mut config = RuntimeConfig::m001().expect("bundled capability policy");
+    config.singleton_path = env::temp_dir().join(format!(
+        "seyal-runtime-bench-{}-{requested}-{columns}x{rows}.lock",
+        process::id()
+    ));
+    config.max_executions = requested.max(1);
+    let mut runtime = Runtime::new(config).expect("headless Runtime");
+    let baseline = process_metrics(&runtime);
+
+    let creation_start = Instant::now();
+    let mut ids = Vec::with_capacity(requested);
+    let mut platform_limit = None;
+    for index in 0..requested {
+        let command = if alternate && index == 0 {
+            CommandSpec::new("/bin/sh").args(["-c", "printf '\033[?1049hALT'; exec /bin/cat"])
+        } else {
+            CommandSpec::new("/bin/cat")
+        };
+        match runtime.create_execution(
+            command,
+            WindowSize::new(columns, rows, 0, 0).expect("valid geometry"),
+        ) {
+            Ok(id) => ids.push(id),
+            Err(error) => {
+                platform_limit = Some(error.to_string());
+                break;
             }
         }
-        let creation = before.elapsed();
-        println!(
-            "population={population} created={created} create_us={} aggregate_pending={} threads_model=single-reactor-owner",
-            creation.as_micros(),
-            runtime.aggregate_accepted_but_unwritten_bytes()
-        );
-
-        let teardown = Instant::now();
-        runtime.begin_shutdown().expect("begin shutdown");
-        let result = runtime.run_until_empty(Instant::now() + Duration::from_secs(5));
-        println!(
-            "population={population} teardown_us={} shutdown={:?}",
-            teardown.elapsed().as_micros(),
-            result.as_ref().map(|_| "ok")
-        );
-        result.expect("controlled Runtime teardown");
     }
+    let creation_us = creation_start.elapsed().as_micros();
+
+    for _ in 0..4 {
+        let _ = runtime.poll_once(Some(Duration::from_millis(2)));
+    }
+    thread::sleep(Duration::from_millis(100));
+    let populated = process_metrics(&runtime);
+
+    let registry_start = Instant::now();
+    for _ in 0..100 {
+        let summaries = runtime.list();
+        for summary in &summaries {
+            std::hint::black_box(runtime.lookup(summary.id));
+        }
+    }
+    let registry_us = registry_start.elapsed().as_micros();
+
+    let progress_us = ids.first().and_then(|id| {
+        let ingress = runtime.input_ingress(*id).ok()?;
+        let before_generation = runtime.execution(*id)?.terminal().damage_generation();
+        let start = Instant::now();
+        ingress.try_submit(b"z".to_vec()).ok()?;
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while Instant::now() < deadline {
+            runtime.poll_once(Some(Duration::from_millis(20))).ok()?;
+            if runtime.execution(*id)?.terminal().damage_generation() > before_generation {
+                return Some(start.elapsed().as_micros());
+            }
+        }
+        None
+    });
+
+    let teardown_start = Instant::now();
+    runtime.begin_shutdown().expect("begin shutdown");
+    let shutdown = runtime.run_until_empty(Instant::now() + Duration::from_secs(8));
+    let teardown_us = teardown_start.elapsed().as_micros();
+    let final_metrics = process_metrics(&runtime);
+
+    let classification = if ids.len() == requested {
+        "MEASURED"
+    } else {
+        "PLATFORM_LIMITED"
+    };
+    println!(
+        "runtime_resource population_requested={requested} population_created={} geometry={}x{} screen={} classification={classification} create_us={creation_us} teardown_us={teardown_us} registry_100x_us={registry_us} control_to_state_us={:?} rss_baseline_kib={} rss_populated_kib={} rss_final_kib={} incremental_runtime_kib={} child_rss_kib={} threads_baseline={} threads_populated={} threads_final={} fd_baseline={} fd_populated={} fd_final={} pending_final={} shutdown_ok={} platform_error={:?}",
+        ids.len(),
+        columns,
+        rows,
+        if alternate { "alternate" } else { "primary" },
+        progress_us,
+        baseline.rss_kib,
+        populated.rss_kib,
+        final_metrics.rss_kib,
+        populated.rss_kib.saturating_sub(baseline.rss_kib),
+        populated.child_rss_kib,
+        baseline.threads,
+        populated.threads,
+        final_metrics.threads,
+        baseline.fds,
+        populated.fds,
+        final_metrics.fds,
+        runtime.aggregate_accepted_but_unwritten_bytes(),
+        shutdown.is_ok(),
+        platform_limit,
+    );
+    shutdown.expect("controlled Runtime teardown");
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy)]
+struct Metrics {
+    rss_kib: usize,
+    child_rss_kib: usize,
+    threads: usize,
+    fds: usize,
+}
+
+#[cfg(target_os = "macos")]
+fn process_metrics(runtime: &Runtime) -> Metrics {
+    let pid = process::id();
+    let output = Command::new("/bin/ps")
+        .args(["-o", "rss=,thcount=", "-p", &pid.to_string()])
+        .output()
+        .expect("ps Runtime metrics");
+    let line = String::from_utf8_lossy(&output.stdout);
+    let mut fields = line.split_whitespace();
+    let rss_kib = fields.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let threads = fields.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let child_rss_kib = runtime
+        .list()
+        .iter()
+        .filter_map(|summary| runtime.execution(summary.id))
+        .map(|execution| rss_for_pid(execution.child_id()))
+        .sum();
+    let fds = fs::read_dir("/dev/fd").map(|entries| entries.count()).unwrap_or(0);
+    Metrics {
+        rss_kib,
+        child_rss_kib,
+        threads,
+        fds,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn rss_for_pid(pid: u32) -> usize {
+    let output = Command::new("/bin/ps")
+        .args(["-o", "rss=", "-p", &pid.to_string()])
+        .output();
+    output
+        .ok()
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .and_then(|value| value.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+#[cfg(target_os = "macos")]
+fn print_host_metadata() {
+    let product = command_text("/usr/bin/sw_vers", &["-productVersion"]);
+    let build = command_text("/usr/bin/sw_vers", &["-buildVersion"]);
+    let hardware = command_text("/usr/sbin/sysctl", &["-n", "machdep.cpu.brand_string"]);
+    let pty_max = command_text("/usr/sbin/sysctl", &["-n", "kern.tty.ptmx_max"]);
+    let rustc = command_text("rustc", &["--version"]);
+    println!(
+        "host macos_version={product} macos_build={build} hardware={hardware:?} rust={rustc:?} pty_max={pty_max}"
+    );
+}
+
+#[cfg(target_os = "macos")]
+fn command_text(program: &str, args: &[&str]) -> String {
+    Command::new(program)
+        .args(args)
+        .output()
+        .ok()
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        .unwrap_or_else(|| "unavailable".to_owned())
 }

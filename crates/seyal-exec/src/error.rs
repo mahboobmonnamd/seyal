@@ -11,6 +11,7 @@ pub enum ExecError {
     ProcessGroupMismatch { expected: i32, actual: i32 },
     IoTimedOut(&'static str),
     TerminationTimedOut,
+    StaleRegistrationToken,
 }
 
 impl fmt::Display for ExecError {
@@ -28,6 +29,7 @@ impl fmt::Display for ExecError {
             Self::TerminationTimedOut => {
                 f.write_str("owned child did not reap within the supplied termination policy")
             }
+            Self::StaleRegistrationToken => f.write_str("stale execution reactor registration token"),
         }
     }
 }

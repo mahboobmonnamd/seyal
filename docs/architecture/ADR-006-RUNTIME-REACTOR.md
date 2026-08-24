@@ -79,10 +79,24 @@ Input memory is bounded at two levels:
 ```text
 per-execution pending-input byte limit
 +
-Runtime-wide total pending-input byte limit across all executions
+Runtime-wide total accepted-but-unwritten input byte limit across all executions and ingress queues
 ```
 
-A submission is accepted only if both limits remain satisfied. This prevents 100 individually bounded terminals from multiplying into an unintended aggregate memory commitment. Queue-full/budget-full is explicit backpressure to the caller/control plane; already accepted bytes retain order and are not discarded.
+A submission is accepted only if both limits remain satisfied. The Runtime-wide budget applies from the moment input is accepted, including bytes still waiting in a producer/ingress/control queue before the reactor moves them into an execution's pending-input queue. Moving accepted bytes between bounded queues must transfer the same reservation rather than double-counting or temporarily dropping it.
+
+The admission lifecycle is:
+
+```text
+validate execution + per-execution capacity
+→ atomically reserve Runtime-wide input bytes
+→ accept/enqueue payload
+→ move payload through ingress/execution queues without changing total reservation
+→ release reservation only as bytes are successfully written or explicitly discarded during execution teardown/finalization
+```
+
+If enqueue fails after reservation, the reservation is rolled back before returning failure. Rejection/backpressure occurs before accepting ownership of the payload. This prevents concurrent producers from collectively allocating more accepted-but-unwritten input than the Runtime-wide memory budget merely because the reactor has not yet drained their ingress work.
+
+Queue-full/budget-full is explicit backpressure to the caller/control plane; already accepted bytes retain order and are not discarded.
 
 On the reactor owner, input handling first attempts a nonblocking PTY write. If progress becomes partial or `WouldBlock`, unwritten bytes remain queued and writable interest is armed. When the queue becomes empty, writable interest is removed/disabled so idle PTYs do not create permanent writable wakeups.
 
@@ -161,7 +175,7 @@ Pass 4 implementation must record reproducible evidence for at least:
 - one continuously busy output execution alongside idle/interactive executions, proving bounded read fairness;
 - one execution with a large pending writable backlog alongside readable/control work, proving bounded write fairness;
 - PTY-readable event → committed `TerminalState` generation latency;
-- per-execution and Runtime-wide aggregate pending-input backpressure;
+- per-execution and Runtime-wide aggregate pending-input backpressure, including concurrent-producer accepted-byte accounting across ingress and execution queues;
 - writable-interest disablement after drain;
 - create/register/remove cycles without FD/kqueue registration leakage;
 - idempotent removal when filters/processes/descriptors disappear during teardown;
@@ -185,7 +199,8 @@ These are baseline measurements, not claims that M001 already meets the long-ter
 - Runtime-only descriptors are close-on-exec.
 - Malformed/stale registration events are ignored safely.
 - Expected already-gone teardown conditions are idempotent cleanup, not Runtime-wide failure.
-- Per-execution input, aggregate Runtime input, control queue and registration counts are bounded by Runtime policy.
+- Per-execution input, accepted-but-unwritten aggregate Runtime input across ingress/execution queues, control queue and registration counts are bounded by Runtime policy.
+- Input reservation is acquired before acceptance and released exactly once on successful write, rejected enqueue rollback, or execution teardown/finalization.
 - A reactor failure is a Runtime-level failure and must not silently create a second terminal owner or hand PTYs to the GUI.
 - Same-user local transport authentication/permissions remain Pass 5 responsibilities.
 - Runtime crash survival of arbitrary live PTYs remains explicitly outside M001.
@@ -196,7 +211,7 @@ These are baseline measurements, not claims that M001 already meets the long-ter
 - `seyal-exec` gains a small macOS-only readiness-composition seam, not a daemon/socket abstraction.
 - The Runtime can supervise many executions with a constant/small bounded thread model.
 - Event delivery cannot depend on the memory address/lifetime of movable Rust registry entries.
-- Per-terminal backpressure cannot multiply into unbounded aggregate pending-input memory.
+- Per-terminal backpressure cannot multiply into unbounded aggregate pending-input memory, including before ingress work reaches the reactor-owned per-execution queue.
 - Both read and write progress have explicit dispatch fairness boundaries.
 - Teardown races are handled idempotently instead of escalating normal kernel disappearance into Runtime failure.
 - Blocking termination convenience APIs are kept out of the shared event-loop path.

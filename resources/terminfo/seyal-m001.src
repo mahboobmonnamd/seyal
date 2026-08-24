@@ -1,0 +1,15 @@
+# Milestone-scoped capability entry. Keep this intentionally narrower than
+# xterm-256color; every capability below maps to SUPPORTED M001 behavior.
+seyal-m001|Seyal Milestone 001 terminal,
+    am,
+    cols#80, lines#24, colors#256, pairs#32767,
+    bel=^G, cr=^M, cud1=^J, cub1=^H,
+    clear=\E[H\E[2J,
+    el=\E[K, ed=\E[J,
+    cup=\E[%i%p1%d;%p2%dH,
+    cuu=\E[%p1%dA, cud=\E[%p1%dB, cuf=\E[%p1%dC, cub=\E[%p1%dD,
+    home=\E[H,
+    bold=\E[1m, smul=\E[4m, rmul=\E[24m, rev=\E[7m, sgr0=\E[0m,
+    setaf=\E[38;5;%p1%dm, setab=\E[48;5;%p1%dm, op=\E[39;49m,
+    civis=\E[?25l, cnorm=\E[?25h,
+    smcup=\E[?1049h, rmcup=\E[?1049l,

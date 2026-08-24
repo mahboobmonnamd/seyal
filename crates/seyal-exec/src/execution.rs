@@ -3,8 +3,8 @@ use std::time::Duration;
 use seyal_terminal::TerminalState;
 
 use crate::{
-    ChildExit, CommandSpec, ExecError, ReadOutcome, Readiness, TerminationPolicy, WindowSize,
-    WriteOutcome, endpoint::TerminalEndpoint,
+    ChildExit, CommandSpec, ExecError, ReadOutcome, Readiness, SignalDisposition,
+    TerminationPolicy, WindowSize, WriteOutcome, endpoint::TerminalEndpoint,
 };
 
 pub struct TerminalExecution {
@@ -71,7 +71,24 @@ impl TerminalExecution {
         self.endpoint.try_wait()
     }
 
+    /// Sends SIGTERM to the still-owned primary process group without waiting.
+    /// Runtime uses this step from its deadline-driven lifecycle state machine.
+    pub fn signal_terminate(&mut self) -> Result<SignalDisposition, ExecError> {
+        self.endpoint.signal_terminate()
+    }
+
+    /// Sends SIGKILL to the still-owned primary process group without waiting.
+    /// Runtime uses this only after the configured graceful deadline expires.
+    pub fn signal_kill(&mut self) -> Result<SignalDisposition, ExecError> {
+        self.endpoint.signal_kill()
+    }
+
     pub fn terminate(&mut self, policy: TerminationPolicy) -> Result<ChildExit, ExecError> {
         self.endpoint.terminate(policy)
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn reactor_fd(&self) -> i32 {
+        self.endpoint.master_fd()
     }
 }

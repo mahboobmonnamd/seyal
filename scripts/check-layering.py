@@ -10,6 +10,7 @@ ROOT = Path(os.environ.get("SEYAL_VALIDATION_ROOT", Path(__file__).resolve().par
 RULES = {
     "seyal-terminal": {"seyal-workspace", "seyal-exec", "seyal-runtime", "seyal-render"},
     "seyal-exec": {"seyal-render", "seyal-runtime", "seyal-workspace"},
+    "seyal-runtime": {"seyal-render", "seyal-workspace"},
     "seyal-workspace": {"seyal-exec", "seyal-runtime", "seyal-render"},
     "seyal-render": {"seyal-terminal", "seyal-exec", "seyal-runtime", "seyal-workspace"},
 }

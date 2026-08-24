@@ -44,7 +44,10 @@ pub struct TerminalProjectionSnapshot {
     pub cells: Vec<ProjectionCell>,
 }
 
-pub(crate) fn snapshot(terminal: &TerminalState, source_damage_generation: u64) -> TerminalProjectionSnapshot {
+pub(crate) fn snapshot(
+    terminal: &TerminalState,
+    source_damage_generation: u64,
+) -> TerminalProjectionSnapshot {
     let rows = terminal.rows();
     let columns = terminal.cols();
     let cursor = terminal.cursor();

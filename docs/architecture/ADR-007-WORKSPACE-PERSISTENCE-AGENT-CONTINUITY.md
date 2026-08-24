@@ -1,6 +1,6 @@
 # ADR-007 — Workspace ownership, persistence classes and agentic continuity
 
-- **Status:** Proposed for acceptance by Issue #82 / its review PR
+- **Status:** Accepted for M001
 - **Date:** 2026-08-24
 - **Issue:** #82
 - **Scope:** pre-M001-Pass-4 Runtime/workspace identity, persistence classes, resource ownership and future agentic continuity

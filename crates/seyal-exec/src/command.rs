@@ -1,16 +1,28 @@
 use std::{
     ffi::{OsStr, OsString},
+    fmt,
     path::{Path, PathBuf},
     process::Command,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CommandSpec {
     program: OsString,
     args: Vec<OsString>,
     current_dir: Option<PathBuf>,
     clear_environment: bool,
     environment: Vec<(OsString, OsString)>,
+}
+
+impl fmt::Debug for CommandSpec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CommandSpec")
+            .field("arg_count", &self.args.len())
+            .field("has_current_dir", &self.current_dir.is_some())
+            .field("clear_environment", &self.clear_environment)
+            .field("environment_override_count", &self.environment.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl CommandSpec {

@@ -38,6 +38,13 @@ impl TerminationPolicy {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SignalDisposition {
+    Delivered,
+    ProcessGone,
+    AlreadyReaped(ChildExit),
+}
+
 pub(crate) struct ChildLifecycle {
     child: Child,
     process_group: i32,
@@ -72,22 +79,42 @@ impl ChildLifecycle {
         }
     }
 
+    pub(crate) fn signal_terminate(&mut self) -> Result<SignalDisposition, ExecError> {
+        self.signal(platform::Signal::Terminate)
+    }
+
+    pub(crate) fn signal_kill(&mut self) -> Result<SignalDisposition, ExecError> {
+        self.signal(platform::Signal::Kill)
+    }
+
+    fn signal(&mut self, signal: platform::Signal) -> Result<SignalDisposition, ExecError> {
+        if let Some(exit) = self.try_wait()? {
+            return Ok(SignalDisposition::AlreadyReaped(exit));
+        }
+        let outcome = platform::signal_owned_process_group(
+            self.child.id() as i32,
+            self.process_group,
+            signal,
+        )?;
+        Ok(match outcome {
+            platform::SignalOutcome::Delivered => SignalDisposition::Delivered,
+            platform::SignalOutcome::Gone => SignalDisposition::ProcessGone,
+        })
+    }
+
     pub(crate) fn terminate(&mut self, policy: TerminationPolicy) -> Result<ChildExit, ExecError> {
         if let Some(exit) = self.try_wait()? {
             return Ok(exit);
         }
 
-        match platform::signal_owned_process_group(
-            self.child.id() as i32,
-            self.process_group,
-            platform::Signal::Terminate,
-        )? {
-            platform::SignalOutcome::Delivered => {
+        match self.signal_terminate()? {
+            SignalDisposition::AlreadyReaped(exit) => return Ok(exit),
+            SignalDisposition::Delivered => {
                 if let Some(exit) = self.wait_for_exit(policy.graceful_wait)? {
                     return Ok(exit);
                 }
             }
-            platform::SignalOutcome::Gone => {
+            SignalDisposition::ProcessGone => {
                 if let Some(exit) = self.try_wait()? {
                     return Ok(exit);
                 }
@@ -98,12 +125,9 @@ impl ChildLifecycle {
             return Ok(exit);
         }
 
-        match platform::signal_owned_process_group(
-            self.child.id() as i32,
-            self.process_group,
-            platform::Signal::Kill,
-        )? {
-            platform::SignalOutcome::Delivered | platform::SignalOutcome::Gone => {}
+        match self.signal_kill()? {
+            SignalDisposition::AlreadyReaped(exit) => return Ok(exit),
+            SignalDisposition::Delivered | SignalDisposition::ProcessGone => {}
         }
 
         self.wait_for_exit(policy.kill_wait)?

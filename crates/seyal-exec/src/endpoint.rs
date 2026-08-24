@@ -130,10 +130,7 @@ impl TerminalEndpoint {
         self.child.try_wait()
     }
 
-    pub(crate) fn terminate(
-        &mut self,
-        policy: TerminationPolicy,
-    ) -> Result<ChildExit, ExecError> {
+    pub(crate) fn terminate(&mut self, policy: TerminationPolicy) -> Result<ChildExit, ExecError> {
         self.child.terminate(policy)
     }
 }

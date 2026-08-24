@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "authority": "derived-navigation-only",
+  "description": "Compact agent navigation graph. Authoritative architecture, specs, milestones, code and tests always win on conflict.",
+  "nodes": [
+    {
+      "id": "COMP-TERMINAL-EXECUTION",
+      "type": "component",
+      "title": "TerminalExecution",
+      "summary": "Owns one terminal endpoint/PTY, child lifecycle, authoritative terminal state, and attachment/projection state.",
+      "tags": ["pty", "execution", "runtime", "ownership"],
+      "sources": [
+        {"path": "docs/architecture/README.md", "fingerprint": "0b18ea1ffd2a4bcd21aa1f500107d51146217d0c"}
+      ],
+      "relationships": [
+        {"type": "owns", "target": "COMP-TERMINAL-STATE"},
+        {"type": "is-presented-by", "target": "CONCEPT-BLOCK-TIMELINE"}
+      ]
+    },
+    {
+      "id": "COMP-TERMINAL-STATE",
+      "type": "component",
+      "title": "TerminalState",
+      "summary": "Canonical VT/grid state mutated by the incremental parser; renderer and GUI consume derived projection and never own a second authoritative grid.",
+      "tags": ["vt", "grid", "parser", "damage", "terminal"],
+      "sources": [
+        {"path": "docs/architecture/ADR-004-VT-STATE-OWNERSHIP.md", "fingerprint": "c7cd1a72cdd88ce78801b07f240fcb15a8e59e1d"},
+        {"path": "docs/specs/SPEC-001-M001-VT.md", "fingerprint": "fcd04b8ceb6c188d45239b8b04b5be285878c619"}
+      ],
+      "relationships": [
+        {"type": "governed-by", "target": "DEC-ADR-004"},
+        {"type": "implemented-by", "target": "MODULE-SEYAL-TERMINAL"}
+      ]
+    },
+    {
+      "id": "CONCEPT-BLOCK-TIMELINE",
+      "type": "concept",
+      "title": "BlockTimeline",
+      "summary": "Workspace metadata keyed by ExecutionId and logical history anchors. Blocks own no PTY, VT, grid, child, renderer, or copied terminal output.",
+      "tags": ["blocks", "workspace", "history", "execution-id"],
+      "sources": [
+        {"path": "docs/architecture/README.md", "fingerprint": "0b18ea1ffd2a4bcd21aa1f500107d51146217d0c"}
+      ],
+      "relationships": [
+        {"type": "references", "target": "COMP-TERMINAL-EXECUTION"}
+      ]
+    },
+    {
+      "id": "DEC-ADR-004",
+      "type": "decision",
+      "title": "ADR-004 VT state ownership",
+      "summary": "Establishes one authoritative TerminalState, incremental parser framing, parser/state separation, screen ownership, line identity, and generation-based damage.",
+      "tags": ["adr", "vt", "ownership", "parser", "damage"],
+      "sources": [
+        {"path": "docs/architecture/ADR-004-VT-STATE-OWNERSHIP.md", "fingerprint": "c7cd1a72cdd88ce78801b07f240fcb15a8e59e1d"}
+      ],
+      "relationships": [
+        {"type": "governs", "target": "COMP-TERMINAL-STATE"}
+      ]
+    },
+    {
+      "id": "DEC-ADR-003",
+      "type": "decision",
+      "title": "ADR-003 OSS/commercial boundary",
+      "summary": "Seyal OSS is canonical and independent; seyal-commercial consumes a pinned OSS revision and proprietary code never becomes an OSS dependency.",
+      "tags": ["adr", "oss", "commercial", "repository", "submodule"],
+      "sources": [
+        {"path": "docs/architecture/ADR-003-OSS-COMMERCIAL-REPOSITORY-BOUNDARY.md", "fingerprint": "8a977a581f01be7b645744598d8ca07718dcb19c"}
+      ],
+      "relationships": []
+    },
+    {
+      "id": "MODULE-SEYAL-TERMINAL",
+      "type": "module",
+      "title": "seyal-terminal",
+      "summary": "Portable terminal-semantics ownership boundary for VT parsing, canonical terminal state, history identity and damage semantics.",
+      "tags": ["rust", "crate", "terminal", "vt"],
+      "sources": [
+        {"path": "docs/engineering/REPOSITORY-STRUCTURE.md", "fingerprint": "4bcc9bf2120aaf83b0173ddb7209ff7d8a79360a"}
+      ],
+      "relationships": [
+        {"type": "implements", "target": "COMP-TERMINAL-STATE"}
+      ]
+    }
+  ]
+}

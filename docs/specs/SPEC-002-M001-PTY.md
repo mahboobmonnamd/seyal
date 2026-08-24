@@ -35,7 +35,11 @@ The PTY layer:
 - does not inject `TERM`;
 - does not inject `SEYAL_INSIDE`;
 - contains no `RILL_*` environment names;
-- does not log environment values.
+- does not log environment values;
+- does not expose program, argument, current-directory, environment-key or
+  environment-value contents through unrestricted `Debug` output. Debug
+  diagnostics are structural/count-only so command secrets and local paths are
+  not accidentally emitted by callers.
 
 ## 4. Spawn
 
@@ -191,6 +195,8 @@ EOF is accepted.
 - no cross-language callback exists in byte progress;
 - no commercial code/dependency enters this crate;
 - repeated spawn/terminate must not accumulate descriptors or zombies;
+- command debug formatting must not expose program/argument/path/environment
+  contents;
 - no test/example may intentionally abandon a live child by dropping the actual
   execution owner and call that detach.
 
@@ -211,7 +217,9 @@ macOS executable tests cover:
 11. direct PTY-byte delivery into authoritative `TerminalState`;
 12. environment behavior and absence of RILL marker injection;
 13. all spawned test executions are explicitly reaped/terminated before owner
-    scope ends.
+    scope ends;
+14. `CommandSpec` debug diagnostics redact program, arguments, paths and
+    environment contents.
 
 A client-wrapper detach test belongs to the Runtime/attachment issue where such a
 wrapper actually exists; Issue #28 must not add a fake wrapper solely to satisfy

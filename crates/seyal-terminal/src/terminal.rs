@@ -1,6 +1,7 @@
 use crate::{
     Cell, CursorState, Damage, LineId, ModeState, TerminalError,
     damage::{DamageTracker, Mutation},
+    line::LineIdAllocator,
     parser::{Actions, Parser},
     screen::Screen,
 };
@@ -25,14 +26,22 @@ impl TerminalState {
         })
     }
 
-    pub fn feed(&mut self, bytes: &[u8]) {
+    pub fn feed(&mut self, bytes: &[u8]) -> Result<(), TerminalError> {
+        if let Some(error) = self.core.fault {
+            return Err(error);
+        }
         self.parser.feed(bytes, &mut self.core);
         self.core.damage.commit();
+        self.core.fault.map_or(Ok(()), Err)
     }
 
-    pub fn finish_input(&mut self) {
+    pub fn finish_input(&mut self) -> Result<(), TerminalError> {
+        if let Some(error) = self.core.fault {
+            return Err(error);
+        }
         self.parser.finish(&mut self.core);
         self.core.damage.commit();
+        self.core.fault.map_or(Ok(()), Err)
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), TerminalError> {
@@ -91,25 +100,28 @@ impl TerminalState {
 struct TerminalCore {
     primary: Screen,
     alternate: Option<Screen>,
+    line_ids: LineIdAllocator,
     modes: ModeState,
-    next_screen_namespace: u32,
     damage: DamageTracker,
     diagnostics: Diagnostics,
+    fault: Option<TerminalError>,
 }
 
 impl TerminalCore {
     fn new(cols: u16, rows: u16) -> Result<Self, TerminalError> {
-        let primary = Screen::new(cols, rows, 1)?;
+        let mut line_ids = LineIdAllocator::new();
+        let primary = Screen::new(cols, rows, &mut line_ids)?;
         let mut damage = DamageTracker::default();
         damage.mark(Mutation::full(rows));
         damage.commit();
         Ok(Self {
             primary,
             alternate: None,
+            line_ids,
             modes: ModeState::default(),
-            next_screen_namespace: 2,
             damage,
             diagnostics: Diagnostics::default(),
+            fault: None,
         })
     }
 
@@ -135,12 +147,24 @@ impl TerminalCore {
     }
 
     fn resize(&mut self, cols: u16, rows: u16) -> Result<(), TerminalError> {
+        if let Some(error) = self.fault {
+            return Err(error);
+        }
         if cols == 0 || rows == 0 {
             return Err(TerminalError::InvalidSize);
         }
-        let primary = self.primary.resize(cols, rows)?;
+
+        let mut required_ids = usize::from(rows.saturating_sub(self.primary.rows()));
+        if let Some(screen) = &self.alternate {
+            required_ids += usize::from(rows.saturating_sub(screen.rows()));
+        }
+        if !self.line_ids.can_allocate(required_ids) {
+            return Err(TerminalError::LineIdentityExhausted);
+        }
+
+        let primary = self.primary.resize(cols, rows, &mut self.line_ids)?;
         let alternate = if let Some(screen) = &mut self.alternate {
-            screen.resize(cols, rows)?
+            screen.resize(cols, rows, &mut self.line_ids)?
         } else {
             Mutation::none()
         };
@@ -158,30 +182,49 @@ impl TerminalCore {
         self.apply(Mutation::row(row));
     }
 
-    fn set_alternate_screen(&mut self, enabled: bool) {
+    fn set_alternate_screen(&mut self, enabled: bool) -> Result<(), TerminalError> {
         if enabled == self.modes.alternate_screen {
-            return;
+            return Ok(());
         }
 
         if enabled {
             let cols = self.primary.cols();
             let rows = self.primary.rows();
             let pen = self.primary.pen();
-            let namespace = self.next_screen_namespace;
-            self.next_screen_namespace = self.next_screen_namespace.saturating_add(1);
-            match Screen::new(cols, rows, namespace) {
-                Ok(mut screen) => {
-                    screen.inherit_pen_for_clean_buffer(pen);
-                    self.alternate = Some(screen);
-                    self.modes.alternate_screen = true;
-                    self.apply(Mutation::full(rows));
-                }
-                Err(_) => self.record_malformed(),
-            }
+            let mut screen = Screen::new(cols, rows, &mut self.line_ids)?;
+            screen.inherit_pen_for_clean_buffer(pen);
+            self.alternate = Some(screen);
+            self.modes.alternate_screen = true;
+            self.apply(Mutation::full(rows));
         } else {
             self.alternate = None;
             self.modes.alternate_screen = false;
             self.apply(Mutation::full(self.primary.rows()));
+        }
+        Ok(())
+    }
+
+    fn print_current(&mut self, character: char) -> Result<Mutation, TerminalError> {
+        if self.modes.alternate_screen
+            && let Some(screen) = &mut self.alternate
+        {
+            return screen.print(character, &mut self.line_ids);
+        }
+        self.primary.print(character, &mut self.line_ids)
+    }
+
+    fn execute_current(&mut self, byte: u8) -> Result<Mutation, TerminalError> {
+        if self.modes.alternate_screen
+            && let Some(screen) = &mut self.alternate
+        {
+            return screen.execute(byte, &mut self.line_ids);
+        }
+        self.primary.execute(byte, &mut self.line_ids)
+    }
+
+    fn record_fault(&mut self, error: TerminalError) {
+        if self.fault.is_none() {
+            self.fault = Some(error);
         }
     }
 
@@ -201,16 +244,29 @@ impl TerminalCore {
 
 impl Actions for TerminalCore {
     fn print(&mut self, character: char) {
-        let mutation = self.current_mut().print(character);
-        self.apply(mutation);
+        if self.fault.is_some() {
+            return;
+        }
+        match self.print_current(character) {
+            Ok(mutation) => self.apply(mutation),
+            Err(error) => self.record_fault(error),
+        }
     }
 
     fn execute(&mut self, byte: u8) {
-        let mutation = self.current_mut().execute(byte);
-        self.apply(mutation);
+        if self.fault.is_some() {
+            return;
+        }
+        match self.execute_current(byte) {
+            Ok(mutation) => self.apply(mutation),
+            Err(error) => self.record_fault(error),
+        }
     }
 
     fn csi(&mut self, params: &[u16], private: Option<u8>, ignored: bool, final_byte: u8) {
+        if self.fault.is_some() {
+            return;
+        }
         if ignored {
             self.record_deferred();
             return;
@@ -222,7 +278,12 @@ impl Actions for TerminalCore {
                 for mode in params {
                     match *mode {
                         25 => self.set_cursor_visible(enabled),
-                        1049 => self.set_alternate_screen(enabled),
+                        1049 => {
+                            if let Err(error) = self.set_alternate_screen(enabled) {
+                                self.record_fault(error);
+                                break;
+                            }
+                        }
                         _ => self.record_deferred(),
                     }
                 }
@@ -273,6 +334,9 @@ impl Actions for TerminalCore {
     }
 
     fn esc(&mut self, final_byte: u8, had_intermediate: bool) {
+        if self.fault.is_some() {
+            return;
+        }
         if had_intermediate {
             self.record_deferred();
             return;
@@ -296,11 +360,15 @@ impl Actions for TerminalCore {
     }
 
     fn deferred_string(&mut self) {
-        self.record_deferred();
+        if self.fault.is_none() {
+            self.record_deferred();
+        }
     }
 
     fn malformed(&mut self) {
-        self.record_malformed();
+        if self.fault.is_none() {
+            self.record_malformed();
+        }
     }
 }
 

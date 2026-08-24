@@ -10,6 +10,7 @@ ROOT = Path(os.environ.get("SEYAL_VALIDATION_ROOT", Path(__file__).resolve().par
 WORKSPACE_MANIFEST = ROOT / "Cargo.toml"
 TERMINAL_MANIFEST = ROOT / "crates" / "seyal-terminal" / "Cargo.toml"
 EXEC_MANIFEST = ROOT / "crates" / "seyal-exec" / "Cargo.toml"
+RUNTIME_MANIFEST = ROOT / "crates" / "seyal-runtime" / "Cargo.toml"
 
 
 def fail(message: str) -> None:
@@ -30,10 +31,9 @@ if not isinstance(members, list) or not members:
     fail("workspace must contain at least one explicit member")
 if len(members) != len(set(members)):
     fail("workspace members must be unique")
-if "crates/seyal-terminal" not in members:
-    fail("seyal-terminal must be a physical M001 ownership boundary")
-if "crates/seyal-exec" not in members:
-    fail("Issue #28 requires seyal-exec as the PTY/child ownership boundary")
+for required in ("crates/seyal-terminal", "crates/seyal-exec", "crates/seyal-runtime"):
+    if required not in members:
+        fail(f"required production ownership boundary missing: {required}")
 
 for member in members:
     member_manifest = ROOT / member / "Cargo.toml"
@@ -50,49 +50,63 @@ for key, expected in expected_defaults.items():
     if package_defaults.get(key) != expected:
         fail(f"workspace.package.{key} must be {expected!r}")
 
-if not TERMINAL_MANIFEST.is_file():
-    fail("missing crates/seyal-terminal/Cargo.toml")
+if not TERMINAL_MANIFEST.is_file() or not EXEC_MANIFEST.is_file() or not RUNTIME_MANIFEST.is_file():
+    fail("terminal, exec and runtime manifests must all exist")
 terminal_data = tomllib.loads(TERMINAL_MANIFEST.read_text(encoding="utf-8"))
-terminal_package = terminal_data.get("package", {})
-if terminal_package.get("name") != "seyal-terminal":
-    fail("terminal package must be named seyal-terminal")
-if terminal_package.get("publish") is not False:
-    fail("M001 crates must not be publishable packages")
-
-if not EXEC_MANIFEST.is_file():
-    fail("missing crates/seyal-exec/Cargo.toml")
 exec_data = tomllib.loads(EXEC_MANIFEST.read_text(encoding="utf-8"))
-exec_package = exec_data.get("package", {})
-if exec_package.get("name") != "seyal-exec":
-    fail("execution package must be named seyal-exec")
-if exec_package.get("publish") is not False:
-    fail("M001 crates must not be publishable packages")
+runtime_data = tomllib.loads(RUNTIME_MANIFEST.read_text(encoding="utf-8"))
+for data, expected_name in (
+    (terminal_data, "seyal-terminal"),
+    (exec_data, "seyal-exec"),
+    (runtime_data, "seyal-runtime"),
+):
+    package = data.get("package", {})
+    if package.get("name") != expected_name:
+        fail(f"package must be named {expected_name}")
+    if package.get("publish") is not False:
+        fail("M001 crates must not be publishable packages")
 
 exec_dependencies = exec_data.get("dependencies", {})
 if set(exec_dependencies) != {"seyal-terminal"}:
     fail("seyal-exec must depend on exactly seyal-terminal among portable dependencies")
-terminal_dependency = exec_dependencies["seyal-terminal"]
-if not isinstance(terminal_dependency, dict) or terminal_dependency.get("path") != "../seyal-terminal":
+if exec_dependencies["seyal-terminal"].get("path") != "../seyal-terminal":
     fail("seyal-exec must consume seyal-terminal through the local workspace path")
 
-macos_dependencies = exec_data.get("target", {}).get("cfg(target_os = \"macos\")", {}).get(
-    "dependencies", {}
-)
-if set(macos_dependencies) != {"libc"}:
-    fail("seyal-exec macOS platform boundary may depend only on libc in M001")
-if macos_dependencies["libc"] != "=0.2.189":
-    fail("seyal-exec must exactly pin the reviewed libc 0.2.189 dependency")
+runtime_dependencies = runtime_data.get("dependencies", {})
+if set(runtime_dependencies) != {"seyal-exec"}:
+    fail("seyal-runtime must depend on exactly seyal-exec among portable dependencies")
+if runtime_dependencies["seyal-exec"].get("path") != "../seyal-exec":
+    fail("seyal-runtime must consume seyal-exec through the local workspace path")
 
-exec_src = ROOT / "crates" / "seyal-exec" / "src"
-if not exec_src.is_dir():
-    fail("seyal-exec source directory is missing")
-for path in sorted(exec_src.rglob("*.rs")):
-    text = path.read_text(encoding="utf-8")
-    if "RILL_" in text:
-        fail(f"legacy RILL environment identifier found in {path.relative_to(ROOT)}")
+for name, data in (("seyal-exec", exec_data), ("seyal-runtime", runtime_data)):
+    macos_dependencies = data.get("target", {}).get('cfg(target_os = "macos")', {}).get(
+        "dependencies", {}
+    )
+    if set(macos_dependencies) != {"libc"}:
+        fail(f"{name} macOS platform boundary may depend only on libc in M001")
+    if macos_dependencies["libc"] != "=0.2.189":
+        fail(f"{name} must exactly pin the reviewed libc 0.2.189 dependency")
 
-lib_text = (exec_src / "lib.rs").read_text(encoding="utf-8")
-if "TerminalEndpoint" in lib_text.split("pub use")[-1]:
+for crate in ("seyal-exec", "seyal-runtime"):
+    src = ROOT / "crates" / crate / "src"
+    if not src.is_dir():
+        fail(f"{crate} source directory is missing")
+    for path in sorted(src.rglob("*.rs")):
+        text = path.read_text(encoding="utf-8")
+        if "RILL_" in text:
+            fail(f"legacy RILL environment identifier found in {path.relative_to(ROOT)}")
+
+exec_lib_text = (ROOT / "crates" / "seyal-exec" / "src" / "lib.rs").read_text(encoding="utf-8")
+if "pub use endpoint::TerminalEndpoint" in exec_lib_text:
     fail("TerminalEndpoint must not be exported as a public construction surface")
+
+runtime_src = "\n".join(
+    path.read_text(encoding="utf-8")
+    for path in (ROOT / "crates" / "seyal-runtime" / "src").rglob("*.rs")
+)
+if "TerminalState::new" in runtime_src:
+    fail("seyal-runtime must not construct a second authoritative TerminalState")
+if "tokio" in runtime_src.lower() or "mio::" in runtime_src:
+    fail("Pass 4 Runtime must not introduce Tokio/Mio")
 
 print("[seyal workspace test] workspace ownership scaffold invariants passed.")

@@ -35,49 +35,60 @@ Seyal Runtime
 
 `ExecutionReactor` is a readiness capability, not an execution owner. `TerminalExecution` remains the only owner that closes the PTY master or reaps/signals its child.
 
+The kqueue descriptor is a Runtime-internal descriptor and must be close-on-exec. It must never leak into spawned shells/commands. Event/change buffers are bounded and reusable; the wait/dispatch path must not require heap allocation per event.
+
 ### 2. Raw descriptors stay encapsulated
 
 The reactor implementation may register the PTY master descriptor and child PID internally because it lives inside `seyal-exec`, but public Runtime callers do not receive a raw descriptor or ownership-transferring handle.
 
-Registration uses an opaque generation-bearing token supplied/associated by the Runtime. Events return that token and readiness kind, not a raw FD as identity. Registration generations prevent a stale queued event from being applied to a later execution after FD/PID reuse.
+The reactor allocates an opaque generation-bearing registration token and returns it to the Runtime for association with an `ExecutionId`. Runtime code does not choose or recycle the registration generation. Events return that token and readiness kind, not a raw FD or PID as identity. Registration generations prevent a stale queued event from being applied to a later execution after FD/PID reuse.
 
 The required lifecycle is:
 
 ```text
 create TerminalExecution
-→ register reactor filters
-→ publish execution in Runtime registry
+→ register reactor filters and obtain RegistrationToken
+→ reconcile immediate child exit with try_wait
+→ publish execution in Runtime registry only if still live
 → service events
 → mark/remove execution from registry
 → deregister reactor filters
 → only then drop the TerminalExecution owner
 ```
 
-Rollback must remove any partially installed registration if create/register fails.
+The spawn-to-registration window is a correctness boundary: a command that exits immediately must not become a permanently registered or permanently unobserved execution. Registration followed by an immediate nonblocking child-state reconciliation closes that race. Rollback must remove any partially installed registration and explicitly finalize/reap the created execution if create/register/publish fails.
 
 ### 3. Read progress is bounded and fair
 
-A readable event causes the Runtime to call the existing nonblocking `TerminalExecution::read_output` path. That path still feeds bytes directly into the one authoritative `TerminalState`.
+A readable event causes the Runtime reactor owner to call the existing nonblocking `TerminalExecution::read_output` path. That path still feeds bytes directly into the one authoritative `TerminalState`.
 
 One ready execution may consume only a bounded byte/work quantum per dispatch before the loop returns to other ready events. The exact initial quantum is an implementation constant justified by tests/measurements, not a product protocol. Continuous output from one PTY must not starve unrelated executions or Runtime control events.
 
-Level readiness must be drained until `WouldBlock` or the per-dispatch quantum is reached. No renderer/client acknowledgement may gate the next PTY read.
+Level readiness must be drained until `WouldBlock` or the per-dispatch quantum is reached. If the quantum is reached while data remains readable, the level-triggered registration remains eligible for a subsequent dispatch. No renderer/client acknowledgement may gate the next PTY read.
 
 ### 4. Writable readiness is armed only for queued input
 
-The Runtime owns a bounded pending-input queue per execution. It first attempts nonblocking PTY writes immediately. If progress becomes partial or `WouldBlock`, writable interest is armed. When the queue becomes empty, writable interest is removed/disabled so idle PTYs do not create permanent writable wakeups.
+The Runtime owns a bounded pending-input queue per execution, but only the single Runtime reactor owner mutates a `TerminalExecution` or writes its PTY. Cross-thread/control producers, when they exist, enqueue bounded typed control/input work and trigger the Runtime wake event; they never call `TerminalExecution` concurrently.
 
-Queue capacity is bounded. Queue-full is explicit backpressure to the caller/control plane; it must never block PTY output processing or grow memory without bound.
+On the reactor owner, input handling first attempts a nonblocking PTY write. If progress becomes partial or `WouldBlock`, unwritten bytes remain queued and writable interest is armed. When the queue becomes empty, writable interest is removed/disabled so idle PTYs do not create permanent writable wakeups.
 
-### 5. Child exit is an explicit reactor event
+Queue capacity is bounded. Queue-full is explicit backpressure to the caller/control plane; it must never block PTY output processing, reorder already accepted bytes, or grow memory without bound.
+
+### 5. Child exit is an explicit reactor event and primary completion boundary
 
 The macOS reactor registers the execution's primary child with `EVFILT_PROC` / `NOTE_EXIT` in addition to PTY readiness. On notification the Runtime uses the existing child lifecycle/`try_wait` authority to classify and reap the exit.
 
-PTY EOF/HUP remains meaningful terminal-endpoint state but is not the sole source of primary-child exit truth; descendants can keep a PTY slave open after the primary child has exited.
+PTY EOF/HUP remains meaningful terminal-endpoint state but is not the sole source of primary-child exit truth; descendants can keep a PTY slave open after the primary child has exited. M001 therefore defines primary-child exit as the execution's logical process-completion boundary. The Runtime must not wait indefinitely for PTY EOF merely because a descendant retained the slave.
+
+Before final removal, the Runtime performs a bounded final nonblocking drain of bytes already available on the PTY master, preserving terminal output that was queued before primary exit. It then deregisters the PTY/process filters and drops the `TerminalExecution`, which closes the master. Output generated by arbitrary descendants after primary completion is not a persistent-session contract in M001.
+
+This rule avoids both lost final output and ghost executions that remain forever because an unrelated descendant inherited the slave. A future requirement to keep an execution alive after its primary command has exited would require a separate lifecycle decision rather than treating PTY EOF as implicit authority.
 
 ### 6. Runtime wakeup is kernel-event based
 
-The reactor reserves one user/control wake event (Darwin `EVFILT_USER`) so Runtime-local control/shutdown work can interrupt a blocking wait without polling sleeps or a permanent per-execution thread. Pass 5 may register its real local control transport with the same Runtime scheduling layer, but this ADR does not define that transport.
+The reactor reserves one user/control wake event (Darwin `EVFILT_USER`) so Runtime-local control/shutdown work can interrupt a blocking wait without polling sleeps or a permanent per-execution thread. The corresponding Runtime control queue is bounded. Multiple wake triggers may coalesce; the reactor owner therefore drains queued control work to its bounded fairness limit rather than assuming one wake event equals one command.
+
+Pass 5 may register its real local control transport with the same Runtime scheduling layer, but this ADR does not define that transport.
 
 ### 7. Termination becomes a nonblocking Runtime state machine
 
@@ -87,16 +98,18 @@ Runtime-owned termination therefore progresses as states/deadlines:
 
 ```text
 Running
-→ TerminatingGraceful(deadline)   # verified owned pgrp receives SIGTERM
+→ TerminatingGraceful(deadline)   # verified owned primary pgrp receives SIGTERM
 → Exited                          # NOTE_EXIT / try_wait
 or, when deadline expires
-→ TerminatingForced(deadline)     # same verified owned pgrp receives SIGKILL
+→ TerminatingForced(deadline)     # same verified owned primary pgrp receives SIGKILL
 → Exited                          # reap
 or
 → TerminationFailed               # bounded reap deadline exceeded
 ```
 
 `seyal-exec` may expose additional safe nonblocking signal primitives required by this state machine, while preserving ADR-005 process-group verification and never signaling after reap.
+
+After the primary child is reaped, execution finalization follows §5: drain currently available PTY bytes within a bounded finalization quantum, deregister, then close the master by dropping the execution owner. Seyal does not enumerate arbitrary descendant PIDs/process groups as a substitute for PTY/session semantics; implementation tests must prove that a shell job in a distinct job-control process group cannot keep Runtime terminal resources registered after primary completion/termination.
 
 The reactor wait timeout is bounded by the nearest Runtime deadline; Seyal does not create one timer thread per execution.
 
@@ -135,18 +148,23 @@ Pass 4 implementation must record reproducible evidence for at least:
 - PTY-readable event → committed `TerminalState` generation latency;
 - bounded pending-input behavior and writable-interest disablement after drain;
 - create/register/remove cycles without FD/kqueue registration leakage;
-- primary-child exit observation when descendants keep the PTY open;
+- immediate-exit commands cannot be missed in the spawn/register race;
+- primary-child exit is observed and final buffered output is preserved even when descendants keep the PTY slave open;
+- a distinct job-control process group cannot keep Runtime terminal resources registered after execution finalization;
 - stale registration events cannot act on a replacement execution;
-- Runtime control wakeup does not require polling sleeps.
+- Runtime control wakeup does not require polling sleeps;
+- the kqueue descriptor and other Runtime-only descriptors are not inherited by spawned commands.
 
 These are baseline measurements, not claims that M001 already meets the long-term performance targets.
 
 ## Security and failure behavior
 
 - Reactor tokens are routing identities, not authorization credentials.
+- Registration generations are allocated by the reactor and are not caller-selected/reused identity.
 - No public raw PTY descriptor is introduced.
+- Runtime-only descriptors are close-on-exec.
 - Malformed/stale registration events are ignored safely.
-- Queue and registration counts are bounded by Runtime policy.
+- Input/control queue and registration counts are bounded by Runtime policy.
 - A reactor failure is a Runtime-level failure and must not silently create a second terminal owner or hand PTYs to the GUI.
 - Same-user local transport authentication/permissions remain Pass 5 responsibilities.
 - Runtime crash survival of arbitrary live PTYs remains explicitly outside M001.
@@ -157,15 +175,17 @@ These are baseline measurements, not claims that M001 already meets the long-ter
 - `seyal-exec` gains a small macOS-only readiness-composition seam, not a daemon/socket abstraction.
 - The Runtime can supervise many executions with a constant/small bounded thread model.
 - Blocking termination convenience APIs are kept out of the shared event-loop path.
+- Primary-child exit cannot be confused with PTY EOF, and descendants cannot keep dead executions registered indefinitely.
 - Future Linux/Windows reactor implementations are designed only when those Runtime platforms become active.
 
 ## Revisit conditions
 
-Revisit this ADR if measured macOS evidence shows direct `kqueue` cannot meet correctness/fairness/performance requirements, if a second Runtime platform becomes active and a shared low-level reactor materially reduces risk/cost, or if process-lifecycle requirements change enough that `EVFILT_PROC` is no longer the appropriate macOS mechanism.
+Revisit this ADR if measured macOS evidence shows direct `kqueue` cannot meet correctness/fairness/performance requirements, if a second Runtime platform becomes active and a shared low-level reactor materially reduces risk/cost, if preserving terminal execution after primary-command exit becomes a product requirement, or if process-lifecycle requirements change enough that `EVFILT_PROC` is no longer the appropriate macOS mechanism.
 
 ## External evidence reviewed
 
 - Darwin/macOS `kqueue(2)` semantics for `EVFILT_PROC`, `NOTE_EXIT`, and `EVFILT_USER`/`NOTE_TRIGGER`.
+- POSIX/macOS session and job-control semantics: `setsid()` creates one session/process group initially, while interactive shells may create distinct process groups for foreground/background jobs.
 - Mio 1.2.x documentation describing macOS `kqueue`, token-based readiness, `Waker`, and its low-level event-loop scope.
 
 External documentation informs mechanism choice only; Seyal architecture/specifications remain normative.

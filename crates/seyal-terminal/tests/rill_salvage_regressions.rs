@@ -10,7 +10,9 @@ fn terminal(cols: u16, rows: u16) -> TerminalState {
 fn full_screen_scroll_blanks_new_row_with_active_background() {
     let mut terminal = terminal(4, 2);
 
-    terminal.feed(b"\x1b[41mA\r\nB\r\n");
+    terminal
+        .feed(b"\x1b[41mA\r\nB\r\n")
+        .expect("scroll feed succeeds");
 
     for col in 0..terminal.cols() {
         let cell = terminal.cell(col, 1).expect("bottom row cell");
@@ -26,7 +28,9 @@ fn full_screen_scroll_blanks_new_row_with_active_background() {
 fn alternate_screen_inherits_saved_rendition_and_restores_primary_rendition() {
     let mut terminal = terminal(6, 2);
 
-    terminal.feed(b"\x1b[44mP\x1b[?1049hA");
+    terminal
+        .feed(b"\x1b[44mP\x1b[?1049hA")
+        .expect("alternate enter feed succeeds");
     let alternate = terminal.cell(0, 0).expect("alternate cell");
     assert_eq!(alternate.character, 'A');
     assert_eq!(alternate.style.bg, Color::Indexed(4));
@@ -35,7 +39,9 @@ fn alternate_screen_inherits_saved_rendition_and_restores_primary_rendition() {
         Color::Indexed(4)
     );
 
-    terminal.feed(b"\x1b[41mR\x1b[?1049lQ");
+    terminal
+        .feed(b"\x1b[41mR\x1b[?1049lQ")
+        .expect("alternate leave feed succeeds");
     let primary = terminal.cell(1, 0).expect("primary continuation");
     assert_eq!(primary.character, 'Q');
     assert_eq!(primary.style.bg, Color::Indexed(4));

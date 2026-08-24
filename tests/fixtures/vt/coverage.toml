@@ -45,8 +45,8 @@ id = "cursor-save-restore"
 classification = "supported"
 basis = "external-plus-seyal-invariant"
 evidence = ["m001-ecma48-erase-save", "crates/seyal-terminal/tests/m001_vt.rs::save_restore_cursor_supports_csi_and_dec_forms"]
-reference = "ECMA-48 save/restore family plus SPEC-001 screen-local saved state"
-notes = "Seyal additionally preserves pen and pending-wrap state per SPEC-001."
+reference = "xterm ctlseqs CSI s/u (SCOSC/SCORC) plus SPEC-001 screen-local saved state; ESC 7/8 remains covered by the Seyal unit test"
+notes = "CSI s/u is independently grounded in xterm ctlseqs, not ECMA-48. Seyal additionally preserves pen and pending-wrap state per SPEC-001."
 
 [[behavior]]
 id = "erase-ed-el"
@@ -61,7 +61,7 @@ id = "sgr-and-colors"
 classification = "supported"
 basis = "external"
 evidence = ["m001-ecma48-core", "crates/seyal-terminal/tests/m001_vt.rs::sgr_tracks_supported_attributes_and_colors"]
-reference = "ECMA-48 SGR plus widely-established ANSI/xterm indexed and truecolor extensions"
+reference = "ECMA-48 SGR for standard attributes/colors plus xterm-compatible indexed/truecolor extensions covered by Seyal tests"
 notes = "M001 supports only the enumerated SPEC-001 subset; unlisted SGR parameters are deferred."
 
 [[behavior]]

@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: bootstrap bootstrap-agents build test check bench governance-check docs docs-install docs-build docs-check
+.PHONY: bootstrap bootstrap-agents build test check bench governance-check docs docs-install docs-build docs-check design-preview preview
 
 bootstrap:
 	@bash scripts/task.sh bootstrap
@@ -10,6 +10,11 @@ bootstrap-agents:
 
 build:
 	@bash scripts/task.sh build
+
+design-preview:
+	@open "target/macos-derived-data/Build/Products/Debug/Seyal.app" --args --design-preview
+
+preview: design-preview
 
 test:
 	@bash scripts/task.sh test

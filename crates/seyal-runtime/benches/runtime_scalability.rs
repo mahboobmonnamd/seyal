@@ -40,7 +40,11 @@ fn run_macos() {
         assert!(status.success(), "runtime benchmark worker failed");
     }
 
-    for (columns, rows, screen) in [(120, 40, "primary"), (200, 60, "primary"), (80, 24, "alternate")] {
+    for (columns, rows, screen) in [
+        (120, 40, "primary"),
+        (200, 60, "primary"),
+        (80, 24, "alternate"),
+    ] {
         let status = Command::new(&executable)
             .args([
                 "--worker",
@@ -97,7 +101,7 @@ fn worker() {
     for _ in 0..4 {
         let _ = runtime.poll_once(Some(Duration::from_millis(2)));
     }
-    thread::sleep(Duration::from_millis(100));
+    thread::sleep(Duration::from_millis(250));
     let populated = process_metrics(&runtime);
 
     let registry_start = Instant::now();
@@ -136,7 +140,7 @@ fn worker() {
         "PLATFORM_LIMITED"
     };
     println!(
-        "runtime_resource population_requested={requested} population_created={} geometry={}x{} screen={} classification={classification} create_us={creation_us} teardown_us={teardown_us} registry_100x_us={registry_us} control_to_state_us={:?} rss_baseline_kib={} rss_populated_kib={} rss_final_kib={} incremental_runtime_kib={} child_rss_kib={} threads_baseline={} threads_populated={} threads_final={} fd_baseline={} fd_populated={} fd_final={} pending_final={} shutdown_ok={} platform_error={:?}",
+        "runtime_resource population_requested={requested} population_created={} geometry={}x{} screen={} classification={classification} create_us={creation_us} teardown_us={teardown_us} registry_100x_us={registry_us} control_to_state_us={:?} rss_baseline_kib={} rss_populated_kib={} rss_final_kib={} incremental_runtime_kib={} child_rss_kib={} idle_cpu_percent={} threads_baseline={} threads_populated={} threads_final={} fd_baseline={} fd_populated={} fd_final={} pending_final={} shutdown_ok={} platform_error={:?}",
         ids.len(),
         columns,
         rows,
@@ -147,6 +151,7 @@ fn worker() {
         final_metrics.rss_kib,
         populated.rss_kib.saturating_sub(baseline.rss_kib),
         populated.child_rss_kib,
+        populated.cpu_percent,
         baseline.threads,
         populated.threads,
         final_metrics.threads,
@@ -165,6 +170,7 @@ fn worker() {
 struct Metrics {
     rss_kib: usize,
     child_rss_kib: usize,
+    cpu_percent: f32,
     threads: usize,
     fds: usize,
 }
@@ -173,12 +179,13 @@ struct Metrics {
 fn process_metrics(runtime: &Runtime) -> Metrics {
     let pid = process::id();
     let output = Command::new("/bin/ps")
-        .args(["-o", "rss=,thcount=", "-p", &pid.to_string()])
+        .args(["-o", "rss=,%cpu=,thcount=", "-p", &pid.to_string()])
         .output()
         .expect("ps Runtime metrics");
     let line = String::from_utf8_lossy(&output.stdout);
     let mut fields = line.split_whitespace();
     let rss_kib = fields.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let cpu_percent = fields.next().and_then(|v| v.parse().ok()).unwrap_or(0.0);
     let threads = fields.next().and_then(|v| v.parse().ok()).unwrap_or(0);
     let child_rss_kib = runtime
         .list()
@@ -190,6 +197,7 @@ fn process_metrics(runtime: &Runtime) -> Metrics {
     Metrics {
         rss_kib,
         child_rss_kib,
+        cpu_percent,
         threads,
         fds,
     }

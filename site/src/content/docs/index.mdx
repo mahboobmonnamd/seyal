@@ -1,0 +1,28 @@
+---
+title: Seyal Documentation
+description: Learn to use, understand, and contribute to Seyal.
+template: splash
+hero:
+  tagline: One place to learn Seyal as a user or understand it as a contributor.
+  actions:
+    - text: User Guide
+      link: /user/
+      icon: right-arrow
+    - text: Developer Guide
+      link: /developer/
+      icon: right-arrow
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+<CardGrid>
+  <Card title="Use Seyal" icon="rocket">
+    Installation, terminal behavior, workflows, configuration, troubleshooting, and feature guides belong in the User Guide.
+  </Card>
+  <Card title="Build Seyal" icon="seti:rust">
+    Architecture orientation, contribution workflow, testing, performance, security, and source-of-truth links belong in the Developer Guide.
+  </Card>
+</CardGrid>
+
+> Seyal is still under active development. Documentation must distinguish implemented behavior from planned capability.

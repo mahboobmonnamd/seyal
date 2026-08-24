@@ -80,7 +80,9 @@ fn run_macos() {
         return;
     }
 
-    println!("seyal-runtime Pass 5 equivalent display-transport comparator; performance_claim=false");
+    println!(
+        "seyal-runtime Pass 5 equivalent display-transport comparator; performance_claim=false"
+    );
     println!(
         "method=fresh_worker_per_population_and_transport socket_only=full_fixed_width_snapshot_over_unix_stream hybrid=production_uds_plus_readonly_shm"
     );
@@ -189,10 +191,9 @@ fn worker() {
         TransportMode::SocketOnly => {
             DisplayClients::Socket(setup_socket_clients(&runtime, &ids[..visible_count]))
         }
-        TransportMode::HybridProjection => DisplayClients::Hybrid(setup_hybrid_clients(
-            &mut runtime,
-            &ids[..visible_count],
-        )),
+        TransportMode::HybridProjection => {
+            DisplayClients::Hybrid(setup_hybrid_clients(&mut runtime, &ids[..visible_count]))
+        }
     };
     let display_setup_us = setup_start.elapsed().as_micros();
     let initial_semantic_match = display.semantic_match(&runtime, &ids[..visible_count]);
@@ -222,7 +223,10 @@ fn worker() {
             .and_then(|client| measure_hybrid_progress(&mut runtime, *id, client)),
     });
     if let Some(progress) = &progress {
-        assert!(progress.semantic_match, "updated display state was not canonical");
+        assert!(
+            progress.semantic_match,
+            "updated display state was not canonical"
+        );
     }
 
     let resync = ids.first().and_then(|id| match &mut display {
@@ -234,7 +238,10 @@ fn worker() {
             .map(|client| measure_hybrid_resync(&mut runtime, client)),
     });
     if let Some(result) = &resync {
-        assert!(result.semantic_match, "resync display state was not canonical");
+        assert!(
+            result.semantic_match,
+            "resync display state was not canonical"
+        );
     }
 
     let reconnect = ids.first().map(|id| match &mut display {
@@ -471,7 +478,10 @@ fn connect_hybrid_client(runtime: &mut Runtime, execution_id: ExecutionId) -> Hy
     let region_bytes = attached.region_bytes as usize;
     let mapping = ReadOnlyMapping::new(fd, region_bytes).expect("map benchmark projection");
     let region = read_region_header(&mapping.memory()).expect("benchmark region header");
-    assert_eq!(region.execution_id, u128::from_le_bytes(execution_id.to_bytes()));
+    assert_eq!(
+        region.execution_id,
+        u128::from_le_bytes(execution_id.to_bytes())
+    );
     assert_eq!(region.region_bytes as usize, region_bytes);
     HybridClient {
         stream,
@@ -489,11 +499,19 @@ fn measure_socket_progress(
     client: &mut SocketClient,
 ) -> Option<ProgressResult> {
     let ingress = runtime.input_ingress(execution_id).ok()?;
-    let before_generation = runtime.execution(execution_id)?.terminal().damage_generation();
+    let before_generation = runtime
+        .execution(execution_id)?
+        .terminal()
+        .damage_generation();
     let start = Instant::now();
     ingress.try_submit(b"z".to_vec()).ok()?;
     let deadline = Instant::now() + Duration::from_secs(2);
-    while runtime.execution(execution_id)?.terminal().damage_generation() <= before_generation {
+    while runtime
+        .execution(execution_id)?
+        .terminal()
+        .damage_generation()
+        <= before_generation
+    {
         runtime.poll_once(Some(Duration::from_millis(2))).ok()?;
         if Instant::now() >= deadline {
             return None;

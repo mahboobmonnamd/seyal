@@ -80,8 +80,8 @@ macos_dependencies = exec_data.get("target", {}).get("cfg(target_os = \"macos\")
 )
 if set(macos_dependencies) != {"libc"}:
     fail("seyal-exec macOS platform boundary may depend only on libc in M001")
-if macos_dependencies["libc"] != "0.2.189":
-    fail("seyal-exec must pin the reviewed libc 0.2.189 dependency requirement")
+if macos_dependencies["libc"] != "=0.2.189":
+    fail("seyal-exec must exactly pin the reviewed libc 0.2.189 dependency")
 
 exec_src = ROOT / "crates" / "seyal-exec" / "src"
 if not exec_src.is_dir():
@@ -90,5 +90,9 @@ for path in sorted(exec_src.rglob("*.rs")):
     text = path.read_text(encoding="utf-8")
     if "RILL_" in text:
         fail(f"legacy RILL environment identifier found in {path.relative_to(ROOT)}")
+
+lib_text = (exec_src / "lib.rs").read_text(encoding="utf-8")
+if "TerminalEndpoint" in lib_text.split("pub use")[-1]:
+    fail("TerminalEndpoint must not be exported as a public construction surface")
 
 print("[seyal workspace test] workspace ownership scaffold invariants passed.")

@@ -1,9 +1,9 @@
 //! Seyal-owned local terminal execution boundary.
 //!
-//! `TerminalExecution` owns one PTY endpoint/child lifecycle and one
-//! authoritative `seyal_terminal::TerminalState`. The macOS PTY implementation
-//! is internal; raw descriptors, GUI state, Blocks and Runtime orchestration do
-//! not enter this crate's public surface.
+//! `TerminalExecution` owns one internal PTY endpoint/child lifecycle and one
+//! authoritative `seyal_terminal::TerminalState`. The endpoint itself is not a
+//! public construction surface: callers cannot create an untracked PTY without
+//! the corresponding terminal state.
 
 mod child;
 mod command;
@@ -16,7 +16,7 @@ mod winsize;
 
 pub use child::{ChildExit, TerminationPolicy};
 pub use command::CommandSpec;
-pub use endpoint::{ReadOutcome, TerminalEndpoint, WriteOutcome};
+pub use endpoint::{ReadOutcome, WriteOutcome};
 pub use error::ExecError;
 pub use execution::TerminalExecution;
 pub use readiness::Readiness;

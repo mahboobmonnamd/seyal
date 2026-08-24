@@ -3,8 +3,8 @@ use std::time::Duration;
 use seyal_terminal::TerminalState;
 
 use crate::{
-    ChildExit, CommandSpec, ExecError, ReadOutcome, Readiness, TerminalEndpoint, TerminationPolicy,
-    WindowSize, WriteOutcome,
+    ChildExit, CommandSpec, ExecError, ReadOutcome, Readiness, TerminationPolicy, WindowSize,
+    WriteOutcome, endpoint::TerminalEndpoint,
 };
 
 pub struct TerminalExecution {
@@ -51,6 +51,10 @@ impl TerminalExecution {
 
     pub fn wait_readable(&self, timeout: Duration) -> Result<Readiness, ExecError> {
         self.endpoint.wait_readable(timeout)
+    }
+
+    pub fn wait_writable(&self, timeout: Duration) -> Result<Readiness, ExecError> {
+        self.endpoint.wait_writable(timeout)
     }
 
     pub fn resize(&mut self, size: WindowSize) -> Result<(), ExecError> {

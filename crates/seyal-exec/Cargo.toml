@@ -11,7 +11,7 @@ publish = false
 seyal-terminal = { path = "../seyal-terminal" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-libc = "0.2.189"
+libc = "=0.2.189"
 
 [lints.rust]
 unsafe_code = "deny"

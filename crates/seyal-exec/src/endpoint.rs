@@ -24,13 +24,13 @@ pub enum WriteOutcome {
     WouldBlock,
 }
 
-pub struct TerminalEndpoint {
+pub(crate) struct TerminalEndpoint {
     master: platform::MasterHandle,
     child: ChildLifecycle,
 }
 
 impl TerminalEndpoint {
-    pub fn spawn(command_spec: &CommandSpec, size: WindowSize) -> Result<Self, ExecError> {
+    pub(crate) fn spawn(command_spec: &CommandSpec, size: WindowSize) -> Result<Self, ExecError> {
         let pair = platform::open_pty(size)?;
         let stdin = pair.slave.try_clone()?;
         let stdout = pair.slave.try_clone()?;
@@ -52,11 +52,11 @@ impl TerminalEndpoint {
         })
     }
 
-    pub fn child_id(&self) -> u32 {
+    pub(crate) fn child_id(&self) -> u32 {
         self.child.id()
     }
 
-    pub fn read(&mut self, buffer: &mut [u8]) -> Result<ReadOutcome, ExecError> {
+    pub(crate) fn read(&mut self, buffer: &mut [u8]) -> Result<ReadOutcome, ExecError> {
         if buffer.is_empty() {
             return Ok(ReadOutcome::Bytes(0));
         }
@@ -71,7 +71,7 @@ impl TerminalEndpoint {
         }
     }
 
-    pub fn write(&mut self, bytes: &[u8]) -> Result<WriteOutcome, ExecError> {
+    pub(crate) fn write(&mut self, bytes: &[u8]) -> Result<WriteOutcome, ExecError> {
         if bytes.is_empty() {
             return Ok(WriteOutcome::Bytes(0));
         }
@@ -84,7 +84,11 @@ impl TerminalEndpoint {
         }
     }
 
-    pub fn write_all_bounded(&mut self, bytes: &[u8], timeout: Duration) -> Result<(), ExecError> {
+    pub(crate) fn write_all_bounded(
+        &mut self,
+        bytes: &[u8],
+        timeout: Duration,
+    ) -> Result<(), ExecError> {
         let deadline = Instant::now() + timeout;
         let mut written = 0;
 
@@ -106,27 +110,30 @@ impl TerminalEndpoint {
         Ok(())
     }
 
-    pub fn wait_readable(&self, timeout: Duration) -> Result<Readiness, ExecError> {
+    pub(crate) fn wait_readable(&self, timeout: Duration) -> Result<Readiness, ExecError> {
         wait(&self.master, Interest::Read, timeout)
     }
 
-    pub fn wait_writable(&self, timeout: Duration) -> Result<Readiness, ExecError> {
+    pub(crate) fn wait_writable(&self, timeout: Duration) -> Result<Readiness, ExecError> {
         wait(&self.master, Interest::Write, timeout)
     }
 
-    pub fn set_window_size(&self, size: WindowSize) -> Result<(), ExecError> {
+    pub(crate) fn set_window_size(&self, size: WindowSize) -> Result<(), ExecError> {
         platform::set_winsize(&self.master, size)
     }
 
-    pub fn window_size(&self) -> Result<WindowSize, ExecError> {
+    pub(crate) fn window_size(&self) -> Result<WindowSize, ExecError> {
         platform::get_winsize(&self.master)
     }
 
-    pub fn try_wait(&mut self) -> Result<Option<ChildExit>, ExecError> {
+    pub(crate) fn try_wait(&mut self) -> Result<Option<ChildExit>, ExecError> {
         self.child.try_wait()
     }
 
-    pub fn terminate(&mut self, policy: TerminationPolicy) -> Result<ChildExit, ExecError> {
+    pub(crate) fn terminate(
+        &mut self,
+        policy: TerminationPolicy,
+    ) -> Result<ChildExit, ExecError> {
         self.child.terminate(policy)
     }
 }

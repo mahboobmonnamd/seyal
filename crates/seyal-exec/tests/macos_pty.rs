@@ -4,18 +4,23 @@
 use std::{
     fs::File,
     os::fd::AsRawFd,
-    sync::Mutex,
+    sync::{Mutex, MutexGuard},
     time::{Duration, Instant},
 };
 
 use seyal_exec::{
-    ChildExit, CommandSpec, ExecError, ReadOutcome, TerminalEndpoint, TerminalExecution,
-    TerminationPolicy, WindowSize,
+    ChildExit, CommandSpec, ExecError, ReadOutcome, TerminalExecution, TerminationPolicy,
+    WindowSize,
 };
 
 static TEST_LOCK: Mutex<()> = Mutex::new(());
-
 const IO_TIMEOUT: Duration = Duration::from_secs(3);
+
+fn test_guard() -> MutexGuard<'static, ()> {
+    TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 fn sh(script: &str) -> CommandSpec {
     CommandSpec::new("/bin/sh").args(["-c", script])
@@ -26,7 +31,7 @@ fn termination_policy() -> TerminationPolicy {
 }
 
 fn read_until(
-    endpoint: &mut TerminalEndpoint,
+    execution: &mut TerminalExecution,
     needle: &[u8],
     timeout: Duration,
 ) -> Result<Vec<u8>, ExecError> {
@@ -35,7 +40,7 @@ fn read_until(
     let mut buffer = [0_u8; 8192];
 
     loop {
-        match endpoint.read(&mut buffer)? {
+        match execution.read_output(&mut buffer)? {
             ReadOutcome::Bytes(count) => {
                 output.extend_from_slice(&buffer[..count]);
                 if output.windows(needle.len()).any(|window| window == needle) {
@@ -50,9 +55,9 @@ fn read_until(
         if remaining.is_zero() {
             return Ok(output);
         }
-        let readiness = endpoint.wait_readable(remaining.min(Duration::from_millis(100)))?;
+        let readiness = execution.wait_readable(remaining.min(Duration::from_millis(100)))?;
         if readiness.hangup && !readiness.ready {
-            match endpoint.read(&mut buffer)? {
+            match execution.read_output(&mut buffer)? {
                 ReadOutcome::Bytes(count) => output.extend_from_slice(&buffer[..count]),
                 ReadOutcome::WouldBlock | ReadOutcome::Eof => {}
             }
@@ -60,10 +65,13 @@ fn read_until(
     }
 }
 
-fn wait_exit(endpoint: &mut TerminalEndpoint, timeout: Duration) -> Result<ChildExit, ExecError> {
+fn wait_exit(
+    execution: &mut TerminalExecution,
+    timeout: Duration,
+) -> Result<ChildExit, ExecError> {
     let deadline = Instant::now() + timeout;
     loop {
-        if let Some(exit) = endpoint.try_wait()? {
+        if let Some(exit) = execution.try_wait()? {
             return Ok(exit);
         }
         if Instant::now() >= deadline {
@@ -81,37 +89,42 @@ fn fd_count() -> usize {
 
 #[test]
 fn real_command_spawn_and_byte_round_trip() {
-    let _guard = TEST_LOCK.lock().expect("test lock");
+    let _guard = test_guard();
     let size = WindowSize::cells(80, 24).expect("valid size");
-    let command = sh("stty raw -echo; head -c 4");
-    let mut endpoint = TerminalEndpoint::spawn(&command, size).expect("spawn PTY");
+    let command = sh("stty raw -echo; printf ready; head -c 4");
+    let mut execution = TerminalExecution::spawn(&command, size).expect("spawn PTY");
 
-    endpoint
-        .write_all_bounded(b"ping", IO_TIMEOUT)
+    let ready = read_until(&mut execution, b"ready", IO_TIMEOUT).expect("child ready");
+    assert!(ready.windows(5).any(|window| window == b"ready"));
+    execution
+        .write_input_bounded(b"ping", IO_TIMEOUT)
         .expect("write input");
-    let output = read_until(&mut endpoint, b"ping", IO_TIMEOUT).expect("read output");
+    let output = read_until(&mut execution, b"ping", IO_TIMEOUT).expect("read output");
     assert!(output.windows(4).any(|window| window == b"ping"));
 
-    let _ = wait_exit(&mut endpoint, IO_TIMEOUT).expect("child exit");
+    assert_eq!(
+        wait_exit(&mut execution, IO_TIMEOUT).expect("child exit"),
+        ChildExit::Exited(0)
+    );
 }
 
 #[test]
-fn bursty_output_is_not_truncated_by_endpoint() {
-    let _guard = TEST_LOCK.lock().expect("test lock");
+fn bursty_output_is_not_truncated_by_execution_path() {
+    let _guard = test_guard();
     let size = WindowSize::cells(80, 24).expect("valid size");
     let command =
         sh("i=0; while [ \"$i\" -lt 4096 ]; do printf 0123456789abcdef; i=$((i+1)); done");
-    let mut endpoint = TerminalEndpoint::spawn(&command, size).expect("spawn PTY");
+    let mut execution = TerminalExecution::spawn(&command, size).expect("spawn PTY");
     let expected_len = 4096 * 16;
     let deadline = Instant::now() + IO_TIMEOUT;
     let mut output = Vec::with_capacity(expected_len);
     let mut buffer = [0_u8; 8192];
 
     while output.len() < expected_len && Instant::now() < deadline {
-        match endpoint.read(&mut buffer).expect("read") {
+        match execution.read_output(&mut buffer).expect("read") {
             ReadOutcome::Bytes(count) => output.extend_from_slice(&buffer[..count]),
             ReadOutcome::WouldBlock => {
-                let _ = endpoint
+                let _ = execution
                     .wait_readable(Duration::from_millis(100))
                     .expect("wait readable");
             }
@@ -126,28 +139,30 @@ fn bursty_output_is_not_truncated_by_endpoint() {
             .all(|chunk| chunk == b"0123456789abcdef")
     );
     assert_eq!(
-        wait_exit(&mut endpoint, IO_TIMEOUT).expect("child exit"),
+        wait_exit(&mut execution, IO_TIMEOUT).expect("child exit"),
         ChildExit::Exited(0)
     );
 }
 
 #[test]
-fn resize_is_kernel_visible_and_preserves_child_identity() {
-    let _guard = TEST_LOCK.lock().expect("test lock");
+fn resize_is_kernel_visible_and_preserves_execution_identity() {
+    let _guard = test_guard();
     let initial = WindowSize::cells(80, 24).expect("initial size");
     let resized = WindowSize::new(100, 33, 1000, 660).expect("resized");
     let command = sh("trap 'stty size; exit 0' WINCH; printf ready; while :; do sleep 1; done");
-    let mut endpoint = TerminalEndpoint::spawn(&command, initial).expect("spawn PTY");
-    let child_id = endpoint.child_id();
+    let mut execution = TerminalExecution::spawn(&command, initial).expect("spawn PTY");
+    let child_id = execution.child_id();
 
-    let ready = read_until(&mut endpoint, b"ready", IO_TIMEOUT).expect("ready output");
+    let ready = read_until(&mut execution, b"ready", IO_TIMEOUT).expect("ready output");
     assert!(ready.windows(5).any(|window| window == b"ready"));
 
-    endpoint.set_window_size(resized).expect("set window size");
-    assert_eq!(endpoint.window_size().expect("get window size"), resized);
-    assert_eq!(endpoint.child_id(), child_id);
+    execution.resize(resized).expect("resize execution");
+    assert_eq!(execution.window_size().expect("get window size"), resized);
+    assert_eq!(execution.child_id(), child_id);
+    assert_eq!(execution.terminal().cols(), resized.columns());
+    assert_eq!(execution.terminal().rows(), resized.rows());
 
-    let output = read_until(&mut endpoint, b"33 100", IO_TIMEOUT).expect("resize output");
+    let output = read_until(&mut execution, b"33 100", IO_TIMEOUT).expect("resize output");
     assert!(
         output
             .windows(b"33 100".len())
@@ -155,18 +170,18 @@ fn resize_is_kernel_visible_and_preserves_child_identity() {
         "child did not observe resized rows/columns: {output:?}"
     );
     assert_eq!(
-        wait_exit(&mut endpoint, IO_TIMEOUT).expect("child exit"),
+        wait_exit(&mut execution, IO_TIMEOUT).expect("child exit"),
         ChildExit::Exited(0)
     );
 }
 
 #[test]
 fn normal_and_signal_exits_are_distinct() {
-    let _guard = TEST_LOCK.lock().expect("test lock");
+    let _guard = test_guard();
     let size = WindowSize::default();
 
     let mut normal =
-        TerminalEndpoint::spawn(&sh("exit 23"), size).expect("spawn normal exit child");
+        TerminalExecution::spawn(&sh("exit 23"), size).expect("spawn normal exit child");
     assert_eq!(
         wait_exit(&mut normal, IO_TIMEOUT).expect("normal exit"),
         ChildExit::Exited(23)
@@ -177,7 +192,7 @@ fn normal_and_signal_exits_are_distinct() {
     );
 
     let mut signaled =
-        TerminalEndpoint::spawn(&sh("kill -TERM $$"), size).expect("spawn signaled child");
+        TerminalExecution::spawn(&sh("kill -TERM $$"), size).expect("spawn signaled child");
     assert_eq!(
         wait_exit(&mut signaled, IO_TIMEOUT).expect("signal exit"),
         ChildExit::Signaled(libc::SIGTERM)
@@ -186,14 +201,14 @@ fn normal_and_signal_exits_are_distinct() {
 
 #[test]
 fn child_exit_eventually_becomes_master_eof_or_hangup() {
-    let _guard = TEST_LOCK.lock().expect("test lock");
+    let _guard = test_guard();
     let size = WindowSize::default();
-    let mut endpoint = TerminalEndpoint::spawn(&sh("printf done"), size).expect("spawn PTY");
+    let mut execution = TerminalExecution::spawn(&sh("printf done"), size).expect("spawn PTY");
 
-    let output = read_until(&mut endpoint, b"done", IO_TIMEOUT).expect("output");
+    let output = read_until(&mut execution, b"done", IO_TIMEOUT).expect("output");
     assert!(output.windows(4).any(|window| window == b"done"));
     assert_eq!(
-        wait_exit(&mut endpoint, IO_TIMEOUT).expect("child exit"),
+        wait_exit(&mut execution, IO_TIMEOUT).expect("child exit"),
         ChildExit::Exited(0)
     );
 
@@ -201,14 +216,17 @@ fn child_exit_eventually_becomes_master_eof_or_hangup() {
     let mut buffer = [0_u8; 32];
     let mut closed = false;
     while Instant::now() < deadline {
-        let readiness = endpoint
+        let readiness = execution
             .wait_readable(Duration::from_millis(100))
             .expect("wait");
         if readiness.hangup {
             closed = true;
             break;
         }
-        if matches!(endpoint.read(&mut buffer).expect("read"), ReadOutcome::Eof) {
+        if matches!(
+            execution.read_output(&mut buffer).expect("read"),
+            ReadOutcome::Eof
+        ) {
             closed = true;
             break;
         }
@@ -218,31 +236,31 @@ fn child_exit_eventually_becomes_master_eof_or_hangup() {
 
 #[test]
 fn explicit_terminate_reaps_only_the_owned_process_group() {
-    let _guard = TEST_LOCK.lock().expect("test lock");
+    let _guard = test_guard();
     let size = WindowSize::default();
-    let mut endpoint =
-        TerminalEndpoint::spawn(&sh("while :; do sleep 1; done"), size).expect("spawn PTY");
+    let mut execution = TerminalExecution::spawn(&sh("while :; do sleep 1; done"), size)
+        .expect("spawn PTY");
 
-    let exit = endpoint
+    let exit = execution
         .terminate(termination_policy())
         .expect("terminate owned execution");
     assert!(matches!(
         exit,
         ChildExit::Signaled(libc::SIGTERM) | ChildExit::Signaled(libc::SIGKILL)
     ));
-    assert_eq!(endpoint.try_wait().expect("idempotent reap"), Some(exit));
+    assert_eq!(execution.try_wait().expect("idempotent reap"), Some(exit));
 }
 
 #[test]
 fn repeated_spawn_terminate_does_not_accumulate_fds() {
-    let _guard = TEST_LOCK.lock().expect("test lock");
+    let _guard = test_guard();
     let before = fd_count();
     let size = WindowSize::default();
 
     for _ in 0..16 {
-        let mut endpoint =
-            TerminalEndpoint::spawn(&sh("while :; do sleep 1; done"), size).expect("spawn");
-        endpoint
+        let mut execution = TerminalExecution::spawn(&sh("while :; do sleep 1; done"), size)
+            .expect("spawn");
+        execution
             .terminate(termination_policy())
             .expect("terminate and reap");
     }
@@ -256,7 +274,7 @@ fn repeated_spawn_terminate_does_not_accumulate_fds() {
 
 #[test]
 fn readiness_works_above_select_fd_limit() {
-    let _guard = TEST_LOCK.lock().expect("test lock");
+    let _guard = test_guard();
 
     unsafe {
         let mut limit = std::mem::MaybeUninit::<libc::rlimit>::uninit();
@@ -282,12 +300,12 @@ fn readiness_works_above_select_fd_limit() {
         }
     }
 
-    let mut endpoint =
-        TerminalEndpoint::spawn(&sh("printf highfd"), WindowSize::default()).expect("spawn PTY");
-    let output = read_until(&mut endpoint, b"highfd", IO_TIMEOUT).expect("high fd output");
+    let mut execution = TerminalExecution::spawn(&sh("printf highfd"), WindowSize::default())
+        .expect("spawn PTY");
+    let output = read_until(&mut execution, b"highfd", IO_TIMEOUT).expect("high fd output");
     assert!(output.windows(6).any(|window| window == b"highfd"));
     assert_eq!(
-        wait_exit(&mut endpoint, IO_TIMEOUT).expect("child exit"),
+        wait_exit(&mut execution, IO_TIMEOUT).expect("child exit"),
         ChildExit::Exited(0)
     );
 
@@ -296,9 +314,9 @@ fn readiness_works_above_select_fd_limit() {
 
 #[test]
 fn invalid_command_does_not_leak_descriptors() {
-    let _guard = TEST_LOCK.lock().expect("test lock");
+    let _guard = test_guard();
     let before = fd_count();
-    let result = TerminalEndpoint::spawn(
+    let result = TerminalExecution::spawn(
         &CommandSpec::new("/definitely/not/a/seyal-command"),
         WindowSize::default(),
     );
@@ -312,7 +330,7 @@ fn invalid_command_does_not_leak_descriptors() {
 
 #[test]
 fn terminal_execution_feeds_the_single_authoritative_terminal_state() {
-    let _guard = TEST_LOCK.lock().expect("test lock");
+    let _guard = test_guard();
     let mut execution =
         TerminalExecution::spawn(&sh("printf abc"), WindowSize::cells(80, 24).expect("size"))
             .expect("spawn execution");
@@ -346,18 +364,7 @@ fn terminal_execution_feeds_the_single_authoritative_terminal_state() {
             .is_some_and(|row| row.starts_with("abc"))
     );
     assert_eq!(
-        wait_execution_exit(&mut execution, IO_TIMEOUT),
+        wait_exit(&mut execution, IO_TIMEOUT).expect("execution exit"),
         ChildExit::Exited(0)
     );
-}
-
-fn wait_execution_exit(execution: &mut TerminalExecution, timeout: Duration) -> ChildExit {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if let Some(exit) = execution.try_wait().expect("wait execution") {
-            return exit;
-        }
-        assert!(Instant::now() < deadline, "execution did not exit");
-        std::thread::sleep(Duration::from_millis(5));
-    }
 }

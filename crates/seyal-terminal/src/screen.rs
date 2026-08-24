@@ -142,9 +142,9 @@ impl Screen {
     ) -> Result<Mutation, TerminalError> {
         let mut mutation = Mutation::none();
         if self.cursor.pending_wrap {
-            self.cursor.pending_wrap = false;
+            let wrap_mutation = self.line_feed(line_ids)?;
             self.cursor.col = 0;
-            mutation = mutation.merge(self.line_feed(line_ids)?);
+            mutation = mutation.merge(wrap_mutation);
         }
 
         let row = self.cursor.row;
@@ -370,13 +370,14 @@ impl Screen {
 
     fn line_feed(&mut self, line_ids: &mut LineIdAllocator) -> Result<Mutation, TerminalError> {
         let old = self.cursor.row;
-        self.cursor.pending_wrap = false;
         if self.cursor.row < self.rows - 1 {
+            self.cursor.pending_wrap = false;
             self.cursor.row += 1;
             return Ok(Mutation::rows(old, self.cursor.row));
         }
 
         let new_line_id = line_ids.allocate()?;
+        self.cursor.pending_wrap = false;
         let row_width = usize::from(self.cols);
         self.cells.copy_within(row_width.., 0);
         let last_row_start = self.cells.len() - row_width;

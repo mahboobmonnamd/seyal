@@ -82,14 +82,21 @@ fn headless_detach_preserves_execution_identity_and_terminal_state() {
 
     runtime.detach(id, first).expect("detach presentation");
     assert_eq!(runtime.lookup(id).unwrap().attachment_count, 0);
-    assert_eq!(runtime.lookup(id).unwrap().lifecycle, ExecutionLifecycle::Running);
+    assert_eq!(
+        runtime.lookup(id).unwrap().lifecycle,
+        ExecutionLifecycle::Running
+    );
     assert_eq!(runtime.id(), runtime_id);
     assert!(runtime.execution(id).is_some());
 
     let second = runtime.attach(id).expect("reattach");
     assert_eq!(runtime.lookup(id).unwrap().attachment_count, 1);
     assert_eq!(
-        runtime.execution(id).unwrap().terminal().damage_generation(),
+        runtime
+            .execution(id)
+            .unwrap()
+            .terminal()
+            .damage_generation(),
         generation
     );
     runtime.detach(id, second).expect("second detach");
@@ -100,7 +107,10 @@ fn headless_detach_preserves_execution_identity_and_terminal_state() {
 fn singleton_uses_live_lock_not_stale_file_metadata() {
     let config = config("singleton");
     let first = Runtime::new(config.clone()).expect("first Runtime owns scope");
-    assert!(matches!(Runtime::new(config.clone()), Err(RuntimeError::AlreadyRunning)));
+    assert!(matches!(
+        Runtime::new(config.clone()),
+        Err(RuntimeError::AlreadyRunning)
+    ));
     let first_id = first.id();
     drop(first);
 
@@ -147,7 +157,10 @@ fn concurrent_producers_cannot_oversubscribe_runtime_input_budget() {
     let second = runtime
         .create_execution(CommandSpec::new("/bin/cat"), size())
         .expect("second cat");
-    let ingress = [runtime.input_ingress(first).unwrap(), runtime.input_ingress(second).unwrap()];
+    let ingress = [
+        runtime.input_ingress(first).unwrap(),
+        runtime.input_ingress(second).unwrap(),
+    ];
     let barrier = Arc::new(Barrier::new(9));
     let mut workers = Vec::new();
     for index in 0..8 {
@@ -161,7 +174,8 @@ fn concurrent_producers_cannot_oversubscribe_runtime_input_budget() {
     barrier.wait();
     let accepted = workers
         .into_iter()
-        .filter(|worker| worker.join().unwrap())
+        .map(|worker| worker.join().unwrap())
+        .filter(|accepted| *accepted)
         .count();
     assert!(accepted <= 4);
     assert!(runtime.aggregate_accepted_but_unwritten_bytes() <= 16);
@@ -171,6 +185,67 @@ fn concurrent_producers_cannot_oversubscribe_runtime_input_budget() {
         Instant::now() + Duration::from_secs(2),
         |runtime| runtime.aggregate_accepted_but_unwritten_bytes() == 0,
     );
+    shutdown(&mut runtime);
+}
+
+#[test]
+fn read_quantum_prevents_noisy_execution_from_starving_quiet_execution() {
+    let mut config = config("read-fairness");
+    config.read_dispatch_bytes = 4096;
+    let mut runtime = Runtime::new(config).expect("Runtime");
+    let noisy = runtime
+        .create_execution(
+            CommandSpec::new("/bin/sh")
+                .args(["-c", "yes N | head -c 1048576; sleep 30"]),
+            size(),
+        )
+        .expect("noisy execution");
+    let quiet = runtime
+        .create_execution(
+            CommandSpec::new("/bin/sh").args(["-c", "printf QUIET; sleep 30"]),
+            size(),
+        )
+        .expect("quiet execution");
+
+    wait_until(
+        &mut runtime,
+        Instant::now() + Duration::from_secs(2),
+        |runtime| {
+            runtime
+                .execution(quiet)
+                .and_then(|execution| execution.terminal().row_text(0))
+                .is_some_and(|row| row.contains("QUIET"))
+        },
+    );
+    assert!(runtime.execution(noisy).is_some());
+    shutdown(&mut runtime);
+}
+
+#[test]
+fn write_quantum_advances_two_backlogged_executions_in_one_control_turn() {
+    let mut config = config("write-fairness");
+    config.write_dispatch_bytes = 1024;
+    config.per_execution_input_bytes = 64 * 1024;
+    config.aggregate_input_bytes = 128 * 1024;
+    let mut runtime = Runtime::new(config).expect("Runtime");
+    let first = runtime
+        .create_execution(CommandSpec::new("/bin/cat"), size())
+        .expect("first cat");
+    let second = runtime
+        .create_execution(CommandSpec::new("/bin/cat"), size())
+        .expect("second cat");
+    let first_ingress = runtime.input_ingress(first).unwrap();
+    let second_ingress = runtime.input_ingress(second).unwrap();
+    first_ingress.try_submit(vec![b'a'; 16 * 1024]).unwrap();
+    second_ingress.try_submit(vec![b'b'; 16 * 1024]).unwrap();
+
+    runtime
+        .poll_once(Some(Duration::from_secs(1)))
+        .expect("control wake is delivered");
+    let first_remaining = first_ingress.accepted_but_unwritten_bytes();
+    let second_remaining = second_ingress.accepted_but_unwritten_bytes();
+    assert!(first_remaining < 16 * 1024);
+    assert!(second_remaining < 16 * 1024);
     shutdown(&mut runtime);
 }
 
@@ -229,8 +304,16 @@ fn runtime_internal_descriptors_are_not_inherited_by_child() {
                 .is_some_and(|row| row.contains("checked"))
         },
     );
-    let row = runtime.execution(id).unwrap().terminal().row_text(0).unwrap();
-    assert!(!row.contains("LEAK:"), "child inherited Runtime-only fd: {row:?}");
+    let row = runtime
+        .execution(id)
+        .unwrap()
+        .terminal()
+        .row_text(0)
+        .unwrap();
+    assert!(
+        !row.contains("LEAK:"),
+        "child inherited Runtime-only fd: {row:?}"
+    );
     shutdown(&mut runtime);
 }
 
@@ -238,10 +321,15 @@ fn runtime_internal_descriptors_are_not_inherited_by_child() {
 fn resize_and_new_input_are_rejected_after_termination_begins() {
     let mut runtime = Runtime::new(config("post-exit-admission")).expect("Runtime");
     let id = runtime
-        .create_execution(CommandSpec::new("/bin/sh").args(["-c", "sleep 30"]), size())
+        .create_execution(
+            CommandSpec::new("/bin/sh").args(["-c", "sleep 30"]),
+            size(),
+        )
         .expect("execution");
     let ingress = runtime.input_ingress(id).unwrap();
-    runtime.request_termination(id).expect("termination request");
+    runtime
+        .request_termination(id)
+        .expect("termination request");
     assert!(matches!(
         runtime.resize(id, WindowSize::new(100, 30, 0, 0).unwrap()),
         Err(RuntimeError::ExecutionNotRunning)
@@ -253,4 +341,25 @@ fn resize_and_new_input_are_rejected_after_termination_begins() {
     runtime
         .run_until_empty(Instant::now() + Duration::from_secs(2))
         .expect("termination finalizes");
+}
+
+#[test]
+fn repeated_create_and_controlled_terminate_returns_registry_and_budget_to_zero() {
+    let mut runtime = Runtime::new(config("repeated-cleanup")).expect("Runtime");
+    for _ in 0..20 {
+        let id = runtime
+            .create_execution(
+                CommandSpec::new("/bin/sh").args(["-c", "sleep 30"]),
+                size(),
+            )
+            .expect("execution");
+        runtime.request_termination(id).unwrap();
+        wait_until(
+            &mut runtime,
+            Instant::now() + Duration::from_secs(1),
+            |runtime| runtime.lookup(id).is_none(),
+        );
+        assert_eq!(runtime.aggregate_accepted_but_unwritten_bytes(), 0);
+    }
+    assert_eq!(runtime.execution_count(), 0);
 }

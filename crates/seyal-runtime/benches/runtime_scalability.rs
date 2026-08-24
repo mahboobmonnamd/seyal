@@ -1,3 +1,4 @@
+#[cfg(target_os = "macos")]
 use std::{env, process::Command, time::Instant};
 
 #[cfg(target_os = "macos")]

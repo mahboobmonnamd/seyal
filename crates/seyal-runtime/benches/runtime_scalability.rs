@@ -772,15 +772,17 @@ fn wait_generation_wake(
             let header = FrameHeader::decode(&buffer[..HEADER_LEN]).ok()?;
             let total = HEADER_LEN + header.payload_len as usize;
             if buffer.len() >= total {
-                let payload = &buffer[HEADER_LEN..total];
+                let wake = if header.message_type == MessageType::GenerationWake as u16 {
+                    Some(GenerationWake::decode(&buffer[HEADER_LEN..total]).ok()?)
+                } else {
+                    None
+                };
                 buffer.drain(..total);
-                if header.message_type == MessageType::GenerationWake as u16 {
-                    let wake = GenerationWake::decode(payload).ok()?;
-                    if wake.attachment_id == attachment_id
-                        && wake.committed_generation >= minimum_generation
-                    {
-                        return Some((wake, Instant::now()));
-                    }
+                if let Some(wake) = wake
+                    && wake.attachment_id == attachment_id
+                    && wake.committed_generation >= minimum_generation
+                {
+                    return Some((wake, Instant::now()));
                 }
             }
         }

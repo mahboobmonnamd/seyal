@@ -17,5 +17,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "seyal-runtime"
+version = "0.0.0"
+dependencies = [
+ "libc",
+ "seyal-exec",
+]
+
+[[package]]
 name = "seyal-terminal"
 version = "0.0.0"

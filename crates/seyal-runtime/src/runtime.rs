@@ -15,7 +15,8 @@ use seyal_exec::{
 };
 
 use crate::{
-    AttachmentId, CapabilityPolicy, ExecutionId, InputIngress, RuntimeError, RuntimeId, WorkspaceId,
+    AttachmentId, CapabilityPolicy, ExecutionId, InputIngress, RuntimeError, RuntimeId,
+    WorkspaceId,
     input::{AcceptedInput, ControlMessage},
     singleton::SingletonGuard,
 };
@@ -34,7 +35,9 @@ use crate::{
         },
     },
     projection::{
-        layout::{MAX_CAPACITY_COLS, MAX_CAPACITY_ROWS, MAX_REGION_BYTES, REGION_HEADER_LEN, RegionHeader},
+        layout::{
+            MAX_CAPACITY_COLS, MAX_CAPACITY_ROWS, MAX_REGION_BYTES, REGION_HEADER_LEN, RegionHeader,
+        },
         lifecycle::ProjectionRegion,
         producer,
         writer::Writer,
@@ -199,10 +202,8 @@ impl LocalIpcState {
                 "local IPC stale socket validation failed",
             ))
         })?;
-        let server = LocalIpcServer::bind(
-            &socket_path,
-            crate::local_ipc::connection::MAX_CONNECTIONS,
-        )?;
+        let server =
+            LocalIpcServer::bind(&socket_path, crate::local_ipc::connection::MAX_CONNECTIONS)?;
         let listener_reactor_token = match reactor.register_auxiliary(server.listener_fd()) {
             Ok(token) => token,
             Err(error) => {
@@ -311,10 +312,9 @@ impl Runtime {
     pub fn local_ipc_socket_path(&self) -> Option<&Path> {
         #[cfg(target_os = "macos")]
         {
-            return self
-                .local_ipc
+            self.local_ipc
                 .as_ref()
-                .map(|state| state.socket_path.as_path());
+                .map(|state| state.socket_path.as_path())
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -551,7 +551,8 @@ impl Runtime {
                         processed += 1;
                     }
                 }
-                ReactorEventKind::AuxiliaryReadable | ReactorEventKind::AuxiliaryWritable => {
+                ReactorEventKind::AuxiliaryReadable | ReactorEventKind::AuxiliaryWritable =>
+                {
                     #[cfg(target_os = "macos")]
                     if let Some(token) = event.token {
                         self.service_local_reactor_event(token, event.kind, event.hangup)?;
@@ -792,10 +793,7 @@ impl Runtime {
             .min()
             .map(|deadline| deadline.saturating_duration_since(now));
         let rollback = (!self.rollback_reap.is_empty()).then_some(ROLLBACK_REAP_TICK);
-        [requested, lifecycle, rollback]
-            .into_iter()
-            .flatten()
-            .min()
+        [requested, lifecycle, rollback].into_iter().flatten().min()
     }
 
     fn kill_unpublished(&mut self, mut execution: TerminalExecution) {
@@ -856,9 +854,7 @@ impl Runtime {
                 ReactorEventKind::AuxiliaryReadable => {
                     state.server.service_read(connection_token, hangup)
                 }
-                ReactorEventKind::AuxiliaryWritable => {
-                    state.server.service_write(connection_token)
-                }
+                ReactorEventKind::AuxiliaryWritable => state.server.service_write(connection_token),
                 _ => Vec::new(),
             }
         };
@@ -930,9 +926,9 @@ impl Runtime {
     }
 
     fn local_connection_exists(&self, token: u64) -> bool {
-        self.local_ipc
-            .as_ref()
-            .is_some_and(|state| state.connections.contains_key(&token) && state.server.contains(token))
+        self.local_ipc.as_ref().is_some_and(|state| {
+            state.connections.contains_key(&token) && state.server.contains(token)
+        })
     }
 
     fn sync_local_writable(&mut self, token: u64) -> bool {
@@ -943,7 +939,11 @@ impl Runtime {
         let Some((reactor_token, wants_write)) = values else {
             return false;
         };
-        if self.reactor.set_writable(reactor_token, wants_write).is_err() {
+        if self
+            .reactor
+            .set_writable(reactor_token, wants_write)
+            .is_err()
+        {
             self.close_local_connection(token);
             return false;
         }
@@ -1057,11 +1057,19 @@ impl Runtime {
 
     fn handle_hello(&mut self, token: u64, payload: &[u8]) {
         let Ok(hello) = framing::ClientHello::decode(payload) else {
-            self.send_error(token, ErrorCode::MalformedPayload, MessageType::ClientHello as u16);
+            self.send_error(
+                token,
+                ErrorCode::MalformedPayload,
+                MessageType::ClientHello as u16,
+            );
             return;
         };
         if hello.client_capabilities != 0 {
-            self.send_error(token, ErrorCode::MalformedPayload, MessageType::ClientHello as u16);
+            self.send_error(
+                token,
+                ErrorCode::MalformedPayload,
+                MessageType::ClientHello as u16,
+            );
             return;
         }
         let response = framing::ServerHello {
@@ -1080,7 +1088,11 @@ impl Runtime {
 
     fn handle_list_executions(&mut self, token: u64, payload: &[u8]) {
         if !payload.is_empty() {
-            self.send_error(token, ErrorCode::MalformedPayload, MessageType::ListExecutions as u16);
+            self.send_error(
+                token,
+                ErrorCode::MalformedPayload,
+                MessageType::ListExecutions as u16,
+            );
             return;
         }
         let summaries = self.list();
@@ -1109,18 +1121,30 @@ impl Runtime {
 
     fn handle_attach(&mut self, token: u64, payload: &[u8]) {
         let Ok(attach) = WireAttach::decode(payload) else {
-            self.send_error(token, ErrorCode::MalformedPayload, MessageType::Attach as u16);
+            self.send_error(
+                token,
+                ErrorCode::MalformedPayload,
+                MessageType::Attach as u16,
+            );
             return;
         };
         let Some(entry) = self.entries.get(&attach.execution_id) else {
-            self.send_error(token, ErrorCode::InvalidExecution, MessageType::Attach as u16);
+            self.send_error(
+                token,
+                ErrorCode::InvalidExecution,
+                MessageType::Attach as u16,
+            );
             return;
         };
         let Some(state) = self.local_ipc.as_ref() else {
             return;
         };
         if state.attachments.len() >= MAX_LIVE_ATTACHMENTS {
-            self.send_error(token, ErrorCode::CapacityExceeded, MessageType::Attach as u16);
+            self.send_error(
+                token,
+                ErrorCode::CapacityExceeded,
+                MessageType::Attach as u16,
+            );
             return;
         }
         if attach.requested_role == Role::Controller
@@ -1144,16 +1168,28 @@ impl Runtime {
         let Ok((mut projection, committed_generation)) =
             build_projection(attachment_id, attach.execution_id, token, &snapshot)
         else {
-            self.send_error(token, ErrorCode::ProjectionUnavailable, MessageType::Attach as u16);
+            self.send_error(
+                token,
+                ErrorCode::ProjectionUnavailable,
+                MessageType::Attach as u16,
+            );
             return;
         };
         let new_bytes = projection.region.region_bytes();
         if !self.projection_budget_allows(0, new_bytes) {
-            self.send_error(token, ErrorCode::CapacityExceeded, MessageType::Attach as u16);
+            self.send_error(
+                token,
+                ErrorCode::CapacityExceeded,
+                MessageType::Attach as u16,
+            );
             return;
         }
         let Some(reader_fd) = projection.region.take_reader_fd() else {
-            self.send_error(token, ErrorCode::InternalFailure, MessageType::Attach as u16);
+            self.send_error(
+                token,
+                ErrorCode::InternalFailure,
+                MessageType::Attach as u16,
+            );
             return;
         };
         let attached = WireAttached {
@@ -1194,13 +1230,18 @@ impl Runtime {
 
     fn handle_detach(&mut self, token: u64, payload: &[u8]) {
         let Ok(detach) = framing::Detach::decode(payload) else {
-            self.send_error(token, ErrorCode::MalformedPayload, MessageType::Detach as u16);
+            self.send_error(
+                token,
+                ErrorCode::MalformedPayload,
+                MessageType::Detach as u16,
+            );
             return;
         };
-        let result = self
-            .local_ipc
-            .as_mut()
-            .map(|state| state.attachments.detach_for_connection(token, detach.attachment_id));
+        let result = self.local_ipc.as_mut().map(|state| {
+            state
+                .attachments
+                .detach_for_connection(token, detach.attachment_id)
+        });
         match result {
             Some(Ok(())) => {}
             Some(Err(AttachmentError::WrongConnection)) => {
@@ -1232,17 +1273,26 @@ impl Runtime {
 
     fn handle_input(&mut self, token: u64, payload: &[u8]) {
         let Ok(input) = framing::InputRef::decode(payload) else {
-            self.send_error(token, ErrorCode::MalformedPayload, MessageType::Input as u16);
+            self.send_error(
+                token,
+                ErrorCode::MalformedPayload,
+                MessageType::Input as u16,
+            );
             return;
         };
-        let authorization = self
-            .local_ipc
-            .as_ref()
-            .map(|state| state.attachments.authorize_mutation(token, input.attachment_id));
+        let authorization = self.local_ipc.as_ref().map(|state| {
+            state
+                .attachments
+                .authorize_mutation(token, input.attachment_id)
+        });
         let execution_id = match authorization {
             Some(Ok(id)) => id,
             Some(Err(AttachmentError::PermissionDenied)) => {
-                self.send_error(token, ErrorCode::PermissionDenied, MessageType::Input as u16);
+                self.send_error(
+                    token,
+                    ErrorCode::PermissionDenied,
+                    MessageType::Input as u16,
+                );
                 return;
             }
             _ => {
@@ -1256,23 +1306,36 @@ impl Runtime {
                     self.send_error(token, ErrorCode::Backpressure, MessageType::Input as u16);
                 }
             }
-            Err(_) => self.send_error(token, ErrorCode::InvalidExecution, MessageType::Input as u16),
+            Err(_) => self.send_error(
+                token,
+                ErrorCode::InvalidExecution,
+                MessageType::Input as u16,
+            ),
         }
     }
 
     fn handle_resize(&mut self, token: u64, payload: &[u8]) {
         let Ok(resize) = WireResize::decode(payload) else {
-            self.send_error(token, ErrorCode::MalformedPayload, MessageType::Resize as u16);
+            self.send_error(
+                token,
+                ErrorCode::MalformedPayload,
+                MessageType::Resize as u16,
+            );
             return;
         };
-        let authorization = self
-            .local_ipc
-            .as_ref()
-            .map(|state| state.attachments.authorize_mutation(token, resize.attachment_id));
+        let authorization = self.local_ipc.as_ref().map(|state| {
+            state
+                .attachments
+                .authorize_mutation(token, resize.attachment_id)
+        });
         let execution_id = match authorization {
             Some(Ok(id)) => id,
             Some(Err(AttachmentError::PermissionDenied)) => {
-                self.send_error(token, ErrorCode::PermissionDenied, MessageType::Resize as u16);
+                self.send_error(
+                    token,
+                    ErrorCode::PermissionDenied,
+                    MessageType::Resize as u16,
+                );
                 return;
             }
             _ => {
@@ -1285,21 +1348,37 @@ impl Runtime {
             || resize.rows > MAX_CAPACITY_ROWS
             || resize.columns > MAX_CAPACITY_COLS
         {
-            self.send_error(token, ErrorCode::InvalidGeometry, MessageType::Resize as u16);
+            self.send_error(
+                token,
+                ErrorCode::InvalidGeometry,
+                MessageType::Resize as u16,
+            );
             return;
         }
         let Ok(size) = WindowSize::cells(resize.columns, resize.rows) else {
-            self.send_error(token, ErrorCode::InvalidGeometry, MessageType::Resize as u16);
+            self.send_error(
+                token,
+                ErrorCode::InvalidGeometry,
+                MessageType::Resize as u16,
+            );
             return;
         };
         if self.resize(execution_id, size).is_err() {
-            self.send_error(token, ErrorCode::InvalidExecution, MessageType::Resize as u16);
+            self.send_error(
+                token,
+                ErrorCode::InvalidExecution,
+                MessageType::Resize as u16,
+            );
         }
     }
 
     fn handle_resync(&mut self, token: u64, payload: &[u8]) {
         let Ok(resync) = framing::Resync::decode(payload) else {
-            self.send_error(token, ErrorCode::MalformedPayload, MessageType::Resync as u16);
+            self.send_error(
+                token,
+                ErrorCode::MalformedPayload,
+                MessageType::Resync as u16,
+            );
             return;
         };
         let execution = self.local_ipc.as_ref().map(|state| {
@@ -1315,7 +1394,11 @@ impl Runtime {
             }
         };
         let Some(entry) = self.entries.get(&execution_id) else {
-            self.send_error(token, ErrorCode::InvalidExecution, MessageType::Resync as u16);
+            self.send_error(
+                token,
+                ErrorCode::InvalidExecution,
+                MessageType::Resync as u16,
+            );
             return;
         };
         let snapshot = producer::from_execution(entry.execution.projection_snapshot());
@@ -1359,7 +1442,11 @@ impl Runtime {
         ) && self.local_connection_exists(token)
         {
             self.mark_projection_unavailable(resync.attachment_id);
-            self.send_error(token, ErrorCode::ProjectionUnavailable, MessageType::Resync as u16);
+            self.send_error(
+                token,
+                ErrorCode::ProjectionUnavailable,
+                MessageType::Resync as u16,
+            );
         }
     }
 
@@ -1402,9 +1489,7 @@ impl Runtime {
         let mut execution_count = 0usize;
         if let Some(state) = self.local_ipc.as_ref() {
             for projection in state.projections.values() {
-                if !execution_ids[..execution_count]
-                    .iter()
-                    .any(|value| *value == Some(projection.execution_id))
+                if !execution_ids[..execution_count].contains(&Some(projection.execution_id))
                     && execution_count < execution_ids.len()
                 {
                     execution_ids[execution_count] = Some(projection.execution_id);
@@ -1446,7 +1531,8 @@ impl Runtime {
                         )
                     })
                 });
-                let Some((token, capacity_rows, capacity_cols, projection_id)) = projection_meta else {
+                let Some((token, capacity_rows, capacity_cols, projection_id)) = projection_meta
+                else {
                     continue;
                 };
                 if snapshot.rows > capacity_rows || snapshot.columns > capacity_cols {
@@ -1566,7 +1652,9 @@ impl Runtime {
 
 #[cfg(target_os = "macos")]
 fn align_up(value: usize, alignment: usize) -> Option<usize> {
-    value.checked_add(alignment - 1).map(|v| v / alignment * alignment)
+    value
+        .checked_add(alignment - 1)
+        .map(|v| v / alignment * alignment)
 }
 
 #[cfg(target_os = "macos")]

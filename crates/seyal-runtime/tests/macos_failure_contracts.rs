@@ -3,7 +3,9 @@
 use std::time::{Duration, Instant};
 
 use seyal_exec::{CommandSpec, WindowSize};
-use seyal_runtime::{ExecutionLifecycle, Runtime, RuntimeConfig, RuntimeError};
+use seyal_runtime::{
+    ExecutionLifecycle, LocalIpcMode, Runtime, RuntimeConfig, RuntimeError,
+};
 
 fn config(test: &str) -> RuntimeConfig {
     let mut config = RuntimeConfig::m001().expect("bundled capability profile");
@@ -15,6 +17,11 @@ fn config(test: &str) -> RuntimeConfig {
             .unwrap()
             .as_nanos()
     ));
+    // These retained Pass-4 contracts exercise execution lifecycle/input and
+    // the in-process attachment API, not Pass-5 local IPC. Keep them isolated
+    // from the production per-user control socket; Pass-5 IPC has dedicated
+    // protocol/integration coverage.
+    config.local_ipc = LocalIpcMode::Disabled;
     config.graceful_termination = Duration::from_millis(25);
     config.forced_reap = Duration::from_millis(500);
     config.final_drain = Duration::from_millis(100);

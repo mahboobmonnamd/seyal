@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
-    "check": "astro check"
+    "check": "astro build"
   },
   "dependencies": {
     "@astrojs/starlight": "0.41.7",

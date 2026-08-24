@@ -129,10 +129,11 @@ impl ExecutionReactor {
         &mut self,
         execution: &TerminalExecution,
     ) -> Result<RegistrationToken, ExecError> {
-        let fd = execution.reactor_fd();
-        let pid = execution.child_id() as i32;
-        let token = self.allocate_slot(fd, pid);
+        self.register_identifiers(execution.reactor_fd(), execution.child_id() as i32)
+    }
 
+    fn register_identifiers(&mut self, fd: i32, pid: i32) -> Result<RegistrationToken, ExecError> {
+        let token = self.allocate_slot(fd, pid);
         if let Err(error) = crate::platform::register_read(&self.kqueue, fd, token.0) {
             self.release_slot(token);
             return Err(error);
@@ -354,5 +355,110 @@ mod tests {
         let token = RegistrationToken::new(17, 42);
         assert_eq!(token.decode(), (17, 42));
         assert_ne!(token.opaque_value(), 17);
+    }
+
+    #[cfg(target_os = "macos")]
+    mod macos {
+        use std::time::Duration;
+
+        use crate::{
+            CommandSpec, ExecError, ExecutionReactor, ReactorEvent, ReactorEventKind,
+            TerminalExecution, TerminationPolicy, WindowSize,
+        };
+
+        fn spawn_sleep() -> TerminalExecution {
+            TerminalExecution::spawn(
+                &CommandSpec::new("/bin/sh").args(["-c", "sleep 30"]),
+                WindowSize::new(80, 24, 0, 0).unwrap(),
+            )
+            .unwrap()
+        }
+
+        fn cleanup(execution: &mut TerminalExecution) {
+            let _ = execution.terminate(TerminationPolicy::new(
+                Duration::from_millis(50),
+                Duration::from_secs(1),
+            ));
+        }
+
+        #[test]
+        fn evfilt_user_wakes_idle_reactor() {
+            let mut reactor = ExecutionReactor::new().unwrap();
+            reactor.waker().wake().unwrap();
+            let mut events = [ReactorEvent::EMPTY; 8];
+            let count = reactor
+                .wait(&mut events, Some(Duration::from_secs(1)))
+                .unwrap();
+            assert!(events[..count]
+                .iter()
+                .any(|event| event.kind == ReactorEventKind::Control));
+        }
+
+        #[test]
+        fn released_generation_is_stale_before_slot_reuse() {
+            let mut reactor = ExecutionReactor::new().unwrap();
+            let mut first = spawn_sleep();
+            let first_token = reactor.register(&first).unwrap();
+            reactor.deregister(first_token).unwrap();
+            assert!(!reactor.is_current(first_token));
+            assert!(matches!(
+                reactor.set_writable(first_token, true),
+                Err(ExecError::StaleRegistrationToken)
+            ));
+            cleanup(&mut first);
+        }
+
+        #[test]
+        fn slot_reuse_changes_generation_and_rejects_old_token() {
+            let mut reactor = ExecutionReactor::new().unwrap();
+            let mut first = spawn_sleep();
+            let first_token = reactor.register(&first).unwrap();
+            reactor.deregister(first_token).unwrap();
+            cleanup(&mut first);
+
+            let mut second = spawn_sleep();
+            let second_token = reactor.register(&second).unwrap();
+            assert_ne!(first_token, second_token);
+            assert!(reactor.is_current(second_token));
+            assert!(!reactor.is_current(first_token));
+            assert!(matches!(
+                reactor.set_writable(first_token, true),
+                Err(ExecError::StaleRegistrationToken)
+            ));
+            reactor.deregister(second_token).unwrap();
+            cleanup(&mut second);
+        }
+
+        #[test]
+        fn partial_process_registration_failure_rolls_back_slot_and_read_interest() {
+            let mut reactor = ExecutionReactor::new().unwrap();
+            let mut execution = spawn_sleep();
+            let fd = execution.reactor_fd();
+            assert!(reactor.register_identifiers(fd, i32::MAX).is_err());
+            assert!(reactor.slots.iter().all(|slot| !slot.active));
+
+            let token = reactor.register(&execution).unwrap();
+            assert!(reactor.is_current(token));
+            reactor.deregister(token).unwrap();
+            cleanup(&mut execution);
+        }
+
+        #[test]
+        fn writable_interest_can_be_disarmed_when_queue_becomes_empty() {
+            let mut reactor = ExecutionReactor::new().unwrap();
+            let mut execution = spawn_sleep();
+            let token = reactor.register(&execution).unwrap();
+            reactor.set_writable(token, true).unwrap();
+            reactor.set_writable(token, false).unwrap();
+            let mut events = [ReactorEvent::EMPTY; 8];
+            let count = reactor
+                .wait(&mut events, Some(Duration::from_millis(20)))
+                .unwrap();
+            assert!(!events[..count].iter().any(|event| {
+                event.token == Some(token) && event.kind == ReactorEventKind::Writable
+            }));
+            reactor.deregister(token).unwrap();
+            cleanup(&mut execution);
+        }
     }
 }

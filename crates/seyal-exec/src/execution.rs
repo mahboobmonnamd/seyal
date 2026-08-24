@@ -1,10 +1,11 @@
 use std::time::Duration;
 
-use seyal_terminal::{Damage, TerminalState};
+use seyal_terminal::TerminalState;
 
 use crate::{
     ChildExit, CommandSpec, ExecError, ReadOutcome, Readiness, SignalDisposition,
-    TerminationPolicy, WindowSize, WriteOutcome, endpoint::TerminalEndpoint,
+    TerminalProjectionSnapshot, TerminationPolicy, WindowSize, WriteOutcome,
+    endpoint::TerminalEndpoint, projection,
 };
 
 pub struct TerminalExecution {
@@ -27,17 +28,25 @@ impl TerminalExecution {
         &self.terminal
     }
 
-    /// Consumes and returns the canonical terminal's coalesced pending
-    /// damage, if any, since the last call.
+    /// Copies the current canonical visible terminal state into an owned,
+    /// projection-neutral snapshot without consuming canonical damage.
     ///
-    /// This is the single sanctioned mutable-consumption seam for a Runtime
-    /// projection producer: exactly one caller may destructively drain
-    /// damage from canonical state per `TerminalExecution` (SPEC-004
-    /// section 11.1 forbids multiple independent consumers of
-    /// `take_damage()`). It never touches PTY I/O and has no effect on
-    /// `TerminalState` content, only on its damage-tracking bookkeeping.
-    pub fn take_damage(&mut self) -> Option<Damage> {
-        self.terminal.take_damage()
+    /// Attach/resync use this seam so one client cannot steal the Runtime's
+    /// single damage-consumer signal from other attached clients.
+    pub fn projection_snapshot(&self) -> TerminalProjectionSnapshot {
+        projection::snapshot(&self.terminal, self.terminal.damage_generation())
+    }
+
+    /// Single Runtime-side damage-consumption seam for display projection.
+    ///
+    /// If canonical state has changed since the previous call, consumes that
+    /// coalesced damage generation once and returns a full current visible
+    /// snapshot tagged with the consumed generation. Runtime then fans that
+    /// one snapshot out to every attachment. Client-specific attach/resync
+    /// must use [`Self::projection_snapshot`] instead.
+    pub fn take_projection_update(&mut self) -> Option<TerminalProjectionSnapshot> {
+        let damage = self.terminal.take_damage()?;
+        Some(projection::snapshot(&self.terminal, damage.generation))
     }
 
     pub fn read_output(&mut self, buffer: &mut [u8]) -> Result<ReadOutcome, ExecError> {

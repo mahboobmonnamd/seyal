@@ -189,6 +189,10 @@ impl ReadOnlyMapping {
                 "projection region size outside ABI bounds",
             ));
         }
+        // SCM_RIGHTS does not provide a portable guarantee that FD_CLOEXEC is
+        // preserved for the receiving process. Enforce it at this trust
+        // boundary before the descriptor can be retained by the mapping.
+        ensure_close_on_exec(&fd)?;
         let raw = fd.as_raw_fd();
         let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
         // SAFETY: `stat` is a valid writable out-parameter and `raw` is live.
@@ -314,11 +318,19 @@ mod tests {
     }
 
     #[test]
-    fn transferred_reader_descriptor_is_enforced_read_only() {
+    fn transferred_reader_descriptor_is_enforced_read_only_and_close_on_exec() {
         let header = sample_header(REGION_HEADER_LEN as u64 + 2 * 4096);
         let mut region = ProjectionRegion::create(&header).unwrap();
         let reader_fd = region.take_reader_fd().unwrap();
+        let raw = reader_fd.as_raw_fd();
+        // Model a receiver on a platform where SCM_RIGHTS did not preserve
+        // FD_CLOEXEC, then verify ReadOnlyMapping restores it.
+        let flags = unsafe { libc::fcntl(raw, libc::F_GETFD) };
+        assert!(flags >= 0);
+        assert!(unsafe { libc::fcntl(raw, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } >= 0);
         let mapping = ReadOnlyMapping::new(reader_fd, region.region_bytes()).unwrap();
+        let received_flags = unsafe { libc::fcntl(raw, libc::F_GETFD) };
+        assert_ne!(received_flags & libc::FD_CLOEXEC, 0);
         assert_eq!(read_region_header(&mapping.memory()).unwrap(), header);
     }
 

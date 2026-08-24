@@ -19,6 +19,3 @@ pub mod discovery;
 #[allow(unsafe_code)]
 pub mod fd_transfer;
 pub mod framing;
-#[cfg(target_os = "macos")]
-#[allow(unsafe_code)]
-mod kq;

@@ -46,6 +46,8 @@ Every implementation Issue must state:
 - Demo / verification procedure
 - Definition of Done
 
+`Documentation impact` must identify whether the change affects User Guide, Developer Guide, authoritative engineering docs, media/screenshots, or none. `None` is valid only with a reason.
+
 ## Ready gate
 
 An Issue is Ready only when all are true:
@@ -57,6 +59,7 @@ An Issue is Ready only when all are true:
 - [ ] acceptance criteria are measurable
 - [ ] test strategy is defined
 - [ ] performance/security requirements are identified
+- [ ] documentation impact is classified
 - [ ] no unresolved architecture question remains
 
 If any item is false, return the Issue to Refinement or Blocked. An agent must not silently fill the gap.
@@ -73,9 +76,13 @@ Done means applicable evidence exists, not merely that the feature appears to wo
 - latency/throughput/CPU/RSS/thread/GPU measurements
 - failure injection
 - security analysis
-- documentation
+- documentation impact re-assessed against the final implementation
+- affected user/developer/authority docs updated in the same Issue/PR, or a concrete `N/A` rationale recorded
+- documentation validation (`make docs-check` / `make docs-build`) when site docs changed
 - CI evidence
 - reproducible demo/verification
+
+Documentation is not considered complete merely because an Issue originally said `N/A`; implementation evidence can change the documentation impact and must be re-assessed before Done.
 
 A correctness, latency, CPU or memory regression cannot be silently accepted. If a regression is intentional, it needs explicit documented approval/evidence at the correct authority level.
 

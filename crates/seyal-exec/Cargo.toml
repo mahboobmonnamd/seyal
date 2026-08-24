@@ -10,9 +10,6 @@ publish = false
 [dependencies]
 seyal-terminal = { path = "../seyal-terminal" }
 
-[dev-dependencies]
-seyal-terminal = { path = "../seyal-terminal" }
-
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "=0.2.189"
 

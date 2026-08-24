@@ -4,9 +4,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN_DIR="${HOME}/.local/bin"
 GITHUB_WRAPPER="${BIN_DIR}/seyal-github-mcp"
+AI_SDLC_DIR="${ROOT}/.sdlc/framework"
 
 # Reviewed/pinned developer-tool inputs. Update only through a normal Seyal PR.
 XCODEBUILD_MCP_VERSION="2.7.0"
+AI_SDLC_REPO="https://github.com/mahboobmonnamd/ai-sdlc.git"
+AI_SDLC_SOURCE_REF="issue-1-project-context"
+AI_SDLC_COMMIT="95e9e0ef6aa3880b8ab82a887d2a612c47e99d0f"
 
 info() { printf '[seyal bootstrap] %s\n' "$*"; }
 warn() { printf '[seyal bootstrap] WARN: %s\n' "$*" >&2; }
@@ -17,6 +21,35 @@ ensure_submodules() {
     info "initializing pinned git submodules"
     git -C "${ROOT}" submodule update --init --recursive
   fi
+}
+
+ensure_ai_sdlc() {
+  mkdir -p "${ROOT}/.sdlc"
+
+  if [[ ! -d "${AI_SDLC_DIR}/.git" ]]; then
+    rm -rf "${AI_SDLC_DIR}"
+    info "cloning AI-SDLC developer framework"
+    git clone --filter=blob:none --no-checkout "${AI_SDLC_REPO}" "${AI_SDLC_DIR}"
+  fi
+
+  info "materializing pinned AI-SDLC ${AI_SDLC_COMMIT}"
+  git -C "${AI_SDLC_DIR}" fetch --depth 1 origin "${AI_SDLC_SOURCE_REF}"
+  local fetched
+  fetched="$(git -C "${AI_SDLC_DIR}" rev-parse FETCH_HEAD)"
+  if [[ "${fetched}" != "${AI_SDLC_COMMIT}" ]]; then
+    echo "AI-SDLC pin mismatch: expected ${AI_SDLC_COMMIT}, fetched ${fetched} from ${AI_SDLC_SOURCE_REF}" >&2
+    exit 1
+  fi
+  git -C "${AI_SDLC_DIR}" checkout --detach --force "${AI_SDLC_COMMIT}"
+
+  [[ -f "${AI_SDLC_DIR}/skills/project-context/SKILL.md" ]] || {
+    echo "pinned AI-SDLC revision is missing skills/project-context/SKILL.md" >&2
+    exit 1
+  }
+  [[ -f "${AI_SDLC_DIR}/tools/project_context.py" ]] || {
+    echo "pinned AI-SDLC revision is missing tools/project_context.py" >&2
+    exit 1
+  }
 }
 
 ensure_github_mcp_binary() {
@@ -122,14 +155,14 @@ configure_copilot() {
 verify_repo_skills() {
   local required=(
     architecture-change implement-issue issue-refinement milestone-validation
-    performance-gate pr-review security-review vt-tdd
+    performance-gate pr-review security-review vt-tdd project-context
     macos-native-design macos-ui-testing macos-accessibility visual-regression
     terminal-conformance metal-renderer rust-fuzzing apple-platform-docs image-to-code
   )
   local skill
   for skill in "${required[@]}"; do
     [[ -f "${ROOT}/.agents/skills/${skill}/SKILL.md" ]] || {
-      echo "missing canonical skill: ${skill}" >&2
+      echo "missing canonical skill/adapter: ${skill}" >&2
       exit 1
     }
     [[ -f "${ROOT}/.claude/skills/${skill}/SKILL.md" ]] || {
@@ -142,6 +175,7 @@ verify_repo_skills() {
 main() {
   verify_repo_skills
   ensure_submodules
+  ensure_ai_sdlc
 
   # Claude Code and Codex need Seyal's local GitHub MCP wrapper. Copilot CLI
   # already provides GitHub MCP, so do not install a duplicate solely for it.
@@ -156,7 +190,7 @@ main() {
   configure_copilot
 
   info "complete"
-  info "Seyal project skills are versioned in .agents/skills; only project-required MCP tooling is configured; no credentials were written"
+  info "Seyal-specific skills stay in-repo; generic project-context is pinned from AI-SDLC; no credentials were written"
 }
 
 main "$@"

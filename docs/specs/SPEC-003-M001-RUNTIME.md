@@ -1,13 +1,15 @@
 # SPEC-003 — M001 headless Runtime and multi-execution supervision
 
-- **Status:** Active when ADR-006 is accepted/merged
+- **Status:** Active; hardened by #80 and constrained for workspace/continuity by #82 when ADR-007 is accepted
 - **Date:** 2026-08-24
-- **Issue:** #70
-- **Architecture:** Foundation Architecture + ADR-005 + ADR-006
+- **Issues:** #70, #80, #82
+- **Architecture:** Foundation Architecture + ADR-005 + ADR-006 + ADR-007
 
 ## 1. Purpose
 
 Define the observable M001 Pass 4 contract for Seyal's first headless Runtime: one per-user Runtime authority supervising multiple `TerminalExecution`s independently of GUI lifetime, with bounded readiness, lifecycle, input and termination behavior.
+
+Pass 4 must also preserve the Workspace/persistence/agent-continuity seams defined by ADR-007 without implementing production Workspace persistence or the agent platform.
 
 This specification does not define the Pass 5 local transport/projection protocol or Pass 9 full GUI-crash/reconnect validation.
 
@@ -21,21 +23,28 @@ This specification does not define the Pass 5 local transport/projection protoco
 6. Zero attachments does not terminate a live execution.
 7. Only the Runtime reactor owner mutates a live `TerminalExecution`; control producers enqueue bounded typed work and wake the reactor instead of touching PTY/VT state concurrently.
 8. No renderer, Block, agent, persistence, cloud, licensing or commercial feature participates synchronously in terminal byte progress.
+9. Every published live execution has exactly one owning `WorkspaceId` association in Runtime/workspace metadata; that association is not stored as PTY/VT ownership inside `TerminalExecution`.
+10. Window/Tab/Split/PaneView and future chat/provider-session identities are never Runtime execution/workspace authority.
 
-## 3. Runtime identity and execution identity
+## 3. Runtime, Workspace and execution identity
 
-The Runtime has a stable `RuntimeId` for its current process/runtime lifetime.
+`RuntimeId` identifies the current Runtime process incarnation. It remains stable while that Runtime process is alive and changes after Runtime restart.
 
-Every created execution has an `ExecutionId` that:
+Every created execution has an opaque `ExecutionId` that:
 
-- is unique within the Runtime lifetime;
-- is never reused during that lifetime after an execution is removed;
+- identifies exactly one terminal execution lifetime;
+- is never intentionally reused for a different execution, including across Runtime incarnations in the same local user scope;
+- is generated from a persistence-compatible namespace/strategy rather than a plain process-local counter that resets with `RuntimeId`;
 - remains stable while attachments come and go;
-- is distinct from OS PID, PTY FD, reactor registration token and viewport/pane identity.
+- is distinct from OS PID, PTY FD, reactor registration token, `WorkspaceId` and viewport/pane identity.
+
+A Runtime restart does not make an old PTY live again. If future durable metadata retains an old `ExecutionId`, a replacement terminal execution still receives a new `ExecutionId`.
 
 Reactor registration tokens are allocated by `ExecutionReactor`, carry a reuse generation, and are never caller-selected durable identities.
 
-This specification does not require identity secrecy and does not define the final persistence/restart identity format.
+Pass 4 also exposes/uses a typed `WorkspaceId` association seam. M001 may use one implicit/default Workspace and does not implement named multi-workspace persistence/UI. Because `WorkspaceId` is durable domain identity, that implicit/default Workspace identity must remain stable within the local user scope across Runtime incarnations; it must not be regenerated from `RuntimeId`, cwd, repository path or presentation state. The execution→Workspace association belongs to Runtime/workspace metadata, not `seyal-exec` terminal ownership.
+
+This specification does not require identity secrecy and does not freeze the final on-disk/wire encoding of durable IDs.
 
 ## 4. Headless lifecycle and per-user singleton
 
@@ -74,6 +83,18 @@ The registry has a configured/testable maximum live-execution bound. Creation be
 
 Registry insertion is the publication point: before insertion, a created execution is not externally observable and failures must roll it back completely.
 
+### 5.1 Workspace association seam
+
+Every published execution is associated with exactly one owning Workspace in Runtime/workspace metadata.
+
+Pass 4 may satisfy this with one typed implicit/default Workspace. That default has one stable semantic `WorkspaceId` in the local user scope across Runtime incarnations even though Pass 4 does not implement a production Workspace database. It must not use `None`, `RuntimeId`, current cwd, repository path, current window/tab/pane or provider/chat session as hidden Workspace ownership.
+
+The association must be independently queryable/changeable by future workspace-domain code without moving PTY/VT ownership out of the execution registry.
+
+Closing/hiding presentation or detaching the last client does not remove the Workspace association and does not terminate a live primary execution.
+
+Pass 4 does not implement named Workspace CRUD, Workspace deletion, layout persistence or a production Workspace database.
+
 ## 6. Logical attachment semantics
 
 Pass 4 attachment is a Runtime-owned logical reference, not a network/socket/projection protocol.
@@ -85,27 +106,29 @@ Pass 4 attachment is a Runtime-owned logical reference, not a network/socket/pro
 - GUI close is logical detach, not Runtime shutdown and not execution termination.
 - transport authentication, controller/observer protocol roles and shared projection are Pass 5.
 
-## 7. Reactor registration and immediate-exit race
+## 7. Reactor registration, event identity and teardown
 
 On macOS, each live execution is registered with the ADR-006 `ExecutionReactor`.
 
-Registration returns an opaque generation-bearing token allocated by the reactor. The Runtime associates the token with `ExecutionId`; the token is routing metadata only and is not exposed as durable execution identity.
+Registration returns an opaque generation-bearing `RegistrationToken` allocated by the reactor. The Runtime associates the token with `ExecutionId`; the token is routing metadata only and is not exposed as durable execution identity.
+
+Darwin `kevent.udata` may carry the token only as a by-value opaque integer/generation encoding (or equivalent non-owning integer representation). It must never contain a pointer/reference to a registry entry, `TerminalExecution`, queue node, or any other movable/freed Rust allocation. FD/PID values also remain kernel lookup inputs, not execution identity.
 
 A successful create transaction is:
 
 ```text
-validate Runtime capacity + command + window size
+validate Runtime capacity + command + window size + Workspace association
 → create TerminalExecution
 → register PTY/primary-child readiness and obtain RegistrationToken
 → immediately reconcile primary-child state with nonblocking try_wait
-→ if still live, insert/publish registry entry
+→ if still live, insert/publish registry entry + owning Workspace association
 ```
 
 The immediate reconciliation is mandatory so a command that exits between spawn and reactor registration cannot be missed or remain stuck forever.
 
-If registration, reconciliation or registry insertion fails, the operation must roll back safely: remove any partial filters, reap/finalize the created execution as required, close owned descriptors, and leave no untracked live execution.
+If registration, reconciliation or registry insertion fails, the operation must roll back safely: remove any partial filters, reap/finalize the created execution as required, close owned descriptors, remove any partial Workspace association, and leave no untracked live execution.
 
-Removal performs deregistration before the execution owner is destroyed. Stale events from an already-deregistered generation are ignored safely.
+Removal performs deregistration before the execution owner is destroyed. Deregistration is idempotent: expected already-gone FD/PID/filter conditions caused by concurrent kernel teardown are accepted as completed cleanup, while unexpected reactor failures remain diagnosable. Stale events from an already-deregistered generation are ignored safely even if the underlying numeric FD/PID has been reused.
 
 ## 8. Output/read fairness
 
@@ -115,28 +138,55 @@ For one dispatch:
 
 - bytes are read into a reusable bounded buffer;
 - successful bytes feed the same authoritative `TerminalState` synchronously;
-- reading stops on `WouldBlock`, EOF/HUP, or the Runtime's per-dispatch byte/work quantum;
+- reading stops on `WouldBlock`, EOF/HUP, or the Runtime's per-dispatch read byte/work quantum;
 - after the quantum is consumed the Runtime returns to the shared event loop before servicing more of that execution.
 
 One continuously producing execution must not starve another ready execution or Runtime control work. If the quantum is reached while the level-triggered PTY remains readable, it remains eligible for a later dispatch.
 
 No per-byte heap allocation, JSON, serialization, renderer acknowledgement or cross-language callback is permitted in this path. Reactor event/change buffers are bounded and reusable rather than allocated per wait/event.
 
-## 9. Input, writable readiness and control ownership
+Workspace/Block/agent/context persistence or metadata mutation is not performed synchronously in this path.
 
-The Runtime maintains a bounded FIFO input queue per execution and a bounded Runtime control queue.
+## 9. Input, writable readiness, aggregate backpressure and control ownership
+
+The Runtime maintains a bounded FIFO input queue per execution, a bounded Runtime-wide accepted-but-unwritten input byte budget across all executions and ingress queues, and a bounded Runtime control queue.
 
 Only the Runtime reactor owner performs PTY writes. A producer outside that owner may enqueue typed input/control work and trigger the Runtime wake event; it may not call `TerminalExecution` directly.
+
+An input submission is accepted only if both of these remain within configured/testable limits:
+
+```text
+accepted-but-unwritten bytes for that execution <= per-execution limit
+sum(accepted-but-unwritten bytes across ingress + execution queues) <= Runtime-wide input budget
+```
+
+The aggregate budget is authoritative from the instant ownership of a submission is accepted, not only after the reactor transfers it into a per-execution queue. The admission sequence is:
+
+```text
+validate execution/per-execution capacity
+→ atomically reserve aggregate bytes
+→ accept/enqueue payload
+→ transfer payload between ingress and execution queues without changing the reservation
+→ release reservation exactly once as bytes are successfully written or explicitly discarded during teardown/finalization
+```
+
+If enqueue fails after a reservation is acquired, that reservation is rolled back before returning failure. Concurrent producers therefore cannot collectively create accepted-but-unwritten payload memory beyond the configured Runtime-wide budget merely because the reactor has not yet processed their ingress work.
+
+Rejecting/backpressuring a new submission must not discard, reorder, or silently truncate already accepted bytes.
 
 On the reactor owner, input handling:
 
 1. attempts direct nonblocking PTY write;
 2. preserves unwritten bytes in order;
 3. arms writable readiness only while pending bytes remain;
-4. on writable readiness continues bounded draining;
-5. disarms writable readiness when the queue becomes empty.
+4. on writable readiness drains only up to the per-dispatch write byte/work quantum or until `WouldBlock`/empty;
+5. returns to the shared event loop when the write quantum is consumed so readable PTYs and control work can progress;
+6. releases aggregate reservation only for bytes that were successfully written;
+7. disarms writable readiness when the queue becomes empty.
 
-If accepting new bytes would exceed the configured per-execution queue bound, the Runtime returns explicit backpressure/error. It does not block the shared reactor and does not discard/reorder already accepted input.
+If accepting new bytes would exceed either the per-execution or aggregate Runtime input bound, the Runtime returns explicit backpressure/error before accepting ownership of those bytes. It does not block the shared reactor.
+
+Execution removal/finalization releases any reservation for accepted bytes that are explicitly discarded as part of teardown. Reservation accounting must not leak across execution removal and must never be released twice.
 
 If the bounded Runtime control queue is full, new control work is rejected/backpressured explicitly rather than growing memory without bound. Wake notifications may coalesce; queue state, not wake-event count, is authoritative.
 
@@ -154,7 +204,9 @@ After primary reap, the execution enters `DrainingAfterPrimaryExit`:
 2. continue normal fair, nonblocking PTY reads across reactor dispatches;
 3. if a read reaches `WouldBlock`, EOF or HUP, drain is complete;
 4. also arm a configured/testable finalization deadline so continuous descendant output cannot keep the execution alive forever;
-5. when drain completes or that deadline expires, deregister PTY/process filters, remove the registry entry, and drop `TerminalExecution`, closing the PTY master.
+5. when drain completes or that deadline expires, deregister PTY/process filters idempotently, remove the live registry entry, release hot execution resources, and drop `TerminalExecution`, closing the PTY master.
+
+The owning Workspace domain identity/association record is conceptually separate from live PTY lifetime. Future persistence may retain a completed execution record/history reference; Pass 4 is not required to store that record durably.
 
 The per-dispatch fairness quantum remains in force while draining; primary exit does not allow one execution to monopolize the reactor. The Runtime must not truncate final command output merely because more than one dispatch quantum was queued at exit, and it must not let a continuously writing descendant extend execution lifetime without bound.
 
@@ -254,16 +306,22 @@ When shutdown is explicitly requested, the Runtime stops accepting new execution
 
 If a bounded controlled shutdown cannot complete, the failure is reported; the implementation must not falsely report clean shutdown while live owned executions/registrations remain.
 
-Abrupt Runtime crash/kill remains outside M001 survival guarantees.
+Abrupt Runtime crash/kill remains outside M001 survival guarantees. Future durable Workspace/work metadata recovery is a separate concern and must not be presented as live PTY recovery.
 
 ## 17. Failure behavior
 
 - Reactor registration failure leaves no published partial execution.
 - Immediate child exit during create/register is reconciled and cannot become a stuck registry entry.
+- Partial create/publication failure leaves no stale Workspace ownership association.
 - A stale/unknown reactor token is ignored and diagnosed safely.
+- Event routing never dereferences a Rust pointer sourced from `kevent.udata`.
+- Expected already-gone FD/PID/filter conditions during deregistration are idempotent cleanup; unexpected reactor errors remain visible.
 - PTY read error is isolated to the affected execution unless it indicates a Runtime-wide reactor failure.
 - One execution's full input queue cannot stall other execution output.
+- Aggregate accepted-but-unwritten input memory cannot exceed the configured Runtime-wide budget even when producers submit concurrently and payloads are still in ingress/control queues.
+- Input reservation rollback/release is exact: failed enqueue, successful writes and execution teardown cannot leak or double-release budget.
 - One continuously ready PTY cannot monopolize the event loop indefinitely.
+- One continuously writable execution with a large queued input cannot monopolize the event loop indefinitely.
 - A full control queue produces explicit backpressure instead of unbounded allocation.
 - Continuous descendant output after primary exit cannot bypass the finalization deadline.
 - Runtime-wide reactor failure must surface as a Runtime failure; it must not move terminal ownership into the GUI.
@@ -277,10 +335,37 @@ Pass 4 is not complete without reproducible measurements, including environment 
 - idle CPU with 1/10/50/100 live idle executions;
 - Runtime RSS with 1/10/50/100 live idle executions;
 - Runtime thread count with 1/10/50/100 live idle executions;
-- one hot-output execution plus other ready/idle executions, proving fairness;
+- Runtime FD/resource counts across repeated create/finalize cycles;
+- one hot-output execution plus other ready/idle executions, proving read fairness;
+- one large writable backlog alongside readable/control work, proving write fairness;
 - PTY-ready event → committed `TerminalState` generation latency;
-- bounded input/control queue behavior;
-- repeated create/register/remove cycles and descriptor/registration leak checks.
+- per-execution and aggregate Runtime accepted-but-unwritten input backpressure, including concurrent-producer ingress accounting;
+- bounded control queue behavior;
+- repeated create/register/remove cycles and descriptor/registration leak checks, including teardown races.
+
+For the existing `<= 256 KiB` hidden/detached hot-memory target, use this target-comparison profile:
+
+```text
+80x24
+primary screen active
+alternate screen inactive
+zero presentation clients
+minimal/no scrollback payload beyond current M001 seam
+idle shell
+```
+
+Additionally report memory/resource scaling for at least:
+
+```text
+120x40
+200x60
+80x24 with alternate screen active
+120x40 with alternate screen active
+```
+
+at relevant population counts. Do not silently apply the same absolute target to arbitrary grid sizes; report target versus measured evidence explicitly.
+
+Where practical, benchmark/diagnostic evidence should include component allocation/capacity information for major live execution structures without adding instrumentation to the production per-byte hot path.
 
 Long-term architecture targets remain targets until measured; Pass 4 must not relabel them as achieved.
 
@@ -290,24 +375,31 @@ At minimum:
 
 1. Runtime launches headlessly with no GUI dependency.
 2. A second Runtime for the same user scope is rejected without disturbing the first; a new Runtime can start after the first cleanly exits.
-3. Create/list returns stable unique `ExecutionId`s.
-4. Capacity limit rejects excess creation without leaks.
-5. An immediately exiting command cannot be missed between spawn and reactor registration.
-6. Last logical attachment detaches while a live primary execution remains alive.
-7. Multiple PTYs make progress on one Runtime reactor without thread-per-PTY.
-8. A bursty/hot PTY cannot starve another ready PTY.
-9. Pending input drains after writable readiness and writable interest becomes inactive when empty.
-10. Input/control queue bounds produce explicit backpressure without corrupting accepted order.
-11. Primary child exit is observed/reaped even if a descendant retains the slave; final output spanning more than one dispatch quantum is committed before the first `WouldBlock`/EOF/HUP or configured finalization deadline.
-12. A continuously writing descendant cannot keep `DrainingAfterPrimaryExit` alive past the configured finalization deadline.
-13. SIGTERM → deadline → SIGKILL termination progresses without blocking unrelated execution output.
-14. A shell job in a distinct job-control process group cannot keep Runtime terminal resources/registrations alive after primary execution finalization.
-15. Repeated create/remove does not accumulate descriptors, registrations or zombies.
-16. Stale registration generation cannot target a new execution after FD/PID reuse.
-17. Runtime-only descriptors, including kqueue/singleton descriptors, are not inherited by spawned commands.
-18. Controlled Runtime shutdown progresses all live executions without blocking the reactor and does not report success with owned live resources remaining.
-19. No RILL identifiers/daemon/socket coupling are introduced.
-20. No GUI/Swift dependency enters Runtime or PTY/VT byte progress.
+3. `RuntimeId` is stable for the current Runtime incarnation and a new Runtime incarnation receives a different identity; the implicit/default `WorkspaceId` remains the same semantic identity across those Runtime incarnations.
+4. Create/list returns stable, opaque `ExecutionId`s independent of PID/FD/reactor/pane identity; IDs created in a later Runtime incarnation do not reuse earlier captured execution IDs.
+5. Every published execution has exactly one owning Workspace association; Pass 4's implicit/default Workspace is not derived from RuntimeId/cwd/window/pane/provider-session identity.
+6. Capacity limit rejects excess creation without PTY/process/Workspace-association leaks.
+7. An immediately exiting command cannot be missed between spawn and reactor registration/publication.
+8. Reactor events route through by-value generation-bearing tokens; `kevent.udata` is never a Rust object pointer/reference.
+9. Last logical attachment detaches while a live primary execution and its Workspace association remain alive.
+10. Multiple PTYs make progress on one Runtime reactor without thread-per-PTY.
+11. A bursty/hot PTY cannot starve another ready PTY.
+12. Pending input drains after writable readiness and writable interest becomes inactive when empty.
+13. A single execution with a large writable backlog cannot starve another readable PTY or bounded Runtime control work.
+14. Per-execution input/control queue bounds produce explicit backpressure without corrupting accepted order.
+15. Concurrent producers cannot collectively accept more unwritten input than the Runtime-wide byte budget even when payloads are still waiting in ingress/control queues; moving payloads between queues does not double-count or temporarily unreserve them, and reservation is released exactly once on successful write, failed-enqueue rollback or execution teardown.
+16. Primary child exit is observed/reaped even if a descendant retains the slave; final output spanning more than one dispatch quantum is committed before the first `WouldBlock`/EOF/HUP or configured finalization deadline.
+17. A continuously writing descendant cannot keep `DrainingAfterPrimaryExit` alive past the configured finalization deadline.
+18. SIGTERM → deadline → SIGKILL termination progresses without blocking unrelated execution output.
+19. A shell job in a distinct job-control process group cannot keep Runtime terminal resources/registrations alive after primary execution finalization.
+20. Repeated create/remove does not accumulate descriptors, registrations, Workspace associations or zombies.
+21. Removal/deregistration remains idempotent when process/filter/descriptor disappearance races with teardown.
+22. Stale registration generation cannot target a new execution after FD/PID reuse.
+23. Runtime-only descriptors, including kqueue/singleton descriptors, are not inherited by spawned commands.
+24. Controlled Runtime shutdown progresses all live executions without blocking the reactor and does not report success with owned live resources remaining.
+25. No full terminal history/transcript, agent context/transcript or provider-session state is added to the hot execution registry as a future-proofing shortcut.
+26. No RILL identifiers/daemon/socket coupling are introduced.
+27. No GUI/Swift dependency enters Runtime or PTY/VT byte progress.
 
 ## 20. Explicitly deferred
 
@@ -316,6 +408,13 @@ At minimum:
 - controller/observer protocol authorization beyond the logical Pass 4 seam;
 - Metal rendering/input wiring;
 - Block timeline implementation;
+- named/multiple Workspace persistence and Workspace CRUD/UI;
+- production Workspace metadata database/schema;
+- production history/scrollback persistence, compression or paging;
+- presentation/layout persistence;
+- WorkItem/Attempt/AgentRun implementation;
+- provider/harness resume adapters;
+- context engine/cache/router/workflow implementation;
 - complete GUI crash/reconnect validation (Pass 9);
 - Runtime-crash/reboot PTY survival;
 - Linux/Windows Runtime reactor implementation;

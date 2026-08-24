@@ -14,6 +14,7 @@ Define the observable M001 contract for Seyal's incremental VT parser and author
 - Construction or resize with a zero dimension fails with `TerminalError::InvalidSize`.
 - A failed resize leaves existing dimensions/state unchanged.
 - Cells outside the active dimensions are not addressable.
+- Operations that require a new logical line identity fail explicitly with `TerminalError::LineIdentityExhausted` if the finite identity space is exhausted; they must never wrap or silently reuse an existing `LineId`.
 
 ## 3. Input framing
 
@@ -22,6 +23,8 @@ Define the observable M001 contract for Seyal's incremental VT parser and author
 `feed(bytes)` may receive any split of the original byte stream. Supported final canonical state must be independent of feed chunk boundaries.
 
 The parser must retain incomplete UTF-8 and escape/CSI framing between feeds. No caller may be required to align reads to characters or escape sequences.
+
+`feed(bytes)` and `finish_input()` surface terminal-state failures such as logical-line identity exhaustion to the caller. A terminal-state failure is not reported as malformed VT input.
 
 ### 3.2 UTF-8
 
@@ -138,7 +141,7 @@ Other private modes are deferred and must not corrupt parser continuity.
 ## 11. Primary and alternate screens
 
 - Primary screen is preserved while alternate screen is active.
-- Entering `?1049h` has xterm-compatible save/switch/clear semantics for the M001 subset: the primary cursor/rendition state remains saved, a clean alternate screen with the same dimensions and a separate line-identity namespace is activated, and the alternate screen begins with the active saved pen rendition rather than resetting SGR state merely because the buffer changed.
+- Entering `?1049h` has xterm-compatible save/switch/clear semantics for the M001 subset: the primary cursor/rendition state remains saved, a clean alternate screen with the same dimensions is activated, its rows receive fresh `LineId` values from the same terminal-owned allocator, and the alternate screen begins with the active saved pen rendition rather than resetting SGR state merely because the buffer changed.
 - Blank cells in the newly cleared alternate screen use the active pen background and otherwise default cell attributes.
 - Rendition changes made while alternate is active belong to that alternate-screen lifetime and do not leak into the restored primary state on `?1049l`.
 - Re-entering while already active is idempotent.
@@ -152,19 +155,23 @@ M001 does not implement broad alternate-screen compatibility variants beyond the
 
 - Retained top-left cell content is preserved across resize.
 - Retained logical row IDs remain stable.
-- New rows receive new `LineId` values.
+- New rows receive new `LineId` values from the terminal-owned allocator.
 - Cursor and saved cursor are clamped to new dimensions.
 - Resize clears pending-wrap state.
 - Resize produces full-screen damage.
+- Before a multi-screen resize commits, enough fresh IDs for all newly created primary/alternate rows must be available; identity exhaustion must not leave one screen resized and the other stale.
 
 Production reflow is deferred.
 
 ## 13. Logical line identity
 
 - Every visible screen row has a `LineId`.
-- Ordinary cell/style/cursor mutations do not change that row's ID.
+- `TerminalState` owns the single allocator for all logical line identities during its lifetime.
+- Ordinary cell/style/cursor mutations do not change a retained row's ID.
 - Full-screen line-feed scrolling moves the old lower-row ID with its content and allocates a new ID for the new bottom row.
-- Primary and each alternate-screen lifetime use distinct identity namespaces.
+- Primary construction, resize growth and every alternate-screen lifetime draw from the same allocator; screen objects do not own independent namespaces/counters.
+- A `LineId` is never reused during the `TerminalState` lifetime.
+- Finite-space exhaustion is explicit (`TerminalError::LineIdentityExhausted`) rather than wrapping, saturating or duplicating an ID.
 - Viewport row number is never the durable Block/history anchor.
 
 ## 14. Damage
@@ -218,5 +225,7 @@ Historical implementation evidence reviewed for this contract comes from RILL co
 RILL behavior is not normative. Where RILL and this specification differ, this specification and current Seyal architecture win.
 
 Issue #68 re-audited two blanking/rendition behaviors against the retained RILL evidence and xterm 1049 save/switch/clear semantics before making them normative here. The resulting regression tests are Seyal-owned and do not import RILL module architecture.
+
+Issue #71 re-audited long-lived line identity and removed the initial `u32` namespace/local-counter saturation model. Tests cover uniqueness across scroll, resize growth and repeated alternate-screen lifetimes, plus allocator boundary injection proving the final finite ID is issued at most once before explicit exhaustion.
 
 Acceptance requires exact-byte tests for chunk boundaries, controls, CSI/SGR/color, alternate screen, resize, malformed/deferred recovery, line identity and damage, plus fuzz invariants once the VT fuzz target is activated.

@@ -1,6 +1,6 @@
 use crate::{
     Cell, Color, CursorState, LineId, Style, TerminalError, cursor::Cursor, damage::Mutation,
-    line::LineClock,
+    line::LineIdAllocator,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -14,26 +14,34 @@ pub(crate) struct Screen {
     rows: u16,
     cells: Vec<Cell>,
     line_ids: Vec<LineId>,
-    line_clock: LineClock,
     cursor: Cursor,
     pen: Style,
     saved_cursor: Option<SavedCursor>,
 }
 
 impl Screen {
-    pub(crate) fn new(cols: u16, rows: u16, namespace: u32) -> Result<Self, TerminalError> {
+    pub(crate) fn new(
+        cols: u16,
+        rows: u16,
+        line_ids: &mut LineIdAllocator,
+    ) -> Result<Self, TerminalError> {
         if cols == 0 || rows == 0 {
             return Err(TerminalError::InvalidSize);
         }
+        if !line_ids.can_allocate(usize::from(rows)) {
+            return Err(TerminalError::LineIdentityExhausted);
+        }
 
-        let mut line_clock = LineClock::new(namespace);
-        let line_ids = (0..rows).map(|_| line_clock.allocate()).collect();
+        let mut row_ids = Vec::with_capacity(usize::from(rows));
+        for _ in 0..rows {
+            row_ids.push(line_ids.allocate()?);
+        }
+
         Ok(Self {
             cols,
             rows,
             cells: vec![Cell::default(); usize::from(cols) * usize::from(rows)],
-            line_ids,
-            line_clock,
+            line_ids: row_ids,
             cursor: Cursor::default(),
             pen: Style::default(),
             saved_cursor: None,
@@ -76,7 +84,12 @@ impl Screen {
         self.line_ids.get(usize::from(row)).copied()
     }
 
-    pub(crate) fn resize(&mut self, cols: u16, rows: u16) -> Result<Mutation, TerminalError> {
+    pub(crate) fn resize(
+        &mut self,
+        cols: u16,
+        rows: u16,
+        line_ids: &mut LineIdAllocator,
+    ) -> Result<Mutation, TerminalError> {
         if cols == 0 || rows == 0 {
             return Err(TerminalError::InvalidSize);
         }
@@ -86,6 +99,11 @@ impl Screen {
 
         let old_cols = self.cols;
         let old_rows = self.rows;
+        let new_row_count = usize::from(rows.saturating_sub(old_rows));
+        if !line_ids.can_allocate(new_row_count) {
+            return Err(TerminalError::LineIdentityExhausted);
+        }
+
         let mut next = vec![Cell::default(); usize::from(cols) * usize::from(rows)];
         let copy_cols = old_cols.min(cols);
         let copy_rows = old_rows.min(rows);
@@ -102,7 +120,7 @@ impl Screen {
             if row < old_rows {
                 next_line_ids.push(self.line_ids[usize::from(row)]);
             } else {
-                next_line_ids.push(self.line_clock.allocate());
+                next_line_ids.push(line_ids.allocate()?);
             }
         }
 
@@ -117,12 +135,16 @@ impl Screen {
         Ok(Mutation::full(rows))
     }
 
-    pub(crate) fn print(&mut self, character: char) -> Mutation {
+    pub(crate) fn print(
+        &mut self,
+        character: char,
+        line_ids: &mut LineIdAllocator,
+    ) -> Result<Mutation, TerminalError> {
         let mut mutation = Mutation::none();
         if self.cursor.pending_wrap {
-            self.cursor.pending_wrap = false;
+            let wrap_mutation = self.line_feed(line_ids)?;
             self.cursor.col = 0;
-            mutation = mutation.merge(self.line_feed());
+            mutation = mutation.merge(wrap_mutation);
         }
 
         let row = self.cursor.row;
@@ -138,17 +160,21 @@ impl Screen {
         } else {
             self.cursor.col += 1;
         }
-        mutation
+        Ok(mutation)
     }
 
-    pub(crate) fn execute(&mut self, byte: u8) -> Mutation {
-        match byte {
+    pub(crate) fn execute(
+        &mut self,
+        byte: u8,
+        line_ids: &mut LineIdAllocator,
+    ) -> Result<Mutation, TerminalError> {
+        Ok(match byte {
             0x08 => self.backspace(),
             0x09 => self.tab(),
-            0x0a..=0x0c => self.line_feed(),
+            0x0a..=0x0c => return self.line_feed(line_ids),
             0x0d => self.carriage_return(),
             _ => Mutation::none(),
-        }
+        })
     }
 
     pub(crate) fn cursor_up(&mut self, count: u16) -> Mutation {
@@ -342,22 +368,24 @@ impl Screen {
         Mutation::row(row)
     }
 
-    fn line_feed(&mut self) -> Mutation {
+    fn line_feed(&mut self, line_ids: &mut LineIdAllocator) -> Result<Mutation, TerminalError> {
         let old = self.cursor.row;
-        self.cursor.pending_wrap = false;
         if self.cursor.row < self.rows - 1 {
+            self.cursor.pending_wrap = false;
             self.cursor.row += 1;
-            return Mutation::rows(old, self.cursor.row);
+            return Ok(Mutation::rows(old, self.cursor.row));
         }
 
+        let new_line_id = line_ids.allocate()?;
+        self.cursor.pending_wrap = false;
         let row_width = usize::from(self.cols);
         self.cells.copy_within(row_width.., 0);
         let last_row_start = self.cells.len() - row_width;
         self.cells[last_row_start..].fill(Cell::blank(self.pen.bg));
         self.line_ids.copy_within(1.., 0);
         let last = self.line_ids.len() - 1;
-        self.line_ids[last] = self.line_clock.allocate();
-        Mutation::full(self.rows)
+        self.line_ids[last] = new_line_id;
+        Ok(Mutation::full(self.rows))
     }
 
     fn index(&self, col: u16, row: u16) -> usize {

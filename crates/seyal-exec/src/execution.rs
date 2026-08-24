@@ -32,7 +32,7 @@ impl TerminalExecution {
         if let ReadOutcome::Bytes(count) = outcome
             && count > 0
         {
-            self.terminal.feed(&buffer[..count]);
+            self.terminal.feed(&buffer[..count])?;
         }
         Ok(outcome)
     }

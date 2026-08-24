@@ -1,9 +1,15 @@
+use std::collections::HashSet;
+
 use seyal_terminal::{Color, Style, TerminalError, TerminalState};
 
 fn terminal(cols: u16, rows: u16) -> TerminalState {
     let mut terminal = TerminalState::new(cols, rows).expect("valid terminal");
     let _ = terminal.take_damage();
     terminal
+}
+
+fn feed(terminal: &mut TerminalState, bytes: &[u8]) {
+    terminal.feed(bytes).expect("terminal feed succeeds");
 }
 
 fn row(terminal: &TerminalState, row: u16) -> String {
@@ -13,11 +19,11 @@ fn row(terminal: &TerminalState, row: u16) -> String {
 #[test]
 fn printable_utf8_survives_arbitrary_chunking() {
     let mut terminal = terminal(8, 2);
-    terminal.feed(b"A");
-    terminal.feed(&[0xe2]);
-    terminal.feed(&[0x82]);
-    terminal.feed(&[0xac]);
-    terminal.feed(b"Z");
+    feed(&mut terminal, b"A");
+    feed(&mut terminal, &[0xe2]);
+    feed(&mut terminal, &[0x82]);
+    feed(&mut terminal, &[0xac]);
+    feed(&mut terminal, b"Z");
 
     assert_eq!(terminal.cell(0, 0).unwrap().character, 'A');
     assert_eq!(terminal.cell(1, 0).unwrap().character, '€');
@@ -28,7 +34,7 @@ fn printable_utf8_survives_arbitrary_chunking() {
 #[test]
 fn malformed_utf8_recovers_and_reprocesses_following_ascii() {
     let mut terminal = terminal(8, 2);
-    terminal.feed(&[0xf0, b'A']);
+    feed(&mut terminal, &[0xf0, b'A']);
 
     assert_eq!(terminal.cell(0, 0).unwrap().character, '\u{fffd}');
     assert_eq!(terminal.cell(1, 0).unwrap().character, 'A');
@@ -38,41 +44,41 @@ fn malformed_utf8_recovers_and_reprocesses_following_ascii() {
 #[test]
 fn controls_apply_without_parser_state_duplication() {
     let mut terminal = terminal(16, 3);
-    terminal.feed(b"ab\rZ");
+    feed(&mut terminal, b"ab\rZ");
     assert_eq!(&row(&terminal, 0)[..2], "Zb");
 
-    terminal.feed(b"\r\na\tb");
+    feed(&mut terminal, b"\r\na\tb");
     assert_eq!(terminal.cell(0, 1).unwrap().character, 'a');
     assert_eq!(terminal.cell(8, 1).unwrap().character, 'b');
 
-    terminal.feed(b"\x08X");
+    feed(&mut terminal, b"\x08X");
     assert_eq!(terminal.cell(8, 1).unwrap().character, 'X');
 }
 
 #[test]
 fn relative_and_absolute_cursor_movement_clamps_to_grid() {
     let mut terminal = terminal(6, 4);
-    terminal.feed(b"\x1b[3;4HX");
+    feed(&mut terminal, b"\x1b[3;4HX");
     assert_eq!(terminal.cell(3, 2).unwrap().character, 'X');
 
-    terminal.feed(b"\x1b[99A\x1b[99DZ");
+    feed(&mut terminal, b"\x1b[99A\x1b[99DZ");
     assert_eq!(terminal.cell(0, 0).unwrap().character, 'Z');
 
-    terminal.feed(b"\x1b[4d\x1b[6GY");
+    feed(&mut terminal, b"\x1b[4d\x1b[6GY");
     assert_eq!(terminal.cell(5, 3).unwrap().character, 'Y');
 }
 
 #[test]
 fn erase_line_and_display_support_m001_modes() {
     let mut terminal = terminal(5, 2);
-    terminal.feed(b"abcde\r\n12345");
-    terminal.feed(b"\x1b[2;3H\x1b[0K");
+    feed(&mut terminal, b"abcde\r\n12345");
+    feed(&mut terminal, b"\x1b[2;3H\x1b[0K");
     assert_eq!(row(&terminal, 1), "12   ");
 
-    terminal.feed(b"\x1b[1;3H\x1b[1K");
+    feed(&mut terminal, b"\x1b[1;3H\x1b[1K");
     assert_eq!(row(&terminal, 0), "   de");
 
-    terminal.feed(b"\x1b[2J");
+    feed(&mut terminal, b"\x1b[2J");
     assert_eq!(row(&terminal, 0), "     ");
     assert_eq!(row(&terminal, 1), "     ");
 }
@@ -80,7 +86,7 @@ fn erase_line_and_display_support_m001_modes() {
 #[test]
 fn sgr_tracks_supported_attributes_and_colors() {
     let mut terminal = terminal(8, 2);
-    terminal.feed(b"\x1b[1;4;7;31;48;5;200mX");
+    feed(&mut terminal, b"\x1b[1;4;7;31;48;5;200mX");
     let first = terminal.cell(0, 0).unwrap();
     assert_eq!(
         first.style,
@@ -93,7 +99,7 @@ fn sgr_tracks_supported_attributes_and_colors() {
         }
     );
 
-    terminal.feed(b"\x1b[0;38;2;10;20;30;49mY");
+    feed(&mut terminal, b"\x1b[0;38;2;10;20;30;49mY");
     let second = terminal.cell(1, 0).unwrap();
     assert_eq!(
         second.style.fg,
@@ -112,7 +118,7 @@ fn sgr_tracks_supported_attributes_and_colors() {
 #[test]
 fn deferred_sgr_does_not_corrupt_following_supported_state() {
     let mut terminal = terminal(8, 2);
-    terminal.feed(b"\x1b[2m\x1b[31mX");
+    feed(&mut terminal, b"\x1b[2m\x1b[31mX");
 
     assert_eq!(terminal.cell(0, 0).unwrap().style.fg, Color::Indexed(1));
     assert!(terminal.diagnostics().deferred_sequences >= 1);
@@ -121,11 +127,11 @@ fn deferred_sgr_does_not_corrupt_following_supported_state() {
 #[test]
 fn cursor_visibility_is_runtime_authoritative_mode_state() {
     let mut terminal = terminal(8, 2);
-    terminal.feed(b"\x1b[?25l");
+    feed(&mut terminal, b"\x1b[?25l");
     assert!(!terminal.cursor().visible);
     assert!(!terminal.modes().cursor_visible);
 
-    terminal.feed(b"\x1b[?25h");
+    feed(&mut terminal, b"\x1b[?25h");
     assert!(terminal.cursor().visible);
     assert!(terminal.modes().cursor_visible);
 }
@@ -133,25 +139,25 @@ fn cursor_visibility_is_runtime_authoritative_mode_state() {
 #[test]
 fn save_restore_cursor_supports_csi_and_dec_forms() {
     let mut terminal = terminal(8, 4);
-    terminal.feed(b"\x1b[3;4H\x1b[s\x1b[1;1H\x1b[uX");
+    feed(&mut terminal, b"\x1b[3;4H\x1b[s\x1b[1;1H\x1b[uX");
     assert_eq!(terminal.cell(3, 2).unwrap().character, 'X');
 
-    terminal.feed(b"\x1b[2;2H\x1b7\x1b[4;8H\x1b8Y");
+    feed(&mut terminal, b"\x1b[2;2H\x1b7\x1b[4;8H\x1b8Y");
     assert_eq!(terminal.cell(1, 1).unwrap().character, 'Y');
 }
 
 #[test]
 fn alternate_screen_preserves_primary_and_is_discarded_on_leave() {
     let mut terminal = terminal(6, 3);
-    terminal.feed(b"primary");
+    feed(&mut terminal, b"primary");
     let primary_line = terminal.line_id(0).unwrap();
 
-    terminal.feed(b"\x1b[?1049hALT");
+    feed(&mut terminal, b"\x1b[?1049hALT");
     assert!(terminal.modes().alternate_screen);
     assert_eq!(&row(&terminal, 0)[..3], "ALT");
     assert_ne!(terminal.line_id(0).unwrap(), primary_line);
 
-    terminal.feed(b"\x1b[?1049l");
+    feed(&mut terminal, b"\x1b[?1049l");
     assert!(!terminal.modes().alternate_screen);
     assert_eq!(&row(&terminal, 0)[..6], "primar");
     assert_eq!(terminal.line_id(0).unwrap(), primary_line);
@@ -160,7 +166,7 @@ fn alternate_screen_preserves_primary_and_is_discarded_on_leave() {
 #[test]
 fn resize_preserves_retained_cells_and_line_identity() {
     let mut terminal = terminal(4, 2);
-    terminal.feed(b"abc");
+    feed(&mut terminal, b"abc");
     let line = terminal.line_id(0).unwrap();
 
     terminal.resize(6, 3).unwrap();
@@ -169,7 +175,7 @@ fn resize_preserves_retained_cells_and_line_identity() {
     assert_eq!(&row(&terminal, 0)[..3], "abc");
     assert_eq!(terminal.line_id(0).unwrap(), line);
 
-    terminal.feed(b"\x1b[3;6H");
+    feed(&mut terminal, b"\x1b[3;6H");
     terminal.resize(2, 1).unwrap();
     assert_eq!(terminal.cursor().col, 1);
     assert_eq!(terminal.cursor().row, 0);
@@ -192,7 +198,7 @@ fn zero_dimensions_are_rejected_without_partial_resize() {
 fn line_feed_scrolls_full_screen_and_advances_line_identity() {
     let mut terminal = terminal(4, 2);
     let initial_second = terminal.line_id(1).unwrap();
-    terminal.feed(b"a\r\nb\r\nc");
+    feed(&mut terminal, b"a\r\nb\r\nc");
 
     assert_eq!(terminal.line_id(0).unwrap(), initial_second);
     assert_ne!(terminal.line_id(1).unwrap(), initial_second);
@@ -201,12 +207,41 @@ fn line_feed_scrolls_full_screen_and_advances_line_identity() {
 }
 
 #[test]
+fn allocated_line_ids_do_not_repeat_across_scroll_resize_and_alternate_lifetimes() {
+    let mut terminal = terminal(4, 2);
+    let mut seen = HashSet::new();
+    for row in 0..terminal.rows() {
+        assert!(seen.insert(terminal.line_id(row).unwrap()));
+    }
+
+    feed(&mut terminal, b"\x1b[2;1H");
+    for _ in 0..128 {
+        feed(&mut terminal, b"\r\n");
+        assert!(seen.insert(terminal.line_id(terminal.rows() - 1).unwrap()));
+    }
+
+    let old_rows = terminal.rows();
+    terminal.resize(4, 5).expect("grow resize succeeds");
+    for row in old_rows..terminal.rows() {
+        assert!(seen.insert(terminal.line_id(row).unwrap()));
+    }
+
+    for _ in 0..16 {
+        feed(&mut terminal, b"\x1b[?1049h");
+        for row in 0..terminal.rows() {
+            assert!(seen.insert(terminal.line_id(row).unwrap()));
+        }
+        feed(&mut terminal, b"\x1b[?1049l");
+    }
+}
+
+#[test]
 fn deferred_and_unknown_sequences_leave_parser_continuity_intact() {
     let mut terminal = terminal(8, 2);
-    terminal.feed(b"\x1b[3@A");
-    terminal.feed(b"\x1b]0;title\x07B");
-    terminal.feed(b"\x1b[?9999hC");
-    terminal.feed(b"\x1b[999zD");
+    feed(&mut terminal, b"\x1b[3@A");
+    feed(&mut terminal, b"\x1b]0;title\x07B");
+    feed(&mut terminal, b"\x1b[?9999hC");
+    feed(&mut terminal, b"\x1b[999zD");
 
     assert_eq!(&row(&terminal, 0)[..4], "ABCD");
     assert!(terminal.diagnostics().deferred_sequences >= 3);
@@ -216,10 +251,10 @@ fn deferred_and_unknown_sequences_leave_parser_continuity_intact() {
 #[test]
 fn truncated_input_is_held_across_feed_and_reported_only_on_finish() {
     let mut terminal = terminal(8, 2);
-    terminal.feed(&[0xe2, 0x82]);
+    feed(&mut terminal, &[0xe2, 0x82]);
     assert_eq!(terminal.diagnostics().malformed_sequences, 0);
 
-    terminal.finish_input();
+    terminal.finish_input().expect("finish input succeeds");
     assert_eq!(terminal.cell(0, 0).unwrap().character, '\u{fffd}');
     assert!(terminal.diagnostics().malformed_sequences >= 1);
 }
@@ -228,9 +263,9 @@ fn truncated_input_is_held_across_feed_and_reported_only_on_finish() {
 fn damage_generations_are_monotonic_and_coalesce_until_consumed() {
     let mut terminal = terminal(8, 3);
     let initial = terminal.damage_generation();
-    terminal.feed(b"A");
+    feed(&mut terminal, b"A");
     let after_text = terminal.damage_generation();
-    terminal.feed(b"\x1b[3;1H");
+    feed(&mut terminal, b"\x1b[3;1H");
     let after_cursor = terminal.damage_generation();
 
     assert!(after_text > initial);
@@ -246,11 +281,11 @@ fn damage_generations_are_monotonic_and_coalesce_until_consumed() {
 fn one_shot_and_bytewise_feeds_produce_the_same_canonical_state() {
     let bytes = b"hello\r\n\x1b[31mred\x1b[0m \xe2\x82\xac\x1b[2;2H!\x1b[?25l";
     let mut one_shot = terminal(12, 4);
-    one_shot.feed(bytes);
+    feed(&mut one_shot, bytes);
 
     let mut bytewise = terminal(12, 4);
     for byte in bytes {
-        bytewise.feed(&[*byte]);
+        feed(&mut bytewise, &[*byte]);
     }
 
     for row_index in 0..4 {

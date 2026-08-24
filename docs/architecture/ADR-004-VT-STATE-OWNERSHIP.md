@@ -47,9 +47,11 @@ Full-screen scroll blanking follows the same canonical blank-cell rule: a newly 
 
 ### Stable logical line identity
 
-Each screen row carries a `LineId`. IDs are stable for retained logical rows across ordinary mutation and resize. Full-screen line-feed scrolling moves the existing row identity with the row and allocates a new identity for the new bottom line. Alternate buffers use separate identity namespaces.
+Each screen row carries a `LineId`. `TerminalState` owns one monotonic `LineIdAllocator` for its entire lifetime; primary rows, resize-created rows, scroll-created rows and every alternate-screen lifetime all draw from that single authority. A `Screen` does not own an independent identity namespace or counter.
 
-This is the M001 seam for future Block anchors and scrollback/reflow. Viewport row numbers are not durable identity.
+IDs are stable for retained logical rows across ordinary mutation and resize. Full-screen line-feed scrolling moves the existing row identity with the row and allocates a new identity for the new bottom line. An ID is never reused during the `TerminalState` lifetime. If the finite `u64` identity space is ever exhausted, allocation fails explicitly with `TerminalError::LineIdentityExhausted`; Seyal must not wrap or saturate into duplicate durable anchors.
+
+This is the M001 seam for future Block anchors and scrollback/reflow. Viewport row numbers are not durable identity. A future durable anchor can combine `ExecutionId` with `LineId` without depending on screen lifetime or viewport position.
 
 ### Damage
 
@@ -73,6 +75,7 @@ M001 accepts printable Unicode scalar input and incremental UTF-8 correctness. I
 - Renderer, PTY, runtime IPC, Blocks and persistence stay outside the VT mutation hot path.
 - Future projection code can consume cell/state/damage without becoming authoritative terminal state.
 - Scroll/alternate blanking use one background-aware cell rule, avoiding renderer-side repair or a second semantic interpretation.
+- Line identity allocation is centralized with terminal state, so alternate-screen churn cannot create namespace reuse and long-running scroll cannot silently repeat IDs.
 
 ## RILL salvage review
 
@@ -94,7 +97,8 @@ M001 accepts printable Unicode scalar input and incremental UTF-8 correctness. I
 - RILL mutation-test production hooks are not imported;
 - deferred behavior is not exposed as supported M001 functionality;
 - logical line identity is made explicit from the start for Block/history compatibility;
-- Issue #68 corrected two rewrite regressions where the initial Seyal salvage accidentally used default rendition/background for scroll-created and alternate-screen cells instead of the active saved pen semantics.
+- Issue #68 corrected two rewrite regressions where the initial Seyal salvage accidentally used default rendition/background for scroll-created and alternate-screen cells instead of the active saved pen semantics;
+- Issue #71 removes the initial 32-bit namespace/local-counter packing whose saturating counters could eventually repeat a `LineId`, replacing it with one terminal-owned non-reusing allocator and explicit exhaustion.
 
 ### Rejected/deferred
 

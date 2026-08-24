@@ -6,6 +6,7 @@ Specifications define **observable behavior and enforceable contracts** below ac
 
 - [`SPEC-001-M001-VT.md`](SPEC-001-M001-VT.md) — M001 incremental VT parser, canonical terminal state, supported/deferred sequences, line identity, resize and damage behavior.
 - [`SPEC-002-M001-PTY.md`](SPEC-002-M001-PTY.md) — M001 local macOS PTY endpoint, nonblocking byte I/O, resize, child lifecycle, detach/terminate and resource behavior.
+- [`SPEC-003-M001-RUNTIME.md`](SPEC-003-M001-RUNTIME.md) — M001 headless Runtime ownership, multi-execution readiness/fairness, logical attachment, bounded input, child-exit and nonblocking termination behavior.
 
 ## When a specification is required
 
@@ -14,6 +15,7 @@ Create or update a specification before implementation when work defines or chan
 - VT parser/state behavior and supported-sequence semantics;
 - Unicode/grapheme/width behavior;
 - PTY and child lifecycle;
+- headless Runtime registry/readiness/lifecycle behavior;
 - attach/detach/reconnect behavior;
 - local or remote protocols and projection contracts;
 - persistence contracts and failure behavior;

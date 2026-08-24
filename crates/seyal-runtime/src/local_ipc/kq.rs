@@ -50,17 +50,19 @@ impl Kqueue {
     }
 
     pub fn register_write(&self, fd: RawFd, token: u64) -> io::Result<()> {
-        self.change(fd, libc::EVFILT_WRITE, libc::EV_ADD | libc::EV_ENABLE, token)
+        self.change(
+            fd,
+            libc::EVFILT_WRITE,
+            libc::EV_ADD | libc::EV_ENABLE,
+            token,
+        )
     }
 
     pub fn deregister_write(&self, fd: RawFd) -> io::Result<()> {
         match self.change(fd, libc::EVFILT_WRITE, libc::EV_DELETE, 0) {
             Ok(()) => Ok(()),
             Err(error)
-                if matches!(
-                    error.raw_os_error(),
-                    Some(libc::ENOENT) | Some(libc::EBADF)
-                ) =>
+                if matches!(error.raw_os_error(), Some(libc::ENOENT) | Some(libc::EBADF)) =>
             {
                 Ok(())
             }
@@ -198,9 +200,11 @@ mod tests {
         }; 8];
         let count = kq.wait(Some(Duration::from_secs(1)), &mut events).unwrap();
         assert!(count >= 1);
-        assert!(events[..count]
-            .iter()
-            .any(|event| event.token == 42 && event.readiness == Readiness::Readable));
+        assert!(
+            events[..count]
+                .iter()
+                .any(|event| event.token == 42 && event.readiness == Readiness::Readable)
+        );
     }
 
     #[test]

@@ -282,7 +282,8 @@ impl SlotHeader {
             _ => return Err(LayoutError::NonzeroReserved),
         };
         let cursor_style = bytes[29];
-        let mode_flags = ModeFlags::from_u16(u16::from_le_bytes(bytes[30..32].try_into().unwrap()))?;
+        let mode_flags =
+            ModeFlags::from_u16(u16::from_le_bytes(bytes[30..32].try_into().unwrap()))?;
         let cell_count = u32::from_le_bytes(bytes[32..36].try_into().unwrap());
         let damage_count = u16::from_le_bytes(bytes[36..38].try_into().unwrap());
         let full_snapshot = match bytes[38] {
@@ -747,7 +748,11 @@ mod tests {
     fn cell_record_round_trips_rgb_and_attributes() {
         let cell = CellRecord {
             scalar: 'A',
-            foreground: WireColor::Rgb { r: 10, g: 20, b: 30 },
+            foreground: WireColor::Rgb {
+                r: 10,
+                g: 20,
+                b: 30,
+            },
             background: WireColor::Indexed(200),
             attributes: WireAttributes {
                 bold: true,

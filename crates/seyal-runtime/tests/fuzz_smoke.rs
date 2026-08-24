@@ -4,7 +4,9 @@ use std::{env, fs, path::PathBuf};
 
 use seyal_runtime::local_ipc::attachment::AttachmentRegistry;
 use seyal_runtime::local_ipc::connection::ConnectionState;
-use seyal_runtime::local_ipc::framing::{FrameHeader, HEADER_LEN, MessageType, Role, decode_message};
+use seyal_runtime::local_ipc::framing::{
+    FrameHeader, HEADER_LEN, MessageType, Role, decode_message,
+};
 use seyal_runtime::projection::layout::{
     CELL_LEN, CellRecord, DAMAGE_LEN, DamageRecord, REGION_HEADER_LEN, RegionHeader,
     SLOT_HEADER_LEN, SlotHeader,

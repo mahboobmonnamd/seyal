@@ -146,7 +146,10 @@ impl AttachmentRegistry {
         ids
     }
 
-    pub fn execution_of(&self, attachment_id: AttachmentId) -> Result<ExecutionId, AttachmentError> {
+    pub fn execution_of(
+        &self,
+        attachment_id: AttachmentId,
+    ) -> Result<ExecutionId, AttachmentError> {
         self.attachments
             .get(&attachment_id)
             .map(|record| record.execution_id)
@@ -160,7 +163,10 @@ impl AttachmentRegistry {
             .ok_or(AttachmentError::StaleIdentity)
     }
 
-    pub fn projection_of(&self, attachment_id: AttachmentId) -> Result<ProjectionId, AttachmentError> {
+    pub fn projection_of(
+        &self,
+        attachment_id: AttachmentId,
+    ) -> Result<ProjectionId, AttachmentError> {
         self.attachments
             .get(&attachment_id)
             .map(|record| record.projection_id)
@@ -192,7 +198,10 @@ impl AttachmentRegistry {
     /// attachment for its own execution may mutate; an observer attempt is
     /// `PermissionDenied` and a stale/unknown attachment is `StaleIdentity`
     /// (SPEC-004 section 5.2).
-    pub fn authorize_mutation(&self, attachment_id: AttachmentId) -> Result<ExecutionId, AttachmentError> {
+    pub fn authorize_mutation(
+        &self,
+        attachment_id: AttachmentId,
+    ) -> Result<ExecutionId, AttachmentError> {
         let record = self
             .attachments
             .get(&attachment_id)
@@ -296,7 +305,10 @@ mod tests {
     fn detach_of_unknown_attachment_is_stale_identity() {
         let mut registry = AttachmentRegistry::new();
         let bogus = AttachmentId::from_bytes(999u128.to_le_bytes());
-        assert_eq!(registry.detach(bogus), Err(AttachmentError::UnknownAttachment));
+        assert_eq!(
+            registry.detach(bogus),
+            Err(AttachmentError::UnknownAttachment)
+        );
     }
 
     #[test]

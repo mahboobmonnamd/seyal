@@ -85,7 +85,9 @@ impl Harness {
     }
 
     fn spawn(&mut self, command: CommandSpec) -> ExecutionId {
-        self.runtime.create_execution(command, size()).expect("execution")
+        self.runtime
+            .create_execution(command, size())
+            .expect("execution")
     }
 
     fn pump(&mut self) {
@@ -98,7 +100,9 @@ impl Harness {
         loop {
             match UnixStream::connect(&path) {
                 Ok(stream) => {
-                    stream.set_nonblocking(true).expect("nonblocking client socket");
+                    stream
+                        .set_nonblocking(true)
+                        .expect("nonblocking client socket");
                     return stream;
                 }
                 Err(_) => {
@@ -164,7 +168,8 @@ impl Harness {
                 let header = FrameHeader::decode(&buffer[..HEADER_LEN]).expect("valid header");
                 let total = HEADER_LEN + header.payload_len as usize;
                 if buffer.len() >= total {
-                    let fd = captured_fd.expect("frame completed without ever observing a descriptor");
+                    let fd =
+                        captured_fd.expect("frame completed without ever observing a descriptor");
                     return (header.message_type, buffer[HEADER_LEN..total].to_vec(), fd);
                 }
             }
@@ -183,7 +188,10 @@ impl Harness {
                 }
                 Ok((_, RecvFd::Malformed)) => panic!("malformed descriptor transfer"),
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    assert!(Instant::now() < deadline, "timed out awaiting an fd-bearing frame");
+                    assert!(
+                        Instant::now() < deadline,
+                        "timed out awaiting an fd-bearing frame"
+                    );
                     self.pump();
                 }
                 Err(error) => panic!("client recvmsg error: {error}"),
@@ -195,7 +203,10 @@ impl Harness {
         self.send(
             stream,
             MessageType::ClientHello,
-            &ClientHello { client_capabilities: 0 }.encode(),
+            &ClientHello {
+                client_capabilities: 0,
+            }
+            .encode(),
         );
         let deadline = Instant::now() + Duration::from_secs(2);
         let (message_type, payload) = self.expect_frame(stream, deadline);
@@ -267,7 +278,8 @@ impl Harness {
 #[test]
 fn attach_receives_initial_snapshot_reflecting_real_pty_output() {
     let mut harness = Harness::new("initial-snapshot");
-    let execution_id = harness.spawn(CommandSpec::new("/bin/sh").args(["-c", "printf hi; sleep 2"]));
+    let execution_id =
+        harness.spawn(CommandSpec::new("/bin/sh").args(["-c", "printf hi; sleep 2"]));
 
     let mut client = harness.connect();
     harness.hello(&mut client);
@@ -294,7 +306,11 @@ fn attach_to_a_finalized_execution_is_rejected_as_invalid_execution() {
         let (message_type, payload) = harness.expect_frame(&mut client, deadline);
         assert_eq!(message_type, MessageType::ExecutionList as u16);
         let list = seyal_runtime::local_ipc::framing::ExecutionList::decode(&payload).unwrap();
-        if !list.entries.iter().any(|entry| entry.execution_id == execution_id) {
+        if !list
+            .entries
+            .iter()
+            .any(|entry| entry.execution_id == execution_id)
+        {
             break;
         }
         assert!(Instant::now() < deadline, "execution never finalized");
@@ -372,7 +388,8 @@ fn second_controller_attach_is_rejected_and_first_controller_lease_is_untouched(
 
     let mut first = harness.connect();
     harness.hello(&mut first);
-    let (_first_attached, _first_mapping) = harness.attach(&mut first, execution_id, Role::Controller);
+    let (_first_attached, _first_mapping) =
+        harness.attach(&mut first, execution_id, Role::Controller);
 
     let mut second = harness.connect();
     harness.hello(&mut second);
@@ -429,7 +446,8 @@ fn reconnect_obtains_current_state_without_pty_replay() {
 
     let mut first = harness.connect();
     harness.hello(&mut first);
-    let (first_attached, first_mapping) = harness.attach(&mut first, execution_id, Role::Controller);
+    let (first_attached, first_mapping) =
+        harness.attach(&mut first, execution_id, Role::Controller);
     let first_region = region_header_of(&first_mapping, first_attached.region_bytes);
 
     harness.send(
@@ -450,20 +468,23 @@ fn reconnect_obtains_current_state_without_pty_replay() {
     // second client-side VT reconstructing it.
     let mut second = harness.connect();
     harness.hello(&mut second);
-    let (second_attached, second_mapping) = harness.attach(&mut second, execution_id, Role::Observer);
+    let (second_attached, second_mapping) =
+        harness.attach(&mut second, execution_id, Role::Observer);
     assert_ne!(second_attached.attachment_id, first_attached.attachment_id);
     assert_ne!(second_attached.projection_id, first_attached.projection_id);
     let second_region = region_header_of(&second_mapping, second_attached.region_bytes);
     let row = row_text(&second_mapping, &second_region).expect("readable snapshot on reconnect");
-    assert!(row.starts_with("XY"), "reconnect must observe current state, got {row:?}");
+    assert!(
+        row.starts_with("XY"),
+        "reconnect must observe current state, got {row:?}"
+    );
 }
 
 #[test]
 fn a_killed_client_never_blocks_pty_progress_for_other_attachments() {
     let mut harness = Harness::new("killed-client");
-    let execution_id = harness.spawn(
-        CommandSpec::new("/bin/sh").args(["-c", "yes XXXXXX | head -c 200000"]),
-    );
+    let execution_id =
+        harness.spawn(CommandSpec::new("/bin/sh").args(["-c", "yes XXXXXX | head -c 200000"]));
 
     // A slow/malicious client that attaches and then never reads again.
     let mut slow = harness.connect();

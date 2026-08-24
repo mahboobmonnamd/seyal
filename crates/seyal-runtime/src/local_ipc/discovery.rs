@@ -48,7 +48,8 @@ pub fn darwin_user_runtime_dir() -> Result<PathBuf, DiscoveryError> {
     // required length (a standard two-call confstr idiom), then with a
     // correctly sized owned buffer; both calls only write into memory this
     // function owns.
-    let required = unsafe { libc::confstr(libc::_CS_DARWIN_USER_TEMP_DIR, std::ptr::null_mut(), 0) };
+    let required =
+        unsafe { libc::confstr(libc::_CS_DARWIN_USER_TEMP_DIR, std::ptr::null_mut(), 0) };
     if required == 0 {
         return Err(DiscoveryError::ConfstrFailed);
     }
@@ -220,10 +221,7 @@ mod tests {
     fn control_socket_path_rejects_path_exceeding_sun_path_capacity() {
         let too_long = PathBuf::from("/").join("a".repeat(200));
         let result = control_socket_path(&too_long);
-        assert!(matches!(
-            result,
-            Err(DiscoveryError::PathTooLongForSocket)
-        ));
+        assert!(matches!(result, Err(DiscoveryError::PathTooLongForSocket)));
     }
 
     #[test]

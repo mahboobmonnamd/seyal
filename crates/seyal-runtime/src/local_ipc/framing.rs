@@ -239,7 +239,9 @@ impl ClientHello {
         if reserved != 0 {
             return Err(FramingError::MalformedPayload);
         }
-        Ok(Self { client_capabilities })
+        Ok(Self {
+            client_capabilities,
+        })
     }
 }
 
@@ -325,7 +327,11 @@ impl ExecutionList {
             return Err(FramingError::MalformedPayload);
         }
         let expected = 4usize
-            .checked_add((count as usize).checked_mul(Self::ENTRY_LEN).ok_or(FramingError::LengthOverflow)?)
+            .checked_add(
+                (count as usize)
+                    .checked_mul(Self::ENTRY_LEN)
+                    .ok_or(FramingError::LengthOverflow)?,
+            )
             .ok_or(FramingError::LengthOverflow)?;
         exact_len(bytes, expected)?;
 
@@ -339,8 +345,7 @@ impl ExecutionList {
                 1 => true,
                 _ => return Err(FramingError::MalformedPayload),
             };
-            let attachment_count =
-                u16::from_le_bytes([bytes[offset + 18], bytes[offset + 19]]);
+            let attachment_count = u16::from_le_bytes([bytes[offset + 18], bytes[offset + 19]]);
             entries.push(ExecutionListEntry {
                 execution_id,
                 lifecycle,
@@ -1008,7 +1013,10 @@ mod tests {
     fn input_ref_decode_rejects_oversized_byte_count() {
         let mut bytes = vec![0u8; InputRef::HEADER_LEN];
         bytes[16..20].copy_from_slice(&(MAX_INPUT_BYTES + 1).to_le_bytes());
-        assert_eq!(InputRef::decode(&bytes), Err(FramingError::OversizedPayload));
+        assert_eq!(
+            InputRef::decode(&bytes),
+            Err(FramingError::OversizedPayload)
+        );
     }
 
     #[test]

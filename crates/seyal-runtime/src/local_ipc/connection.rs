@@ -17,8 +17,7 @@ use std::{
 };
 
 use crate::local_ipc::{
-    auth,
-    fd_transfer,
+    auth, fd_transfer,
     framing::{FrameHeader, HEADER_LEN, MAX_FRAME_PAYLOAD, MessageType},
     kq::{Kqueue, Readiness},
 };
@@ -89,7 +88,9 @@ pub struct Connection {
 
 #[derive(Debug)]
 pub enum ServerEvent {
-    Connected { token: u64 },
+    Connected {
+        token: u64,
+    },
     /// A fully framed, protocol-version-valid frame. Message-type/semantic
     /// validation against `state` is the caller's responsibility (it may
     /// need to send a nonfatal `UnknownMessage`/`Error` reply rather than
@@ -101,8 +102,12 @@ pub enum ServerEvent {
     },
     /// A protocol-fatal framing error (SPEC-004 section 6.2/6.3): the
     /// connection is already closed by the time this is reported.
-    FramingError { token: u64 },
-    Disconnected { token: u64 },
+    FramingError {
+        token: u64,
+    },
+    Disconnected {
+        token: u64,
+    },
     /// A peer whose UID did not match was rejected before any connection
     /// state was created (SPEC-004 section 4.3).
     PeerRejected,
@@ -283,7 +288,8 @@ impl LocalIpcServer {
             return Ok(());
         }
         if !connection.outbox.is_empty() && !connection.write_registered {
-            self.kq.register_write(connection.stream.as_raw_fd(), token)?;
+            self.kq
+                .register_write(connection.stream.as_raw_fd(), token)?;
             connection.write_registered = true;
         }
         Ok(())
@@ -297,7 +303,9 @@ impl LocalIpcServer {
     }
 
     pub fn state_of(&self, token: u64) -> Option<ConnectionState> {
-        self.connections.get(&token).map(|connection| connection.state)
+        self.connections
+            .get(&token)
+            .map(|connection| connection.state)
     }
 
     pub fn set_state(&mut self, token: u64, state: ConnectionState) {
@@ -485,9 +493,11 @@ mod tests {
         client.write_all(&frame).unwrap();
 
         let events = server.poll(Some(Duration::from_secs(1))).unwrap();
-        assert!(events
-            .iter()
-            .any(|event| matches!(event, ServerEvent::FramingError { .. })));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, ServerEvent::FramingError { .. }))
+        );
         assert_eq!(server.connection_count(), 0);
         std::fs::remove_file(&path).ok();
     }
@@ -500,9 +510,11 @@ mod tests {
         drop(client);
 
         let events = server.poll(Some(Duration::from_secs(1))).unwrap();
-        assert!(events
-            .iter()
-            .any(|event| matches!(event, ServerEvent::Disconnected { .. })));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, ServerEvent::Disconnected { .. }))
+        );
         assert_eq!(server.connection_count(), 0);
         std::fs::remove_file(&path).ok();
     }
@@ -551,7 +563,10 @@ mod tests {
                 break;
             }
         }
-        assert!(disconnected, "expected the queue cap to disconnect the client");
+        assert!(
+            disconnected,
+            "expected the queue cap to disconnect the client"
+        );
         assert_eq!(server.connection_count(), 0);
         std::fs::remove_file(&path).ok();
     }

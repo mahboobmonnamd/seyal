@@ -15,8 +15,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::projection::layout::{
-    CELL_LEN, CellRecord, DAMAGE_LEN, DamageRecord, LayoutError, ModeFlags, PUBLICATION_WORD_OFFSET,
-    RegionHeader, SLOT_HEADER_LEN, SLOT_SEQUENCE_OFFSET, SlotHeader,
+    CELL_LEN, CellRecord, DAMAGE_LEN, DamageRecord, LayoutError, ModeFlags,
+    PUBLICATION_WORD_OFFSET, RegionHeader, SLOT_HEADER_LEN, SLOT_SEQUENCE_OFFSET, SlotHeader,
 };
 
 /// A raw, backend-agnostic view over projection region memory.
@@ -275,7 +275,10 @@ impl Writer {
     }
 }
 
-fn validate_snapshot(region: &RegionHeader, snapshot: &SnapshotWrite<'_>) -> Result<(), WriterError> {
+fn validate_snapshot(
+    region: &RegionHeader,
+    snapshot: &SnapshotWrite<'_>,
+) -> Result<(), WriterError> {
     if snapshot.rows > region.capacity_rows || snapshot.columns > region.capacity_cols {
         return Err(WriterError::InvalidInput(LayoutError::InvalidRowsColumns));
     }
@@ -335,7 +338,10 @@ const MAX_READ_RETRIES: u32 = 64;
 /// Implements SPEC-004 section 10.2 exactly: a reader never renders a slot
 /// observed with an odd or changed sequence, and retries (bounded) instead
 /// of blocking or requiring writer cooperation.
-pub fn read_latest(memory: &RegionMemory, region: &RegionHeader) -> Result<SnapshotRead, ReaderError> {
+pub fn read_latest(
+    memory: &RegionMemory,
+    region: &RegionHeader,
+) -> Result<SnapshotRead, ReaderError> {
     for _ in 0..MAX_READ_RETRIES {
         // Step 1: acquire-load region.publication.
         let publication = memory.atomic_load(PUBLICATION_WORD_OFFSET, Ordering::Acquire);
@@ -414,7 +420,11 @@ mod tests {
         (storage, memory)
     }
 
-    fn small_region_header(capacity_rows: u16, capacity_cols: u16, slot_stride: u64) -> RegionHeader {
+    fn small_region_header(
+        capacity_rows: u16,
+        capacity_cols: u16,
+        slot_stride: u64,
+    ) -> RegionHeader {
         RegionHeader {
             region_bytes: REGION_HEADER_LEN as u64 + 2 * slot_stride,
             execution_id: 1,
@@ -560,8 +570,8 @@ mod tests {
 
     #[test]
     fn aggressive_concurrent_writer_and_reader_never_observe_a_torn_generation() {
-        use std::sync::atomic::AtomicBool;
         use std::sync::Arc;
+        use std::sync::atomic::AtomicBool;
 
         let region = small_region_header(3, 5, 4096);
         let (storage, memory) = aligned_region(region.region_bytes as usize);

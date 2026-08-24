@@ -47,10 +47,7 @@ impl RegionMemory {
     /// Copies an aligned byte range out of the mapping using atomic word
     /// loads. This compatibility seam is intentionally a copy: it never
     /// creates a Rust slice/reference over shared projection storage.
-    pub fn read_bytes(
-        &self,
-        range: std::ops::Range<usize>,
-    ) -> Result<Vec<u8>, WriterError> {
+    pub fn read_bytes(&self, range: std::ops::Range<usize>) -> Result<Vec<u8>, WriterError> {
         let len = range
             .end
             .checked_sub(range.start)
@@ -62,9 +59,7 @@ impl RegionMemory {
         if !offset.is_multiple_of(8) || !len.is_multiple_of(8) {
             return Err(WriterError::UnalignedAccess);
         }
-        let end = offset
-            .checked_add(len)
-            .ok_or(WriterError::OutOfBounds)?;
+        let end = offset.checked_add(len).ok_or(WriterError::OutOfBounds)?;
         if end > self.len {
             return Err(WriterError::OutOfBounds);
         }
@@ -83,8 +78,10 @@ impl RegionMemory {
 
     fn write_atomic_bytes(&self, offset: usize, bytes: &[u8]) -> Result<(), WriterError> {
         self.checked_word_range(offset, bytes.len())?;
-        for (word_index, chunk) in bytes.chunks_exact(8).enumerate() {
-            let word = u64::from_le_bytes(chunk.try_into().expect("exact 8-byte chunk"));
+        let (chunks, remainder) = bytes.as_chunks::<8>();
+        debug_assert!(remainder.is_empty());
+        for (word_index, chunk) in chunks.iter().enumerate() {
+            let word = u64::from_le_bytes(*chunk);
             self.atomic_store(offset + word_index * 8, word, Ordering::Relaxed);
         }
         Ok(())
@@ -149,16 +146,8 @@ impl Writer {
     pub fn new(memory: RegionMemory, region: RegionHeader) -> Result<Self, WriterError> {
         let slot0 = region.slot_offset(0)? as usize;
         let slot1 = region.slot_offset(1)? as usize;
-        memory.atomic_store(
-            slot0 + SLOT_SEQUENCE_OFFSET,
-            0,
-            Ordering::Release,
-        );
-        memory.atomic_store(
-            slot1 + SLOT_SEQUENCE_OFFSET,
-            0,
-            Ordering::Release,
-        );
+        memory.atomic_store(slot0 + SLOT_SEQUENCE_OFFSET, 0, Ordering::Release);
+        memory.atomic_store(slot1 + SLOT_SEQUENCE_OFFSET, 0, Ordering::Release);
         memory.atomic_store(PUBLICATION_WORD_OFFSET, 0, Ordering::Release);
         Ok(Self {
             memory,
@@ -246,10 +235,8 @@ impl Writer {
         for (index, damage) in snapshot.damages.iter().enumerate() {
             let mut encoded = [0u8; DAMAGE_LEN];
             damage.encode(&mut encoded)?;
-            self.memory.write_atomic_bytes(
-                slot_offset + damages_offset + index * DAMAGE_LEN,
-                &encoded,
-            )?;
+            self.memory
+                .write_atomic_bytes(slot_offset + damages_offset + index * DAMAGE_LEN, &encoded)?;
         }
 
         self.memory.atomic_store(
@@ -274,9 +261,7 @@ fn validate_snapshot(
     snapshot: &SnapshotWrite<'_>,
 ) -> Result<(), WriterError> {
     if snapshot.rows > region.capacity_rows || snapshot.columns > region.capacity_cols {
-        return Err(WriterError::InvalidInput(
-            LayoutError::InvalidRowsColumns,
-        ));
+        return Err(WriterError::InvalidInput(LayoutError::InvalidRowsColumns));
     }
     let expected_cells = snapshot.rows as usize * snapshot.columns as usize;
     if snapshot.cells.len() != expected_cells {
@@ -286,9 +271,7 @@ fn validate_snapshot(
         return Err(WriterError::InvalidInput(LayoutError::InvalidDamageCount));
     }
     if !snapshot.full_snapshot {
-        return Err(WriterError::InvalidInput(
-            LayoutError::InvalidSnapshotFlags,
-        ));
+        return Err(WriterError::InvalidInput(LayoutError::InvalidSnapshotFlags));
     }
     let cells_len = expected_cells
         .checked_mul(CELL_LEN)
@@ -394,11 +377,11 @@ pub fn read_latest(
         )?;
 
         let mut cells = Vec::with_capacity(header.cell_count as usize);
-        for chunk in cell_bytes.chunks_exact(CELL_LEN) {
+        for chunk in cell_bytes.as_chunks::<CELL_LEN>().0 {
             cells.push(CellRecord::decode(chunk)?);
         }
         let mut damages = Vec::with_capacity(header.damage_count as usize);
-        for chunk in damage_bytes.chunks_exact(DAMAGE_LEN) {
+        for chunk in damage_bytes.as_chunks::<DAMAGE_LEN>().0 {
             damages.push(DamageRecord::decode(chunk, header.rows)?);
         }
 

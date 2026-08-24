@@ -125,20 +125,44 @@ impl ExecutionReactor {
         }
     }
 
+    /// Registers the resources of one owned TerminalExecution.
+    ///
+    /// Darwin may report ESRCH if the owned primary exits between spawn and
+    /// EVFILT_PROC registration. In that one case the read registration/token
+    /// is retained so Runtime can perform the mandatory immediate `try_wait`
+    /// reconciliation before publishing the execution. Arbitrary identifier
+    /// registration never receives this exception.
     pub fn register(
         &mut self,
         execution: &TerminalExecution,
     ) -> Result<RegistrationToken, ExecError> {
-        self.register_identifiers(execution.reactor_fd(), execution.child_id() as i32)
+        self.register_identifiers(
+            execution.reactor_fd(),
+            execution.child_id() as i32,
+            true,
+        )
     }
 
-    fn register_identifiers(&mut self, fd: i32, pid: i32) -> Result<RegistrationToken, ExecError> {
+    fn register_identifiers(
+        &mut self,
+        fd: i32,
+        pid: i32,
+        allow_owned_process_gone: bool,
+    ) -> Result<RegistrationToken, ExecError> {
         let token = self.allocate_slot(fd, pid);
         if let Err(error) = crate::platform::register_read(&self.kqueue, fd, token.0) {
             self.release_slot(token);
             return Err(error);
         }
         if let Err(error) = crate::platform::register_process_exit(&self.kqueue, pid, token.0) {
+            let process_gone = allow_owned_process_gone
+                && matches!(
+                    &error,
+                    ExecError::Io(error) if error.raw_os_error() == Some(libc::ESRCH)
+                );
+            if process_gone {
+                return Ok(token);
+            }
             let _ = crate::platform::deregister_read(&self.kqueue, fd);
             self.release_slot(token);
             return Err(error);
@@ -436,7 +460,11 @@ mod tests {
             let mut reactor = ExecutionReactor::new().unwrap();
             let mut execution = spawn_sleep();
             let fd = execution.reactor_fd();
-            assert!(reactor.register_identifiers(fd, i32::MAX).is_err());
+            assert!(
+                reactor
+                    .register_identifiers(fd, i32::MAX, false)
+                    .is_err()
+            );
             assert!(reactor.slots.iter().all(|slot| !slot.active));
 
             let token = reactor.register(&execution).unwrap();

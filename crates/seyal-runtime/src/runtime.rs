@@ -229,9 +229,17 @@ impl Runtime {
             }
         };
 
-        if let Some(exit) = execution.try_wait()? {
-            self.reactor.deregister(token)?;
-            return Err(RuntimeError::ChildExitedBeforePublication(exit));
+        match execution.try_wait() {
+            Ok(Some(exit)) => {
+                self.reactor.deregister(token)?;
+                return Err(RuntimeError::ChildExitedBeforePublication(exit));
+            }
+            Ok(None) => {}
+            Err(error) => {
+                let _ = self.reactor.deregister(token);
+                self.kill_unpublished(execution);
+                return Err(error.into());
+            }
         }
 
         let id = ExecutionId::new();

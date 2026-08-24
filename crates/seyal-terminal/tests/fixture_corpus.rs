@@ -90,7 +90,9 @@ fn retained_utf8_fixture_is_chunk_boundary_independent() {
 
     let mut bytewise = TerminalState::new(8, 2).expect("fixture dimensions are valid");
     for byte in input {
-        bytewise.feed(&[*byte]).expect("bytewise fixture feed succeeds");
+        bytewise
+            .feed(&[*byte])
+            .expect("bytewise fixture feed succeeds");
     }
 
     assert_eq!(render(&bytewise), expected);

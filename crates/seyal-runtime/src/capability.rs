@@ -17,6 +17,8 @@ const TERM_NAME: &str = "seyal-m001";
 #[cfg(target_os = "macos")]
 const BUNDLED_ENTRY: &[u8] = include_bytes!(env!("SEYAL_M001_TERMINFO_ENTRY"));
 #[cfg(target_os = "macos")]
+const BUNDLED_BUCKET: &str = env!("SEYAL_M001_TERMINFO_BUCKET");
+#[cfg(target_os = "macos")]
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Debug)]
@@ -29,7 +31,7 @@ impl CapabilityPolicy {
         #[cfg(target_os = "macos")]
         {
             let root = runtime_terminfo_root();
-            let entry_dir = root.join("s");
+            let entry_dir = root.join(BUNDLED_BUCKET);
             create_private_dir(&entry_dir)?;
             let entry = entry_dir.join(TERM_NAME);
             if fs::read(&entry).ok().as_deref() != Some(BUNDLED_ENTRY) {

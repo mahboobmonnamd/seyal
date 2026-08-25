@@ -4,8 +4,8 @@ use seyal_terminal::TerminalState;
 
 use crate::{
     ChildExit, CommandSpec, ExecError, ProjectionDamage, ReadOutcome, Readiness, SignalDisposition,
-    TerminalProjectionSnapshot, TerminationPolicy, WindowSize, WriteOutcome,
-    endpoint::TerminalEndpoint, projection,
+    TerminalProjectionSnapshot, TerminalProjectionUpdate, TerminationPolicy, WindowSize,
+    WriteOutcome, endpoint::TerminalEndpoint, projection,
 };
 
 pub struct TerminalExecution {
@@ -28,32 +28,20 @@ impl TerminalExecution {
         &self.terminal
     }
 
-    /// Copies the current canonical visible terminal state into an owned,
-    /// projection-neutral snapshot without consuming canonical damage.
-    ///
-    /// Attach/resync use this seam so one client cannot steal the Runtime's
-    /// single damage-consumer signal from other attached clients. Because the
-    /// caller did not consume a canonical damage record, this snapshot carries
-    /// full redraw guidance.
+    /// Copies the complete current canonical visible terminal state into an
+    /// owned, projection-neutral snapshot without consuming canonical damage.
+    /// Attach/reconnect/resync intentionally use this expensive recovery seam.
     pub fn projection_snapshot(&self) -> TerminalProjectionSnapshot {
-        projection::snapshot(
-            &self.terminal,
-            self.terminal.damage_generation(),
-            ProjectionDamage::full(self.terminal.rows()),
-        )
+        projection::snapshot(&self.terminal, self.terminal.damage_generation())
     }
 
-    /// Single Runtime-side damage-consumption seam for display projection.
-    ///
-    /// If canonical state has changed since the previous call, consumes that
-    /// coalesced damage generation once and returns a complete current visible
-    /// snapshot tagged with the consumed generation and its canonical damage
-    /// range. Runtime then fans that one snapshot out to every attachment.
-    /// Client-specific attach/resync must use [`Self::projection_snapshot`]
-    /// instead.
-    pub fn take_projection_update(&mut self) -> Option<TerminalProjectionSnapshot> {
+    /// Consumes canonical damage exactly once and copies only the affected row
+    /// range for steady-state display fanout. A full canonical damage record
+    /// still produces the complete visible state, as required after resize or
+    /// other full invalidation.
+    pub fn take_projection_update(&mut self) -> Option<TerminalProjectionUpdate> {
         let damage = self.terminal.take_damage()?;
-        Some(projection::snapshot(
+        Some(projection::update(
             &self.terminal,
             damage.generation,
             ProjectionDamage {
@@ -108,14 +96,10 @@ impl TerminalExecution {
         self.endpoint.try_wait()
     }
 
-    /// Sends SIGTERM to the still-owned primary process group without waiting.
-    /// Runtime uses this step from its deadline-driven lifecycle state machine.
     pub fn signal_terminate(&mut self) -> Result<SignalDisposition, ExecError> {
         self.endpoint.signal_terminate()
     }
 
-    /// Sends SIGKILL to the still-owned primary process group without waiting.
-    /// Runtime uses this only after the configured graceful deadline expires.
     pub fn signal_kill(&mut self) -> Result<SignalDisposition, ExecError> {
         self.endpoint.signal_kill()
     }

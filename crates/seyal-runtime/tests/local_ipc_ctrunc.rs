@@ -44,11 +44,13 @@ fn fd_count() -> usize {
 }
 
 fn send_many_fds(socket: RawFd, payload: &[u8], fd: RawFd, count: usize) {
-    assert!(count >= 64, "test must exceed Runtime ancillary receive capacity");
+    // This deliberately exceeds the old fixed receive scratch capacity. The
+    // production receiver must now absorb the complete SCM_RIGHTS set, reject
+    // it as protocol-fatal, and close every descriptor without MSG_CTRUNC.
+    assert!(count >= 64, "test must exercise a wide SCM_RIGHTS set");
     let payload_bytes = count * std::mem::size_of::<RawFd>();
     // SAFETY: CMSG_SPACE/CMSG_LEN only calculate integer sizes.
     let control_len = unsafe { libc::CMSG_SPACE(payload_bytes as u32) as usize };
-    assert!(control_len > 256, "test must force MSG_CTRUNC");
 
     let mut control = [0usize; 128];
     assert!(control_len <= std::mem::size_of_val(&control));
@@ -208,7 +210,7 @@ impl Harness {
 }
 
 #[test]
-fn truncated_ancillary_data_is_fatal_closes_received_fds_and_releases_controller() {
+fn wide_scm_rights_set_is_fatal_closes_all_fds_and_releases_controller() {
     let baseline_fds = fd_count();
     {
         let mut harness = Harness::new();
@@ -226,7 +228,7 @@ fn truncated_ancillary_data_is_fatal_closes_received_fds_and_releases_controller
             harness.pump();
             assert!(
                 Instant::now() < deadline,
-                "MSG_CTRUNC did not close the connection and release authority"
+                "illegal SCM_RIGHTS input did not close the connection and release authority"
             );
         }
 

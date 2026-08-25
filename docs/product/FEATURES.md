@@ -333,15 +333,27 @@ The original RILL competitive catalog contains **216** inventory rows. All 216 a
 - Stable navigation is the default. Attention uses badges and the global Attention Stack rather than constantly reordering the user's workspace list.
 - Local use, local configuration and useful local agent/workflow capabilities do not require a Seyal account.
 
-## Source completeness and local export
+## Source completeness and local export/import
 
-Feature archaeology uses current Seyal documents plus every open/closed Issue and comment from `mahboobmonnamd/RILL` and `mahboobmonnamd/terminal`. Run:
+Feature archaeology uses current Seyal documents plus every open/closed Issue and comment from `mahboobmonnamd/RILL` and `mahboobmonnamd/terminal`.
+
+Export the complete source evidence first:
 
 ```bash
 bash scripts/export-feature-source-issues.sh
 ```
 
-The script writes read-only local evidence under `.feature-sources/`, verifies the GitHub issue count for each repository, and hard-checks that the RILL `inventory` label still contains exactly **216** rows. It does not create or modify GitHub issues.
+The exporter writes read-only local evidence under `.feature-sources/`, verifies the independent GitHub Issue count for both legacy repositories, fetches **all Issue comments through GitHub's paginated comments API**, and validates the 216 unique RILL `F-*` catalog rows. The RILL `inventory` label currently contains 217 issues because catalog epic #33 carries the same label.
+
+To recreate those historical Issues and comments in Seyal:
+
+```bash
+bash scripts/import-feature-source-issues.sh --apply .feature-sources
+```
+
+The importer creates source-specific `legacy-rill`, `legacy-terminal`, and `historical-evidence` labels, preserves original state/state reason, timestamps, author, labels, assignees, milestone and source URL as metadata, recreates all exported comments, and uses stable source markers so rerunning it does not duplicate completed imports. A final reconciliation requires every exported source Issue to have a destination Issue. GitHub may rate-limit a migration this large; rerunning the same command safely resumes from source markers.
+
+The Issue importer does **not** preserve PR diffs or Git commit objects. Do not delete the legacy repositories until those histories are archived separately.
 
 `terminal` contains many implementation regressions, tests and obsolete architecture experiments. Those are source evidence, not product capabilities. A defect becomes a feature row only when it reveals a distinct product behavior that is not already represented above (for example the Changes inspector or DevOps workspace).
 

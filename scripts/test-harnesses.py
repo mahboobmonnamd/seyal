@@ -158,6 +158,7 @@ def validate_fuzz_registry() -> None:
         "local-binary-protocol-decode",
         "shared-projection-validation",
         "reconnect-resync-state-machine",
+        "display-binary-decode",
     }
     names = {target.get("name") for target in targets}
     require(names == expected, f"fuzz registry mismatch: expected {sorted(expected)}, got {sorted(names)}")

@@ -1,6 +1,12 @@
 name: Migrate legacy issues
 
 on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/migrate-legacy-issues.yml
+      - migration/legacy-issues/**
   workflow_dispatch:
 
 permissions:

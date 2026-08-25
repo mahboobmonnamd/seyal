@@ -3,7 +3,7 @@ use std::time::Duration;
 use seyal_terminal::TerminalState;
 
 use crate::{
-    ChildExit, CommandSpec, ExecError, ReadOutcome, Readiness, SignalDisposition,
+    ChildExit, CommandSpec, ExecError, ProjectionDamage, ReadOutcome, Readiness, SignalDisposition,
     TerminalProjectionSnapshot, TerminationPolicy, WindowSize, WriteOutcome,
     endpoint::TerminalEndpoint, projection,
 };
@@ -32,21 +32,36 @@ impl TerminalExecution {
     /// projection-neutral snapshot without consuming canonical damage.
     ///
     /// Attach/resync use this seam so one client cannot steal the Runtime's
-    /// single damage-consumer signal from other attached clients.
+    /// single damage-consumer signal from other attached clients. Because the
+    /// caller did not consume a canonical damage record, this snapshot carries
+    /// full redraw guidance.
     pub fn projection_snapshot(&self) -> TerminalProjectionSnapshot {
-        projection::snapshot(&self.terminal, self.terminal.damage_generation())
+        projection::snapshot(
+            &self.terminal,
+            self.terminal.damage_generation(),
+            ProjectionDamage::full(self.terminal.rows()),
+        )
     }
 
     /// Single Runtime-side damage-consumption seam for display projection.
     ///
     /// If canonical state has changed since the previous call, consumes that
-    /// coalesced damage generation once and returns a full current visible
-    /// snapshot tagged with the consumed generation. Runtime then fans that
-    /// one snapshot out to every attachment. Client-specific attach/resync
-    /// must use [`Self::projection_snapshot`] instead.
+    /// coalesced damage generation once and returns a complete current visible
+    /// snapshot tagged with the consumed generation and its canonical damage
+    /// range. Runtime then fans that one snapshot out to every attachment.
+    /// Client-specific attach/resync must use [`Self::projection_snapshot`]
+    /// instead.
     pub fn take_projection_update(&mut self) -> Option<TerminalProjectionSnapshot> {
         let damage = self.terminal.take_damage()?;
-        Some(projection::snapshot(&self.terminal, damage.generation))
+        Some(projection::snapshot(
+            &self.terminal,
+            damage.generation,
+            ProjectionDamage {
+                full: damage.full,
+                first_row: damage.first_row,
+                last_row: damage.last_row,
+            },
+        ))
     }
 
     pub fn read_output(&mut self, buffer: &mut [u8]) -> Result<ReadOutcome, ExecError> {

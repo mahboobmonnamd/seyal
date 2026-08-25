@@ -21,7 +21,8 @@ pub use endpoint::{ReadOutcome, WriteOutcome};
 pub use error::ExecError;
 pub use execution::TerminalExecution;
 pub use projection::{
-    ProjectionAttributes, ProjectionCell, ProjectionColor, TerminalProjectionSnapshot,
+    ProjectionAttributes, ProjectionCell, ProjectionColor, ProjectionDamage,
+    TerminalProjectionSnapshot,
 };
 pub use reactor::{
     ExecutionReactor, ReactorEvent, ReactorEventKind, ReactorWaker, RegistrationToken,

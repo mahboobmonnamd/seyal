@@ -51,8 +51,9 @@ impl OwnedSnapshot {
 }
 
 /// Converts one owned execution snapshot into ABI 1.0's required complete
-/// visible-state projection. Damage is redraw guidance only; every slot still
-/// contains every visible cell, so missed generations remain recoverable.
+/// visible-state projection. Every slot still contains every visible cell so
+/// missed generations remain recoverable, while `damages` preserves the
+/// canonical coalesced row range as renderer redraw guidance.
 pub fn from_execution(snapshot: TerminalProjectionSnapshot) -> OwnedSnapshot {
     let cells = snapshot
         .cells
@@ -81,9 +82,9 @@ pub fn from_execution(snapshot: TerminalProjectionSnapshot) -> OwnedSnapshot {
         },
         cells,
         damages: vec![DamageRecord {
-            first_row: 0,
-            last_row: snapshot.rows.saturating_sub(1),
-            full: true,
+            first_row: snapshot.damage.first_row,
+            last_row: snapshot.damage.last_row,
+            full: snapshot.damage.full,
         }],
         full_snapshot: true,
         source_damage_generation: snapshot.source_damage_generation,
@@ -93,18 +94,23 @@ pub fn from_execution(snapshot: TerminalProjectionSnapshot) -> OwnedSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use seyal_exec::{ProjectionAttributes, ProjectionCell};
+    use seyal_exec::{ProjectionAttributes, ProjectionCell, ProjectionDamage};
 
     #[test]
-    fn conversion_covers_every_visible_cell_with_full_damage_guidance() {
+    fn conversion_covers_every_visible_cell_and_preserves_damage_guidance() {
         let snapshot = TerminalProjectionSnapshot {
-            rows: 1,
+            rows: 2,
             columns: 2,
             cursor_row: 0,
             cursor_col: 1,
             cursor_visible: true,
             alternate_screen: false,
             source_damage_generation: 3,
+            damage: ProjectionDamage {
+                full: false,
+                first_row: 1,
+                last_row: 1,
+            },
             cells: vec![
                 ProjectionCell {
                     scalar: 'h',
@@ -122,15 +128,29 @@ mod tests {
                         inverse: false,
                     },
                 },
+                ProjectionCell {
+                    scalar: ' ',
+                    foreground: ProjectionColor::Default,
+                    background: ProjectionColor::Default,
+                    attributes: ProjectionAttributes::default(),
+                },
+                ProjectionCell {
+                    scalar: ' ',
+                    foreground: ProjectionColor::Default,
+                    background: ProjectionColor::Default,
+                    attributes: ProjectionAttributes::default(),
+                },
             ],
         };
         let owned = from_execution(snapshot);
-        assert_eq!(owned.cells.len(), 2);
+        assert_eq!(owned.cells.len(), 4);
         assert_eq!(owned.cells[0].scalar, 'h');
         assert_eq!(owned.cells[1].scalar, 'i');
         assert!(owned.full_snapshot);
         assert_eq!(owned.damages.len(), 1);
-        assert!(owned.damages[0].full);
+        assert!(!owned.damages[0].full);
+        assert_eq!(owned.damages[0].first_row, 1);
+        assert_eq!(owned.damages[0].last_row, 1);
         assert_eq!(owned.source_damage_generation, 3);
     }
 }

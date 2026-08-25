@@ -19,9 +19,6 @@ dist/
 # AI-SDLC developer framework (materialized by make bootstrap-agents)
 /.sdlc/framework/
 
-# Local feature-consolidation evidence
-/.feature-sources/
-
 # Coverage / test output
 coverage/
 *.profraw

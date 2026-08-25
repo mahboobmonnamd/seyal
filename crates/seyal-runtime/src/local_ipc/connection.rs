@@ -7,14 +7,15 @@
 
 use std::{
     collections::{HashMap, VecDeque},
-    io::{self, Read},
+    io,
     os::fd::{AsRawFd, OwnedFd, RawFd},
     os::unix::net::{UnixListener, UnixStream},
     path::Path,
 };
 
 use crate::local_ipc::{
-    auth, fd_transfer,
+    auth,
+    fd_transfer::{self, RecvFd},
     framing::{FrameHeader, HEADER_LEN, MAX_FRAME_PAYLOAD, MessageType},
 };
 
@@ -185,6 +186,11 @@ impl LocalIpcServer {
     }
 
     /// Services one client read-readiness notification with bounded work.
+    ///
+    /// C→Runtime protocol traffic never carries file descriptors. The Runtime
+    /// therefore receives with `recvmsg(2)` even for ordinary byte frames so
+    /// unexpected/truncated ancillary data is observable and protocol-fatal
+    /// rather than silently discarded by `read(2)`.
     pub fn service_read(&mut self, token: u64, hangup: bool) -> Vec<ServerEvent> {
         let mut events = Vec::new();
         let Some(connection) = self.connections.get_mut(&token) else {
@@ -206,12 +212,15 @@ impl LocalIpcServer {
             }
             let read_len = READ_CHUNK_BYTES.min(remaining_capacity);
 
-            match connection.stream.read(&mut chunk[..read_len]) {
-                Ok(0) => {
+            match fd_transfer::recv_with_fd(
+                connection.stream.as_raw_fd(),
+                &mut chunk[..read_len],
+            ) {
+                Ok((0, RecvFd::None)) => {
                     self.close_with_event(token, &mut events);
                     return events;
                 }
-                Ok(count) => {
+                Ok((count, RecvFd::None)) => {
                     debug_assert!(count <= remaining_capacity);
                     connection.read_buf.extend_from_slice(&chunk[..count]);
                     if drain_frames(connection, token, &mut events).is_err() {
@@ -221,6 +230,23 @@ impl LocalIpcServer {
                     if events.len() >= MAX_FRAMES_PER_READINESS {
                         break;
                     }
+                }
+                Ok((_count, RecvFd::One(fd))) => {
+                    // No client-to-Runtime frame is permitted to carry a
+                    // descriptor. Dropping the OwnedFd closes it before the
+                    // offending connection is removed.
+                    drop(fd);
+                    events.push(ServerEvent::FramingError { token });
+                    self.close_with_event(token, &mut events);
+                    return events;
+                }
+                Ok((_count, RecvFd::Malformed)) => {
+                    // `recv_with_fd` has already closed every descriptor it
+                    // could safely recover from malformed/truncated control
+                    // data. The protocol connection is still fatal.
+                    events.push(ServerEvent::FramingError { token });
+                    self.close_with_event(token, &mut events);
+                    return events;
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
                 Err(_) => {
@@ -490,6 +516,62 @@ mod tests {
         (client, token)
     }
 
+    fn client_hello_frame() -> Vec<u8> {
+        encode_frame(
+            MessageType::ClientHello,
+            &ClientHello {
+                client_capabilities: 0,
+            }
+            .encode(),
+        )
+    }
+
+    fn send_multiple_fds(socket: RawFd, bytes: &[u8], fds: &[RawFd]) -> io::Result<usize> {
+        let payload_bytes = std::mem::size_of_val(fds);
+        // SAFETY: CMSG_SPACE only calculates a byte count.
+        let control_len = unsafe { libc::CMSG_SPACE(payload_bytes as u32) as usize };
+        #[repr(align(16))]
+        struct Control([u8; 256]);
+        assert!(control_len <= 256);
+        let mut control = Control([0; 256]);
+        let mut iov = libc::iovec {
+            iov_base: bytes.as_ptr() as *mut libc::c_void,
+            iov_len: bytes.len(),
+        };
+        // SAFETY: zeroed msghdr is a valid empty starting point and all fields
+        // consumed by sendmsg are initialized below.
+        let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+        msg.msg_iov = &mut iov;
+        msg.msg_iovlen = 1;
+        msg.msg_control = control.0.as_mut_ptr().cast();
+        msg.msg_controllen = control_len as _;
+        // SAFETY: aligned control buffer has CMSG_SPACE for every descriptor.
+        let cmsg = unsafe { libc::CMSG_FIRSTHDR(&msg) };
+        assert!(!cmsg.is_null());
+        // SAFETY: `CMSG_DATA(cmsg)` has `payload_bytes` writable bytes.
+        unsafe {
+            (*cmsg).cmsg_level = libc::SOL_SOCKET;
+            (*cmsg).cmsg_type = libc::SCM_RIGHTS;
+            (*cmsg).cmsg_len = libc::CMSG_LEN(payload_bytes as u32) as _;
+            for (index, fd) in fds.iter().copied().enumerate() {
+                std::ptr::write_unaligned(
+                    libc::CMSG_DATA(cmsg)
+                        .cast::<u8>()
+                        .add(index * std::mem::size_of::<RawFd>())
+                        .cast::<RawFd>(),
+                    fd,
+                );
+            }
+        }
+        // SAFETY: msghdr and ancillary payload are fully initialized above.
+        let result = unsafe { libc::sendmsg(socket, &msg, 0) };
+        if result < 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(result as usize)
+        }
+    }
+
     #[test]
     fn connection_state_machine_rejects_invalid_transitions() {
         assert!(
@@ -526,13 +608,7 @@ mod tests {
     fn complete_frame_is_reported_once() {
         let (mut server, path) = bind_test_server();
         let (mut client, token) = accept_one(&mut server, &path);
-        let frame = encode_frame(
-            MessageType::ClientHello,
-            &ClientHello {
-                client_capabilities: 0,
-            }
-            .encode(),
-        );
+        let frame = client_hello_frame();
         client.write_all(&frame).unwrap();
         let events = server.service_read(token, false);
         assert_eq!(
@@ -546,16 +622,74 @@ mod tests {
     }
 
     #[test]
+    fn inbound_descriptor_is_protocol_fatal_and_is_closed() {
+        let (mut server, path) = bind_test_server();
+        let (client, token) = accept_one(&mut server, &path);
+        let transferred = std::fs::File::open("/dev/null").unwrap();
+        let before = std::fs::read_dir("/dev/fd").unwrap().count();
+        fd_transfer::send_with_fd(
+            client.as_raw_fd(),
+            &client_hello_frame(),
+            Some(transferred.as_raw_fd()),
+        )
+        .unwrap();
+
+        let events = server.service_read(token, false);
+        assert!(events.iter().any(|event| {
+            matches!(event, ServerEvent::FramingError { token: event_token } if *event_token == token)
+        }));
+        assert!(events.iter().any(|event| {
+            matches!(event, ServerEvent::Disconnected { token: event_token } if *event_token == token)
+        }));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, ServerEvent::Frame { .. }))
+        );
+        assert!(!server.contains(token));
+        assert_eq!(
+            std::fs::read_dir("/dev/fd").unwrap().count(),
+            before,
+            "rejected inbound descriptor leaked"
+        );
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn multiple_inbound_descriptors_are_protocol_fatal_without_leak() {
+        let (mut server, path) = bind_test_server();
+        let (client, token) = accept_one(&mut server, &path);
+        let first = std::fs::File::open("/dev/null").unwrap();
+        let second = std::fs::File::open("/dev/null").unwrap();
+        let before = std::fs::read_dir("/dev/fd").unwrap().count();
+        send_multiple_fds(
+            client.as_raw_fd(),
+            &client_hello_frame(),
+            &[first.as_raw_fd(), second.as_raw_fd()],
+        )
+        .unwrap();
+
+        let events = server.service_read(token, false);
+        assert!(events.iter().any(|event| {
+            matches!(event, ServerEvent::FramingError { token: event_token } if *event_token == token)
+        }));
+        assert!(events.iter().any(|event| {
+            matches!(event, ServerEvent::Disconnected { token: event_token } if *event_token == token)
+        }));
+        assert!(!server.contains(token));
+        assert_eq!(
+            std::fs::read_dir("/dev/fd").unwrap().count(),
+            before,
+            "rejected inbound descriptors leaked"
+        );
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
     fn fragmented_frame_is_buffered_within_the_hard_receive_cap() {
         let (mut server, path) = bind_test_server();
         let (mut client, token) = accept_one(&mut server, &path);
-        let frame = encode_frame(
-            MessageType::ClientHello,
-            &ClientHello {
-                client_capabilities: 0,
-            }
-            .encode(),
-        );
+        let frame = client_hello_frame();
         client.write_all(&frame[..10]).unwrap();
         assert!(server.service_read(token, false).is_empty());
         client.write_all(&frame[10..]).unwrap();
@@ -577,13 +711,7 @@ mod tests {
             MessageType::Goodbye,
             &vec![0x5a; MAX_FRAME_PAYLOAD as usize],
         );
-        bytes.extend_from_slice(&encode_frame(
-            MessageType::ClientHello,
-            &ClientHello {
-                client_capabilities: 0,
-            }
-            .encode(),
-        ));
+        bytes.extend_from_slice(&client_hello_frame());
 
         let writer = std::thread::spawn(move || writer_client.write_all(&bytes).unwrap());
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);

@@ -1,14 +1,17 @@
 use std::alloc::System;
-use stats_alloc::{INSTRUMENTED_SYSTEM, Region, Stats, StatsAlloc};
+use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 
 #[global_allocator]
 static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
 
 #[cfg(target_os = "macos")]
+use stats_alloc::Stats;
+
+#[cfg(target_os = "macos")]
 use std::{
     env,
     io::{Read, Write},
-    os::fd::AsRawFd,
+    os::fd::{AsRawFd, RawFd},
     os::unix::net::UnixStream,
     process::{self, Command},
     thread,
@@ -68,7 +71,7 @@ enum Transport {
 
 #[cfg(target_os = "macos")]
 impl Transport {
-    fn arg(self) -> &'static str {
+    fn as_arg(self) -> &'static str {
         match self {
             Self::SocketOnly => "socket-only",
             Self::Hybrid => "hybrid",
@@ -79,7 +82,7 @@ impl Transport {
         match value {
             "socket-only" => Self::SocketOnly,
             "hybrid" => Self::Hybrid,
-            _ => panic!("invalid transport {value}"),
+            _ => panic!("unknown transport {value}"),
         }
     }
 }
@@ -107,9 +110,11 @@ fn run_macos() {
         "decision_use=allocation_fanout_high_output_supplement not_replacement_for_uninstrumented_runtime_scalability"
     );
     println!(
-        "cpu_rss_accounting=combined_worker_process runtime_client_split=not_meaningful_for_in_process_transport_microbench"
+        "cpu_accounting=getrusage_phase_delta server_and_client_phases_sequential rss_accounting=combined_worker_process"
     );
-    println!("percentile_method=nearest_rank repetitions_regular={REGULAR_REPETITIONS} repetitions_high_output={HIGH_OUTPUT_REPETITIONS}");
+    println!(
+        "percentile_method=nearest_rank repetitions_regular={REGULAR_REPETITIONS} repetitions_high_output={HIGH_OUTPUT_REPETITIONS}"
+    );
     print_host_metadata();
 
     let executable = env::current_exe().expect("benchmark executable");
@@ -146,7 +151,7 @@ fn run_worker_process(
     let status = Command::new(executable)
         .args([
             "--worker",
-            transport.arg(),
+            transport.as_arg(),
             &fanout.to_string(),
             &repetitions.to_string(),
             workload,
@@ -160,6 +165,8 @@ fn run_worker_process(
 #[derive(Clone, Copy, Debug, Default)]
 struct Sample {
     elapsed_ns: u128,
+    server_cpu_us: u128,
+    client_cpu_us: u128,
     server_allocations: usize,
     server_bytes_allocated: usize,
     client_allocations: usize,
@@ -170,24 +177,51 @@ struct Sample {
 }
 
 #[cfg(target_os = "macos")]
-fn sample_from_stats(
-    elapsed: Duration,
-    server: Stats,
-    client: Stats,
-    write_calls: usize,
-    socket_bytes: usize,
-    shm_bytes: usize,
-) -> Sample {
-    Sample {
-        elapsed_ns: elapsed.as_nanos(),
-        server_allocations: server.allocations + server.reallocations,
-        server_bytes_allocated: server.bytes_allocated,
-        client_allocations: client.allocations + client.reallocations,
-        client_bytes_allocated: client.bytes_allocated,
-        write_calls,
-        socket_bytes,
-        shm_bytes,
+#[derive(Clone, Copy, Debug, Default)]
+struct CpuTime {
+    user_us: u128,
+    system_us: u128,
+}
+
+#[cfg(target_os = "macos")]
+impl CpuTime {
+    fn total_us(self) -> u128 {
+        self.user_us + self.system_us
     }
+
+    fn elapsed_since(self, before: Self) -> u128 {
+        self.total_us().saturating_sub(before.total_us())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn cpu_time() -> CpuTime {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+    // SAFETY: `usage` is a valid writable out-parameter and RUSAGE_SELF
+    // requires no caller-owned pointer lifetime beyond this call.
+    let result = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
+    assert_eq!(result, 0, "getrusage failed");
+    // SAFETY: successful getrusage initialized the entire rusage value.
+    let usage = unsafe { usage.assume_init() };
+    CpuTime {
+        user_us: timeval_us(usage.ru_utime),
+        system_us: timeval_us(usage.ru_stime),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn timeval_us(value: libc::timeval) -> u128 {
+    (value.tv_sec.max(0) as u128) * 1_000_000 + value.tv_usec.max(0) as u128
+}
+
+#[cfg(target_os = "macos")]
+fn allocation_counts(stats: Stats) -> (usize, usize) {
+    (
+        stats.allocations.saturating_add(stats.reallocations),
+        stats
+            .bytes_allocated
+            .saturating_add(stats.bytes_reallocated.max(0) as usize),
+    )
 }
 
 #[cfg(target_os = "macos")]
@@ -201,25 +235,25 @@ struct SocketClient {
 fn run_socket_worker(fanout: usize, repetitions: usize, workload: &str) {
     assert!((1..=16).contains(&fanout));
     let mut snapshot = sample_snapshot();
-    let initial_frame = encode_reference_snapshot(&snapshot);
+    let initial = encode_reference_snapshot(&snapshot);
     let baseline_rss = process_rss_kib();
     let mut clients = (0..fanout)
         .map(|_| {
             let (tx, rx) = UnixStream::pair().expect("socket reference pair");
-            tx.set_nonblocking(true).expect("nonblocking socket tx");
-            rx.set_nonblocking(true).expect("nonblocking socket rx");
+            tx.set_nonblocking(true).expect("nonblocking tx");
+            rx.set_nonblocking(true).expect("nonblocking rx");
             SocketClient {
                 tx,
                 rx,
-                recv: vec![0; initial_frame.len()],
+                recv: vec![0; initial.len()],
             }
         })
         .collect::<Vec<_>>();
     for client in &mut clients {
-        send_stream_all(&mut client.tx, &initial_frame);
+        send_stream_all(&mut client.tx, &initial);
         receive_stream_exact(&mut client.rx, &mut client.recv);
         let decoded = decode_reference_snapshot(&client.recv);
-        assert!(visible_state_matches_owned(&decoded, &snapshot));
+        assert!(owned_matches(&decoded, &snapshot));
     }
     let populated_rss = process_rss_kib();
 
@@ -228,6 +262,7 @@ fn run_socket_worker(fanout: usize, repetitions: usize, workload: &str) {
         mutate_snapshot(&mut snapshot, iteration as u64 + 2);
         let started = Instant::now();
 
+        let server_cpu_before = cpu_time();
         let server_region = Region::new(&GLOBAL);
         let frame = encode_reference_snapshot(&snapshot);
         let mut write_calls = 0usize;
@@ -235,27 +270,32 @@ fn run_socket_worker(fanout: usize, repetitions: usize, workload: &str) {
             write_calls += send_stream_all(&mut client.tx, &frame);
         }
         let server_stats = server_region.change();
+        let server_cpu_us = cpu_time().elapsed_since(server_cpu_before);
 
+        let client_cpu_before = cpu_time();
         let client_region = Region::new(&GLOBAL);
         for client in &mut clients {
-            if client.recv.len() != frame.len() {
-                client.recv.resize(frame.len(), 0);
-            }
             receive_stream_exact(&mut client.rx, &mut client.recv);
             let decoded = decode_reference_snapshot(&client.recv);
-            assert!(visible_state_matches_owned(&decoded, &snapshot));
+            assert!(owned_matches(&decoded, &snapshot));
             std::hint::black_box(decoded);
         }
         let client_stats = client_region.change();
-        let elapsed = started.elapsed();
-        samples.push(sample_from_stats(
-            elapsed,
-            server_stats,
-            client_stats,
+        let client_cpu_us = cpu_time().elapsed_since(client_cpu_before);
+        let (server_allocations, server_bytes_allocated) = allocation_counts(server_stats);
+        let (client_allocations, client_bytes_allocated) = allocation_counts(client_stats);
+        samples.push(Sample {
+            elapsed_ns: started.elapsed().as_nanos(),
+            server_cpu_us,
+            client_cpu_us,
+            server_allocations,
+            server_bytes_allocated,
+            client_allocations,
+            client_bytes_allocated,
             write_calls,
-            frame.len() * fanout,
-            0,
-        ));
+            socket_bytes: frame.len() * fanout,
+            shm_bytes: 0,
+        });
     }
 
     print_summary(
@@ -297,6 +337,7 @@ fn run_hybrid_worker(fanout: usize, repetitions: usize, workload: &str) {
         mutate_snapshot(&mut snapshot, iteration as u64 + 2);
         let started = Instant::now();
 
+        let server_cpu_before = cpu_time();
         let server_region = Region::new(&GLOBAL);
         let mut write_calls = 0usize;
         let mut socket_bytes = 0usize;
@@ -305,7 +346,7 @@ fn run_hybrid_worker(fanout: usize, repetitions: usize, workload: &str) {
                 .writer
                 .publish(&snapshot.as_snapshot_write())
                 .expect("publish stress generation");
-            let frame = encode_frame(
+            let wake = encode_frame(
                 MessageType::GenerationWake,
                 &GenerationWake {
                     attachment_id: client.attachment_id,
@@ -314,35 +355,43 @@ fn run_hybrid_worker(fanout: usize, repetitions: usize, workload: &str) {
                 }
                 .encode(),
             );
-            socket_bytes += frame.len();
-            write_calls += send_fd_all(client.wake_tx.as_raw_fd(), &frame);
+            socket_bytes += wake.len();
+            write_calls += send_fd_all(client.wake_tx.as_raw_fd(), &wake);
         }
         let server_stats = server_region.change();
+        let server_cpu_us = cpu_time().elapsed_since(server_cpu_before);
 
+        let client_cpu_before = cpu_time();
         let client_region = Region::new(&GLOBAL);
         for client in &mut clients {
             receive_stream_exact(&mut client.wake_rx, &mut client.wake_recv);
             let header = FrameHeader::decode(&client.wake_recv[..HEADER_LEN]).expect("wake header");
             assert_eq!(header.message_type, MessageType::GenerationWake as u16);
-            let wake = GenerationWake::decode(&client.wake_recv[HEADER_LEN..]).expect("wake payload");
+            let wake = GenerationWake::decode(&client.wake_recv[HEADER_LEN..]).expect("wake body");
             assert_eq!(wake.attachment_id, client.attachment_id);
             assert_eq!(wake.projection_id, client.projection_id);
             let read = read_latest(&client.mapping.memory(), &client.region)
                 .expect("read stress projection");
             assert!(read.generation >= wake.committed_generation);
-            assert!(visible_state_matches_read(&read, &snapshot));
+            assert!(read_matches(&read, &snapshot));
             std::hint::black_box(read);
         }
         let client_stats = client_region.change();
-        let elapsed = started.elapsed();
-        samples.push(sample_from_stats(
-            elapsed,
-            server_stats,
-            client_stats,
+        let client_cpu_us = cpu_time().elapsed_since(client_cpu_before);
+        let (server_allocations, server_bytes_allocated) = allocation_counts(server_stats);
+        let (client_allocations, client_bytes_allocated) = allocation_counts(client_stats);
+        samples.push(Sample {
+            elapsed_ns: started.elapsed().as_nanos(),
+            server_cpu_us,
+            client_cpu_us,
+            server_allocations,
+            server_bytes_allocated,
+            client_allocations,
+            client_bytes_allocated,
             write_calls,
             socket_bytes,
-            writer_bytes_per_publish(&snapshot) * fanout,
-        ));
+            shm_bytes: writer_bytes_per_publish(&snapshot) * fanout,
+        });
     }
 
     print_summary(
@@ -362,14 +411,13 @@ fn setup_hybrid_client(index: usize, snapshot: &OwnedSnapshot) -> HybridClient {
     let projection_raw = index as u128 + 10_001;
     let attachment_id = AttachmentId::from_bytes(attachment_raw.to_le_bytes());
     let projection_id = ProjectionId::from_bytes(projection_raw.to_le_bytes());
-    let slot_stride = slot_stride();
-    let region_bytes = REGION_HEADER_LEN as u64 + 2 * slot_stride;
+    let stride = slot_stride();
     let region = RegionHeader {
-        region_bytes,
+        region_bytes: REGION_HEADER_LEN as u64 + 2 * stride,
         execution_id: 1,
         attachment_id: attachment_raw,
         projection_id: projection_raw,
-        slot_stride,
+        slot_stride: stride,
         slot0_offset: REGION_HEADER_LEN as u64,
         capacity_rows: ROWS,
         capacity_cols: COLUMNS,
@@ -378,15 +426,15 @@ fn setup_hybrid_client(index: usize, snapshot: &OwnedSnapshot) -> HybridClient {
     let mut writer = Writer::new(region_owner.writer_memory(), region).expect("stress writer");
     writer
         .publish(&snapshot.as_snapshot_write())
-        .expect("initial stress generation");
+        .expect("initial stress publish");
     let reader_fd = region_owner.take_reader_fd().expect("stress reader fd");
-    let mapping = ReadOnlyMapping::new(reader_fd, region_bytes as usize).expect("stress reader map");
+    let mapping = ReadOnlyMapping::new(reader_fd, region.region_bytes as usize)
+        .expect("stress read-only mapping");
     let initial = read_latest(&mapping.memory(), &region).expect("initial stress read");
-    assert!(visible_state_matches_read(&initial, snapshot));
-    let (wake_tx, wake_rx) = UnixStream::pair().expect("hybrid wake socket pair");
+    assert!(read_matches(&initial, snapshot));
+    let (wake_tx, wake_rx) = UnixStream::pair().expect("wake socket pair");
     wake_tx.set_nonblocking(true).expect("nonblocking wake tx");
     wake_rx.set_nonblocking(true).expect("nonblocking wake rx");
-    let wake_len = HEADER_LEN + GenerationWake::ENCODED_LEN;
     HybridClient {
         writer,
         _region_owner: region_owner,
@@ -396,7 +444,7 @@ fn setup_hybrid_client(index: usize, snapshot: &OwnedSnapshot) -> HybridClient {
         projection_id,
         wake_tx,
         wake_rx,
-        wake_recv: vec![0; wake_len],
+        wake_recv: vec![0; HEADER_LEN + GenerationWake::WIRE_LEN],
     }
 }
 
@@ -431,8 +479,8 @@ fn sample_snapshot() -> OwnedSnapshot {
 
 #[cfg(target_os = "macos")]
 fn mutate_snapshot(snapshot: &mut OwnedSnapshot, generation: u64) {
-    let row = ((generation - 1) as usize % ROWS as usize) as u16;
-    let column = ((generation * 7) as usize % COLUMNS as usize) as u16;
+    let row = ((generation - 1) % ROWS as u64) as u16;
+    let column = ((generation * 7) % COLUMNS as u64) as u16;
     let index = row as usize * COLUMNS as usize + column as usize;
     snapshot.cells[index].scalar = char::from_u32(b'!' as u32 + (generation % 80) as u32)
         .expect("ASCII benchmark scalar");
@@ -448,17 +496,21 @@ fn mutate_snapshot(snapshot: &mut OwnedSnapshot, generation: u64) {
 
 #[cfg(target_os = "macos")]
 fn slot_stride() -> u64 {
-    let payload = SLOT_HEADER_LEN + ROWS as usize * COLUMNS as usize * CELL_LEN
+    let bytes = SLOT_HEADER_LEN
+        + ROWS as usize * COLUMNS as usize * CELL_LEN
         + ROWS as usize * DAMAGE_LEN;
-    ((payload + 7) & !7) as u64
+    bytes.next_multiple_of(8) as u64
 }
 
 #[cfg(target_os = "macos")]
 fn writer_bytes_per_publish(snapshot: &OwnedSnapshot) -> usize {
-    // Writer::publish writes the static 56-byte portion of SlotHeader, every
-    // encoded cell/damage byte, plus three 8-byte atomic publication words:
-    // odd sequence, finalized sequence and region publication.
-    (SLOT_HEADER_LEN - 8) + snapshot.cells.len() * CELL_LEN + snapshot.damages.len() * DAMAGE_LEN + 24
+    // Writer::publish writes bytes 8..64 of SlotHeader, every encoded
+    // cell/damage byte, and three 8-byte atomic words: odd slot sequence,
+    // finalized slot sequence and region publication.
+    (SLOT_HEADER_LEN - 8)
+        + snapshot.cells.len() * CELL_LEN
+        + snapshot.damages.len() * DAMAGE_LEN
+        + 24
 }
 
 #[cfg(target_os = "macos")]
@@ -482,7 +534,7 @@ fn send_stream_all(stream: &mut UnixStream, bytes: &[u8]) -> usize {
 }
 
 #[cfg(target_os = "macos")]
-fn send_fd_all(socket: std::os::fd::RawFd, bytes: &[u8]) -> usize {
+fn send_fd_all(socket: RawFd, bytes: &[u8]) -> usize {
     let deadline = Instant::now() + Duration::from_secs(2);
     let mut sent = 0usize;
     let mut calls = 0usize;
@@ -494,9 +546,9 @@ fn send_fd_all(socket: std::os::fd::RawFd, bytes: &[u8]) -> usize {
                 calls += 1;
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => thread::yield_now(),
-            Err(error) => panic!("stress hybrid wake write failed: {error}"),
+            Err(error) => panic!("stress wake write failed: {error}"),
         }
-        assert!(Instant::now() < deadline, "stress hybrid wake timed out");
+        assert!(Instant::now() < deadline, "stress wake write timed out");
     }
     calls
 }
@@ -517,7 +569,7 @@ fn receive_stream_exact(stream: &mut UnixStream, buffer: &mut [u8]) {
 }
 
 #[cfg(target_os = "macos")]
-fn visible_state_matches_read(read: &SnapshotRead, expected: &OwnedSnapshot) -> bool {
+fn read_matches(read: &SnapshotRead, expected: &OwnedSnapshot) -> bool {
     read.header.rows == expected.rows
         && read.header.columns == expected.columns
         && read.header.cursor_row == expected.cursor_row
@@ -531,7 +583,7 @@ fn visible_state_matches_read(read: &SnapshotRead, expected: &OwnedSnapshot) -> 
 }
 
 #[cfg(target_os = "macos")]
-fn visible_state_matches_owned(actual: &OwnedSnapshot, expected: &OwnedSnapshot) -> bool {
+fn owned_matches(actual: &OwnedSnapshot, expected: &OwnedSnapshot) -> bool {
     actual.rows == expected.rows
         && actual.columns == expected.columns
         && actual.cursor_row == expected.cursor_row
@@ -546,9 +598,9 @@ fn visible_state_matches_owned(actual: &OwnedSnapshot, expected: &OwnedSnapshot)
 
 #[cfg(target_os = "macos")]
 fn encode_reference_snapshot(snapshot: &OwnedSnapshot) -> Vec<u8> {
-    let cells_bytes = snapshot.cells.len() * CELL_LEN;
-    let damages_bytes = snapshot.damages.len() * DAMAGE_LEN;
-    let total = REFERENCE_HEADER_LEN + cells_bytes + damages_bytes;
+    let total = REFERENCE_HEADER_LEN
+        + snapshot.cells.len() * CELL_LEN
+        + snapshot.damages.len() * DAMAGE_LEN;
     let mut bytes = vec![0u8; total];
     bytes[0..8].copy_from_slice(&REFERENCE_MAGIC);
     bytes[8..12].copy_from_slice(&(total as u32).to_le_bytes());
@@ -599,20 +651,14 @@ fn decode_reference_snapshot(bytes: &[u8]) -> OwnedSnapshot {
     let source_damage_generation = u64::from_le_bytes(bytes[32..40].try_into().unwrap());
     assert_eq!(cell_count, rows as usize * columns as usize);
     let expected_len = REFERENCE_HEADER_LEN + cell_count * CELL_LEN + damage_count * DAMAGE_LEN;
-    assert_eq!(bytes.len(), expected_len);
-
+    assert_eq!(expected_len, bytes.len());
     let cells_end = REFERENCE_HEADER_LEN + cell_count * CELL_LEN;
-    let (cell_chunks, cell_remainder) =
-        bytes[REFERENCE_HEADER_LEN..cells_end].as_chunks::<CELL_LEN>();
-    assert!(cell_remainder.is_empty());
-    let cells = cell_chunks
-        .iter()
+    let cells = bytes[REFERENCE_HEADER_LEN..cells_end]
+        .chunks_exact(CELL_LEN)
         .map(|chunk| CellRecord::decode(chunk).expect("decode reference cell"))
         .collect();
-    let (damage_chunks, damage_remainder) = bytes[cells_end..].as_chunks::<DAMAGE_LEN>();
-    assert!(damage_remainder.is_empty());
-    let damages = damage_chunks
-        .iter()
+    let damages = bytes[cells_end..]
+        .chunks_exact(DAMAGE_LEN)
         .map(|chunk| DamageRecord::decode(chunk, rows).expect("decode reference damage"))
         .collect();
     let cursor_visible = bytes[20] != 0;
@@ -643,41 +689,32 @@ fn print_summary(
     populated_rss: usize,
     samples: &[Sample],
 ) {
-    let elapsed = samples.iter().map(|sample| sample.elapsed_ns).collect::<Vec<_>>();
-    let server_allocations = samples
-        .iter()
-        .map(|sample| sample.server_allocations as u128)
-        .collect::<Vec<_>>();
-    let client_allocations = samples
-        .iter()
-        .map(|sample| sample.client_allocations as u128)
-        .collect::<Vec<_>>();
-    let server_bytes = samples
-        .iter()
-        .map(|sample| sample.server_bytes_allocated as u128)
-        .collect::<Vec<_>>();
-    let client_bytes = samples
-        .iter()
-        .map(|sample| sample.client_bytes_allocated as u128)
-        .collect::<Vec<_>>();
-    let write_calls = samples
-        .iter()
-        .map(|sample| sample.write_calls as u128)
-        .collect::<Vec<_>>();
+    let elapsed = values(samples, |sample| sample.elapsed_ns);
+    let server_cpu = values(samples, |sample| sample.server_cpu_us);
+    let client_cpu = values(samples, |sample| sample.client_cpu_us);
+    let server_allocations = values(samples, |sample| sample.server_allocations as u128);
+    let server_bytes = values(samples, |sample| sample.server_bytes_allocated as u128);
+    let client_allocations = values(samples, |sample| sample.client_allocations as u128);
+    let client_bytes = values(samples, |sample| sample.client_bytes_allocated as u128);
+    let write_calls = values(samples, |sample| sample.write_calls as u128);
     let total_ns: u128 = elapsed.iter().sum();
     let updates_per_second = if total_ns == 0 {
         0
     } else {
-        ((repetitions as u128) * 1_000_000_000 / total_ns) as u64
+        repetitions as u128 * 1_000_000_000 / total_ns
     };
     let socket_bytes = samples.last().map_or(0, |sample| sample.socket_bytes);
     let shm_bytes = samples.last().map_or(0, |sample| sample.shm_bytes);
     println!(
-        "transport_stress transport={} fanout={fanout} repetitions={repetitions} workload={workload} semantic_match=true latency_p50_us={} latency_p95_us={} latency_p99_us={} server_allocations_p50={} server_allocations_p95={} server_bytes_allocated_p50={} client_allocations_p50={} client_allocations_p95={} client_bytes_allocated_p50={} write_calls_p50={} socket_bytes_per_update={socket_bytes} shm_writer_bytes_per_update={shm_bytes} updates_per_second={updates_per_second} rss_baseline_kib={baseline_rss} rss_populated_kib={populated_rss} rss_incremental_kib={} cpu_percent_after={} allocation_scope=server_then_client_in_process rss_cpu_scope=combined_worker_process shm_bytes_source=exact_writer_contract socket_bytes_source=actual_frame_lengths",
-        transport.arg(),
+        "transport_stress transport={} fanout={fanout} repetitions={repetitions} workload={workload} semantic_match=true latency_p50_us={} latency_p95_us={} latency_p99_us={} server_cpu_p50_us={} server_cpu_p95_us={} client_cpu_p50_us={} client_cpu_p95_us={} server_allocations_p50={} server_allocations_p95={} server_bytes_allocated_p50={} client_allocations_p50={} client_allocations_p95={} client_bytes_allocated_p50={} write_calls_p50={} socket_bytes_per_update={socket_bytes} shm_writer_bytes_per_update={shm_bytes} updates_per_second={updates_per_second} rss_baseline_kib={baseline_rss} rss_populated_kib={populated_rss} rss_incremental_kib={} cpu_scope=getrusage_sequential_phase rss_scope=combined_worker_process shm_bytes_source=exact_writer_contract socket_bytes_source=actual_frame_lengths",
+        transport.as_arg(),
         percentile(&elapsed, 50) / 1_000,
         percentile(&elapsed, 95) / 1_000,
         percentile(&elapsed, 99) / 1_000,
+        percentile(&server_cpu, 50),
+        percentile(&server_cpu, 95),
+        percentile(&client_cpu, 50),
+        percentile(&client_cpu, 95),
         percentile(&server_allocations, 50),
         percentile(&server_allocations, 95),
         percentile(&server_bytes, 50),
@@ -686,18 +723,21 @@ fn print_summary(
         percentile(&client_bytes, 50),
         percentile(&write_calls, 50),
         populated_rss.saturating_sub(baseline_rss),
-        process_cpu_percent(),
     );
 }
 
 #[cfg(target_os = "macos")]
-fn percentile(values: &[u128], percentile: usize) -> u128 {
+fn values(samples: &[Sample], f: impl Fn(&Sample) -> u128) -> Vec<u128> {
+    samples.iter().map(f).collect()
+}
+
+#[cfg(target_os = "macos")]
+fn percentile(values: &[u128], percent: usize) -> u128 {
     assert!(!values.is_empty());
-    assert!((1..=100).contains(&percentile));
     let mut sorted = values.to_vec();
     sorted.sort_unstable();
-    let rank = (percentile * sorted.len()).div_ceil(100);
-    sorted[rank.saturating_sub(1)]
+    let rank = (percent * sorted.len()).div_ceil(100).max(1);
+    sorted[rank - 1]
 }
 
 #[cfg(target_os = "macos")]
@@ -713,27 +753,15 @@ fn process_rss_kib() -> usize {
 }
 
 #[cfg(target_os = "macos")]
-fn process_cpu_percent() -> f32 {
-    let output = Command::new("/bin/ps")
-        .args(["-o", "%cpu=", "-p", &process::id().to_string()])
-        .output()
-        .expect("ps cpu");
-    String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse()
-        .unwrap_or(0.0)
-}
-
-#[cfg(target_os = "macos")]
 fn print_host_metadata() {
     let product = command_text("/usr/bin/sw_vers", &["-productVersion"]);
     let build = command_text("/usr/bin/sw_vers", &["-buildVersion"]);
-    let machine_model = command_text("/usr/sbin/sysctl", &["-n", "hw.model"]);
+    let model = command_text("/usr/sbin/sysctl", &["-n", "hw.model"]);
     let hardware = command_text("/usr/sbin/sysctl", &["-n", "machdep.cpu.brand_string"]);
     let rustc = command_text("rustc", &["--version"]);
     let commit = command_text("git", &["rev-parse", "HEAD"]);
     println!(
-        "transport_stress_host macos_version={product} macos_build={build} machine_model={machine_model:?} hardware={hardware:?} rust={rustc:?} build_mode=release commit={commit} geometry={COLUMNS}x{ROWS}"
+        "transport_stress_host macos_version={product} macos_build={build} machine_model={model:?} hardware={hardware:?} rust={rustc:?} build_mode=release commit={commit} geometry={COLUMNS}x{ROWS}"
     );
 }
 

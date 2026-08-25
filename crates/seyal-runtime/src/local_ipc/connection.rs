@@ -572,7 +572,8 @@ mod tests {
     #[test]
     fn max_sized_frame_followed_by_pipelined_frame_stays_within_receive_cap() {
         let (mut server, path) = bind_test_server();
-        let (mut client, token) = accept_one(&mut server, &path);
+        let (client, token) = accept_one(&mut server, &path);
+        let mut writer_client = client.try_clone().unwrap();
         let mut bytes = encode_frame(
             MessageType::Goodbye,
             &vec![0x5a; MAX_FRAME_PAYLOAD as usize],
@@ -585,7 +586,7 @@ mod tests {
             .encode(),
         ));
 
-        let writer = std::thread::spawn(move || client.write_all(&bytes).unwrap());
+        let writer = std::thread::spawn(move || writer_client.write_all(&bytes).unwrap());
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         let mut frame_count = 0usize;
         while frame_count < 2 {
@@ -600,7 +601,10 @@ mod tests {
                 .iter()
                 .filter(|event| matches!(event, ServerEvent::Frame { .. }))
                 .count();
-            assert!(server.contains(token), "valid pipeline closed the connection");
+            assert!(
+                server.contains(token),
+                "valid pipeline closed the connection"
+            );
             assert!(
                 std::time::Instant::now() < deadline,
                 "timed out draining pipelined frames"
@@ -609,6 +613,7 @@ mod tests {
         }
         writer.join().unwrap();
         assert_eq!(frame_count, 2);
+        drop(client);
         std::fs::remove_file(path).ok();
     }
 

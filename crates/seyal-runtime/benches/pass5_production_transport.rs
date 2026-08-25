@@ -188,7 +188,10 @@ fn run_worker(executable: &std::path::Path, case: Case) {
         .args(args)
         .status()
         .expect("launch measured Pass-5 worker");
-    assert!(status.success(), "Pass-5 production benchmark worker failed");
+    assert!(
+        status.success(),
+        "Pass-5 production benchmark worker failed"
+    );
 }
 
 #[cfg(target_os = "macos")]
@@ -243,7 +246,12 @@ fn worker() {
     let Some(&execution_id) = ids.first() else {
         println!(
             "pass5_production_result workload={} population_requested={} population_created=0 fanout_requested={} geometry={}x{} classification=PLATFORM_LIMITED platform_error={:?}",
-            workload.name(), requested_population, requested_fanout, columns, rows, platform_error
+            workload.name(),
+            requested_population,
+            requested_fanout,
+            columns,
+            rows,
+            platform_error
         );
         return;
     };
@@ -320,7 +328,8 @@ fn worker() {
         .max()
         .unwrap_or(0);
 
-    let source_pty_bps = bytes_per_second(runtime_diagnostics.pty_bytes_read, measurement.elapsed_us);
+    let source_pty_bps =
+        bytes_per_second(runtime_diagnostics.pty_bytes_read, measurement.elapsed_us);
     let display_model_bytes = display_counters
         .snapshot_bytes
         .saturating_add(display_counters.delta_bytes);
@@ -349,7 +358,10 @@ fn worker() {
             {
                 break;
             }
-            assert!(Instant::now() < deadline, "disconnected viewer was not reclaimed");
+            assert!(
+                Instant::now() < deadline,
+                "disconnected viewer was not reclaimed"
+            );
         }
     }
 
@@ -547,7 +559,10 @@ fn measure_interactive(
             {
                 break;
             }
-            assert!(Instant::now() < deadline, "interactive display latency timed out");
+            assert!(
+                Instant::now() < deadline,
+                "interactive display latency timed out"
+            );
         }
         samples.push(started.elapsed().as_micros());
     }
@@ -655,9 +670,18 @@ fn print_streaming_timeout_diagnostics(
     let runtime_diagnostics = runtime.benchmark_runtime_diagnostics(execution_id);
     let display = benchmark_display_counters();
     let syscalls = benchmark_syscall_counters();
-    let aggregate_uds_bytes = clients.iter().map(|client| client.bytes_received).sum::<usize>();
-    let display_batches = clients.iter().map(|client| client.display_batches).sum::<usize>();
-    let client_reads = clients.iter().map(|client| client.read_syscalls).sum::<usize>();
+    let aggregate_uds_bytes = clients
+        .iter()
+        .map(|client| client.bytes_received)
+        .sum::<usize>();
+    let display_batches = clients
+        .iter()
+        .map(|client| client.display_batches)
+        .sum::<usize>();
+    let client_reads = clients
+        .iter()
+        .map(|client| client.read_syscalls)
+        .sum::<usize>();
     eprintln!(
         "pass5_streaming_timeout workload={} elapsed_us={} pty_bytes_read={} pty_read_calls={} latest_damage_generation={} source_timestamp_samples={} display_model_bytes={} snapshot_encodes={} delta_encodes={} aggregate_uds_bytes={} display_batches_received={} client_read_syscalls={} server_send_syscalls={} server_sendmsg_syscalls={} runtime_recvmsg_syscalls={}",
         workload.name(),
@@ -818,7 +842,10 @@ impl BenchClient {
                 });
             }
             let pending = self.pending.as_mut().expect("pending batch");
-            assert_eq!(pending.kind, message_type, "display chunks must remain contiguous");
+            assert_eq!(
+                pending.kind, message_type,
+                "display chunks must remain contiguous"
+            );
             assert_eq!(pending.expected, expected, "chunk count changed mid-batch");
             pending.chunks.push(chunk);
             if pending.chunks.len() == pending.expected {
@@ -954,15 +981,29 @@ fn process_metrics() -> Metrics {
         .expect("ps metrics");
     let line = String::from_utf8_lossy(&output.stdout);
     let mut fields = line.split_whitespace();
-    let rss_kib = fields.next().and_then(|value| value.parse().ok()).unwrap_or(0);
-    let cpu_percent = fields.next().and_then(|value| value.parse().ok()).unwrap_or(0.0);
-    let parsed_threads = fields.next().and_then(|value| value.parse().ok()).unwrap_or(0);
+    let rss_kib = fields
+        .next()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
+    let cpu_percent = fields
+        .next()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0.0);
+    let parsed_threads = fields
+        .next()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
     let threads = if parsed_threads == 0 {
         Command::new("/bin/ps")
             .args(["-M", "-p", &pid.to_string()])
             .output()
             .ok()
-            .map(|output| String::from_utf8_lossy(&output.stdout).lines().skip(1).count())
+            .map(|output| {
+                String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .skip(1)
+                    .count()
+            })
             .unwrap_or(0)
     } else {
         parsed_threads

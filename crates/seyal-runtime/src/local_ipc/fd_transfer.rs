@@ -65,7 +65,9 @@ impl SendAncillaryBuffer {
 // the process descriptor table instead of using a small fixed buffer.
 #[repr(align(16))]
 #[derive(Clone, Copy)]
-struct AlignedWord([u8; 16]);
+struct AlignedWord {
+    _bytes: [u8; 16],
+}
 
 struct ReceiveAncillaryBuffer {
     storage: Vec<AlignedWord>,
@@ -95,7 +97,7 @@ impl ReceiveAncillaryBuffer {
                 "failed to reserve SCM_RIGHTS receive buffer for {fd_capacity} descriptors: {error}"
             ))
         })?;
-        storage.resize(word_count, AlignedWord([0; 16]));
+        storage.resize(word_count, AlignedWord { _bytes: [0; 16] });
         Ok(Self { storage, byte_len })
     }
 
@@ -278,16 +280,10 @@ fn recv_with_buffer(
         return Err(io::Error::last_os_error());
     }
 
-    Ok((
-        result as usize,
-        parse_received_ancillary(&msg, ancillary),
-    ))
+    Ok((result as usize, parse_received_ancillary(&msg, ancillary)))
 }
 
-fn parse_received_ancillary(
-    msg: &libc::msghdr,
-    ancillary: &ReceiveAncillaryBuffer,
-) -> RecvFd {
+fn parse_received_ancillary(msg: &libc::msghdr, ancillary: &ReceiveAncillaryBuffer) -> RecvFd {
     let reported_control_len = msg.msg_controllen as usize;
     let control_len = reported_control_len.min(ancillary.byte_len);
     let control_start = ancillary.start_addr();

@@ -4,62 +4,192 @@ Performance claims require measurements. Terminal latency, CPU and RSS are archi
 
 ## Hot-path rule
 
-No avoidable synchronous IPC, JSON, serialization, copies, allocations, locks, agent calls, persistence, cloud/licensing/telemetry, Lua, or Block semantics may enter canonical terminal progress.
+No avoidable synchronous IPC, JSON, high-level serialization, copies, allocations, locks, agent calls, persistence, cloud/licensing/telemetry, Lua or Block semantics may enter canonical terminal progress.
+
+Canonical PTY/VT progress must never synchronously depend on a renderer/client.
 
 ## Evidence
 
-Performance-sensitive Issues must define before implementation:
+Performance-sensitive Issues must define before acceptance:
 
 - workload and terminal dimensions;
 - hardware/OS/build mode;
+- exact commit SHA;
 - metrics and percentile method;
-- baseline commit/result;
-- expected budget/target;
-- acceptable regression threshold or explicit decision process.
+- run/repetition count;
+- baseline/result being compared;
+- expected budget/target or explicit decision process;
+- acceptable regression threshold.
 
 Measure applicable:
 
 - key/input latency stages;
-- PTY read → TerminalState mutation;
-- TerminalState/damage → projection;
-- projection → present;
+- PTY read -> TerminalState mutation;
+- TerminalState/damage -> presentation-model update;
+- presentation update -> client cache ready;
 - end-to-end output latency;
 - throughput;
 - idle/active CPU;
-- Runtime and app RSS;
-- thread count;
-- allocations/copies;
+- Runtime and client RSS;
+- thread/descriptor counts;
+- allocations/reallocations/bytes allocated;
+- bytes copied/written;
+- syscall/write counts where instrumentable;
+- queue depth/coalescing/resync frequency;
 - reconnect/snapshot cost;
-- GPU resources for visible/hidden surfaces.
+- GPU resources for visible/hidden surfaces once renderer work exists.
 
-Never state “faster”, “zero-copy”, “low CPU”, or equivalent as achieved without evidence.
+Never state “faster”, “zero-copy”, “low CPU” or equivalent as achieved without evidence.
 
-## Baselines
+## M001 Pass 5 transport authority
 
-Keep reproducible benchmark definitions separate from production code and record environment metadata with results. M001 targets in the accepted architecture remain targets until measured.
+ADR-001 now selects Candidate D:
 
-The M001 benchmark harness contract lives under `benches/`. `benches/environment-fields.toml` defines the required metadata fields. `scripts/benchmark-smoke.py` writes a real environment record under `target/benchmarks/` solely to prove that recording is reproducible; it sets `performance_claim = false` and is not a latency/CPU/RSS/throughput result.
+```text
+control/input/lifecycle
+    -> compact binary UDS
 
-Future measured workloads must replace `not-applicable` smoke fields with real terminal dimensions, font/scale, shell, workload, run count and percentile method. Generated benchmark records stay out of production modules and should be retained as explicit CI/release artifacts when a measurement Issue requires them.
+normal terminal presentation
+    -> generation-tagged binary terminal-model snapshots/deltas over UDS
+    -> disposable client RenderState cache
 
-For M001 Pass 5 transport evidence, run:
-
-```bash
-cargo bench -p seyal-runtime --bench runtime_scalability -- --nocapture
+future large immutable graphics/media
+    -> separate measured bulk-object path
+       (shared memory/IOSurface-style if later justified)
 ```
 
-The Pass-5 comparator is intentionally an **equivalent display-delivery** comparison, not “IPC disabled” versus “IPC enabled”. `transport=socket-only` is a benchmark-only reference path that encodes the same fixed-width visible `CellRecord`/`DamageRecord` state and actually copies the complete snapshot through a nonblocking Unix stream. `transport=hybrid` uses the production control UDS, `SCM_RIGHTS`, read-only shared memory and `GenerationWake`. Both paths assert that the delivered state equals a snapshot of the same canonical `TerminalExecution` before their measurements are accepted.
+The earlier per-attachment shared-memory grid is no longer the intended production text/grid path. It may remain temporarily as comparator/reference code while the selected UDS path is implemented and measured.
 
-The benchmark emits paired `runtime_resource` records at required populations (`1/10/50/100`) plus representative geometry/screen scenarios. It records visible attachment count separately from total execution population because SPEC-004 currently caps live attachments at 16. It reports display setup, update-to-readable and signal-to-readable timing, copied/projection bytes, socket write count, resync, reconnect, Runtime/child RSS, CPU, threads, fds and teardown state.
+Do not preserve shared-memory grid machinery in production merely because future images may benefit from shared buffers. Text/grid and bulk graphics are different workloads and have separate transport decisions.
 
-Records marked `classification=PLATFORM_LIMITED` are host-ceiling evidence and must be reported, not filtered out. In particular, a host PTY allocation ceiling is not evidence that the Runtime only scales to that population, and it must not be silently converted into a Pass-5 performance claim.
+## Pass-5 decisive benchmark
 
-The comparator source and contributor/debugging notes are documented in `docs/engineering/LOCAL-ATTACHMENT.md`. Benchmark output is evidence only for the exact commit/build/environment that produced it; the benchmark's startup banner deliberately keeps `performance_claim=false` until reviewed results are recorded in the owning PR/milestone evidence.
+Before PR #106 may be Ready for Review/merge, benchmark the real selected path:
 
-## CI strategy
+```text
+real shell/process
+-> real PTY
+-> Seyal VT mutation
+-> canonical TerminalState
+-> canonical damage extraction
+-> terminal-model update construction
+-> compact binary UDS delivery
+-> client RenderState apply/readable state
+```
 
-Fast PR checks use stable smoke benchmarks or guardrails only where noise is controlled. Broader benchmark matrices run scheduled/release and on performance-sensitive changes. A noisy benchmark must not become a fake gate; investigate measurement quality instead.
+### Required fanout
+
+Use multiple viewers of the **same execution**:
+
+- 1;
+- 2;
+- 4;
+- 8;
+- 16.
+
+Fanout must not be represented only as one viewer per many independent executions.
+
+### Required workloads
+
+Include:
+
+- sparse interactive output;
+- normal shell command output;
+- sustained high-volume streaming/logs;
+- burst output;
+- scrolling;
+- full-screen redraw/TUI-like churn;
+- primary and alternate screen.
+
+### Required geometry
+
+Include at least:
+
+- 80x24;
+- 120x40;
+- 200x60.
+
+### Required lifecycle/failure cases
+
+Cover or cross-reference production tests for:
+
+- first attach;
+- detach/reattach;
+- reconnect;
+- explicit/generation-gap resync;
+- resize;
+- slow client;
+- killed client;
+- execution finalization after final PTY output.
+
+### Required metrics
+
+Record at least:
+
+- PTY-read/terminal-mutation -> client-state-ready p50/p95/p99;
+- throughput;
+- Runtime CPU and meaningful client CPU where measurable;
+- Runtime/client RSS or explicit process-model limitations;
+- allocations/reallocations/bytes allocated;
+- bytes copied/written;
+- socket write/send syscall count where instrumentable;
+- queue depth, coalescing and resync frequency;
+- descriptor/thread/resource counts;
+- cleanup state.
+
+The decisive stress combination is:
+
+```text
+sustained high-output streaming
+x same-execution fanout
+x real PTY -> VT -> model update -> UDS -> client cache
+```
+
+including 16 viewers and a large representative geometry.
+
+## Fanout implementation guardrail
+
+The expensive execution-level work should be approximately:
+
+```text
+1 x canonical damage consumption
+1 x terminal-model update construction
+1 x binary encoding
+N x bounded socket delivery/reference
+```
+
+Do not intentionally perform N terminal traversals, N delta calculations or N serializations solely because N viewers are attached when the payload is otherwise identical.
+
+Immutable encoded presentation data may be shared/referenced by bounded per-connection delivery queues where practical. This is an optimization seam, not permission for unbounded retention.
+
+## Backpressure performance rule
+
+Presentation state is replaceable/coalescible. A slow client must not cause an unbounded generation queue.
+
+If bounded continuity cannot be retained, the client is marked for resync and later rebuilt from a current snapshot. Control/input/lifecycle semantics remain ordered and independently bounded.
+
+No renderer acknowledgement is allowed in the canonical PTY/VT progress path.
+
+## Comparator evidence
+
+Existing benches such as `runtime_scalability`, `pass5_transport_stress` and `pass5_shared_projection` remain useful evidence for understanding copies, allocations, fanout and the previous shared-grid candidate. They are comparator/diagnostic evidence only unless they exercise the exact selected production path.
+
+Earlier single-sample or asymmetric results must not be promoted to final architecture claims. Host PTY ceilings must be reported as platform-limited evidence, not hidden or reinterpreted as a Seyal scalability limit.
+
+Benchmark output is evidence only for the exact commit/build/environment that produced it.
+
+## Reopen rule
+
+ADR-001 may be reopened if production-equivalent measurements show that UDS model-delta fanout materially violates Seyal's latency/CPU/RSS goals and a simpler execution-scoped shared publication mechanism demonstrates a substantial measured advantage.
+
+If evidence forces a revisit, do not automatically restore one shared-memory grid per attachment. Choose the smallest mechanism that fixes the measured bottleneck while preserving one canonical terminal authority and renderer independence.
+
+## Baselines and CI
+
+Keep reproducible benchmark definitions separate from production code and record environment metadata with results.
+
+Fast PR checks use stable smoke benchmarks/guardrails only where noise is controlled. Broader matrices belong in explicit performance validation, scheduled/release jobs or performance-sensitive change gates. A noisy benchmark must not become a fake gate.
 
 ## Regression handling
 
-A material regression blocks merge unless explicitly accepted through the correct authority/change process with measured tradeoff evidence. Never hide a regression by changing the benchmark workload or threshold in the same opaque implementation change.
+A material regression blocks merge unless explicitly accepted through the correct ADR/spec authority with measured tradeoff evidence. Never hide a regression by changing benchmark workload or thresholds in the same opaque implementation change.

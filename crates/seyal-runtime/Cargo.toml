@@ -18,9 +18,16 @@ seyal-exec = { path = "../seyal-exec" }
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "=0.2.189"
 
+[dev-dependencies]
+stats_alloc = "=0.1.10"
+
 [lints.rust]
 unsafe_code = "deny"
 
 [[bench]]
 name = "runtime_scalability"
+harness = false
+
+[[bench]]
+name = "pass5_transport_stress"
 harness = false

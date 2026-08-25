@@ -70,7 +70,7 @@ impl RegionMemory {
         self.checked_word_range(offset, len)?;
         let mut out = vec![0u8; len];
         for word_index in 0..(len / 8) {
-            let word = self.atomic_load(offset + word_index * 8, Ordering::Relaxed);
+            let word = self.atomic_load(offset + word_index * 8, Ordering::Relaxed)?;
             out[word_index * 8..(word_index + 1) * 8].copy_from_slice(&word.to_le_bytes());
         }
         Ok(out)
@@ -82,26 +82,36 @@ impl RegionMemory {
         debug_assert!(remainder.is_empty());
         for (word_index, chunk) in chunks.iter().enumerate() {
             let word = u64::from_le_bytes(*chunk);
-            self.atomic_store(offset + word_index * 8, word, Ordering::Relaxed);
+            self.atomic_store(offset + word_index * 8, word, Ordering::Relaxed)?;
         }
         Ok(())
     }
 
-    fn atomic_load(&self, offset: usize, ordering: Ordering) -> u64 {
-        debug_assert_eq!(offset % 8, 0);
-        debug_assert!(offset + 8 <= self.len);
-        // SAFETY: constructor and bounds/alignment checks guarantee a live,
-        // aligned word. Every concurrent access to this word is atomic.
+    /// Loads one shared word only after enforcing alignment and mapping bounds
+    /// in every build profile. Malformed projection metadata must never turn a
+    /// decoded offset into an unchecked pointer arithmetic operation.
+    fn atomic_load(&self, offset: usize, ordering: Ordering) -> Result<u64, WriterError> {
+        self.checked_word_range(offset, 8)?;
+        // SAFETY: `checked_word_range` proves this live mapping contains the
+        // aligned word. Every concurrent access to the word is atomic.
         let word: &AtomicU64 = unsafe { AtomicU64::from_ptr(self.ptr.add(offset).cast()) };
-        word.load(ordering)
+        Ok(word.load(ordering))
     }
 
-    fn atomic_store(&self, offset: usize, value: u64, ordering: Ordering) {
-        debug_assert_eq!(offset % 8, 0);
-        debug_assert!(offset + 8 <= self.len);
-        // SAFETY: same invariants as `atomic_load`.
+    /// Stores one shared word only after enforcing alignment and mapping bounds
+    /// in every build profile. Writer-side geometry is trusted but still
+    /// checked so future callers cannot accidentally create an unsafe access.
+    fn atomic_store(
+        &self,
+        offset: usize,
+        value: u64,
+        ordering: Ordering,
+    ) -> Result<(), WriterError> {
+        self.checked_word_range(offset, 8)?;
+        // SAFETY: same checked mapping/alignment invariant as `atomic_load`.
         let word: &AtomicU64 = unsafe { AtomicU64::from_ptr(self.ptr.add(offset).cast()) };
         word.store(value, ordering);
+        Ok(())
     }
 }
 
@@ -144,11 +154,17 @@ const MAX_GENERATION: u64 = (1u64 << 63) - 1;
 
 impl Writer {
     pub fn new(memory: RegionMemory, region: RegionHeader) -> Result<Self, WriterError> {
+        validate_region_memory(&memory, &region).map_err(|error| match error {
+            ReaderError::Layout(layout) => WriterError::InvalidInput(layout),
+            ReaderError::OutOfBounds
+            | ReaderError::NoReadableGeneration
+            | ReaderError::TornReadExceededRetries => WriterError::OutOfBounds,
+        })?;
         let slot0 = region.slot_offset(0)? as usize;
         let slot1 = region.slot_offset(1)? as usize;
-        memory.atomic_store(slot0 + SLOT_SEQUENCE_OFFSET, 0, Ordering::Release);
-        memory.atomic_store(slot1 + SLOT_SEQUENCE_OFFSET, 0, Ordering::Release);
-        memory.atomic_store(PUBLICATION_WORD_OFFSET, 0, Ordering::Release);
+        memory.atomic_store(slot0 + SLOT_SEQUENCE_OFFSET, 0, Ordering::Release)?;
+        memory.atomic_store(slot1 + SLOT_SEQUENCE_OFFSET, 0, Ordering::Release)?;
+        memory.atomic_store(PUBLICATION_WORD_OFFSET, 0, Ordering::Release)?;
         Ok(Self {
             memory,
             region,
@@ -181,7 +197,7 @@ impl Writer {
             slot_offset + SLOT_SEQUENCE_OFFSET,
             2 * generation + 1,
             Ordering::Release,
-        );
+        )?;
 
         let cells_offset = SLOT_HEADER_LEN as u32;
         let cells_len = snapshot
@@ -243,12 +259,12 @@ impl Writer {
             slot_offset + SLOT_SEQUENCE_OFFSET,
             2 * generation,
             Ordering::Release,
-        );
+        )?;
         self.memory.atomic_store(
             PUBLICATION_WORD_OFFSET,
             (generation << 1) | slot as u64,
             Ordering::Release,
-        );
+        )?;
 
         self.committed_slot = Some(slot);
         self.next_generation += 1;
@@ -326,6 +342,36 @@ pub struct SnapshotRead {
 
 const MAX_READ_RETRIES: u32 = 64;
 
+fn validate_region_memory(
+    memory: &RegionMemory,
+    region: &RegionHeader,
+) -> Result<(), ReaderError> {
+    let encoded_len = usize::try_from(region.region_bytes).map_err(|_| ReaderError::OutOfBounds)?;
+    if encoded_len < REGION_HEADER_LEN || encoded_len > memory.len() {
+        return Err(ReaderError::OutOfBounds);
+    }
+    if region.slot0_offset < REGION_HEADER_LEN as u64 {
+        return Err(ReaderError::Layout(LayoutError::InvalidOffsets));
+    }
+    if !region.slot0_offset.is_multiple_of(64) || !region.slot_stride.is_multiple_of(8) {
+        return Err(ReaderError::Layout(LayoutError::SlotNotAligned));
+    }
+    if region.slot_stride < SLOT_HEADER_LEN as u64 {
+        return Err(ReaderError::Layout(LayoutError::SlotOutOfBounds));
+    }
+    let slot0_end = region
+        .slot0_offset
+        .checked_add(region.slot_stride)
+        .ok_or(ReaderError::Layout(LayoutError::LengthOverflow))?;
+    let slot1_end = slot0_end
+        .checked_add(region.slot_stride)
+        .ok_or(ReaderError::Layout(LayoutError::LengthOverflow))?;
+    if slot1_end > region.region_bytes {
+        return Err(ReaderError::Layout(LayoutError::SlotOutOfBounds));
+    }
+    Ok(())
+}
+
 /// Reads only the immutable/static parts of the region header using atomic
 /// word loads, deliberately skipping the publication word at bytes 96..104.
 pub fn read_region_header(memory: &RegionMemory) -> Result<RegionHeader, ReaderError> {
@@ -338,15 +384,21 @@ pub fn read_region_header(memory: &RegionMemory) -> Result<RegionHeader, ReaderE
     let suffix_offset = PUBLICATION_WORD_OFFSET + 8;
     let suffix = memory.read_atomic_bytes(suffix_offset, REGION_HEADER_LEN - suffix_offset)?;
     bytes[suffix_offset..].copy_from_slice(&suffix);
-    Ok(RegionHeader::decode(&bytes)?)
+    let region = RegionHeader::decode(&bytes)?;
+    validate_region_memory(memory, &region)?;
+    Ok(region)
 }
 
 pub fn read_latest(
     memory: &RegionMemory,
     region: &RegionHeader,
 ) -> Result<SnapshotRead, ReaderError> {
+    // `RegionHeader` is public benchmark/client-facing data. Revalidate it
+    // against this exact mapping even if the caller did not obtain it through
+    // `read_region_header`; no decoded offset is trusted before this point.
+    validate_region_memory(memory, region)?;
     for _ in 0..MAX_READ_RETRIES {
-        let publication = memory.atomic_load(PUBLICATION_WORD_OFFSET, Ordering::Acquire);
+        let publication = memory.atomic_load(PUBLICATION_WORD_OFFSET, Ordering::Acquire)?;
         let generation = publication >> 1;
         let slot = (publication & 1) as u8;
         if generation == 0 {
@@ -354,7 +406,7 @@ pub fn read_latest(
         }
         let slot_offset = region.slot_offset(slot)? as usize;
         let sequence_before =
-            memory.atomic_load(slot_offset + SLOT_SEQUENCE_OFFSET, Ordering::Acquire);
+            memory.atomic_load(slot_offset + SLOT_SEQUENCE_OFFSET, Ordering::Acquire)?;
         if !sequence_before.is_multiple_of(2) || sequence_before != 2 * generation {
             continue;
         }
@@ -386,8 +438,8 @@ pub fn read_latest(
         }
 
         let sequence_after =
-            memory.atomic_load(slot_offset + SLOT_SEQUENCE_OFFSET, Ordering::Acquire);
-        let publication_after = memory.atomic_load(PUBLICATION_WORD_OFFSET, Ordering::Acquire);
+            memory.atomic_load(slot_offset + SLOT_SEQUENCE_OFFSET, Ordering::Acquire)?;
+        let publication_after = memory.atomic_load(PUBLICATION_WORD_OFFSET, Ordering::Acquire)?;
         if sequence_after == sequence_before
             && sequence_after == 2 * generation
             && publication_after == publication
@@ -471,6 +523,56 @@ mod tests {
     }
 
     #[test]
+    fn atomic_word_access_rejects_unaligned_and_out_of_bounds_offsets() {
+        let (_storage, memory) = aligned_region(64);
+        assert_eq!(
+            memory.atomic_load(1, Ordering::Acquire),
+            Err(WriterError::UnalignedAccess)
+        );
+        assert_eq!(
+            memory.atomic_load(64, Ordering::Acquire),
+            Err(WriterError::OutOfBounds)
+        );
+        assert_eq!(
+            memory.atomic_store(64, 1, Ordering::Release),
+            Err(WriterError::OutOfBounds)
+        );
+    }
+
+    #[test]
+    fn region_header_reader_rejects_encoded_region_larger_than_mapping() {
+        let region = small_region_header(2, 2, 4096);
+        let (_storage, memory) = aligned_region(REGION_HEADER_LEN);
+        initialize_region_header(memory, region);
+        assert_eq!(read_region_header(&memory), Err(ReaderError::OutOfBounds));
+    }
+
+    #[test]
+    fn region_header_reader_rejects_stride_that_does_not_fit_both_slots() {
+        let mut region = small_region_header(2, 2, 4096);
+        region.region_bytes = REGION_HEADER_LEN as u64 + region.slot_stride + SLOT_HEADER_LEN as u64;
+        let (_storage, memory) = aligned_region(region.region_bytes as usize);
+        initialize_region_header(memory, region);
+        assert_eq!(
+            read_region_header(&memory),
+            Err(ReaderError::Layout(LayoutError::SlotOutOfBounds))
+        );
+    }
+
+    #[test]
+    fn read_latest_rejects_forged_misaligned_slot_stride_before_atomic_access() {
+        let valid = small_region_header(2, 2, 4096);
+        let (_storage, memory) = aligned_region(valid.region_bytes as usize);
+        initialize_region_header(memory, valid);
+        let mut forged = valid;
+        forged.slot_stride += 1;
+        assert_eq!(
+            read_latest(&memory, &forged),
+            Err(ReaderError::Layout(LayoutError::SlotNotAligned))
+        );
+    }
+
+    #[test]
     fn reader_rejects_generation_zero_before_first_publish() {
         let region = small_region_header(4, 8, 4096);
         let (_storage, memory) = aligned_region(region.region_bytes as usize);
@@ -487,7 +589,9 @@ mod tests {
         let region = small_region_header(2, 2, 4096);
         let (_storage, memory) = aligned_region(region.region_bytes as usize);
         initialize_region_header(memory, region);
-        memory.atomic_store(PUBLICATION_WORD_OFFSET, 1234, Ordering::Release);
+        memory
+            .atomic_store(PUBLICATION_WORD_OFFSET, 1234, Ordering::Release)
+            .unwrap();
         assert_eq!(read_region_header(&memory).unwrap(), region);
     }
 
@@ -513,7 +617,7 @@ mod tests {
         };
         writer.publish(&snapshot).unwrap();
         let slot0 = region.slot_offset(0).unwrap() as usize;
-        assert_eq!(memory.atomic_load(slot0, Ordering::Acquire), 2);
+        assert_eq!(memory.atomic_load(slot0, Ordering::Acquire).unwrap(), 2);
     }
 
     #[test]

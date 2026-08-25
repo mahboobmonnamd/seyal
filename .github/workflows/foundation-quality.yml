@@ -13,52 +13,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  pass5-benchmark-path-repair:
-    name: pass5-benchmark-path-repair
-    if: github.event_name == 'pull_request' && github.head_ref == 'issue/105-m001-pass-5-implementation'
-    permissions:
-      contents: write
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: issue/105-m001-pass-5-implementation
-      - name: Bound benchmark-owned Unix socket path
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('crates/seyal-runtime/benches/pass5_production_transport.rs')
-          s = p.read_text()
-          begin = s.index('    let suffix = format!(\n')
-          marker = '    let mut config = RuntimeConfig::m001().expect("M001 config");\n'
-          end = s.index(marker, begin)
-          replacement = (
-              '    // Keep benchmark-owned filesystem paths intentionally short. Darwin Unix-domain\n'
-              '    // sockets have a 104-byte sun_path limit; workload identity is reported separately.\n'
-              '    // Each worker is a fresh process, so its PID uniquely scopes temporary paths.\n'
-              '    let suffix = format!("{:x}", process::id());\n'
-          )
-          s = s[:begin] + replacement + s[end:]
-          s = s.replace('format!("s5pd-{suffix}")', 'format!("s5d-{suffix}")', 1)
-          p.write_text(s)
-          PY
-      - name: Format patch with pinned toolchain
-        run: |
-          make bootstrap
-          cargo fmt --all
-          git diff --check
-      - name: Commit repair
-        run: |
-          if git diff --quiet -- crates/seyal-runtime/benches/pass5_production_transport.rs; then
-            exit 0
-          fi
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add crates/seyal-runtime/benches/pass5_production_transport.rs
-          git commit -m 'fix(bench): bound Candidate-D runtime socket path'
-          git push origin HEAD:issue/105-m001-pass-5-implementation
-
   repository-policy:
     name: repository-policy
     runs-on: ubuntu-latest

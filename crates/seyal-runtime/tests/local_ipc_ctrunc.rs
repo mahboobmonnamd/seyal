@@ -84,7 +84,11 @@ fn send_many_fds(socket: RawFd, payload: &[u8], fd: RawFd, count: usize) {
             );
         }
         let sent = libc::sendmsg(socket, &message, 0);
-        assert!(sent >= 0, "sendmsg failed: {}", std::io::Error::last_os_error());
+        assert!(
+            sent >= 0,
+            "sendmsg failed: {}",
+            std::io::Error::last_os_error()
+        );
     }
 }
 
@@ -218,13 +222,26 @@ fn wide_scm_rights_set_is_fatal_closes_all_fds_and_releases_controller() {
         let mut owner = harness.connect();
         harness.hello(&mut owner);
         let _controller = harness.attach_controller(&mut owner, execution_id);
-        assert_eq!(harness.runtime.lookup(execution_id).unwrap().attachment_count, 1);
+        assert_eq!(
+            harness
+                .runtime
+                .lookup(execution_id)
+                .unwrap()
+                .attachment_count,
+            1
+        );
 
         let dev_null = std::fs::File::open("/dev/null").unwrap();
         send_many_fds(owner.stream.as_raw_fd(), b"x", dev_null.as_raw_fd(), 80);
 
         let deadline = Instant::now() + Duration::from_secs(2);
-        while harness.runtime.lookup(execution_id).unwrap().attachment_count != 0 {
+        while harness
+            .runtime
+            .lookup(execution_id)
+            .unwrap()
+            .attachment_count
+            != 0
+        {
             harness.pump();
             assert!(
                 Instant::now() < deadline,

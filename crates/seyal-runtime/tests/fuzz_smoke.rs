@@ -1,17 +1,27 @@
 #![cfg(target_os = "macos")]
+#![allow(unsafe_code)]
 
-use std::{env, fs, path::PathBuf};
+use std::{
+    env, fs,
+    io::{Read, Write},
+    os::fd::{AsRawFd, OwnedFd},
+    os::unix::net::UnixStream,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
-use seyal_runtime::local_ipc::attachment::AttachmentRegistry;
-use seyal_runtime::local_ipc::connection::ConnectionState;
+use seyal_exec::{CommandSpec, WindowSize};
+use seyal_runtime::local_ipc::fd_transfer::{self, RecvFd};
 use seyal_runtime::local_ipc::framing::{
-    FrameHeader, HEADER_LEN, MessageType, Role, decode_message,
+    Attach, Attached, ClientHello, Detach, FrameHeader, HEADER_LEN, MessageType, Resync, Role,
+    ServerHello, encode_frame, decode_message,
 };
 use seyal_runtime::projection::layout::{
-    CELL_LEN, CellRecord, DAMAGE_LEN, DamageRecord, REGION_HEADER_LEN, RegionHeader,
+    CELL_LEN, CellRecord, DAMAGE_LEN, DamageRecord, MAX_REGION_BYTES, REGION_HEADER_LEN,
     SLOT_HEADER_LEN, SlotHeader,
 };
-use seyal_runtime::{AttachmentId, ExecutionId, ProjectionId};
+use seyal_runtime::projection::writer::{RegionMemory, read_latest, read_region_header};
+use seyal_runtime::{AttachmentId, ExecutionId, LocalIpcMode, Runtime, RuntimeConfig};
 
 fn input() -> Vec<u8> {
     let path =
@@ -43,9 +53,24 @@ fn local_binary_protocol_decode_seed() {
 #[ignore = "executed by fuzz/targets/shared-projection-validation with a retained seed"]
 fn shared_projection_validation_seed() {
     let bytes = input();
-    if bytes.len() >= REGION_HEADER_LEN {
-        let _ = RegionHeader::decode(&bytes[..REGION_HEADER_LEN]);
+    let bounded_len = bytes.len().min(MAX_REGION_BYTES as usize);
+    let storage_bytes = bounded_len.max(REGION_HEADER_LEN).div_ceil(8) * 8;
+    let mut storage = vec![0u64; storage_bytes / 8].into_boxed_slice();
+    for (index, chunk) in bytes[..bounded_len].chunks(8).enumerate() {
+        let mut word = [0u8; 8];
+        word[..chunk.len()].copy_from_slice(chunk);
+        storage[index] = u64::from_le_bytes(word);
     }
+
+    // SAFETY: boxed `u64` storage is 8-byte aligned, remains alive for the
+    // entire reader exercise, and `storage_bytes` exactly describes its span.
+    let memory = unsafe { RegionMemory::new(storage.as_mut_ptr().cast(), storage_bytes) };
+    if let Ok(region) = read_region_header(&memory) {
+        let _ = read_latest(&memory, &region);
+    }
+
+    // Retain direct fixed-record decoder coverage as a supplement to the
+    // production mapped-reader path above.
     if bytes.len() >= SLOT_HEADER_LEN {
         let _ = SlotHeader::decode(&bytes[..SLOT_HEADER_LEN], 256, 512);
     }
@@ -59,91 +84,251 @@ fn shared_projection_validation_seed() {
     }
 }
 
-#[test]
-#[ignore = "executed by fuzz/targets/reconnect-resync-state-machine with a retained seed"]
-fn reconnect_resync_state_machine_seed() {
-    let bytes = input();
-    let mut registry = AttachmentRegistry::with_capacity(4);
-    let mut state = ConnectionState::AwaitHello;
-    let mut current_attachment: Option<AttachmentId> = None;
-    let mut current_execution: Option<ExecutionId> = None;
-    let mut connection_token = 1u64;
+struct RuntimeFuzzHarness {
+    runtime: Runtime,
+    execution_id: ExecutionId,
+}
 
-    for chunk in bytes.chunks(3) {
-        if chunk.len() < 3 {
-            break;
+impl RuntimeFuzzHarness {
+    fn new() -> Self {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let suffix = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut config = RuntimeConfig::m001().expect("fuzz Runtime config");
+        config.singleton_path = env::temp_dir().join(format!("fz-{suffix:x}.lock"));
+        config.local_ipc = LocalIpcMode::Enabled {
+            runtime_dir_override: Some(env::temp_dir().join(format!("fzd-{suffix:x}"))),
+        };
+        config.graceful_termination = Duration::from_millis(20);
+        config.forced_reap = Duration::from_millis(100);
+        config.final_drain = Duration::from_millis(20);
+        let mut runtime = Runtime::new(config).expect("fuzz Runtime");
+        let execution_id = runtime
+            .create_execution(
+                CommandSpec::new("/bin/cat"),
+                WindowSize::new(8, 2, 0, 0).expect("fuzz geometry"),
+            )
+            .expect("fuzz execution");
+        Self {
+            runtime,
+            execution_id,
         }
-        let op = chunk[0] % 7;
-        let execution_id = ExecutionId::from_bytes((chunk[1] as u128).to_le_bytes());
-        let projection_id = ProjectionId::from_bytes((chunk[2] as u128).to_le_bytes());
+    }
 
-        match op {
-            0 => {
-                let _ = state.validate_incoming(MessageType::ClientHello);
-                state = ConnectionState::Ready;
+    fn pump(&mut self) {
+        let _ = self.runtime.poll_once(Some(Duration::from_millis(1)));
+    }
+
+    fn connect(&mut self) -> UnixStream {
+        let path = self
+            .runtime
+            .local_ipc_socket_path()
+            .expect("fuzz local IPC path")
+            .to_path_buf();
+        let mut stream = UnixStream::connect(path).expect("fuzz connect");
+        stream.set_nonblocking(true).expect("fuzz nonblocking");
+        self.send(
+            &mut stream,
+            MessageType::ClientHello,
+            &ClientHello {
+                client_capabilities: 0,
             }
-            1 => {
-                if state.validate_incoming(MessageType::Attach).is_ok() {
-                    let role = if chunk[2] % 2 == 0 {
-                        Role::Observer
-                    } else {
-                        Role::Controller
-                    };
-                    if let Ok(id) = registry.create_attachment(
-                        execution_id,
-                        role,
-                        projection_id,
-                        connection_token,
-                    ) {
-                        current_attachment = Some(id);
-                        current_execution = Some(execution_id);
-                        state = ConnectionState::Attached;
+            .encode(),
+        );
+        let (kind, payload, fd) = self
+            .recv_frame(&stream, Duration::from_millis(250))
+            .expect("fuzz ServerHello");
+        drop(fd);
+        assert_eq!(kind, MessageType::ServerHello as u16);
+        ServerHello::decode(&payload).expect("fuzz valid ServerHello");
+        stream
+    }
+
+    fn send(&mut self, stream: &mut UnixStream, kind: MessageType, payload: &[u8]) {
+        let frame = encode_frame(kind, payload);
+        let mut sent = 0usize;
+        let deadline = Instant::now() + Duration::from_millis(250);
+        while sent < frame.len() {
+            match stream.write(&frame[sent..]) {
+                Ok(0) => return,
+                Ok(count) => sent += count,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => self.pump(),
+                Err(_) => return,
+            }
+            if Instant::now() >= deadline {
+                return;
+            }
+        }
+        self.pump();
+    }
+
+    fn recv_frame(
+        &mut self,
+        stream: &UnixStream,
+        timeout: Duration,
+    ) -> Option<(u16, Vec<u8>, Option<OwnedFd>)> {
+        let deadline = Instant::now() + timeout;
+        let mut buffer = Vec::new();
+        let mut descriptor = None;
+        loop {
+            if buffer.len() >= HEADER_LEN {
+                let header = FrameHeader::decode(&buffer[..HEADER_LEN]).ok()?;
+                let total = HEADER_LEN.checked_add(header.payload_len as usize)?;
+                if buffer.len() >= total {
+                    return Some((
+                        header.message_type,
+                        buffer[HEADER_LEN..total].to_vec(),
+                        descriptor,
+                    ));
+                }
+            }
+
+            let mut chunk = [0u8; 4096];
+            match fd_transfer::recv_with_fd(stream.as_raw_fd(), &mut chunk) {
+                Ok((0, _)) => return None,
+                Ok((count, RecvFd::One(fd))) => {
+                    if descriptor.replace(fd).is_some() {
+                        return None;
                     }
+                    buffer.extend_from_slice(&chunk[..count]);
                 }
+                Ok((count, RecvFd::None)) => buffer.extend_from_slice(&chunk[..count]),
+                Ok((_, RecvFd::Malformed)) => return None,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => self.pump(),
+                Err(_) => return None,
             }
-            2 => {
-                if let Some(id) = current_attachment
-                    && state.validate_incoming(MessageType::Detach).is_ok()
-                {
-                    let _ = registry.detach_for_connection(connection_token, id);
-                    current_attachment = None;
-                    state = ConnectionState::Ready;
-                }
-            }
-            3 => {
-                if let Some(id) = current_attachment {
-                    let _ = state.validate_incoming(MessageType::Resync);
-                    let _ = registry.execution_for_connection(connection_token, id);
-                    let _ = registry.is_live(id, projection_id);
-                }
-            }
-            4 => {
-                // Reconnect revokes the old connection's authority before a
-                // fresh token is introduced.
-                if let Some(id) = current_attachment {
-                    let _ = registry.detach_for_connection(connection_token, id);
-                }
-                current_attachment = None;
-                connection_token = connection_token.wrapping_add(1).max(1);
-                state = ConnectionState::AwaitHello;
-                if let Some(execution_id) = current_execution {
-                    let _ = registry.attachments_for_execution(execution_id);
-                }
-            }
-            5 => {
-                if let Some(id) = current_attachment {
-                    // A different authenticated connection must never gain
-                    // mutation authority merely by knowing the opaque id.
-                    let attacker = connection_token.wrapping_add(1).max(1);
-                    let _ = registry.authorize_mutation(attacker, id);
-                }
-            }
-            _ => {
-                let _ = registry.has_controller(execution_id);
-                let _ = registry.len();
+            if Instant::now() >= deadline {
+                return None;
             }
         }
     }
 
-    assert!(registry.len() <= 4);
+    fn attach(
+        &mut self,
+        stream: &mut UnixStream,
+        role: Role,
+    ) -> Option<AttachmentId> {
+        self.send(
+            stream,
+            MessageType::Attach,
+            &Attach {
+                execution_id: self.execution_id,
+                requested_role: role,
+            }
+            .encode(),
+        );
+        let (kind, payload, fd) = self.recv_frame(stream, Duration::from_millis(250))?;
+        if kind != MessageType::Attached as u16 {
+            drop(fd);
+            return None;
+        }
+        let attached = Attached::decode(&payload).ok()?;
+        drop(fd);
+        Some(attached.attachment_id)
+    }
+
+    fn drain_one(&mut self, stream: &UnixStream) {
+        let _ = self.recv_frame(stream, Duration::from_millis(50));
+    }
+
+    fn shutdown(mut self) {
+        let _ = self.runtime.begin_shutdown();
+        let _ = self
+            .runtime
+            .run_until_empty(Instant::now() + Duration::from_secs(1));
+    }
+}
+
+fn forged_attachment(seed: u8) -> AttachmentId {
+    AttachmentId::from_bytes((0xfeed_0000u128 | seed as u128).to_le_bytes())
+}
+
+#[test]
+#[ignore = "executed by fuzz/targets/reconnect-resync-state-machine with a retained seed"]
+fn reconnect_resync_state_machine_seed() {
+    let bytes = input();
+    let mut harness = RuntimeFuzzHarness::new();
+    let mut client = harness.connect();
+    let mut attachment = None;
+
+    // Cap state-machine work per seed. The retained/mutated bytes choose
+    // operations and identities, but cannot create unbounded sockets/PTys or
+    // queue work inside one fuzz invocation.
+    for chunk in bytes.chunks(3).take(32) {
+        if chunk.len() < 3 {
+            break;
+        }
+        match chunk[0] % 6 {
+            0 => {
+                let role = if chunk[1] & 1 == 0 {
+                    Role::Observer
+                } else {
+                    Role::Controller
+                };
+                if attachment.is_none() {
+                    attachment = harness.attach(&mut client, role);
+                }
+            }
+            1 => {
+                let id = if chunk[1] & 1 == 0 {
+                    attachment.unwrap_or_else(|| forged_attachment(chunk[2]))
+                } else {
+                    forged_attachment(chunk[2])
+                };
+                harness.send(
+                    &mut client,
+                    MessageType::Resync,
+                    &Resync { attachment_id: id }.encode(),
+                );
+                harness.drain_one(&client);
+            }
+            2 => {
+                let id = if chunk[1] & 1 == 0 {
+                    attachment.unwrap_or_else(|| forged_attachment(chunk[2]))
+                } else {
+                    forged_attachment(chunk[2])
+                };
+                harness.send(
+                    &mut client,
+                    MessageType::Detach,
+                    &Detach { attachment_id: id }.encode(),
+                );
+                harness.drain_one(&client);
+                if attachment == Some(id) {
+                    attachment = None;
+                }
+            }
+            3 => {
+                drop(client);
+                for _ in 0..3 {
+                    harness.pump();
+                }
+                client = harness.connect();
+                attachment = None;
+            }
+            4 => {
+                if let Some(id) = attachment {
+                    let mut attacker = harness.connect();
+                    harness.send(
+                        &mut attacker,
+                        MessageType::Resync,
+                        &Resync { attachment_id: id }.encode(),
+                    );
+                    harness.drain_one(&attacker);
+                }
+            }
+            _ => {
+                // Repeated attach attempts exercise real one-attachment and
+                // one-controller state transitions rather than a copied model.
+                let role = if chunk[2] & 1 == 0 {
+                    Role::Observer
+                } else {
+                    Role::Controller
+                };
+                let _ = harness.attach(&mut client, role);
+            }
+        }
+    }
+
+    drop(client);
+    harness.shutdown();
 }

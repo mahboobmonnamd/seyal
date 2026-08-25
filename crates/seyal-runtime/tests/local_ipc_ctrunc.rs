@@ -38,7 +38,7 @@ fn fd_count() -> usize {
         .filter(|fd| {
             // SAFETY: F_GETFD only inspects the integer descriptor; invalid
             // descriptors are reported with EBADF and are not modified.
-            unsafe { libc::fcntl(*fd, libc::F_GETFD) } >= 0
+            (unsafe { libc::fcntl(*fd, libc::F_GETFD) }) >= 0
         })
         .count()
 }

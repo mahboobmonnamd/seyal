@@ -13,6 +13,9 @@ use std::{
 use crate::projection::layout::{MAX_REGION_BYTES, REGION_HEADER_LEN, RegionHeader};
 use crate::projection::writer::RegionMemory;
 
+#[cfg(feature = "test-fault-injection")]
+use crate::test_fault::{self, FaultPoint};
+
 static NEXT_NAME_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug)]
@@ -45,6 +48,11 @@ impl ProjectionRegion {
         }
         let name = unique_shm_name();
 
+        #[cfg(feature = "test-fault-injection")]
+        if test_fault::take(FaultPoint::ShmOpenWriter) {
+            return Err(LifecycleError::ShmOpenWriter(injected_error("shm_open writer")));
+        }
+
         // macOS shm_open(2) does not accept O_CLOEXEC. Create the object with
         // only the supported POSIX shm flags, then enforce FD_CLOEXEC with
         // fcntl before the descriptor can escape this function.
@@ -67,11 +75,23 @@ impl ProjectionRegion {
             return Err(LifecycleError::CloseOnExec(error));
         }
 
+        #[cfg(feature = "test-fault-injection")]
+        if test_fault::take(FaultPoint::Truncate) {
+            unlink_best_effort(&name);
+            return Err(LifecycleError::Truncate(injected_error("ftruncate")));
+        }
+
         // SAFETY: live writable descriptor; bounded nonzero size.
         if unsafe { libc::ftruncate(writer_raw, region_bytes as libc::off_t) } != 0 {
             let error = io::Error::last_os_error();
             unlink_best_effort(&name);
             return Err(LifecycleError::Truncate(error));
+        }
+
+        #[cfg(feature = "test-fault-injection")]
+        if test_fault::take(FaultPoint::MmapWriter) {
+            unlink_best_effort(&name);
+            return Err(LifecycleError::Mmap(injected_error("mmap writer")));
         }
 
         // SAFETY: descriptor has been resized successfully and remains open.
@@ -105,6 +125,17 @@ impl ProjectionRegion {
             );
         }
 
+        #[cfg(feature = "test-fault-injection")]
+        if test_fault::take(FaultPoint::ShmOpenReader) {
+            // SAFETY: exact mapping created above and not yet owned by a
+            // ProjectionRegion value.
+            unsafe { libc::munmap(ptr, region_bytes as usize) };
+            unlink_best_effort(&name);
+            return Err(LifecycleError::ShmOpenReader(injected_error(
+                "shm_open reader",
+            )));
+        }
+
         // SAFETY: same live shared-memory name, independently opened read-only.
         // As above, apply FD_CLOEXEC explicitly after shm_open succeeds.
         let reader_raw = unsafe { libc::shm_open(name.as_ptr(), libc::O_RDONLY, 0) };
@@ -123,6 +154,15 @@ impl ProjectionRegion {
             unsafe { libc::munmap(ptr, region_bytes as usize) };
             unlink_best_effort(&name);
             return Err(LifecycleError::CloseOnExec(error));
+        }
+
+        #[cfg(feature = "test-fault-injection")]
+        if test_fault::take(FaultPoint::ShmUnlink) {
+            // SAFETY: exact mapping created above. Owned descriptors close by
+            // RAII as this function returns.
+            unsafe { libc::munmap(ptr, region_bytes as usize) };
+            unlink_best_effort(&name);
+            return Err(LifecycleError::Unlink(injected_error("shm_unlink")));
         }
 
         // SAFETY: both owned descriptors are live; unlink only removes the
@@ -279,6 +319,11 @@ fn ensure_close_on_exec(fd: &OwnedFd) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(feature = "test-fault-injection")]
+fn injected_error(stage: &str) -> io::Error {
+    io::Error::other(format!("injected Pass-5 failure at {stage}"))
 }
 
 #[cfg(test)]

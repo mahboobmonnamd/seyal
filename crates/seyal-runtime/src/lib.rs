@@ -15,7 +15,7 @@ mod platform;
 pub mod projection;
 mod runtime;
 mod singleton;
-#[cfg(feature = "test-fault-injection")]
+#[cfg(all(target_os = "macos", feature = "test-fault-injection"))]
 #[doc(hidden)]
 pub mod test_fault;
 

@@ -2,7 +2,7 @@
 
 **Status:** Frozen reference for design/spec alignment  
 **Scope:** Core terminal screen only  
-**Reference image:** `docs/architecture/ui/assets/m001-core-terminal-reference.png`
+**Reference image:** `docs/architecture/ui/assets/m001-core-terminal-reference.jpg`
 
 ## 1. Purpose
 

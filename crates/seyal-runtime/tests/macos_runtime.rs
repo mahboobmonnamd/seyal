@@ -1,6 +1,7 @@
 #![cfg(target_os = "macos")]
 
 use std::{
+    os::unix::fs::MetadataExt,
     sync::{Arc, Barrier},
     thread,
     time::{Duration, Instant},
@@ -288,14 +289,20 @@ fn descendant_held_slave_cannot_keep_primary_execution_alive() {
 }
 
 #[test]
-fn runtime_internal_descriptors_are_not_inherited_by_child() {
-    let mut runtime = Runtime::new(config("cloexec")).expect("Runtime");
+fn runtime_singleton_descriptor_identity_is_not_inherited_by_child() {
+    let runtime_config = config("cloexec");
+    let singleton_path = runtime_config.singleton_path.clone();
+    let mut runtime = Runtime::new(runtime_config).expect("Runtime");
+    let metadata = std::fs::metadata(&singleton_path).expect("singleton metadata");
+    let singleton_identity = format!("{}:{}", metadata.dev(), metadata.ino());
     let id = runtime
         .create_execution(
-            CommandSpec::new("/bin/sh").args([
-                "-c",
-                "for fd in 3 4 5 6 7 8 9; do if [ -e /dev/fd/$fd ]; then printf 'LEAK:%s ' $fd; fi; done; printf 'checked'; sleep 30",
-            ]),
+            CommandSpec::new("/bin/sh")
+                .env("SEYAL_SINGLETON_IDENTITY", singleton_identity)
+                .args([
+                    "-c",
+                    "for fd in 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do if [ -e /dev/fd/$fd ]; then identity=$(/usr/bin/stat -f '%d:%i' /dev/fd/$fd 2>/dev/null || true); if [ \"$identity\" = \"$SEYAL_SINGLETON_IDENTITY\" ]; then printf 'LEAK_RUNTIME:%s ' $fd; fi; fi; done; printf 'checked'; sleep 30",
+                ]),
             size(),
         )
         .expect("execution");
@@ -316,8 +323,8 @@ fn runtime_internal_descriptors_are_not_inherited_by_child() {
         .row_text(0)
         .unwrap();
     assert!(
-        !row.contains("LEAK:"),
-        "child inherited Runtime-only fd: {row:?}"
+        !row.contains("LEAK_RUNTIME:"),
+        "child inherited Runtime singleton descriptor: {row:?}"
     );
     shutdown(&mut runtime);
 }

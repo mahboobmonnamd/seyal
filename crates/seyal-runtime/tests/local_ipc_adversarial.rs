@@ -1,14 +1,10 @@
 #![cfg(target_os = "macos")]
 
-//! Cross-connection authority regression coverage for SPEC-004.
-//!
-//! Attachment identifiers are opaque identities, not bearer capabilities.
-//! Knowing another connection's controller `AttachmentId` must not grant any
-//! input, resize, resync, or detach authority.
+//! Attachment IDs are identities, not bearer capabilities. A second connection
+//! cannot use another connection's controller ID for input/resize/resync/detach.
 
 use std::{
     io::{Read, Write},
-    os::fd::{AsRawFd, OwnedFd},
     os::unix::net::UnixStream,
     time::{Duration, Instant},
 };
@@ -16,274 +12,140 @@ use std::{
 use seyal_exec::{CommandSpec, WindowSize};
 use seyal_runtime::{
     ExecutionId, LocalIpcMode, Runtime, RuntimeConfig,
-    local_ipc::{
-        fd_transfer::{self, RecvFd},
-        framing::{
-            Attach, Attached, ClientHello, Detach, ErrorCode, ErrorMessage, FrameHeader,
-            HEADER_LEN, InputRef, MessageType, Resize, Resync, Role, ServerHello, encode_frame,
-        },
-    },
-    projection::{
-        layout::{REGION_HEADER_LEN, RegionHeader},
-        lifecycle::ReadOnlyMapping,
-        writer::read_latest,
+    display::{DisplayCache, decode_chunk, empty_cache},
+    local_ipc::framing::{
+        Attach, Attached, ClientHello, Detach, ErrorCode, ErrorMessage, FrameHeader, HEADER_LEN,
+        InputRef, MessageType, Resize, Resync, Role, ServerHello, encode_frame,
     },
 };
 
 fn config() -> RuntimeConfig {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let suffix = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let mut config = RuntimeConfig::m001().expect("bundled capability profile");
+    let mut config = RuntimeConfig::m001().unwrap();
     config.singleton_path = std::env::temp_dir().join(format!("s5a-{suffix:x}.lock"));
     config.local_ipc = LocalIpcMode::Enabled {
         runtime_dir_override: Some(std::env::temp_dir().join(format!("s5ad-{suffix:x}"))),
     };
-    config.graceful_termination = Duration::from_millis(50);
-    config.forced_reap = Duration::from_millis(250);
-    config.final_drain = Duration::from_millis(100);
     config
 }
 
-struct Harness {
-    runtime: Runtime,
+struct Client {
+    stream: UnixStream,
+    buffered: Vec<u8>,
 }
 
+struct Harness { runtime: Runtime }
+
 impl Harness {
-    fn new() -> Self {
-        Self {
-            runtime: Runtime::new(config()).expect("Runtime"),
-        }
-    }
-
+    fn new() -> Self { Self { runtime: Runtime::new(config()).unwrap() } }
+    fn pump(&mut self) { self.runtime.poll_once(Some(Duration::from_millis(5))).unwrap(); }
     fn spawn_cat(&mut self) -> ExecutionId {
-        self.runtime
-            .create_execution(
-                CommandSpec::new("/bin/cat"),
-                WindowSize::new(8, 2, 0, 0).expect("valid geometry"),
-            )
-            .expect("execution")
+        self.runtime.create_execution(
+            CommandSpec::new("/bin/cat"),
+            WindowSize::new(80, 24, 0, 0).unwrap(),
+        ).unwrap()
     }
-
-    fn pump(&mut self) {
-        self.runtime
-            .poll_once(Some(Duration::from_millis(5)))
-            .expect("Runtime poll");
+    fn connect(&mut self) -> Client {
+        let path = self.runtime.local_ipc_socket_path().unwrap().to_path_buf();
+        let stream = UnixStream::connect(path).unwrap();
+        stream.set_nonblocking(true).unwrap();
+        self.pump();
+        Client { stream, buffered: Vec::new() }
     }
-
-    fn connect(&mut self) -> UnixStream {
-        let path = self
-            .runtime
-            .local_ipc_socket_path()
-            .expect("local IPC socket")
-            .to_path_buf();
-        let stream = UnixStream::connect(path).expect("connect local IPC");
-        stream.set_nonblocking(true).expect("nonblocking client");
-        stream
-    }
-
-    fn send(&mut self, stream: &mut UnixStream, message_type: MessageType, payload: &[u8]) {
-        stream
-            .write_all(&encode_frame(message_type, payload))
-            .expect("write frame");
+    fn send(&mut self, client: &mut Client, kind: MessageType, payload: &[u8]) {
+        client.stream.write_all(&encode_frame(kind, payload)).unwrap();
         self.pump();
     }
-
-    fn frame(&mut self, stream: &mut UnixStream) -> (u16, Vec<u8>) {
-        let deadline = Instant::now() + Duration::from_secs(2);
-        let mut buffer = Vec::new();
+    fn frame(&mut self, client: &mut Client) -> (MessageType, Vec<u8>) {
+        let deadline = Instant::now() + Duration::from_secs(3);
         loop {
-            let mut chunk = [0u8; 4096];
-            match stream.read(&mut chunk) {
+            if client.buffered.len() >= HEADER_LEN {
+                let header = FrameHeader::decode(&client.buffered[..HEADER_LEN]).unwrap();
+                let total = HEADER_LEN + header.payload_len as usize;
+                if client.buffered.len() >= total {
+                    let raw = client.buffered.drain(..total).collect::<Vec<_>>();
+                    return (MessageType::from_u16(header.message_type).unwrap(), raw[HEADER_LEN..].to_vec());
+                }
+            }
+            let mut chunk = [0u8; 8192];
+            match client.stream.read(&mut chunk) {
                 Ok(0) => panic!("connection closed"),
-                Ok(count) => buffer.extend_from_slice(&chunk[..count]),
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-                Err(error) => panic!("client read failed: {error}"),
+                Ok(n) => client.buffered.extend_from_slice(&chunk[..n]),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => self.pump(),
+                Err(e) => panic!("read failed: {e}"),
             }
-            if buffer.len() >= HEADER_LEN {
-                let header = FrameHeader::decode(&buffer[..HEADER_LEN]).expect("valid header");
-                let total = HEADER_LEN + header.payload_len as usize;
-                if buffer.len() >= total {
-                    return (header.message_type, buffer[HEADER_LEN..total].to_vec());
-                }
-            }
-            assert!(Instant::now() < deadline, "timed out awaiting frame");
-            self.pump();
+            assert!(Instant::now() < deadline, "frame timed out");
         }
     }
-
-    fn fd_frame(&mut self, stream: &UnixStream) -> (u16, Vec<u8>, OwnedFd) {
-        let deadline = Instant::now() + Duration::from_secs(2);
-        let mut buffer = Vec::new();
-        let mut fd = None;
-        loop {
-            if buffer.len() >= HEADER_LEN {
-                let header = FrameHeader::decode(&buffer[..HEADER_LEN]).expect("valid header");
-                let total = HEADER_LEN + header.payload_len as usize;
-                if buffer.len() >= total {
-                    return (
-                        header.message_type,
-                        buffer[HEADER_LEN..total].to_vec(),
-                        fd.expect("fd-bearing frame without descriptor"),
-                    );
-                }
-            }
-            let mut chunk = [0u8; 4096];
-            match fd_transfer::recv_with_fd(stream.as_raw_fd(), &mut chunk) {
-                Ok((0, _)) => panic!("connection closed"),
-                Ok((count, RecvFd::One(received))) => {
-                    assert!(fd.replace(received).is_none(), "multiple descriptors");
-                    buffer.extend_from_slice(&chunk[..count]);
-                }
-                Ok((count, RecvFd::None)) => buffer.extend_from_slice(&chunk[..count]),
-                Ok((_, RecvFd::Malformed)) => panic!("malformed descriptor transfer"),
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-                Err(error) => panic!("recvmsg failed: {error}"),
-            }
-            assert!(Instant::now() < deadline, "timed out awaiting fd frame");
-            self.pump();
+    fn hello(&mut self, client: &mut Client) {
+        self.send(client, MessageType::ClientHello, &ClientHello { client_capabilities: 0 }.encode());
+        let (kind, payload) = self.frame(client);
+        assert_eq!(kind, MessageType::ServerHello);
+        ServerHello::decode(&payload).unwrap();
+    }
+    fn attach(&mut self, client: &mut Client, execution_id: ExecutionId, role: Role) -> (Attached, DisplayCache) {
+        self.send(client, MessageType::Attach, &Attach { execution_id, requested_role: role }.encode());
+        let (kind, payload) = self.frame(client);
+        assert_eq!(kind, MessageType::Attached);
+        let attached = Attached::decode(&payload).unwrap();
+        let mut cache = empty_cache();
+        self.apply_display(client, &mut cache);
+        (attached, cache)
+    }
+    fn apply_display(&mut self, client: &mut Client, cache: &mut DisplayCache) {
+        let (kind, payload) = self.frame(client);
+        assert!(matches!(kind, MessageType::DisplaySnapshot | MessageType::DisplayDelta));
+        let first = decode_chunk(&encode_frame(kind, &payload)).unwrap();
+        let expected = first.chunk_count as usize;
+        let mut chunks = vec![first];
+        while chunks.len() < expected {
+            let (next_kind, next_payload) = self.frame(client);
+            assert_eq!(next_kind, kind);
+            chunks.push(decode_chunk(&encode_frame(kind, &next_payload)).unwrap());
         }
+        cache.apply_chunks(&chunks).unwrap();
     }
-
-    fn hello(&mut self, stream: &mut UnixStream) {
-        self.send(
-            stream,
-            MessageType::ClientHello,
-            &ClientHello {
-                client_capabilities: 0,
-            }
-            .encode(),
-        );
-        let (kind, payload) = self.frame(stream);
-        assert_eq!(kind, MessageType::ServerHello as u16);
-        ServerHello::decode(&payload).expect("valid ServerHello");
-    }
-
-    fn attach(
-        &mut self,
-        stream: &mut UnixStream,
-        execution_id: ExecutionId,
-        role: Role,
-    ) -> (Attached, ReadOnlyMapping) {
-        self.send(
-            stream,
-            MessageType::Attach,
-            &Attach {
-                execution_id,
-                requested_role: role,
-            }
-            .encode(),
-        );
-        let (kind, payload, fd) = self.fd_frame(stream);
-        assert_eq!(kind, MessageType::Attached as u16);
-        let attached = Attached::decode(&payload).expect("valid Attached");
-        let mapping = ReadOnlyMapping::new(fd, attached.region_bytes as usize).expect("projection");
-        (attached, mapping)
-    }
-
-    fn expect_stale(&mut self, stream: &mut UnixStream, message_type: MessageType, payload: &[u8]) {
-        self.send(stream, message_type, payload);
-        let (kind, payload) = self.frame(stream);
-        assert_eq!(kind, MessageType::Error as u16);
-        let error = ErrorMessage::decode(&payload).expect("valid Error");
+    fn stale(&mut self, client: &mut Client, kind: MessageType, payload: &[u8]) {
+        self.send(client, kind, payload);
+        let (response, payload) = self.frame(client);
+        assert_eq!(response, MessageType::Error);
+        let error = ErrorMessage::decode(&payload).unwrap();
         assert_eq!(error.error_code, ErrorCode::StaleIdentity as u16);
-        assert_eq!(error.offending_message_type, message_type as u16);
+        assert_eq!(error.offending_message_type, kind as u16);
     }
 }
 
 #[test]
-fn another_attached_connection_cannot_reuse_controller_attachment_identity() {
+fn another_connection_cannot_reuse_controller_attachment_identity() {
     let mut harness = Harness::new();
     let execution_id = harness.spawn_cat();
 
     let mut owner = harness.connect();
     harness.hello(&mut owner);
-    let (controller, controller_mapping) =
-        harness.attach(&mut owner, execution_id, Role::Controller);
+    let (controller, mut owner_cache) = harness.attach(&mut owner, execution_id, Role::Controller);
 
     let mut attacker = harness.connect();
     harness.hello(&mut attacker);
-    let (_observer, _observer_mapping) =
-        harness.attach(&mut attacker, execution_id, Role::Observer);
+    let (_observer, _cache) = harness.attach(&mut attacker, execution_id, Role::Observer);
 
-    harness.expect_stale(
-        &mut attacker,
-        MessageType::Input,
-        &InputRef {
-            attachment_id: controller.attachment_id,
-            bytes: b"EVIL",
-        }
-        .encode(),
-    );
-    harness.expect_stale(
-        &mut attacker,
-        MessageType::Resize,
-        &Resize {
-            attachment_id: controller.attachment_id,
-            rows: 3,
-            columns: 12,
-        }
-        .encode(),
-    );
-    harness.expect_stale(
-        &mut attacker,
-        MessageType::Resync,
-        &Resync {
-            attachment_id: controller.attachment_id,
-        }
-        .encode(),
-    );
-    harness.expect_stale(
-        &mut attacker,
-        MessageType::Detach,
-        &Detach {
-            attachment_id: controller.attachment_id,
-        }
-        .encode(),
-    );
+    harness.stale(&mut attacker, MessageType::Input, &InputRef { attachment_id: controller.attachment_id, bytes: b"EVIL" }.encode());
+    harness.stale(&mut attacker, MessageType::Resize, &Resize { attachment_id: controller.attachment_id, rows: 30, columns: 100 }.encode());
+    harness.stale(&mut attacker, MessageType::Resync, &Resync { attachment_id: controller.attachment_id }.encode());
+    harness.stale(&mut attacker, MessageType::Detach, &Detach { attachment_id: controller.attachment_id }.encode());
 
-    // The failed cross-connection attempts must not revoke or weaken the
-    // legitimate controller. Prove it still drives the real PTY and its
-    // projection advances to the owner's input.
-    harness.send(
-        &mut owner,
-        MessageType::Input,
-        &InputRef {
-            attachment_id: controller.attachment_id,
-            bytes: b"OK",
-        }
-        .encode(),
-    );
-    let region_bytes = controller_mapping
-        .memory()
-        .read_bytes(0..REGION_HEADER_LEN)
-        .expect("region header bytes");
-    let region = RegionHeader::decode(&region_bytes).expect("region header");
-    let deadline = Instant::now() + Duration::from_secs(2);
+    harness.send(&mut owner, MessageType::Input, &InputRef { attachment_id: controller.attachment_id, bytes: b"OK" }.encode());
+    let deadline = Instant::now() + Duration::from_secs(3);
     loop {
-        if let Ok(snapshot) = read_latest(&controller_mapping.memory(), &region) {
-            let row: String = snapshot
-                .cells
-                .iter()
-                .take(snapshot.header.columns as usize)
-                .map(|cell| cell.scalar)
-                .collect();
-            if row.starts_with("OK") {
-                break;
-            }
-        }
-        assert!(
-            Instant::now() < deadline,
-            "owner projection did not advance"
-        );
-        harness.pump();
+        let row: String = owner_cache.cells.iter().take(owner_cache.columns as usize).map(|c| c.scalar).collect();
+        if row.starts_with("OK") { break; }
+        assert!(Instant::now() < deadline, "legitimate controller stopped making progress");
+        harness.apply_display(&mut owner, &mut owner_cache);
     }
 
     drop(attacker);
     drop(owner);
     harness.pump();
-    harness.runtime.begin_shutdown().expect("begin shutdown");
-    harness
-        .runtime
-        .run_until_empty(Instant::now() + Duration::from_secs(2))
-        .expect("controlled shutdown");
+    harness.runtime.begin_shutdown().unwrap();
+    harness.runtime.run_until_empty(Instant::now() + Duration::from_secs(3)).unwrap();
 }

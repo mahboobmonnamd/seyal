@@ -32,8 +32,6 @@ use seyal_runtime::{
 #[cfg(target_os = "macos")]
 const MAX_VISIBLE_ATTACHMENTS: usize = 16;
 #[cfg(target_os = "macos")]
-const UPDATE_REPETITIONS: usize = 16;
-#[cfg(target_os = "macos")]
 const REFERENCE_HEADER_LEN: usize = 40;
 #[cfg(target_os = "macos")]
 const REFERENCE_MAGIC: [u8; 8] = *b"SYLSOCK1";
@@ -77,29 +75,19 @@ fn main() {
 
 #[cfg(target_os = "macos")]
 fn run_macos() {
-    match env::args().nth(1).as_deref() {
-        Some("--worker") => {
-            worker();
-            return;
-        }
-        Some("--fanout-worker") => {
-            fanout_worker();
-            return;
-        }
-        _ => {}
+    if env::args().nth(1).as_deref() == Some("--worker") {
+        worker();
+        return;
     }
 
     println!(
         "seyal-runtime Pass 5 equivalent display-transport comparator; performance_claim=false"
     );
     println!(
-        "method=fresh_worker_per_scenario socket_only=full_fixed_width_snapshot_over_unix_stream hybrid=production_uds_plus_readonly_shm"
+        "method=fresh_worker_per_population_and_transport socket_only=full_fixed_width_snapshot_over_unix_stream hybrid=production_uds_plus_readonly_shm"
     );
     println!(
         "semantic_rule=delivered_snapshot_must_equal_same_worker_canonical_projection visible_attachment_cap={MAX_VISIBLE_ATTACHMENTS}"
-    );
-    println!(
-        "sampling repetitions={UPDATE_REPETITIONS} percentile_method=nearest_rank client_resource_scope=combined_runtime_and_in_process_benchmark_client allocation_count=not_yet_instrumented"
     );
     print_host_metadata();
 
@@ -117,12 +105,6 @@ fn run_macos() {
             (80, 24, "alternate"),
         ] {
             run_worker_process(&executable, 1, columns, rows, screen, transport);
-        }
-    }
-
-    for transport in [TransportMode::SocketOnly, TransportMode::HybridProjection] {
-        for attachment_count in [1usize, 10, MAX_VISIBLE_ATTACHMENTS] {
-            run_fanout_worker_process(&executable, attachment_count, transport);
         }
     }
 }
@@ -151,43 +133,6 @@ fn run_worker_process(
 }
 
 #[cfg(target_os = "macos")]
-fn run_fanout_worker_process(
-    executable: &std::path::Path,
-    attachment_count: usize,
-    transport: TransportMode,
-) {
-    let status = Command::new(executable)
-        .args([
-            "--fanout-worker",
-            &attachment_count.to_string(),
-            transport.as_arg(),
-        ])
-        .status()
-        .expect("launch fresh fanout benchmark worker");
-    assert!(status.success(), "runtime fanout benchmark worker failed");
-}
-
-#[cfg(target_os = "macos")]
-fn base_config(label: &str, transport: TransportMode, max_executions: usize) -> (RuntimeConfig, Option<std::path::PathBuf>) {
-    let mut config = RuntimeConfig::m001().expect("bundled capability policy");
-    config.singleton_path = env::temp_dir().join(format!("s5b-{}-{label}.lock", process::id()));
-    let local_ipc_runtime_dir = match transport {
-        TransportMode::SocketOnly => None,
-        TransportMode::HybridProjection => {
-            Some(env::temp_dir().join(format!("s5bd-{}-{label}", process::id())))
-        }
-    };
-    config.local_ipc = match &local_ipc_runtime_dir {
-        None => LocalIpcMode::Disabled,
-        Some(path) => LocalIpcMode::Enabled {
-            runtime_dir_override: Some(path.clone()),
-        },
-    };
-    config.max_executions = max_executions.max(1);
-    (config, local_ipc_runtime_dir)
-}
-
-#[cfg(target_os = "macos")]
 fn worker() {
     let args = env::args().collect::<Vec<_>>();
     let requested = args[2].parse::<usize>().expect("population");
@@ -196,8 +141,24 @@ fn worker() {
     let alternate = args[5] == "alternate";
     let transport = TransportMode::from_arg(&args[6]);
 
-    let label = format!("population-{requested}-{columns}x{rows}-{}", transport.as_arg());
-    let (config, local_ipc_runtime_dir) = base_config(&label, transport, requested);
+    let mut config = RuntimeConfig::m001().expect("bundled capability policy");
+    config.singleton_path = env::temp_dir().join(format!(
+        "s5b-{}-{requested}-{columns}x{rows}.lock",
+        process::id()
+    ));
+    let local_ipc_runtime_dir = match transport {
+        TransportMode::SocketOnly => None,
+        TransportMode::HybridProjection => {
+            Some(env::temp_dir().join(format!("s5bd-{}-{requested}", process::id())))
+        }
+    };
+    config.local_ipc = match &local_ipc_runtime_dir {
+        None => LocalIpcMode::Disabled,
+        Some(path) => LocalIpcMode::Enabled {
+            runtime_dir_override: Some(path.clone()),
+        },
+    };
+    config.max_executions = requested.max(1);
     let mut runtime = Runtime::new(config).expect("headless Runtime");
     let baseline = process_metrics(&runtime);
 
@@ -253,9 +214,19 @@ fn worker() {
     }
     let registry_us = registry_start.elapsed().as_micros();
 
-    let progress = ids.first().and_then(|id| measure_progress_series(&mut runtime, *id, &mut display));
+    let progress = ids.first().and_then(|id| match &mut display {
+        DisplayClients::Socket(clients) => clients
+            .first_mut()
+            .and_then(|client| measure_socket_progress(&mut runtime, *id, client)),
+        DisplayClients::Hybrid(clients) => clients
+            .first_mut()
+            .and_then(|client| measure_hybrid_progress(&mut runtime, *id, client)),
+    });
     if let Some(progress) = &progress {
-        assert!(progress.semantic_match, "updated display state was not canonical");
+        assert!(
+            progress.semantic_match,
+            "updated display state was not canonical"
+        );
     }
 
     let resync = ids.first().and_then(|id| match &mut display {
@@ -267,7 +238,10 @@ fn worker() {
             .map(|client| measure_hybrid_resync(&mut runtime, client)),
     });
     if let Some(result) = &resync {
-        assert!(result.semantic_match, "resync display state was not canonical");
+        assert!(
+            result.semantic_match,
+            "resync display state was not canonical"
+        );
     }
 
     let reconnect = ids.first().map(|id| match &mut display {
@@ -275,7 +249,10 @@ fn worker() {
         DisplayClients::Hybrid(clients) => measure_hybrid_reconnect(&mut runtime, *id, clients),
     });
     if let Some(result) = &reconnect {
-        assert!(result.semantic_match, "reconnected display state was not canonical");
+        assert!(
+            result.semantic_match,
+            "reconnected display state was not canonical"
+        );
     }
 
     let display_bytes = display.display_bytes();
@@ -295,18 +272,16 @@ fn worker() {
         "PLATFORM_LIMITED"
     };
     println!(
-        "runtime_resource transport={} population_requested={requested} population_created={} visible_attached={visible_count} hidden_detached={} geometry={}x{} screen={} classification={classification} repetitions={UPDATE_REPETITIONS} percentile_method=nearest_rank create_us={creation_us} display_setup_us={display_setup_us} setup_comparison=non_equivalent_reference_path registry_100x_us={registry_us} update_p50_us={:?} update_p95_us={:?} readiness_to_readable_p50_us={:?} readiness_to_readable_p95_us={:?} update_transfer_bytes_p50={:?} socket_write_calls_p50={:?} hybrid_write_calls=not_instrumented allocations_per_update=not_instrumented resync_us={:?} reconnect_us={:?} reconnect_comparison=non_equivalent_reference_path semantic_match={} display_bytes={} projection_region_bytes={} combined_rss_baseline_kib={} combined_rss_populated_kib={} combined_rss_final_kib={} incremental_combined_runtime_client_kib={} child_rss_kib={} combined_idle_cpu_percent={} threads_baseline={} threads_populated={} threads_final={} fd_baseline={} fd_populated={} fd_final={} teardown_us={teardown_us} pending_final={} shutdown_ok={} platform_error={:?}",
+        "runtime_resource transport={} population_requested={requested} population_created={} visible_attached={visible_count} geometry={}x{} screen={} classification={classification} create_us={creation_us} display_setup_us={display_setup_us} registry_100x_us={registry_us} update_to_readable_us={:?} signal_to_readable_us={:?} update_transfer_bytes={:?} update_write_calls={:?} resync_us={:?} reconnect_us={:?} semantic_match={} display_bytes={} projection_region_bytes={} rss_baseline_kib={} rss_populated_kib={} rss_final_kib={} incremental_runtime_kib={} child_rss_kib={} idle_cpu_percent={} threads_baseline={} threads_populated={} threads_final={} fd_baseline={} fd_populated={} fd_final={} teardown_us={teardown_us} pending_final={} shutdown_ok={} platform_error={:?}",
         transport.as_arg(),
-        ids.len().saturating_sub(visible_count),
+        ids.len(),
         columns,
         rows,
         if alternate { "alternate" } else { "primary" },
-        progress.as_ref().map(|value| value.total_p50_us),
-        progress.as_ref().map(|value| value.total_p95_us),
-        progress.as_ref().map(|value| value.signal_p50_us),
-        progress.as_ref().map(|value| value.signal_p95_us),
-        progress.as_ref().map(|value| value.transfer_bytes_p50),
-        progress.as_ref().and_then(|value| value.write_calls_p50),
+        progress.as_ref().map(|value| value.total_us),
+        progress.as_ref().map(|value| value.signal_to_readable_us),
+        progress.as_ref().map(|value| value.transfer_bytes),
+        progress.as_ref().map(|value| value.write_calls),
         resync.as_ref().map(|value| value.total_us),
         reconnect.as_ref().map(|value| value.total_us),
         initial_semantic_match
@@ -339,76 +314,6 @@ fn worker() {
 }
 
 #[cfg(target_os = "macos")]
-fn fanout_worker() {
-    let args = env::args().collect::<Vec<_>>();
-    let attachment_count = args[2].parse::<usize>().expect("attachment count");
-    assert!((1..=MAX_VISIBLE_ATTACHMENTS).contains(&attachment_count));
-    let transport = TransportMode::from_arg(&args[3]);
-    let label = format!("fanout-{attachment_count}-{}", transport.as_arg());
-    let (config, local_ipc_runtime_dir) = base_config(&label, transport, 1);
-    let mut runtime = Runtime::new(config).expect("fanout Runtime");
-    let execution_id = runtime
-        .create_execution(
-            CommandSpec::new("/bin/cat"),
-            WindowSize::new(80, 24, 0, 0).expect("fanout geometry"),
-        )
-        .expect("fanout execution");
-    settle_runtime(&mut runtime);
-
-    let setup_start = Instant::now();
-    let mut clients = match transport {
-        TransportMode::SocketOnly => FanoutClients::Socket(setup_socket_fanout_clients(
-            &runtime,
-            execution_id,
-            attachment_count,
-        )),
-        TransportMode::HybridProjection => FanoutClients::Hybrid(setup_hybrid_fanout_clients(
-            &mut runtime,
-            execution_id,
-            attachment_count,
-        )),
-    };
-    let setup_us = setup_start.elapsed().as_micros();
-    let before = process_metrics(&runtime);
-    let summary = measure_fanout_series(&mut runtime, execution_id, &mut clients)
-        .expect("fanout updates must advance");
-    assert!(summary.semantic_match, "fanout display state diverged from canonical state");
-    let after = process_metrics(&runtime);
-    let region_bytes = clients.region_bytes();
-    drop(clients);
-    settle_runtime(&mut runtime);
-
-    runtime.begin_shutdown().expect("fanout shutdown");
-    runtime
-        .run_until_empty(Instant::now() + Duration::from_secs(4))
-        .expect("fanout teardown");
-    let final_metrics = process_metrics(&runtime);
-    println!(
-        "fanout_resource transport={} execution_population=1 visible_attached={attachment_count} hidden_detached=0 geometry=80x24 screen=primary repetitions={UPDATE_REPETITIONS} percentile_method=nearest_rank setup_us={setup_us} setup_comparison=non_equivalent_reference_path update_all_clients_p50_us={} update_all_clients_p95_us={} update_transfer_bytes_p50={} socket_write_calls_p50={:?} hybrid_write_calls=not_instrumented allocations_per_update=not_instrumented semantic_match={} projection_region_bytes={} combined_rss_before_kib={} combined_rss_after_kib={} threads_before={} threads_after={} threads_final={} fd_before={} fd_after={} fd_final={} pending_final={}",
-        transport.as_arg(),
-        summary.total_p50_us,
-        summary.total_p95_us,
-        summary.transfer_bytes_p50,
-        summary.write_calls_p50,
-        summary.semantic_match,
-        region_bytes,
-        before.rss_kib,
-        after.rss_kib,
-        before.threads,
-        after.threads,
-        final_metrics.threads,
-        before.fds,
-        after.fds,
-        final_metrics.fds,
-        runtime.aggregate_accepted_but_unwritten_bytes(),
-    );
-    drop(runtime);
-    if let Some(runtime_dir) = local_ipc_runtime_dir {
-        let _ = fs::remove_dir_all(runtime_dir);
-    }
-}
-
-#[cfg(target_os = "macos")]
 fn settle_runtime(runtime: &mut Runtime) {
     for _ in 0..12 {
         let _ = runtime.poll_once(Some(Duration::from_millis(2)));
@@ -420,63 +325,8 @@ struct ProgressResult {
     total_us: u128,
     signal_to_readable_us: u128,
     transfer_bytes: usize,
-    write_calls: Option<usize>,
+    write_calls: usize,
     semantic_match: bool,
-}
-
-#[cfg(target_os = "macos")]
-struct ProgressSummary {
-    total_p50_us: u128,
-    total_p95_us: u128,
-    signal_p50_us: u128,
-    signal_p95_us: u128,
-    transfer_bytes_p50: usize,
-    write_calls_p50: Option<usize>,
-    semantic_match: bool,
-}
-
-#[cfg(target_os = "macos")]
-impl ProgressSummary {
-    fn from_samples(samples: Vec<ProgressResult>) -> Self {
-        assert_eq!(samples.len(), UPDATE_REPETITIONS);
-        let semantic_match = samples.iter().all(|sample| sample.semantic_match);
-        let total = samples.iter().map(|sample| sample.total_us).collect::<Vec<_>>();
-        let signal = samples
-            .iter()
-            .map(|sample| sample.signal_to_readable_us)
-            .collect::<Vec<_>>();
-        let transfer = samples
-            .iter()
-            .map(|sample| sample.transfer_bytes as u128)
-            .collect::<Vec<_>>();
-        let write_calls = samples
-            .iter()
-            .map(|sample| sample.write_calls)
-            .collect::<Option<Vec<_>>>();
-        Self {
-            total_p50_us: percentile(total.clone(), 50),
-            total_p95_us: percentile(total, 95),
-            signal_p50_us: percentile(signal.clone(), 50),
-            signal_p95_us: percentile(signal, 95),
-            transfer_bytes_p50: percentile(transfer, 50) as usize,
-            write_calls_p50: write_calls.map(|values| {
-                percentile(
-                    values.into_iter().map(|value| value as u128).collect(),
-                    50,
-                ) as usize
-            }),
-            semantic_match,
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn percentile(mut values: Vec<u128>, percentile: usize) -> u128 {
-    assert!(!values.is_empty());
-    assert!((1..=100).contains(&percentile));
-    values.sort_unstable();
-    let rank = (percentile * values.len()).div_ceil(100);
-    values[rank.saturating_sub(1)]
 }
 
 #[cfg(target_os = "macos")]
@@ -526,22 +376,6 @@ impl DisplayClients {
 }
 
 #[cfg(target_os = "macos")]
-enum FanoutClients {
-    Socket(Vec<SocketClient>),
-    Hybrid(Vec<HybridClient>),
-}
-
-#[cfg(target_os = "macos")]
-impl FanoutClients {
-    fn region_bytes(&self) -> usize {
-        match self {
-            Self::Socket(_) => 0,
-            Self::Hybrid(clients) => clients.iter().map(|client| client.region_bytes).sum(),
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
 fn canonical_shape(client: &HybridClient) -> OwnedSnapshot {
     let read = read_latest(&client.mapping.memory(), &client.region).expect("read hybrid snapshot");
     OwnedSnapshot {
@@ -569,36 +403,22 @@ struct SocketClient {
 #[cfg(target_os = "macos")]
 fn setup_socket_clients(runtime: &Runtime, ids: &[ExecutionId]) -> Vec<SocketClient> {
     ids.iter()
-        .map(|id| setup_socket_client(runtime, *id))
-        .collect()
-}
-
-#[cfg(target_os = "macos")]
-fn setup_socket_client(runtime: &Runtime, execution_id: ExecutionId) -> SocketClient {
-    let (mut tx, mut rx) = UnixStream::pair().expect("reference socket pair");
-    tx.set_nonblocking(true).expect("nonblocking reference tx");
-    rx.set_nonblocking(true).expect("nonblocking reference rx");
-    let expected = canonical_snapshot(runtime, execution_id);
-    let frame = encode_reference_snapshot(&expected);
-    let transfer = transfer_reference_frame(&mut tx, &mut rx, &frame);
-    let decoded = decode_reference_snapshot(&transfer.bytes);
-    assert!(owned_snapshot_matches(&decoded, &expected));
-    SocketClient {
-        tx,
-        rx,
-        last_snapshot: decoded,
-        last_frame_bytes: frame.len(),
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn setup_socket_fanout_clients(
-    runtime: &Runtime,
-    execution_id: ExecutionId,
-    attachment_count: usize,
-) -> Vec<SocketClient> {
-    (0..attachment_count)
-        .map(|_| setup_socket_client(runtime, execution_id))
+        .map(|id| {
+            let (mut tx, mut rx) = UnixStream::pair().expect("reference socket pair");
+            tx.set_nonblocking(true).expect("nonblocking reference tx");
+            rx.set_nonblocking(true).expect("nonblocking reference rx");
+            let expected = canonical_snapshot(runtime, *id);
+            let frame = encode_reference_snapshot(&expected);
+            let transfer = transfer_reference_frame(&mut tx, &mut rx, &frame);
+            let decoded = decode_reference_snapshot(&transfer.bytes);
+            assert!(owned_snapshot_matches(&decoded, &expected));
+            SocketClient {
+                tx,
+                rx,
+                last_snapshot: decoded,
+                last_frame_bytes: frame.len(),
+            }
+        })
         .collect()
 }
 
@@ -615,17 +435,6 @@ struct HybridClient {
 fn setup_hybrid_clients(runtime: &mut Runtime, ids: &[ExecutionId]) -> Vec<HybridClient> {
     ids.iter()
         .map(|id| connect_hybrid_client(runtime, *id))
-        .collect()
-}
-
-#[cfg(target_os = "macos")]
-fn setup_hybrid_fanout_clients(
-    runtime: &mut Runtime,
-    execution_id: ExecutionId,
-    attachment_count: usize,
-) -> Vec<HybridClient> {
-    (0..attachment_count)
-        .map(|_| connect_hybrid_client(runtime, execution_id))
         .collect()
 }
 
@@ -684,69 +493,6 @@ fn connect_hybrid_client(runtime: &mut Runtime, execution_id: ExecutionId) -> Hy
 }
 
 #[cfg(target_os = "macos")]
-fn measure_progress_series(
-    runtime: &mut Runtime,
-    execution_id: ExecutionId,
-    display: &mut DisplayClients,
-) -> Option<ProgressSummary> {
-    let mut samples = Vec::with_capacity(UPDATE_REPETITIONS);
-    for _ in 0..UPDATE_REPETITIONS {
-        let sample = match display {
-            DisplayClients::Socket(clients) => {
-                measure_socket_progress(runtime, execution_id, clients.first_mut()?)?
-            }
-            DisplayClients::Hybrid(clients) => {
-                measure_hybrid_progress(runtime, execution_id, clients.first_mut()?)?
-            }
-        };
-        samples.push(sample);
-    }
-    Some(ProgressSummary::from_samples(samples))
-}
-
-#[cfg(target_os = "macos")]
-fn measure_fanout_series(
-    runtime: &mut Runtime,
-    execution_id: ExecutionId,
-    clients: &mut FanoutClients,
-) -> Option<ProgressSummary> {
-    let mut samples = Vec::with_capacity(UPDATE_REPETITIONS);
-    for _ in 0..UPDATE_REPETITIONS {
-        let sample = match clients {
-            FanoutClients::Socket(clients) => {
-                measure_socket_fanout_progress(runtime, execution_id, clients)?
-            }
-            FanoutClients::Hybrid(clients) => {
-                measure_hybrid_fanout_progress(runtime, execution_id, clients)?
-            }
-        };
-        samples.push(sample);
-    }
-    Some(ProgressSummary::from_samples(samples))
-}
-
-#[cfg(target_os = "macos")]
-fn wait_terminal_generation(
-    runtime: &mut Runtime,
-    execution_id: ExecutionId,
-    before_generation: u64,
-) -> Option<()> {
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while runtime
-        .execution(execution_id)?
-        .terminal()
-        .damage_generation()
-        <= before_generation
-    {
-        runtime.poll_once(Some(Duration::from_millis(2))).ok()?;
-        if Instant::now() >= deadline {
-            return None;
-        }
-    }
-    Some(())
-}
-
-#[cfg(target_os = "macos")]
 fn measure_socket_progress(
     runtime: &mut Runtime,
     execution_id: ExecutionId,
@@ -759,7 +505,18 @@ fn measure_socket_progress(
         .damage_generation();
     let start = Instant::now();
     ingress.try_submit(b"z".to_vec()).ok()?;
-    wait_terminal_generation(runtime, execution_id, before_generation)?;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while runtime
+        .execution(execution_id)?
+        .terminal()
+        .damage_generation()
+        <= before_generation
+    {
+        runtime.poll_once(Some(Duration::from_millis(2))).ok()?;
+        if Instant::now() >= deadline {
+            return None;
+        }
+    }
     let expected = canonical_snapshot(runtime, execution_id);
     let frame = encode_reference_snapshot(&expected);
     let transfer = transfer_reference_frame(&mut client.tx, &mut client.rx, &frame);
@@ -771,7 +528,7 @@ fn measure_socket_progress(
         total_us: start.elapsed().as_micros(),
         signal_to_readable_us: transfer.first_read_to_complete_us,
         transfer_bytes: transfer.bytes.len(),
-        write_calls: Some(transfer.write_calls),
+        write_calls: transfer.write_calls,
         semantic_match,
     })
 }
@@ -800,85 +557,8 @@ fn measure_hybrid_progress(
         total_us: start.elapsed().as_micros(),
         signal_to_readable_us,
         transfer_bytes,
-        write_calls: None,
+        write_calls: 1,
         semantic_match: snapshot_read_matches(&read, &expected),
-    })
-}
-
-#[cfg(target_os = "macos")]
-fn measure_socket_fanout_progress(
-    runtime: &mut Runtime,
-    execution_id: ExecutionId,
-    clients: &mut [SocketClient],
-) -> Option<ProgressResult> {
-    let ingress = runtime.input_ingress(execution_id).ok()?;
-    let before_generation = runtime
-        .execution(execution_id)?
-        .terminal()
-        .damage_generation();
-    let start = Instant::now();
-    ingress.try_submit(b"f".to_vec()).ok()?;
-    wait_terminal_generation(runtime, execution_id, before_generation)?;
-    let expected = canonical_snapshot(runtime, execution_id);
-    let frame = encode_reference_snapshot(&expected);
-    let mut write_calls = 0usize;
-    let mut signal_to_readable_us = 0u128;
-    let mut semantic_match = true;
-    for client in clients.iter_mut() {
-        let transfer = transfer_reference_frame(&mut client.tx, &mut client.rx, &frame);
-        signal_to_readable_us = signal_to_readable_us.max(transfer.first_read_to_complete_us);
-        write_calls += transfer.write_calls;
-        let decoded = decode_reference_snapshot(&transfer.bytes);
-        semantic_match &= owned_snapshot_matches(&decoded, &expected);
-        client.last_frame_bytes = frame.len();
-        client.last_snapshot = decoded;
-    }
-    Some(ProgressResult {
-        total_us: start.elapsed().as_micros(),
-        signal_to_readable_us,
-        transfer_bytes: frame.len() * clients.len(),
-        write_calls: Some(write_calls),
-        semantic_match,
-    })
-}
-
-#[cfg(target_os = "macos")]
-fn measure_hybrid_fanout_progress(
-    runtime: &mut Runtime,
-    execution_id: ExecutionId,
-    clients: &mut [HybridClient],
-) -> Option<ProgressResult> {
-    let ingress = runtime.input_ingress(execution_id).ok()?;
-    let before_generations = clients
-        .iter()
-        .map(|client| read_latest(&client.mapping.memory(), &client.region).map(|read| read.generation))
-        .collect::<Result<Vec<_>, _>>()
-        .ok()?;
-    let start = Instant::now();
-    ingress.try_submit(b"f".to_vec()).ok()?;
-    let mut reads = Vec::with_capacity(clients.len());
-    let mut signal_to_readable_us = 0u128;
-    for (client, before_generation) in clients.iter_mut().zip(before_generations) {
-        let (wake, wake_observed) = wait_generation_wake(
-            runtime,
-            &mut client.stream,
-            client.attached.attachment_id,
-            before_generation + 1,
-        )?;
-        let read = wait_projection_generation(runtime, client, wake.committed_generation)?;
-        signal_to_readable_us = signal_to_readable_us.max(wake_observed.elapsed().as_micros());
-        reads.push(read);
-    }
-    let expected = canonical_snapshot(runtime, execution_id);
-    let semantic_match = reads
-        .iter()
-        .all(|read| snapshot_read_matches(read, &expected));
-    Some(ProgressResult {
-        total_us: start.elapsed().as_micros(),
-        signal_to_readable_us,
-        transfer_bytes: projection_payload_bytes(&expected) * clients.len(),
-        write_calls: None,
-        semantic_match,
     })
 }
 
@@ -940,7 +620,9 @@ fn measure_socket_reconnect(
         clients.remove(0);
     }
     let start = Instant::now();
-    let mut replacement = setup_socket_client(runtime, execution_id);
+    let mut replacement = setup_socket_clients(runtime, &[execution_id])
+        .pop()
+        .expect("socket reconnect client");
     let expected = canonical_snapshot(runtime, execution_id);
     let semantic_match = owned_snapshot_matches(&replacement.last_snapshot, &expected);
     replacement.last_frame_bytes = encode_reference_snapshot(&expected).len();
@@ -1334,14 +1016,14 @@ struct Metrics {
 fn process_metrics(runtime: &Runtime) -> Metrics {
     let pid = process::id();
     let output = Command::new("/bin/ps")
-        .args(["-o", "rss=,%cpu=", "-p", &pid.to_string()])
+        .args(["-o", "rss=,%cpu=,thcount=", "-p", &pid.to_string()])
         .output()
         .expect("ps Runtime metrics");
     let line = String::from_utf8_lossy(&output.stdout);
     let mut fields = line.split_whitespace();
-    let rss_kib = fields.next().and_then(|value| value.parse().ok()).unwrap_or(0);
-    let cpu_percent = fields.next().and_then(|value| value.parse().ok()).unwrap_or(0.0);
-    let threads = thread_count(pid);
+    let rss_kib = fields.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let cpu_percent = fields.next().and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    let threads = fields.next().and_then(|v| v.parse().ok()).unwrap_or(0);
     let child_rss_kib = runtime
         .list()
         .iter()
@@ -1361,18 +1043,6 @@ fn process_metrics(runtime: &Runtime) -> Metrics {
 }
 
 #[cfg(target_os = "macos")]
-fn thread_count(pid: u32) -> usize {
-    let output = Command::new("/bin/ps")
-        .args(["-M", "-p", &pid.to_string()])
-        .output();
-    output
-        .ok()
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|text| text.lines().skip(1).filter(|line| !line.trim().is_empty()).count())
-        .unwrap_or(0)
-}
-
-#[cfg(target_os = "macos")]
 fn rss_for_pid(pid: u32) -> usize {
     let output = Command::new("/bin/ps")
         .args(["-o", "rss=", "-p", &pid.to_string()])
@@ -1389,12 +1059,10 @@ fn print_host_metadata() {
     let product = command_text("/usr/bin/sw_vers", &["-productVersion"]);
     let build = command_text("/usr/bin/sw_vers", &["-buildVersion"]);
     let hardware = command_text("/usr/sbin/sysctl", &["-n", "machdep.cpu.brand_string"]);
-    let machine_model = command_text("/usr/sbin/sysctl", &["-n", "hw.model"]);
     let pty_max = command_text("/usr/sbin/sysctl", &["-n", "kern.tty.ptmx_max"]);
     let rustc = command_text("rustc", &["--version"]);
-    let commit = command_text("git", &["rev-parse", "HEAD"]);
     println!(
-        "host macos_version={product} macos_build={build} machine_model={machine_model:?} hardware={hardware:?} rust={rustc:?} pty_max={pty_max} build_mode=release commit={commit}"
+        "host macos_version={product} macos_build={build} hardware={hardware:?} rust={rustc:?} pty_max={pty_max}"
     );
 }
 

@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -21,10 +21,23 @@ use crate::{
     singleton::SingletonGuard,
 };
 
+#[cfg(target_os = "macos")]
+mod local;
+#[cfg(target_os = "macos")]
+use local::LocalIpcState;
+
 const EVENT_CAPACITY: usize = 128;
 const READ_BUFFER_SIZE: usize = 16 * 1024;
 const CONTROL_DISPATCH_QUANTUM: usize = 64;
 const ROLLBACK_REAP_TICK: Duration = Duration::from_millis(10);
+
+#[derive(Clone, Debug)]
+pub enum LocalIpcMode {
+    Disabled,
+    Enabled {
+        runtime_dir_override: Option<PathBuf>,
+    },
+}
 
 #[derive(Clone, Debug)]
 pub struct RuntimeConfig {
@@ -39,6 +52,7 @@ pub struct RuntimeConfig {
     pub forced_reap: Duration,
     pub final_drain: Duration,
     pub capability_policy: CapabilityPolicy,
+    pub local_ipc: LocalIpcMode,
 }
 
 impl RuntimeConfig {
@@ -55,6 +69,9 @@ impl RuntimeConfig {
             forced_reap: Duration::from_secs(1),
             final_drain: Duration::from_millis(250),
             capability_policy: CapabilityPolicy::bundled()?,
+            local_ipc: LocalIpcMode::Enabled {
+                runtime_dir_override: None,
+            },
         })
     }
 }
@@ -148,13 +165,27 @@ pub struct Runtime {
     read_buffer: [u8; READ_BUFFER_SIZE],
     shutting_down: bool,
     rollback_reap: Vec<TerminalExecution>,
+    #[cfg(target_os = "macos")]
+    local_ipc: Option<LocalIpcState>,
 }
 
 impl Runtime {
     pub fn new(config: RuntimeConfig) -> Result<Self, RuntimeError> {
         let singleton = SingletonGuard::acquire(&config.singleton_path)?;
         let reactor = ExecutionReactor::new()?;
+        #[cfg(target_os = "macos")]
+        let mut reactor = reactor;
         let (control_tx, control_rx) = sync_channel(config.control_queue_capacity);
+        #[cfg(target_os = "macos")]
+        let local_ipc = match &config.local_ipc {
+            LocalIpcMode::Disabled => None,
+            LocalIpcMode::Enabled {
+                runtime_dir_override,
+            } => Some(LocalIpcState::bind(
+                &mut reactor,
+                runtime_dir_override.clone(),
+            )?),
+        };
         Ok(Self {
             id: RuntimeId::new(),
             default_workspace: WorkspaceId::m001_default(),
@@ -170,7 +201,22 @@ impl Runtime {
             read_buffer: [0; READ_BUFFER_SIZE],
             shutting_down: false,
             rollback_reap: Vec::new(),
+            #[cfg(target_os = "macos")]
+            local_ipc,
         })
+    }
+
+    pub fn local_ipc_socket_path(&self) -> Option<&Path> {
+        #[cfg(target_os = "macos")]
+        {
+            self.local_ipc
+                .as_ref()
+                .map(|state| state.socket_path.as_path())
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            None
+        }
     }
 
     pub fn id(&self) -> RuntimeId {
@@ -402,10 +448,20 @@ impl Runtime {
                         processed += 1;
                     }
                 }
+                ReactorEventKind::AuxiliaryReadable | ReactorEventKind::AuxiliaryWritable =>
+                {
+                    #[cfg(target_os = "macos")]
+                    if let Some(token) = event.token {
+                        self.service_local_reactor_event(token, event.kind, event.hangup)?;
+                        processed += 1;
+                    }
+                }
             }
         }
         self.process_deadlines()?;
         self.reap_failed_creations()?;
+        #[cfg(target_os = "macos")]
+        self.publish_display_updates();
         Ok(processed)
     }
 
@@ -434,8 +490,7 @@ impl Runtime {
                     }
                     handled += 1;
                 }
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => break,
+                Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
             }
         }
         if handled == CONTROL_DISPATCH_QUANTUM {
@@ -613,6 +668,11 @@ impl Runtime {
     }
 
     fn finalize(&mut self, id: ExecutionId) -> Result<(), RuntimeError> {
+        // The final PTY drain may have changed canonical state in this same
+        // scheduling turn. Publish that state before removing TerminalExecution.
+        #[cfg(target_os = "macos")]
+        self.publish_display_updates();
+
         let Some(mut entry) = self.entries.remove(&id) else {
             return Ok(());
         };
@@ -621,6 +681,8 @@ impl Runtime {
         self.by_token.remove(&entry.token);
         self.reactor.deregister(entry.token)?;
         drop(entry);
+        #[cfg(target_os = "macos")]
+        self.notify_local_ipc_execution_finalized(id);
         Ok(())
     }
 

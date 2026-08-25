@@ -12,6 +12,10 @@ cargo_pinned() {
   rustup run "$channel" cargo "$@"
 }
 
+pass5_failure_matrix() {
+  cargo_pinned test -p seyal-runtime --locked --features test-fault-injection --test local_ipc_failure_injection
+}
+
 case "$cmd" in
   bootstrap)
     bash scripts/bootstrap-toolchain.sh
@@ -31,6 +35,7 @@ case "$cmd" in
     python3 scripts/fuzz-smoke.py
     bash scripts/check-toolchain.sh
     cargo_pinned test --workspace --locked
+    pass5_failure_matrix
     bash scripts/test-macos-skeleton.sh
     ;;
   check)
@@ -49,6 +54,7 @@ case "$cmd" in
     cargo_pinned fmt --all -- --check
     cargo_pinned clippy --workspace --all-targets --all-features -- -D warnings
     cargo_pinned test --workspace --locked
+    pass5_failure_matrix
     bash scripts/test-macos-skeleton.sh
     ;;
   bench)
@@ -56,7 +62,15 @@ case "$cmd" in
     python3 scripts/check-benchmark-contract.py
     python3 scripts/benchmark-smoke.py
     if find crates -type f -path '*/benches/*.rs' -print -quit 2>/dev/null | grep -q .; then
+      # Darwin Unix-domain sockets have a 104-byte sun_path limit. The production
+      # benchmark deliberately uses temporary Runtime directories; keep the
+      # benchmark root deterministic and short instead of inheriting a potentially
+      # long hosted-runner TMPDIR. Production runtime discovery is unchanged.
+      if [[ "$(uname -s)" == "Darwin" ]]; then
+        export TMPDIR=/tmp
+      fi
       cargo_pinned bench --workspace --locked
+      cargo_pinned bench -p seyal-runtime --bench pass5_production_transport --features benchmark-instrumentation --locked
     else
       echo "[seyal task] bench: harness metadata recorder passed; no production benchmark target exists yet and no performance result is claimed."
     fi

@@ -46,8 +46,12 @@ impl TerminalEndpoint {
             .stderr(Stdio::from(stderr));
         platform::configure_child(&mut command)?;
 
-        let child = command.spawn()?;
+        // The original slave is not part of the child's descriptor contract.
+        // The three Stdio-owned clones above are sufficient for Command to wire
+        // fd 0/1/2, so close this extra descriptor before fork/exec rather than
+        // relying only on FD_CLOEXEC to clean it up after the fork boundary.
         drop(pair.slave);
+        let child = command.spawn()?;
 
         Ok(Self {
             master: pair.master,

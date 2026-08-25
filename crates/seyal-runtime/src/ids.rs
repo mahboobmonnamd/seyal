@@ -19,6 +19,9 @@ pub struct ExecutionId(u128);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct AttachmentId(u128);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ProjectionId(u128);
+
 impl RuntimeId {
     pub(crate) fn new() -> Self {
         Self(unique_id(0x5255_4e54_494d_4501))
@@ -26,9 +29,6 @@ impl RuntimeId {
 }
 
 impl WorkspaceId {
-    /// The M001 implicit Workspace has one stable semantic identity inside each
-    /// local-user scope. The enclosing singleton/user scope disambiguates users;
-    /// this value deliberately does not derive from RuntimeId, cwd or UI state.
     pub const fn m001_default() -> Self {
         Self(DEFAULT_WORKSPACE)
     }
@@ -45,6 +45,25 @@ impl AttachmentId {
         Self(unique_id(0x4154_5441_4348_0001))
     }
 }
+
+macro_rules! impl_id_wire_bytes {
+    ($type:ty) => {
+        impl $type {
+            pub fn to_bytes(self) -> [u8; 16] {
+                self.0.to_le_bytes()
+            }
+
+            pub fn from_bytes(bytes: [u8; 16]) -> Self {
+                Self(u128::from_le_bytes(bytes))
+            }
+        }
+    };
+}
+
+impl_id_wire_bytes!(RuntimeId);
+impl_id_wire_bytes!(ExecutionId);
+impl_id_wire_bytes!(AttachmentId);
+impl_id_wire_bytes!(ProjectionId);
 
 fn unique_id(domain: u64) -> u128 {
     let nanos = SystemTime::now()
@@ -75,6 +94,7 @@ impl_id_display!(RuntimeId);
 impl_id_display!(WorkspaceId);
 impl_id_display!(ExecutionId);
 impl_id_display!(AttachmentId);
+impl_id_display!(ProjectionId);
 
 #[cfg(test)]
 mod tests {
@@ -97,5 +117,17 @@ mod tests {
         let _runtime_a = RuntimeId::new();
         let _runtime_b = RuntimeId::new();
         assert_eq!(before, WorkspaceId::m001_default());
+    }
+
+    #[test]
+    fn wire_ids_round_trip_through_raw_little_endian_bytes() {
+        let runtime = RuntimeId::new();
+        let execution = ExecutionId::new();
+        let attachment = AttachmentId::new();
+        let projection = ProjectionId::from_bytes([0x5a; 16]);
+        assert_eq!(RuntimeId::from_bytes(runtime.to_bytes()), runtime);
+        assert_eq!(ExecutionId::from_bytes(execution.to_bytes()), execution);
+        assert_eq!(AttachmentId::from_bytes(attachment.to_bytes()), attachment);
+        assert_eq!(ProjectionId::from_bytes(projection.to_bytes()), projection);
     }
 }

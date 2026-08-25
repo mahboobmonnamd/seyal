@@ -17,6 +17,18 @@ pub(crate) fn try_lock_exclusive(fd: RawFd) -> io::Result<bool> {
 }
 
 #[cfg(target_os = "macos")]
+pub(crate) fn unlock(fd: RawFd) -> io::Result<()> {
+    // SAFETY: `fd` is still owned/live by the SingletonGuard when Drop calls
+    // this. LOCK_UN changes only advisory lock state and does not take
+    // ownership of the descriptor.
+    if unsafe { libc::flock(fd, libc::LOCK_UN) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(target_os = "macos")]
 pub(crate) fn set_close_on_exec(fd: RawFd) -> io::Result<()> {
     // SAFETY: fd is owned/live for both fcntl operations.
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };

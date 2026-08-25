@@ -6,7 +6,14 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
+autobenches = false
 build = "build.rs"
+
+[features]
+default = []
+test-fault-injection = []
+benchmark-shared-projection = []
+benchmark-instrumentation = []
 
 [dependencies]
 seyal-exec = { path = "../seyal-exec" }
@@ -14,9 +21,17 @@ seyal-exec = { path = "../seyal-exec" }
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "=0.2.189"
 
+[dev-dependencies]
+stats_alloc = "=0.1.10"
+
 [lints.rust]
 unsafe_code = "deny"
 
 [[bench]]
-name = "runtime_scalability"
+name = "pass5_delta_transport"
 harness = false
+
+[[bench]]
+name = "pass5_production_transport"
+harness = false
+required-features = ["benchmark-instrumentation"]

@@ -3,8 +3,9 @@ use std::time::Duration;
 use seyal_terminal::TerminalState;
 
 use crate::{
-    ChildExit, CommandSpec, ExecError, ReadOutcome, Readiness, SignalDisposition,
-    TerminationPolicy, WindowSize, WriteOutcome, endpoint::TerminalEndpoint,
+    ChildExit, CommandSpec, ExecError, ProjectionDamage, ReadOutcome, Readiness, SignalDisposition,
+    TerminalProjectionSnapshot, TerminalProjectionUpdate, TerminationPolicy, WindowSize,
+    WriteOutcome, endpoint::TerminalEndpoint, projection,
 };
 
 pub struct TerminalExecution {
@@ -25,6 +26,30 @@ impl TerminalExecution {
 
     pub fn terminal(&self) -> &TerminalState {
         &self.terminal
+    }
+
+    /// Copies the complete current canonical visible terminal state into an
+    /// owned, projection-neutral snapshot without consuming canonical damage.
+    /// Attach/reconnect/resync intentionally use this expensive recovery seam.
+    pub fn projection_snapshot(&self) -> TerminalProjectionSnapshot {
+        projection::snapshot(&self.terminal, self.terminal.damage_generation())
+    }
+
+    /// Consumes canonical damage exactly once and copies only the affected row
+    /// range for steady-state display fanout. A full canonical damage record
+    /// still produces the complete visible state, as required after resize or
+    /// other full invalidation.
+    pub fn take_projection_update(&mut self) -> Option<TerminalProjectionUpdate> {
+        let damage = self.terminal.take_damage()?;
+        Some(projection::update(
+            &self.terminal,
+            damage.generation,
+            ProjectionDamage {
+                full: damage.full,
+                first_row: damage.first_row,
+                last_row: damage.last_row,
+            },
+        ))
     }
 
     pub fn read_output(&mut self, buffer: &mut [u8]) -> Result<ReadOutcome, ExecError> {
@@ -71,14 +96,10 @@ impl TerminalExecution {
         self.endpoint.try_wait()
     }
 
-    /// Sends SIGTERM to the still-owned primary process group without waiting.
-    /// Runtime uses this step from its deadline-driven lifecycle state machine.
     pub fn signal_terminate(&mut self) -> Result<SignalDisposition, ExecError> {
         self.endpoint.signal_terminate()
     }
 
-    /// Sends SIGKILL to the still-owned primary process group without waiting.
-    /// Runtime uses this only after the configured graceful deadline expires.
     pub fn signal_kill(&mut self) -> Result<SignalDisposition, ExecError> {
         self.endpoint.signal_kill()
     }

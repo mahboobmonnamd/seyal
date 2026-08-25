@@ -979,12 +979,10 @@ impl Runtime {
     }
 
     fn release_local_attachment(&mut self, attachment_id: AttachmentId) {
-        let execution_id = self.local_ipc.as_ref().and_then(|state| {
-            state
-                .attachments
-                .execution_of(attachment_id)
-                .ok()
-        });
+        let execution_id = self
+            .local_ipc
+            .as_ref()
+            .and_then(|state| state.attachments.execution_of(attachment_id).ok());
         if let Some(state) = self.local_ipc.as_mut() {
             let _ = state.attachments.detach(attachment_id);
             if let Some(projection) = state.projections.remove(&attachment_id) {

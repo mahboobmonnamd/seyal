@@ -773,6 +773,13 @@ impl Runtime {
     }
 
     fn finalize(&mut self, id: ExecutionId) -> Result<(), RuntimeError> {
+        // Final PTY bytes may have mutated canonical TerminalState during the
+        // same drain turn that observes EOF. Publish that pending canonical
+        // damage while TerminalExecution still exists; only then may teardown
+        // remove the execution and its projection resources.
+        #[cfg(target_os = "macos")]
+        self.publish_projection_updates();
+
         let Some(mut entry) = self.entries.remove(&id) else {
             return Ok(());
         };

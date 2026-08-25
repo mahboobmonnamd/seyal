@@ -14,7 +14,8 @@ pub mod local_ipc;
 #[allow(unsafe_code)]
 mod platform;
 /// Legacy Candidate-B shared-projection machinery retained only for isolated
-/// comparator/reference evidence. Production text/grid delivery uses `display`.
+/// comparator/reference evidence. It is absent from normal production builds.
+#[cfg(feature = "benchmark-shared-projection")]
 pub mod projection;
 mod runtime;
 mod singleton;

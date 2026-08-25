@@ -673,6 +673,7 @@ mod tests {
             cursor_visible: true,
             alternate_screen: false,
             source_damage_generation: generation,
+            damage: ProjectionDamage::full(rows),
             cells: (0..rows as usize * columns as usize).map(cell).collect(),
         }
     }

@@ -803,6 +803,10 @@ impl Runtime {
     }
 
     pub(super) fn publish_display_updates(&mut self) {
+        // Run expensive recovery at most once per Runtime poll, after all
+        // readiness frames for that turn have had a chance to coalesce.
+        self.service_pending_resyncs();
+
         let execution_ids = self.local_ipc.as_ref().map_or_else(Vec::new, |state| {
             self.entries
                 .keys()

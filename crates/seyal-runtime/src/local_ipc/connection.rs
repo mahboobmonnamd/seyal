@@ -10,6 +10,9 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(feature = "benchmark-instrumentation")]
+use std::sync::atomic::{AtomicU64, Ordering};
+
 #[cfg(feature = "test-fault-injection")]
 use crate::test_fault::{self, FaultPoint};
 use crate::{
@@ -26,6 +29,79 @@ pub const MAX_OUTBOUND_QUEUE_BYTES: usize = 262_144;
 const MAX_RECEIVE_BUFFER_BYTES: usize = HEADER_LEN + MAX_FRAME_PAYLOAD as usize;
 const READ_CHUNK_BYTES: usize = HEADER_LEN * 32;
 const MAX_FRAMES_PER_READINESS: usize = 64;
+
+#[cfg(feature = "benchmark-instrumentation")]
+static BENCH_DELTA_QUEUED: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "benchmark-instrumentation")]
+static BENCH_DELTA_SKIPPED: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "benchmark-instrumentation")]
+static BENCH_NEED_SNAPSHOT: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "benchmark-instrumentation")]
+static BENCH_SNAPSHOT_QUEUED: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "benchmark-instrumentation")]
+static BENCH_PENDING_SUPERSESSIONS: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "benchmark-instrumentation")]
+static BENCH_SNAPSHOT_COMPLETED: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "benchmark-instrumentation")]
+static BENCH_DELTA_COMPLETED: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "benchmark-instrumentation")]
+static BENCH_DISPLAY_QUEUE_HIGH_WATER_BYTES: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(feature = "benchmark-instrumentation")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BenchmarkConnectionCounters {
+    pub delta_queued: u64,
+    pub delta_skipped: u64,
+    pub need_snapshot: u64,
+    pub snapshot_queued: u64,
+    pub pending_supersessions: u64,
+    pub snapshot_completed: u64,
+    pub delta_completed: u64,
+    pub display_queue_high_water_bytes: u64,
+}
+
+#[cfg(feature = "benchmark-instrumentation")]
+pub fn reset_benchmark_connection_counters() {
+    BENCH_DELTA_QUEUED.store(0, Ordering::Relaxed);
+    BENCH_DELTA_SKIPPED.store(0, Ordering::Relaxed);
+    BENCH_NEED_SNAPSHOT.store(0, Ordering::Relaxed);
+    BENCH_SNAPSHOT_QUEUED.store(0, Ordering::Relaxed);
+    BENCH_PENDING_SUPERSESSIONS.store(0, Ordering::Relaxed);
+    BENCH_SNAPSHOT_COMPLETED.store(0, Ordering::Relaxed);
+    BENCH_DELTA_COMPLETED.store(0, Ordering::Relaxed);
+    BENCH_DISPLAY_QUEUE_HIGH_WATER_BYTES.store(0, Ordering::Relaxed);
+}
+
+#[cfg(feature = "benchmark-instrumentation")]
+pub fn benchmark_connection_counters() -> BenchmarkConnectionCounters {
+    BenchmarkConnectionCounters {
+        delta_queued: BENCH_DELTA_QUEUED.load(Ordering::Relaxed),
+        delta_skipped: BENCH_DELTA_SKIPPED.load(Ordering::Relaxed),
+        need_snapshot: BENCH_NEED_SNAPSHOT.load(Ordering::Relaxed),
+        snapshot_queued: BENCH_SNAPSHOT_QUEUED.load(Ordering::Relaxed),
+        pending_supersessions: BENCH_PENDING_SUPERSESSIONS.load(Ordering::Relaxed),
+        snapshot_completed: BENCH_SNAPSHOT_COMPLETED.load(Ordering::Relaxed),
+        delta_completed: BENCH_DELTA_COMPLETED.load(Ordering::Relaxed),
+        display_queue_high_water_bytes: BENCH_DISPLAY_QUEUE_HIGH_WATER_BYTES.load(Ordering::Relaxed),
+    }
+}
+
+#[cfg(feature = "benchmark-instrumentation")]
+fn update_display_queue_high_water(bytes: usize) {
+    let bytes = bytes as u64;
+    let mut current = BENCH_DISPLAY_QUEUE_HIGH_WATER_BYTES.load(Ordering::Relaxed);
+    while bytes > current {
+        match BENCH_DISPLAY_QUEUE_HIGH_WATER_BYTES.compare_exchange_weak(
+            current,
+            bytes,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(observed) => current = observed,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConnectionState {
@@ -89,6 +165,22 @@ impl DisplayItem {
             sent: 0,
         }
     }
+
+    #[cfg(feature = "benchmark-instrumentation")]
+    fn remaining_len(&self) -> usize {
+        let current = self
+            .batch
+            .frames
+            .get(self.frame_index)
+            .map_or(0, |frame| frame.len().saturating_sub(self.sent));
+        let tail = self
+            .batch
+            .frames
+            .iter()
+            .skip(self.frame_index.saturating_add(1))
+            .fold(0usize, |sum, frame| sum.saturating_add(frame.len()));
+        current.saturating_add(tail)
+    }
 }
 
 struct Connection {
@@ -106,18 +198,36 @@ struct Connection {
 impl Connection {
     fn queue_snapshot(&mut self, snapshot: EncodedDisplayBatch) {
         self.display_generation = snapshot.generation;
+        #[cfg(feature = "benchmark-instrumentation")]
+        {
+            BENCH_SNAPSHOT_QUEUED.fetch_add(1, Ordering::Relaxed);
+            if self.pending_display.is_some() {
+                BENCH_PENDING_SUPERSESSIONS.fetch_add(1, Ordering::Relaxed);
+            }
+        }
         self.pending_display = Some(snapshot);
+        #[cfg(feature = "benchmark-instrumentation")]
+        update_display_queue_high_water(self.display_queue_bytes());
     }
 
     fn try_queue_delta(&mut self, delta: EncodedDisplayBatch) -> DeltaEnqueueResult {
         if delta.generation <= self.display_generation {
+            #[cfg(feature = "benchmark-instrumentation")]
+            BENCH_DELTA_SKIPPED.fetch_add(1, Ordering::Relaxed);
             return DeltaEnqueueResult::Skipped;
         }
         if self.display_generation != delta.base_generation || self.pending_display.is_some() {
+            #[cfg(feature = "benchmark-instrumentation")]
+            BENCH_NEED_SNAPSHOT.fetch_add(1, Ordering::Relaxed);
             return DeltaEnqueueResult::NeedSnapshot;
         }
         self.display_generation = delta.generation;
         self.pending_display = Some(delta);
+        #[cfg(feature = "benchmark-instrumentation")]
+        {
+            BENCH_DELTA_QUEUED.fetch_add(1, Ordering::Relaxed);
+            update_display_queue_high_water(self.display_queue_bytes());
+        }
         DeltaEnqueueResult::Queued
     }
 
@@ -129,6 +239,19 @@ impl Connection {
                 .pending_display
                 .as_ref()
                 .is_some_and(|batch| batch.kind == DisplayKind::Snapshot)
+    }
+
+    #[cfg(feature = "benchmark-instrumentation")]
+    fn display_queue_bytes(&self) -> usize {
+        let inflight = self
+            .display_inflight
+            .as_ref()
+            .map_or(0, DisplayItem::remaining_len);
+        let pending = self
+            .pending_display
+            .as_ref()
+            .map_or(0, |batch| batch.total_bytes);
+        inflight.saturating_add(pending)
     }
 }
 
@@ -513,6 +636,15 @@ fn flush_outbound(connection: &mut Connection) -> io::Result<()> {
             break;
         };
         if item.frame_index >= item.batch.frames.len() {
+            #[cfg(feature = "benchmark-instrumentation")]
+            match item.batch.kind {
+                DisplayKind::Snapshot => {
+                    BENCH_SNAPSHOT_COMPLETED.fetch_add(1, Ordering::Relaxed);
+                }
+                DisplayKind::Delta => {
+                    BENCH_DELTA_COMPLETED.fetch_add(1, Ordering::Relaxed);
+                }
+            }
             connection.display_inflight = None;
             continue;
         }
@@ -524,6 +656,15 @@ fn flush_outbound(connection: &mut Connection) -> io::Result<()> {
                     item.frame_index += 1;
                     item.sent = 0;
                     if item.frame_index >= item.batch.frames.len() {
+                        #[cfg(feature = "benchmark-instrumentation")]
+                        match item.batch.kind {
+                            DisplayKind::Snapshot => {
+                                BENCH_SNAPSHOT_COMPLETED.fetch_add(1, Ordering::Relaxed);
+                            }
+                            DisplayKind::Delta => {
+                                BENCH_DELTA_COMPLETED.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
                         connection.display_inflight = None;
                         continue;
                     }

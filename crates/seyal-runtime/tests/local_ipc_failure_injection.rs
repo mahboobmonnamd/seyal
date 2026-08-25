@@ -1,8 +1,5 @@
 #![cfg(all(target_os = "macos", feature = "test-fault-injection"))]
 
-//! Candidate-D attach rollback matrix. Failed transport admission/flush must not
-//! publish attachment/controller authority and a fresh controller must recover.
-
 use std::{
     io::{Read, Write},
     os::unix::net::UnixStream,
@@ -29,101 +26,61 @@ fn config() -> RuntimeConfig {
     };
     config
 }
-
-fn pump(runtime: &mut Runtime) {
-    runtime.poll_once(Some(Duration::from_millis(5))).unwrap();
-}
-
+fn pump(runtime: &mut Runtime) { runtime.poll_once(Some(Duration::from_millis(5))).unwrap(); }
 fn connect(runtime: &mut Runtime) -> UnixStream {
-    let path = runtime.local_ipc_socket_path().unwrap().to_path_buf();
-    let stream = UnixStream::connect(path).unwrap();
-    stream.set_nonblocking(true).unwrap();
-    pump(runtime);
-    stream
+    let stream = UnixStream::connect(runtime.local_ipc_socket_path().unwrap()).unwrap();
+    stream.set_nonblocking(true).unwrap(); pump(runtime); stream
 }
-
 fn send(runtime: &mut Runtime, stream: &mut UnixStream, kind: MessageType, payload: &[u8]) {
-    stream.write_all(&encode_frame(kind, payload)).unwrap();
-    pump(runtime);
+    stream.write_all(&encode_frame(kind, payload)).unwrap(); pump(runtime);
 }
-
 fn frame(runtime: &mut Runtime, stream: &mut UnixStream) -> Option<(MessageType, Vec<u8>)> {
-    let deadline = Instant::now() + Duration::from_secs(2);
-    let mut buffer = Vec::new();
-    loop {
-        let mut chunk = [0u8; 8192];
-        match stream.read(&mut chunk) {
-            Ok(0) => return None,
-            Ok(n) => buffer.extend_from_slice(&chunk[..n]),
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => pump(runtime),
-            Err(_) => return None,
-        }
-        if buffer.len() >= HEADER_LEN {
-            let header = FrameHeader::decode(&buffer[..HEADER_LEN]).unwrap();
-            let total = HEADER_LEN + header.payload_len as usize;
-            if buffer.len() >= total {
-                return Some((MessageType::from_u16(header.message_type).unwrap(), buffer[HEADER_LEN..total].to_vec()));
-            }
-        }
-        assert!(Instant::now() < deadline, "frame wait timed out");
+    let deadline = Instant::now() + Duration::from_secs(2); let mut buffer = Vec::new();
+    loop { let mut chunk = [0u8; 8192]; match stream.read(&mut chunk) {
+        Ok(0) => return None, Ok(n) => buffer.extend_from_slice(&chunk[..n]),
+        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => pump(runtime), Err(_) => return None,
     }
+    if buffer.len() >= HEADER_LEN { let h = FrameHeader::decode(&buffer[..HEADER_LEN]).unwrap(); let total = HEADER_LEN + h.payload_len as usize; if buffer.len() >= total { return Some((MessageType::from_u16(h.message_type).unwrap(), buffer[HEADER_LEN..total].to_vec())); } }
+    assert!(Instant::now() < deadline, "frame timed out"); }
 }
-
 fn hello(runtime: &mut Runtime, stream: &mut UnixStream) {
     send(runtime, stream, MessageType::ClientHello, &ClientHello { client_capabilities: 0 }.encode());
-    let (kind, payload) = frame(runtime, stream).expect("ServerHello");
-    assert_eq!(kind, MessageType::ServerHello);
-    ServerHello::decode(&payload).unwrap();
+    let (kind, payload) = frame(runtime, stream).unwrap(); assert_eq!(kind, MessageType::ServerHello); ServerHello::decode(&payload).unwrap();
 }
-
-fn attach_request(runtime: &mut Runtime, stream: &mut UnixStream, execution_id: ExecutionId) {
+fn attach(runtime: &mut Runtime, stream: &mut UnixStream, execution_id: ExecutionId) {
     send(runtime, stream, MessageType::Attach, &Attach { execution_id, requested_role: Role::Controller }.encode());
 }
-
-fn no_authority(runtime: &Runtime, execution_id: ExecutionId) {
-    assert_eq!(runtime.lookup(execution_id).unwrap().attachment_count, 0);
-}
+fn no_authority(runtime: &Runtime, execution_id: ExecutionId) { assert_eq!(runtime.lookup(execution_id).unwrap().attachment_count, 0); }
 
 #[test]
-fn connection_loss_during_attach_never_strands_controller_lease() {
+fn attach_admission_failure_publishes_no_authority_and_fresh_controller_recovers() {
     let mut runtime = Runtime::new(config()).unwrap();
-    let execution_id = runtime.create_execution(
-        CommandSpec::new("/bin/cat"),
-        WindowSize::new(80, 24, 0, 0).unwrap(),
-    ).unwrap();
+    let execution_id = runtime.create_execution(CommandSpec::new("/bin/cat"), WindowSize::new(80, 24, 0, 0).unwrap()).unwrap();
 
-    // Drop immediately after the request is admitted, before consuming any
-    // server output. Runtime must reclaim any transient connection state.
-    let mut failed = connect(&mut runtime);
-    hello(&mut runtime, &mut failed);
-    attach_request(&mut runtime, &mut failed, execution_id);
-    drop(failed);
-    for _ in 0..8 { pump(&mut runtime); }
+    let mut failed = connect(&mut runtime); hello(&mut runtime, &mut failed);
+    test_fault::fail_next(FaultPoint::AttachAdmission);
+    attach(&mut runtime, &mut failed, execution_id);
+    for _ in 0..4 { pump(&mut runtime); }
     no_authority(&runtime, execution_id);
+    drop(failed); pump(&mut runtime);
 
-    // A new controller proves the prior attempt did not strand authority.
-    let mut fresh = connect(&mut runtime);
-    hello(&mut runtime, &mut fresh);
-    attach_request(&mut runtime, &mut fresh, execution_id);
+    let mut fresh = connect(&mut runtime); hello(&mut runtime, &mut fresh); attach(&mut runtime, &mut fresh, execution_id);
     let (kind, payload) = frame(&mut runtime, &mut fresh).expect("Attached");
     assert_eq!(kind, MessageType::Attached);
-    let attached = Attached::decode(&payload).unwrap();
-    assert_eq!(attached.execution_id, execution_id);
+    assert_eq!(Attached::decode(&payload).unwrap().execution_id, execution_id);
     assert_eq!(runtime.lookup(execution_id).unwrap().attachment_count, 1);
 
-    drop(fresh);
-    for _ in 0..8 { pump(&mut runtime); }
-    no_authority(&runtime, execution_id);
-    runtime.begin_shutdown().unwrap();
-    runtime.run_until_empty(Instant::now() + Duration::from_secs(3)).unwrap();
+    drop(fresh); for _ in 0..8 { pump(&mut runtime); } no_authority(&runtime, execution_id);
+    runtime.begin_shutdown().unwrap(); runtime.run_until_empty(Instant::now() + Duration::from_secs(3)).unwrap();
 }
 
 #[test]
-fn candidate_d_fault_points_do_not_affect_legacy_comparator_state() {
-    // The points are registered and deterministic; production attach behavior
-    // is additionally covered by connection-loss rollback above. This keeps
-    // feature compilation honest while legacy shm fault points remain isolated
-    // to comparator/reference code.
-    test_fault::fail_next(FaultPoint::AttachAdmission);
+fn write_flush_failure_disconnects_and_reclaims_published_authority() {
+    let mut runtime = Runtime::new(config()).unwrap();
+    let execution_id = runtime.create_execution(CommandSpec::new("/bin/cat"), WindowSize::new(80, 24, 0, 0).unwrap()).unwrap();
+    let mut client = connect(&mut runtime); hello(&mut runtime, &mut client);
     test_fault::fail_next(FaultPoint::AttachFlush);
+    attach(&mut runtime, &mut client, execution_id);
+    for _ in 0..8 { pump(&mut runtime); }
+    no_authority(&runtime, execution_id);
 }

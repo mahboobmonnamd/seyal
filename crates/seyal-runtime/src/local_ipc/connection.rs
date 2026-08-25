@@ -620,6 +620,7 @@ mod tests {
             cursor_visible: true,
             alternate_screen: false,
             source_damage_generation: generation,
+            damage: ProjectionDamage::full(2),
             cells: sample_cells(4),
         }
     }

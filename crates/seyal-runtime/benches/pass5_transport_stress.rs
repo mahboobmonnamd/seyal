@@ -43,7 +43,7 @@ const COLUMNS: u16 = 80;
 #[cfg(target_os = "macos")]
 const REGULAR_REPETITIONS: usize = 64;
 #[cfg(target_os = "macos")]
-const HIGH_OUTPUT_REPETITIONS: usize = 512;
+const BURST_REPETITIONS: usize = 512;
 #[cfg(target_os = "macos")]
 const REFERENCE_HEADER_LEN: usize = 40;
 #[cfg(target_os = "macos")]
@@ -55,7 +55,7 @@ fn main() {
         println!(
             "pass5_transport_stress PLATFORM_LIMITED target_os!=macos performance_claim=false"
         );
-        let _ = Region::new(&GLOBAL).change();
+        let _ = Region::new(GLOBAL).change();
     }
 
     #[cfg(target_os = "macos")]
@@ -90,7 +90,7 @@ impl Transport {
 #[cfg(target_os = "macos")]
 fn run_macos() {
     let args = env::args().collect::<Vec<_>>();
-    if args.get(1).is_some_and(|arg| arg == "--worker") {
+    if args.get(1).is_some_and(|value| value == "--worker") {
         let transport = Transport::parse(&args[2]);
         let fanout = args[3].parse::<usize>().expect("fanout");
         let repetitions = args[4].parse::<usize>().expect("repetitions");
@@ -104,23 +104,23 @@ fn run_macos() {
 
     println!("pass5_transport_stress performance_claim=false");
     println!(
-        "scope=derived_complete_snapshot_to_all_clients allocator=stats_alloc-0.1.10 allocator_instrumentation_affects_absolute_latency=true"
+        "scope=derived_complete_snapshot_transport allocator=stats_alloc-0.1.10 allocator_instrumentation_affects_absolute_latency=true"
     );
     println!(
-        "decision_use=allocation_fanout_high_output_supplement not_replacement_for_uninstrumented_runtime_scalability"
+        "decision_use=fanout_allocation_transport_burst_supplement not_replacement_for_uninstrumented_runtime_scalability"
     );
     println!(
-        "cpu_accounting=getrusage_phase_delta server_and_client_phases_sequential rss_accounting=combined_worker_process"
+        "cpu_scope=combined_worker_process_via_usr_bin_time phase_metrics=wall_time rss_scope=combined_worker_process"
     );
     println!(
-        "percentile_method=nearest_rank repetitions_regular={REGULAR_REPETITIONS} repetitions_high_output={HIGH_OUTPUT_REPETITIONS}"
+        "percentile_method=nearest_rank regular_repetitions={REGULAR_REPETITIONS} burst_repetitions={BURST_REPETITIONS}"
     );
     print_host_metadata();
 
     let executable = env::current_exe().expect("benchmark executable");
     for fanout in [1usize, 10, 16] {
         for transport in [Transport::SocketOnly, Transport::Hybrid] {
-            run_worker_process(
+            run_timed_worker(
                 &executable,
                 transport,
                 fanout,
@@ -130,25 +130,27 @@ fn run_macos() {
         }
     }
     for transport in [Transport::SocketOnly, Transport::Hybrid] {
-        run_worker_process(
+        run_timed_worker(
             &executable,
             transport,
             16,
-            HIGH_OUTPUT_REPETITIONS,
-            "high_output_updates",
+            BURST_REPETITIONS,
+            "synthetic_derived_state_burst",
         );
     }
 }
 
 #[cfg(target_os = "macos")]
-fn run_worker_process(
+fn run_timed_worker(
     executable: &std::path::Path,
     transport: Transport,
     fanout: usize,
     repetitions: usize,
     workload: &str,
 ) {
-    let status = Command::new(executable)
+    let output = Command::new("/usr/bin/time")
+        .arg("-lp")
+        .arg(executable)
         .args([
             "--worker",
             transport.as_arg(),
@@ -156,20 +158,46 @@ fn run_worker_process(
             &repetitions.to_string(),
             workload,
         ])
-        .status()
-        .expect("launch transport stress worker");
-    assert!(status.success(), "transport stress worker failed");
+        .output()
+        .expect("launch timed transport worker");
+    assert!(output.status.success(), "transport stress worker failed");
+    print!("{}", String::from_utf8_lossy(&output.stdout));
+    let timing = String::from_utf8_lossy(&output.stderr);
+    println!(
+        "transport_worker_cpu transport={} fanout={fanout} repetitions={repetitions} workload={workload} user_seconds={} system_seconds={} scope=combined_worker_process source=/usr/bin/time",
+        transport.as_arg(),
+        time_metric(&timing, "user").unwrap_or_else(|| "unavailable".to_owned()),
+        time_metric(&timing, "sys").unwrap_or_else(|| "unavailable".to_owned()),
+    );
+}
+
+#[cfg(target_os = "macos")]
+fn time_metric(output: &str, key: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        let mut fields = line.split_whitespace();
+        let first = fields.next()?;
+        let second = fields.next()?;
+        if first == key {
+            Some(second.to_owned())
+        } else if second == key {
+            Some(first.to_owned())
+        } else {
+            None
+        }
+    })
 }
 
 #[cfg(target_os = "macos")]
 #[derive(Clone, Copy, Debug, Default)]
 struct Sample {
-    elapsed_ns: u128,
-    server_cpu_us: u128,
-    client_cpu_us: u128,
+    total_ns: u128,
+    server_ns: u128,
+    client_ns: u128,
     server_allocations: usize,
+    server_reallocations: usize,
     server_bytes_allocated: usize,
     client_allocations: usize,
+    client_reallocations: usize,
     client_bytes_allocated: usize,
     write_calls: usize,
     socket_bytes: usize,
@@ -177,58 +205,15 @@ struct Sample {
 }
 
 #[cfg(target_os = "macos")]
-#[derive(Clone, Copy, Debug, Default)]
-struct CpuTime {
-    user_us: u128,
-    system_us: u128,
-}
-
-#[cfg(target_os = "macos")]
-impl CpuTime {
-    fn total_us(self) -> u128 {
-        self.user_us + self.system_us
-    }
-
-    fn elapsed_since(self, before: Self) -> u128 {
-        self.total_us().saturating_sub(before.total_us())
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn cpu_time() -> CpuTime {
-    let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
-    // SAFETY: `usage` is a valid writable out-parameter and RUSAGE_SELF
-    // requires no caller-owned pointer lifetime beyond this call.
-    let result = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
-    assert_eq!(result, 0, "getrusage failed");
-    // SAFETY: successful getrusage initialized the entire rusage value.
-    let usage = unsafe { usage.assume_init() };
-    CpuTime {
-        user_us: timeval_us(usage.ru_utime),
-        system_us: timeval_us(usage.ru_stime),
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn timeval_us(value: libc::timeval) -> u128 {
-    (value.tv_sec.max(0) as u128) * 1_000_000 + value.tv_usec.max(0) as u128
-}
-
-#[cfg(target_os = "macos")]
-fn allocation_counts(stats: Stats) -> (usize, usize) {
-    (
-        stats.allocations.saturating_add(stats.reallocations),
-        stats
-            .bytes_allocated
-            .saturating_add(stats.bytes_reallocated.max(0) as usize),
-    )
+fn allocation_fields(stats: Stats) -> (usize, usize, usize) {
+    (stats.allocations, stats.reallocations, stats.bytes_allocated)
 }
 
 #[cfg(target_os = "macos")]
 struct SocketClient {
     tx: UnixStream,
     rx: UnixStream,
-    recv: Vec<u8>,
+    receive: Vec<u8>,
 }
 
 #[cfg(target_os = "macos")]
@@ -245,52 +230,59 @@ fn run_socket_worker(fanout: usize, repetitions: usize, workload: &str) {
             SocketClient {
                 tx,
                 rx,
-                recv: vec![0; initial.len()],
+                receive: vec![0; initial.len()],
             }
         })
         .collect::<Vec<_>>();
+
     for client in &mut clients {
         send_stream_all(&mut client.tx, &initial);
-        receive_stream_exact(&mut client.rx, &mut client.recv);
-        let decoded = decode_reference_snapshot(&client.recv);
-        assert!(owned_matches(&decoded, &snapshot));
+        receive_exact(&mut client.rx, &mut client.receive);
+        assert!(owned_matches(
+            &decode_reference_snapshot(&client.receive),
+            &snapshot
+        ));
     }
     let populated_rss = process_rss_kib();
 
     let mut samples = Vec::with_capacity(repetitions);
     for iteration in 0..repetitions {
         mutate_snapshot(&mut snapshot, iteration as u64 + 2);
-        let started = Instant::now();
+        let total_start = Instant::now();
 
-        let server_cpu_before = cpu_time();
-        let server_region = Region::new(&GLOBAL);
+        let server_start = Instant::now();
+        let server_region = Region::new(GLOBAL);
         let frame = encode_reference_snapshot(&snapshot);
         let mut write_calls = 0usize;
         for client in &mut clients {
             write_calls += send_stream_all(&mut client.tx, &frame);
         }
         let server_stats = server_region.change();
-        let server_cpu_us = cpu_time().elapsed_since(server_cpu_before);
+        let server_ns = server_start.elapsed().as_nanos();
 
-        let client_cpu_before = cpu_time();
-        let client_region = Region::new(&GLOBAL);
+        let client_start = Instant::now();
+        let client_region = Region::new(GLOBAL);
         for client in &mut clients {
-            receive_stream_exact(&mut client.rx, &mut client.recv);
-            let decoded = decode_reference_snapshot(&client.recv);
+            receive_exact(&mut client.rx, &mut client.receive);
+            let decoded = decode_reference_snapshot(&client.receive);
             assert!(owned_matches(&decoded, &snapshot));
             std::hint::black_box(decoded);
         }
         let client_stats = client_region.change();
-        let client_cpu_us = cpu_time().elapsed_since(client_cpu_before);
-        let (server_allocations, server_bytes_allocated) = allocation_counts(server_stats);
-        let (client_allocations, client_bytes_allocated) = allocation_counts(client_stats);
+        let client_ns = client_start.elapsed().as_nanos();
+        let (server_allocations, server_reallocations, server_bytes_allocated) =
+            allocation_fields(server_stats);
+        let (client_allocations, client_reallocations, client_bytes_allocated) =
+            allocation_fields(client_stats);
         samples.push(Sample {
-            elapsed_ns: started.elapsed().as_nanos(),
-            server_cpu_us,
-            client_cpu_us,
+            total_ns: total_start.elapsed().as_nanos(),
+            server_ns,
+            client_ns,
             server_allocations,
+            server_reallocations,
             server_bytes_allocated,
             client_allocations,
+            client_reallocations,
             client_bytes_allocated,
             write_calls,
             socket_bytes: frame.len() * fanout,
@@ -314,12 +306,12 @@ struct HybridClient {
     writer: Writer,
     _region_owner: ProjectionRegion,
     mapping: ReadOnlyMapping,
-    region: RegionHeader,
+    header: RegionHeader,
     attachment_id: AttachmentId,
     projection_id: ProjectionId,
     wake_tx: UnixStream,
     wake_rx: UnixStream,
-    wake_recv: Vec<u8>,
+    wake_receive: Vec<u8>,
 }
 
 #[cfg(target_os = "macos")]
@@ -335,10 +327,10 @@ fn run_hybrid_worker(fanout: usize, repetitions: usize, workload: &str) {
     let mut samples = Vec::with_capacity(repetitions);
     for iteration in 0..repetitions {
         mutate_snapshot(&mut snapshot, iteration as u64 + 2);
-        let started = Instant::now();
+        let total_start = Instant::now();
 
-        let server_cpu_before = cpu_time();
-        let server_region = Region::new(&GLOBAL);
+        let server_start = Instant::now();
+        let server_region = Region::new(GLOBAL);
         let mut write_calls = 0usize;
         let mut socket_bytes = 0usize;
         for client in &mut clients {
@@ -356,37 +348,43 @@ fn run_hybrid_worker(fanout: usize, repetitions: usize, workload: &str) {
                 .encode(),
             );
             socket_bytes += wake.len();
-            write_calls += send_fd_all(client.wake_tx.as_raw_fd(), &wake);
+            write_calls += send_no_fd_all(client.wake_tx.as_raw_fd(), &wake);
         }
         let server_stats = server_region.change();
-        let server_cpu_us = cpu_time().elapsed_since(server_cpu_before);
+        let server_ns = server_start.elapsed().as_nanos();
 
-        let client_cpu_before = cpu_time();
-        let client_region = Region::new(&GLOBAL);
+        let client_start = Instant::now();
+        let client_region = Region::new(GLOBAL);
         for client in &mut clients {
-            receive_stream_exact(&mut client.wake_rx, &mut client.wake_recv);
-            let header = FrameHeader::decode(&client.wake_recv[..HEADER_LEN]).expect("wake header");
-            assert_eq!(header.message_type, MessageType::GenerationWake as u16);
-            let wake = GenerationWake::decode(&client.wake_recv[HEADER_LEN..]).expect("wake body");
+            receive_exact(&mut client.wake_rx, &mut client.wake_receive);
+            let frame_header =
+                FrameHeader::decode(&client.wake_receive[..HEADER_LEN]).expect("wake header");
+            assert_eq!(frame_header.message_type, MessageType::GenerationWake as u16);
+            let wake =
+                GenerationWake::decode(&client.wake_receive[HEADER_LEN..]).expect("wake body");
             assert_eq!(wake.attachment_id, client.attachment_id);
             assert_eq!(wake.projection_id, client.projection_id);
-            let read = read_latest(&client.mapping.memory(), &client.region)
-                .expect("read stress projection");
+            let read =
+                read_latest(&client.mapping.memory(), &client.header).expect("stress projection");
             assert!(read.generation >= wake.committed_generation);
             assert!(read_matches(&read, &snapshot));
             std::hint::black_box(read);
         }
         let client_stats = client_region.change();
-        let client_cpu_us = cpu_time().elapsed_since(client_cpu_before);
-        let (server_allocations, server_bytes_allocated) = allocation_counts(server_stats);
-        let (client_allocations, client_bytes_allocated) = allocation_counts(client_stats);
+        let client_ns = client_start.elapsed().as_nanos();
+        let (server_allocations, server_reallocations, server_bytes_allocated) =
+            allocation_fields(server_stats);
+        let (client_allocations, client_reallocations, client_bytes_allocated) =
+            allocation_fields(client_stats);
         samples.push(Sample {
-            elapsed_ns: started.elapsed().as_nanos(),
-            server_cpu_us,
-            client_cpu_us,
+            total_ns: total_start.elapsed().as_nanos(),
+            server_ns,
+            client_ns,
             server_allocations,
+            server_reallocations,
             server_bytes_allocated,
             client_allocations,
+            client_reallocations,
             client_bytes_allocated,
             write_calls,
             socket_bytes,
@@ -412,7 +410,7 @@ fn setup_hybrid_client(index: usize, snapshot: &OwnedSnapshot) -> HybridClient {
     let attachment_id = AttachmentId::from_bytes(attachment_raw.to_le_bytes());
     let projection_id = ProjectionId::from_bytes(projection_raw.to_le_bytes());
     let stride = slot_stride();
-    let region = RegionHeader {
+    let header = RegionHeader {
         region_bytes: REGION_HEADER_LEN as u64 + 2 * stride,
         execution_id: 1,
         attachment_id: attachment_raw,
@@ -422,16 +420,18 @@ fn setup_hybrid_client(index: usize, snapshot: &OwnedSnapshot) -> HybridClient {
         capacity_rows: ROWS,
         capacity_cols: COLUMNS,
     };
-    let mut region_owner = ProjectionRegion::create(&region).expect("create stress projection");
-    let mut writer = Writer::new(region_owner.writer_memory(), region).expect("stress writer");
+    let mut region_owner = ProjectionRegion::create(&header).expect("create stress projection");
+    let mut writer = Writer::new(region_owner.writer_memory(), header).expect("stress writer");
     writer
         .publish(&snapshot.as_snapshot_write())
         .expect("initial stress publish");
     let reader_fd = region_owner.take_reader_fd().expect("stress reader fd");
-    let mapping = ReadOnlyMapping::new(reader_fd, region.region_bytes as usize)
+    let mapping = ReadOnlyMapping::new(reader_fd, header.region_bytes as usize)
         .expect("stress read-only mapping");
-    let initial = read_latest(&mapping.memory(), &region).expect("initial stress read");
-    assert!(read_matches(&initial, snapshot));
+    assert!(read_matches(
+        &read_latest(&mapping.memory(), &header).expect("initial stress read"),
+        snapshot
+    ));
     let (wake_tx, wake_rx) = UnixStream::pair().expect("wake socket pair");
     wake_tx.set_nonblocking(true).expect("nonblocking wake tx");
     wake_rx.set_nonblocking(true).expect("nonblocking wake rx");
@@ -439,12 +439,12 @@ fn setup_hybrid_client(index: usize, snapshot: &OwnedSnapshot) -> HybridClient {
         writer,
         _region_owner: region_owner,
         mapping,
-        region,
+        header,
         attachment_id,
         projection_id,
         wake_tx,
         wake_rx,
-        wake_recv: vec![0; HEADER_LEN + GenerationWake::WIRE_LEN],
+        wake_receive: vec![0; HEADER_LEN + GenerationWake::WIRE_LEN],
     }
 }
 
@@ -503,9 +503,6 @@ fn slot_stride() -> u64 {
 
 #[cfg(target_os = "macos")]
 fn writer_bytes_per_publish(snapshot: &OwnedSnapshot) -> usize {
-    // Writer::publish writes bytes 8..64 of SlotHeader, every encoded
-    // cell/damage byte, and three 8-byte atomic words: odd slot sequence,
-    // finalized slot sequence and region publication.
     (SLOT_HEADER_LEN - 8)
         + snapshot.cells.len() * CELL_LEN
         + snapshot.damages.len() * DAMAGE_LEN
@@ -533,7 +530,7 @@ fn send_stream_all(stream: &mut UnixStream, bytes: &[u8]) -> usize {
 }
 
 #[cfg(target_os = "macos")]
-fn send_fd_all(socket: RawFd, bytes: &[u8]) -> usize {
+fn send_no_fd_all(socket: RawFd, bytes: &[u8]) -> usize {
     let deadline = Instant::now() + Duration::from_secs(2);
     let mut sent = 0usize;
     let mut calls = 0usize;
@@ -553,7 +550,7 @@ fn send_fd_all(socket: RawFd, bytes: &[u8]) -> usize {
 }
 
 #[cfg(target_os = "macos")]
-fn receive_stream_exact(stream: &mut UnixStream, buffer: &mut [u8]) {
+fn receive_exact(stream: &mut UnixStream, buffer: &mut [u8]) {
     let deadline = Instant::now() + Duration::from_secs(2);
     let mut received = 0usize;
     while received < buffer.len() {
@@ -688,15 +685,17 @@ fn print_summary(
     populated_rss: usize,
     samples: &[Sample],
 ) {
-    let elapsed = values(samples, |sample| sample.elapsed_ns);
-    let server_cpu = values(samples, |sample| sample.server_cpu_us);
-    let client_cpu = values(samples, |sample| sample.client_cpu_us);
+    let total = values(samples, |sample| sample.total_ns);
+    let server = values(samples, |sample| sample.server_ns);
+    let client = values(samples, |sample| sample.client_ns);
     let server_allocations = values(samples, |sample| sample.server_allocations as u128);
+    let server_reallocations = values(samples, |sample| sample.server_reallocations as u128);
     let server_bytes = values(samples, |sample| sample.server_bytes_allocated as u128);
     let client_allocations = values(samples, |sample| sample.client_allocations as u128);
+    let client_reallocations = values(samples, |sample| sample.client_reallocations as u128);
     let client_bytes = values(samples, |sample| sample.client_bytes_allocated as u128);
     let write_calls = values(samples, |sample| sample.write_calls as u128);
-    let total_ns: u128 = elapsed.iter().sum();
+    let total_ns: u128 = total.iter().sum();
     let updates_per_second = if total_ns == 0 {
         0
     } else {
@@ -705,20 +704,22 @@ fn print_summary(
     let socket_bytes = samples.last().map_or(0, |sample| sample.socket_bytes);
     let shm_bytes = samples.last().map_or(0, |sample| sample.shm_bytes);
     println!(
-        "transport_stress transport={} fanout={fanout} repetitions={repetitions} workload={workload} semantic_match=true latency_p50_us={} latency_p95_us={} latency_p99_us={} server_cpu_p50_us={} server_cpu_p95_us={} client_cpu_p50_us={} client_cpu_p95_us={} server_allocations_p50={} server_allocations_p95={} server_bytes_allocated_p50={} client_allocations_p50={} client_allocations_p95={} client_bytes_allocated_p50={} write_calls_p50={} socket_bytes_per_update={socket_bytes} shm_writer_bytes_per_update={shm_bytes} updates_per_second={updates_per_second} rss_baseline_kib={baseline_rss} rss_populated_kib={populated_rss} rss_incremental_kib={} cpu_scope=getrusage_sequential_phase rss_scope=combined_worker_process shm_bytes_source=exact_writer_contract socket_bytes_source=actual_frame_lengths",
+        "transport_stress transport={} fanout={fanout} repetitions={repetitions} workload={workload} semantic_match=true total_p50_us={} total_p95_us={} total_p99_us={} server_phase_p50_us={} server_phase_p95_us={} client_phase_p50_us={} client_phase_p95_us={} server_allocations_p50={} server_allocations_p95={} server_reallocations_p50={} server_bytes_allocated_p50={} client_allocations_p50={} client_allocations_p95={} client_reallocations_p50={} client_bytes_allocated_p50={} write_calls_p50={} socket_bytes_per_update={socket_bytes} shm_writer_bytes_per_update={shm_bytes} updates_per_second={updates_per_second} rss_baseline_kib={baseline_rss} rss_populated_kib={populated_rss} rss_incremental_kib={} phase_time_scope=wall_clock rss_scope=combined_worker_process shm_bytes_source=exact_writer_contract socket_bytes_source=actual_frame_lengths",
         transport.as_arg(),
-        percentile(&elapsed, 50) / 1_000,
-        percentile(&elapsed, 95) / 1_000,
-        percentile(&elapsed, 99) / 1_000,
-        percentile(&server_cpu, 50),
-        percentile(&server_cpu, 95),
-        percentile(&client_cpu, 50),
-        percentile(&client_cpu, 95),
+        percentile(&total, 50) / 1_000,
+        percentile(&total, 95) / 1_000,
+        percentile(&total, 99) / 1_000,
+        percentile(&server, 50) / 1_000,
+        percentile(&server, 95) / 1_000,
+        percentile(&client, 50) / 1_000,
+        percentile(&client, 95) / 1_000,
         percentile(&server_allocations, 50),
         percentile(&server_allocations, 95),
+        percentile(&server_reallocations, 50),
         percentile(&server_bytes, 50),
         percentile(&client_allocations, 50),
         percentile(&client_allocations, 95),
+        percentile(&client_reallocations, 50),
         percentile(&client_bytes, 50),
         percentile(&write_calls, 50),
         populated_rss.saturating_sub(baseline_rss),

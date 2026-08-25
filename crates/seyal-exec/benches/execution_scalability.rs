@@ -116,6 +116,7 @@ mod macos {
         for (repeat, kind, population, rows, cols, alternate, m) in report {
             writeln!(summary, "| {repeat} | {kind} | {population} | {cols}x{rows} | {alternate} | {} | {} | {} | {} | {} | {}/{}/{} | {} | {} | {} |", m.0, m.4, m.5, m.7, m.8, m.9, m.10, m.11, m.12, m.2, m.3).expect("write table row");
         }
+        println!("[seyal scalability] performance_claim=false baseline_measurement=true");
         println!("[seyal scalability] raw_results={}", raw_path.display());
         println!("[seyal scalability] summary={}", summary_path.display());
     }

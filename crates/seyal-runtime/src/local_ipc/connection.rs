@@ -193,22 +193,27 @@ impl LocalIpcServer {
         let mut chunk = [0u8; READ_CHUNK_BYTES];
 
         while events.len() < MAX_FRAMES_PER_READINESS {
-            match connection.stream.read(&mut chunk) {
+            // Do not ask the kernel for bytes that cannot fit in the bounded
+            // receive buffer. A valid maximum-size frame may be immediately
+            // followed by another frame in the socket; reading across that
+            // boundary must not turn the valid first frame into an overflow.
+            let remaining_capacity = MAX_RECEIVE_BUFFER_BYTES
+                .checked_sub(connection.read_buf.len())
+                .unwrap_or(0);
+            if remaining_capacity == 0 {
+                events.push(ServerEvent::FramingError { token });
+                self.close_with_event(token, &mut events);
+                return events;
+            }
+            let read_len = READ_CHUNK_BYTES.min(remaining_capacity);
+
+            match connection.stream.read(&mut chunk[..read_len]) {
                 Ok(0) => {
                     self.close_with_event(token, &mut events);
                     return events;
                 }
                 Ok(count) => {
-                    let Some(new_len) = connection.read_buf.len().checked_add(count) else {
-                        events.push(ServerEvent::FramingError { token });
-                        self.close_with_event(token, &mut events);
-                        return events;
-                    };
-                    if new_len > MAX_RECEIVE_BUFFER_BYTES {
-                        events.push(ServerEvent::FramingError { token });
-                        self.close_with_event(token, &mut events);
-                        return events;
-                    }
+                    debug_assert!(count <= remaining_capacity);
                     connection.read_buf.extend_from_slice(&chunk[..count]);
                     if drain_frames(connection, token, &mut events).is_err() {
                         self.close_with_event(token, &mut events);
@@ -561,6 +566,49 @@ mod tests {
                 .iter()
                 .any(|event| matches!(event, ServerEvent::Frame { .. }))
         );
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn max_sized_frame_followed_by_pipelined_frame_stays_within_receive_cap() {
+        let (mut server, path) = bind_test_server();
+        let (mut client, token) = accept_one(&mut server, &path);
+        let mut bytes = encode_frame(
+            MessageType::Goodbye,
+            &vec![0x5a; MAX_FRAME_PAYLOAD as usize],
+        );
+        bytes.extend_from_slice(&encode_frame(
+            MessageType::ClientHello,
+            &ClientHello {
+                client_capabilities: 0,
+            }
+            .encode(),
+        ));
+
+        let writer = std::thread::spawn(move || client.write_all(&bytes).unwrap());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut frame_count = 0usize;
+        while frame_count < 2 {
+            let events = server.service_read(token, false);
+            assert!(
+                !events
+                    .iter()
+                    .any(|event| matches!(event, ServerEvent::FramingError { .. })),
+                "valid pipelined frames must not exceed the receive cap"
+            );
+            frame_count += events
+                .iter()
+                .filter(|event| matches!(event, ServerEvent::Frame { .. }))
+                .count();
+            assert!(server.contains(token), "valid pipeline closed the connection");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out draining pipelined frames"
+            );
+            std::thread::yield_now();
+        }
+        writer.join().unwrap();
+        assert_eq!(frame_count, 2);
         std::fs::remove_file(path).ok();
     }
 

@@ -173,7 +173,9 @@ fn send_controller_attach(
 }
 
 fn assert_no_published_attachment(runtime: &Runtime, execution_id: ExecutionId) {
-    let summary = runtime.lookup(execution_id).expect("execution remains live");
+    let summary = runtime
+        .lookup(execution_id)
+        .expect("execution remains live");
     assert_eq!(
         summary.attachment_count, 0,
         "failed attach published attachment authority"
@@ -198,7 +200,10 @@ fn expect_disconnect(runtime: &mut Runtime, stream: &mut UnixStream) {
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
             Err(error) => panic!("client read failed: {error}"),
         }
-        assert!(Instant::now() < deadline, "connection did not close after send failure");
+        assert!(
+            Instant::now() < deadline,
+            "connection did not close after send failure"
+        );
         pump(runtime);
     }
 }

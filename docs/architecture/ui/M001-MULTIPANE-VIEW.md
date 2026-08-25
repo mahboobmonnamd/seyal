@@ -2,11 +2,11 @@
 
 **Status:** Frozen UI reference specification  
 **Parent:** `M001-CORE-TERMINAL-REFERENCE-SCREEN.md`  
-**Scope:** Tab-owned split layout and per-pane terminal interaction
+**Scope:** Tab-owned split layout and per-Pane terminal interaction
 
 ## 1. Purpose
 
-The Multipane view defines how one workspace tab presents multiple panes without losing Seyal's terminal ownership, composer, inspector, or power-user density rules.
+The Multipane view defines how one Workspace Tab presents multiple panes without losing terminal ownership, composer isolation, inspector context, or 15-inch power-user density.
 
 ## 2. Canonical ownership
 
@@ -22,135 +22,152 @@ Workspace
 
 Rules:
 
-- the tab owns the split tree/layout;
-- a terminal pane owns at most one `TerminalExecution`;
-- each `TerminalExecution` owns exactly one PTY/child/canonical terminal state;
-- splitting creates another pane and, when a terminal surface is requested, another execution/PTy according to product policy;
-- splitting never duplicates or mirrors a VT engine.
+- the Tab owns the split tree/layout;
+- a terminal Pane owns at most one `TerminalExecution`;
+- `TerminalExecution` owns one PTY/child/canonical terminal state;
+- splitting never mirrors or duplicates a VT engine;
+- non-terminal panes do not receive hidden PTYs merely because they exist.
 
 ## 3. Layout controls
 
-The top tab row exposes functional split controls such as:
+Primary split/layout controls live in the active Tab's top layout chrome and target the focused Pane:
 
 - split right;
 - split down;
-- layout selector only when supported.
+- supported layout selector/actions.
 
-The controls apply to the currently focused pane within the active tab.
-
-No decorative layout buttons.
+Pane-level context menus/keyboard shortcuts may expose equivalent actions when useful, but do not repeat permanent split-button clusters inside every Pane purely for appearance.
 
 ## 4. Pane chrome
 
-Each pane should remain compact.
+Each Pane remains compact.
 
-Useful pane-level context may include:
+Useful context may include:
 
-- compact execution/process title;
-- running/attention indicator;
-- focused-state outline/accent;
-- minimal pane actions through overflow/context menu.
+- execution/process title;
+- cwd/path where needed;
+- Running/Attention state;
+- focused-state accent;
+- minimal overflow actions.
 
-Avoid repeating the full global tab bar or workspace nav inside each pane.
+Avoid repeating Workspace/global Tab navigation inside each Pane.
 
-## 5. Composer rule
+## 5. Per-Pane composer
 
-**Every terminal pane has its own pane-scoped composer.**
+Every terminal Pane owns an independent multiline composer state.
 
-Therefore a 2x2 terminal layout has four composers, one per terminal pane.
+Therefore a 2x2 terminal layout has four composer states, one per terminal Pane.
 
 Rules:
 
-- focused pane composer is visually dominant and receives keyboard interaction;
-- inactive pane composers remain visible enough to communicate that commands are pane-local, but should be subdued to reduce noise;
-- composer draft/history context is stored per pane;
-- typing in one pane must never route to another pane because it was last active elsewhere.
+- focused Pane composer is interaction-dominant;
+- inactive available composers may remain visible but subdued;
+- drafts/history context remain pane-local;
+- typing never routes to a different Pane because it was previously active.
 
-A full-screen TUI takeover may temporarily replace/hide that pane's composer as defined in the TUI specification.
+### 5.1 Busy or TUI Pane
 
-## 6. Block and raw/TUI coexistence
+A Pane whose shell is occupied by a long-running foreground process must not present a misleading fully active composer.
 
-Different panes may simultaneously show different presentations of their own executions:
+- retract or disable that Pane's composer;
+- preserve its draft;
+- optionally show compact real running-process status;
+- restore the composer when the shell becomes available.
+
+During full-screen TUI takeover, that Pane's composer is hidden/disabled.
+
+Other panes remain independently usable.
+
+## 6. Pane-level scrolling
+
+For normal Block/transcript presentation, **each Pane owns one transcript scrollbar**.
+
+- Blocks grow intrinsically with output;
+- long-running normal-screen command output grows its Running Block;
+- there is no fixed-height nested output scrollbar inside each Block;
+- the user scrolls the Pane to navigate Blocks/output;
+- implementation may virtualize off-screen content without exposing nested scroll regions.
+
+During TUI takeover, application/terminal semantics own the Pane surface instead of the normal transcript scrolling model.
+
+## 7. Block/raw/TUI coexistence
+
+Different panes may simultaneously show:
 
 - normal Blocks;
-- long-running streaming Block;
+- long-running streaming output;
 - raw terminal;
-- full-screen TUI takeover.
+- full-screen TUI takeover;
+- future non-terminal surfaces.
 
-No pane presentation may change terminal authority or affect another pane's PTY/VT state.
+No Pane presentation changes another Pane's terminal authority.
 
-## 7. Focus
+## 8. Focus
 
-Exactly one pane is focused for primary keyboard input at a time.
+Exactly one Pane receives primary keyboard focus at a time.
 
 Focus determines:
 
-- active composer;
-- keyboard target;
+- active composer/input target;
 - split target;
 - inspector default context;
 - pane-scoped action target.
 
-Mouse click and keyboard navigation must both update the same focus state.
+Mouse and keyboard focus navigation must update the same canonical UI focus state.
 
-## 8. Inspector
+## 9. Inspector
 
-The right inspector follows the focused pane unless the user explicitly selects a Block/process/agent/resource.
+The inspector follows the focused Pane unless the user explicitly selects another object.
 
-For a focused terminal pane, useful inspector content:
+Useful focused-terminal context includes:
 
-- pane identity;
+- Pane identity;
 - layout/focus state;
 - shell/cwd;
-- execution ID/state;
-- active foreground process;
-- process/resource data.
+- execution state;
+- foreground process;
+- real process/resource data.
 
-Changing focus between panes should update inspector context without destroying pane state.
+Changing Pane focus updates inspector context without destroying any Pane state.
 
-## 9. Left-panel pane tree
+## 10. Left-panel pane tree
 
-Do not render a deeply nested pane tree in the left sidebar by default.
+Do not render a deeply nested Pane tree in the left sidebar by default.
 
-For 15-inch power-user layouts:
+For 15-inch layouts:
 
-- keep Workspaces, Agents and Tabs stable;
-- show a compact pane count/status on the active tab where useful;
-- provide pane navigation/tree only as an invoked view/overlay when complexity warrants it.
+- keep Workspaces, Agents, and Tabs stable;
+- show Pane count/activity compactly where useful;
+- expose a Pane navigator/tree only when invoked or complexity requires it.
 
-This prevents duplicate navigation and preserves horizontal space.
+## 11. Top tab overflow
 
-## 10. Resize
+Multipane must not force the top Workspace Tab strip to wrap vertically.
 
-Dragging split boundaries changes pane geometry.
+- keep active Tab visible;
+- shrink to a documented minimum width;
+- then scroll/overflow horizontally.
 
-For terminal panes, resize proposals eventually flow through the authoritative Runtime/terminal resize path. UI must not present geometry that Runtime/PTY rejected.
+## 12. Resize
 
-Rendering and resize feedback should remain responsive without creating synchronous semantic work on PTY I/O.
+Dragging split boundaries changes Pane geometry.
 
-## 11. Long-running commands
+For terminal panes, resize eventually flows through the authoritative Runtime/PTY/terminal-state transaction. UI must not claim geometry that Runtime/PTY rejected.
 
-If one pane is occupied by `npm run dev`, other panes remain independently usable.
-
-The busy pane:
-
-- keeps streaming its active Block/live output;
-- keeps its own composer state but cannot run an unrelated command in that same foreground shell until the process exits/is interrupted;
-- does not block another pane's shell/composer.
-
-## 12. Non-terminal panes
+## 13. Non-terminal panes
 
 Future panes may host agent/activity/diff/artifact/inspector-like surfaces without owning a PTY.
 
-The layout model must distinguish terminal vs non-terminal surfaces explicitly; do not create hidden PTYs merely because a pane exists.
+The layout model must explicitly distinguish terminal from non-terminal surfaces.
 
-## 13. Performance
+## 14. Performance
 
-Multipane must scale with visible work without:
+Multipane must scale without:
 
-- one renderer loop/thread per pane;
+- one renderer thread/loop per Pane;
 - duplicate terminal state;
-- full-pane redraws when damage is localized;
-- synchronous cross-pane coordination for terminal progress.
+- full-Pane redraws when damage is localized;
+- synchronous cross-Pane coordination for terminal progress;
+- nested output scroll containers that multiply layout work.
 
-Focus/layout/UI metadata is not allowed to become a dependency of PTY → VT → canonical state progress.
+Focus/layout/composer metadata must never become a dependency of PTY → VT → canonical-state progress.

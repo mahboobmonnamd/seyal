@@ -137,4 +137,7 @@ fi
 
 echo "Verified RILL feature catalog: 216 unique F-* rows ($rill_inventory_total inventory-labeled issues including the catalog epic)"
 echo "Combined export: $OUT_DIR/all-issues.json"
-echo "Next: bash scripts/import-feature-source-issues.sh --apply $OUT_DIR"
+echo
+# Import is deliberately a separate explicit write step.
+echo "To create the historical issues in Seyal:"
+echo "  bash scripts/import-feature-source-issues.sh --apply $OUT_DIR"

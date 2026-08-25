@@ -258,7 +258,10 @@ impl Runtime {
 
     #[cfg(feature = "benchmark-instrumentation")]
     pub fn reset_benchmark_runtime_counters(&mut self) {
-        self.benchmark = BenchmarkRuntimeState::default();
+        self.benchmark = BenchmarkRuntimeState {
+            source_times: HashMap::with_capacity(4096),
+            ..BenchmarkRuntimeState::default()
+        };
     }
 
     #[cfg(feature = "benchmark-instrumentation")]
@@ -564,7 +567,7 @@ impl Runtime {
         while consumed < self.config.read_dispatch_bytes {
             let remaining = self.config.read_dispatch_bytes - consumed;
             let read_len = remaining.min(self.read_buffer.len());
-            let (outcome, generation_before, generation_after) = {
+            let (outcome, _generation_before, _generation_after) = {
                 let entry = self
                     .entries
                     .get_mut(&id)
@@ -588,16 +591,14 @@ impl Runtime {
                     consumed += count;
                     #[cfg(feature = "benchmark-instrumentation")]
                     {
-                        self.benchmark.pty_bytes_read = self
-                            .benchmark
-                            .pty_bytes_read
-                            .saturating_add(count as u64);
+                        self.benchmark.pty_bytes_read =
+                            self.benchmark.pty_bytes_read.saturating_add(count as u64);
                         self.benchmark.pty_read_calls =
                             self.benchmark.pty_read_calls.saturating_add(1);
-                        if generation_after > generation_before {
+                        if _generation_after > _generation_before {
                             self.benchmark
                                 .source_times
-                                .insert((id, generation_after), Instant::now());
+                                .insert((id, _generation_after), Instant::now());
                         }
                     }
                 }

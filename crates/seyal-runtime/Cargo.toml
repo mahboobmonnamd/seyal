@@ -8,6 +8,10 @@ repository.workspace = true
 publish = false
 build = "build.rs"
 
+[features]
+default = []
+test-fault-injection = []
+
 [dependencies]
 seyal-exec = { path = "../seyal-exec" }
 

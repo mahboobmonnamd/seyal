@@ -61,7 +61,7 @@ if [[ "$APPLY" != true ]]; then
   terminal_count="$(jq 'length' "$SOURCE_DIR/terminal-issues.json")"
   echo "Dry run only. Would import $rill_count RILL issues + $terminal_count terminal issues into $DEST_REPO."
   echo "Run with --apply to create/update destination issues:"
-  echo "  bash scripts/import-feature-source-issues.sh --apply${SOURCE_DIR:+ "$SOURCE_DIR"}"
+  echo "  bash scripts/import-feature-source-issues.sh --apply $SOURCE_DIR"
   exit 0
 fi
 
@@ -95,10 +95,6 @@ gh issue list \
   --limit 10000 \
   --json number,body,state \
   > "$DEST_CACHE"
-
-json_join() {
-  jq -r 'if length == 0 then "—" else join(", ") end'
-}
 
 find_existing_issue() {
   local marker="$1"
@@ -272,6 +268,31 @@ EOF
 import_file "mahboobmonnamd/RILL" "$SOURCE_DIR/rill-issues.json" "legacy-rill"
 import_file "mahboobmonnamd/terminal" "$SOURCE_DIR/terminal-issues.json" "legacy-terminal"
 
-echo "Import complete."
+# Re-enumerate destination Issues independently and require every source marker to
+# exist. This detects a partial import even when the loop itself reached the end.
+FINAL_CACHE="$TMP_DIR/final-destination-issues.json"
+gh issue list \
+  --repo "$DEST_REPO" \
+  --state all \
+  --limit 10000 \
+  --json number,body \
+  > "$FINAL_CACHE"
+
+rill_expected="$(jq 'length' "$SOURCE_DIR/rill-issues.json")"
+terminal_expected="$(jq 'length' "$SOURCE_DIR/terminal-issues.json")"
+rill_imported="$(jq '[.[] | select((.body // "") | contains("Legacy-Source: mahboobmonnamd/RILL#"))] | length' "$FINAL_CACHE")"
+terminal_imported="$(jq '[.[] | select((.body // "") | contains("Legacy-Source: mahboobmonnamd/terminal#"))] | length' "$FINAL_CACHE")"
+
+if [[ "$rill_imported" != "$rill_expected" || "$terminal_imported" != "$terminal_expected" ]]; then
+  echo "error: import reconciliation failed" >&2
+  echo "  RILL: expected=$rill_expected imported=$rill_imported" >&2
+  echo "  terminal: expected=$terminal_expected imported=$terminal_imported" >&2
+  echo "Rerun the same command; source markers make it safe to resume." >&2
+  exit 1
+fi
+
+echo "Import reconciled successfully:"
+echo "  RILL: $rill_imported/$rill_expected"
+echo "  terminal: $terminal_imported/$terminal_expected"
 echo "Rerunning this command is safe: source issue/comment markers prevent duplicates."
 echo "Do not delete the legacy repositories yet; this preserves Issues/comments, not PR diffs or Git commit objects."

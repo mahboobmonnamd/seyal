@@ -118,7 +118,8 @@ impl Harness {
     fn expect_frame(&mut self, client: &mut Client, deadline: Instant) -> (u16, Vec<u8>) {
         loop {
             if client.buffered.len() >= HEADER_LEN {
-                let header = FrameHeader::decode(&client.buffered[..HEADER_LEN]).expect("valid header");
+                let header =
+                    FrameHeader::decode(&client.buffered[..HEADER_LEN]).expect("valid header");
                 let total = HEADER_LEN + header.payload_len as usize;
                 if client.buffered.len() >= total {
                     let frame = client.buffered.drain(..total).collect::<Vec<_>>();
@@ -146,8 +147,7 @@ impl Harness {
             }
             .encode(),
         );
-        let (kind, payload) =
-            self.expect_frame(client, Instant::now() + Duration::from_secs(2));
+        let (kind, payload) = self.expect_frame(client, Instant::now() + Duration::from_secs(2));
         assert_eq!(kind, MessageType::ServerHello as u16);
         let hello = ServerHello::decode(&payload).expect("ServerHello");
         assert_ne!(
@@ -197,7 +197,8 @@ impl Harness {
         for _ in 1..count {
             let (kind, payload) = self.expect_frame(client, deadline);
             assert_eq!(kind, expected_kind as u16);
-            chunks.push(decode_chunk(&encode_frame(expected_kind, &payload)).expect("display chunk"));
+            chunks
+                .push(decode_chunk(&encode_frame(expected_kind, &payload)).expect("display chunk"));
         }
         chunks
     }
@@ -235,7 +236,10 @@ impl Harness {
             if predicate(&row) {
                 return row;
             }
-            assert!(Instant::now() < deadline, "display condition timed out: {row:?}");
+            assert!(
+                Instant::now() < deadline,
+                "display condition timed out: {row:?}"
+            );
             self.apply_next_display(client, cache);
         }
     }
@@ -358,8 +362,12 @@ fn multiple_viewers_receive_same_canonical_generation() {
         }
         .encode(),
     );
-    harness.wait_for_row(&mut controller, &mut controller_cache, |row| row.starts_with("FAN"));
-    harness.wait_for_row(&mut observer, &mut observer_cache, |row| row.starts_with("FAN"));
+    harness.wait_for_row(&mut controller, &mut controller_cache, |row| {
+        row.starts_with("FAN")
+    });
+    harness.wait_for_row(&mut observer, &mut observer_cache, |row| {
+        row.starts_with("FAN")
+    });
     assert_eq!(controller_cache.generation, observer_cache.generation);
     assert_eq!(controller_cache.cells, observer_cache.cells);
 }
@@ -455,9 +463,10 @@ fn reconnect_gets_current_state_without_pty_byte_replay() {
 #[test]
 fn killed_or_nonreading_client_never_blocks_healthy_viewer_or_pty() {
     let mut harness = Harness::new("slow-client");
-    let execution_id = harness.spawn(
-        CommandSpec::new("/bin/sh").args(["-c", "i=0; while [ $i -lt 20000 ]; do printf 'LINE%05d\\r\\n' $i; i=$((i+1)); done; sleep 1"]),
-    );
+    let execution_id = harness.spawn(CommandSpec::new("/bin/sh").args([
+        "-c",
+        "i=0; while [ $i -lt 20000 ]; do printf 'LINE%05d\\r\\n' $i; i=$((i+1)); done; sleep 1",
+    ]));
 
     let mut slow = harness.connect();
     harness.hello(&mut slow);
@@ -470,7 +479,10 @@ fn killed_or_nonreading_client_never_blocks_healthy_viewer_or_pty() {
         harness.attach(&mut healthy, execution_id, Role::Observer);
     let deadline = Instant::now() + Duration::from_secs(8);
     while healthy_cache.generation < 2 {
-        assert!(Instant::now() < deadline, "healthy viewer stopped making progress");
+        assert!(
+            Instant::now() < deadline,
+            "healthy viewer stopped making progress"
+        );
         harness.apply_next_display(&mut healthy, &mut healthy_cache);
     }
     drop(slow);

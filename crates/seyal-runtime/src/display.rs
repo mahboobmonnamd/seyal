@@ -528,8 +528,7 @@ fn validate_update(update: &TerminalProjectionUpdate) -> Result<(), DisplayError
         return Err(DisplayError::InvalidDamage);
     }
     if update.damage.full
-        && (update.damage.first_row != 0
-            || update.damage.last_row != update.rows.saturating_sub(1))
+        && (update.damage.first_row != 0 || update.damage.last_row != update.rows.saturating_sub(1))
     {
         return Err(DisplayError::InvalidDamage);
     }
@@ -730,7 +729,9 @@ mod tests {
     fn delta_carries_only_projection_update_cells() {
         let initial = sample_snapshot(24, 80, 10);
         let mut cache = empty_cache();
-        cache.apply_batch(&encode_snapshot(&initial).unwrap()).unwrap();
+        cache
+            .apply_batch(&encode_snapshot(&initial).unwrap())
+            .unwrap();
 
         let damage = ProjectionDamage {
             full: false,
@@ -752,7 +753,9 @@ mod tests {
     fn delta_generation_gap_is_rejected_without_partial_commit() {
         let snapshot = sample_snapshot(24, 80, 3);
         let mut cache = empty_cache();
-        cache.apply_batch(&encode_snapshot(&snapshot).unwrap()).unwrap();
+        cache
+            .apply_batch(&encode_snapshot(&snapshot).unwrap())
+            .unwrap();
         let update = sample_update(
             24,
             80,
@@ -795,7 +798,9 @@ mod tests {
     fn incomplete_multi_chunk_delta_does_not_partially_mutate_cache() {
         let snapshot = sample_snapshot(256, 512, 20);
         let mut cache = empty_cache();
-        cache.apply_batch(&encode_snapshot(&snapshot).unwrap()).unwrap();
+        cache
+            .apply_batch(&encode_snapshot(&snapshot).unwrap())
+            .unwrap();
         let mut update = sample_update(256, 512, 21, ProjectionDamage::full(256));
         update.cells[0].scalar = 'Z';
         let batch = encode_delta(&update, 20).unwrap();

@@ -202,7 +202,11 @@ fn final_tail_bytes_are_committed_before_finalized_lifecycle() {
         assert!(Instant::now() < deadline, "finalization timed out");
     }
 
-    let visible = cache.cells.iter().map(|cell| cell.scalar).collect::<String>();
+    let visible = cache
+        .cells
+        .iter()
+        .map(|cell| cell.scalar)
+        .collect::<String>();
     assert!(
         visible.contains("FINAL"),
         "final display state omitted terminal tail marker: {visible:?}"

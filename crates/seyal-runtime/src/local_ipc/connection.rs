@@ -10,6 +10,8 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(feature = "test-fault-injection")]
+use crate::test_fault::{self, FaultPoint};
 use crate::{
     display::{DisplayKind, EncodedDisplayBatch},
     local_ipc::{
@@ -18,8 +20,6 @@ use crate::{
         framing::{FrameHeader, HEADER_LEN, MAX_FRAME_PAYLOAD, MessageType},
     },
 };
-#[cfg(feature = "test-fault-injection")]
-use crate::test_fault::{self, FaultPoint};
 
 pub const MAX_CONNECTIONS: usize = 16;
 pub const MAX_OUTBOUND_QUEUE_BYTES: usize = 262_144;
@@ -192,7 +192,9 @@ impl LocalIpcServer {
     }
 
     pub fn state_of(&self, token: u64) -> Option<ConnectionState> {
-        self.connections.get(&token).map(|connection| connection.state)
+        self.connections
+            .get(&token)
+            .map(|connection| connection.state)
     }
 
     pub fn presentation_generation(&self, token: u64) -> Option<u64> {
@@ -363,9 +365,7 @@ impl LocalIpcServer {
             .checked_add(attached.len())
             .ok_or_else(|| io::Error::other("control queue length overflow"))?;
         if new_total > MAX_OUTBOUND_QUEUE_BYTES {
-            return Err(io::Error::other(
-                "outbound control queue capacity exceeded",
-            ));
+            return Err(io::Error::other("outbound control queue capacity exceeded"));
         }
         connection.queued_control_bytes = new_total;
         connection.mandatory.push_back(OutboundItem::new(attached));
@@ -390,9 +390,7 @@ impl LocalIpcServer {
             .checked_add(bytes.len())
             .ok_or_else(|| io::Error::other("control queue length overflow"))?;
         if new_total > MAX_OUTBOUND_QUEUE_BYTES {
-            return Err(io::Error::other(
-                "outbound control queue capacity exceeded",
-            ));
+            return Err(io::Error::other("outbound control queue capacity exceeded"));
         }
         connection.queued_control_bytes = new_total;
         if after_display {

@@ -85,7 +85,10 @@ impl Grid {
         for (i, cell) in cells.iter_mut().enumerate() {
             write_cell(cell, b'a' + (i % 26) as u8, 1);
         }
-        Self { generation: 1, cells }
+        Self {
+            generation: 1,
+            cells,
+        }
     }
 }
 
@@ -122,9 +125,16 @@ fn run_macos() {
         return;
     }
 
-    println!("pass5_delta_transport performance_claim=false candidate=D prototype_only=true production_transport_unchanged=true");
-    println!("design=single_encode_per_execution compact_binary_uds incremental_generation_delta disposable_client_render_cache bounded_full_snapshot_resync");
-    println!("geometry={}x{} cell_bytes={} repetitions={} percentile_method=nearest_rank", COLS, ROWS, CELL_LEN, REPS);
+    println!(
+        "pass5_delta_transport performance_claim=false candidate=D prototype_only=true production_transport_unchanged=true"
+    );
+    println!(
+        "design=single_encode_per_execution compact_binary_uds incremental_generation_delta disposable_client_render_cache bounded_full_snapshot_resync"
+    );
+    println!(
+        "geometry={}x{} cell_bytes={} repetitions={} percentile_method=nearest_rank",
+        COLS, ROWS, CELL_LEN, REPS
+    );
     print_host_metadata();
 
     let exe = env::current_exe().expect("current exe");
@@ -165,7 +175,12 @@ fn run_worker(fanout: usize, scenario: Scenario) {
             let (tx, rx) = UnixStream::pair().expect("socketpair");
             tx.set_nonblocking(true).expect("tx nonblocking");
             rx.set_nonblocking(true).expect("rx nonblocking");
-            Client { tx, rx, receive: Vec::new(), grid: canonical.clone() }
+            Client {
+                tx,
+                rx,
+                receive: Vec::new(),
+                grid: canonical.clone(),
+            }
         })
         .collect::<Vec<_>>();
 
@@ -265,7 +280,11 @@ fn mutate(grid: &mut Grid, scenario: Scenario, seed: u64) -> Change {
             grid.cells.copy_within(COLS.., 0);
             let start = (ROWS - 1) * COLS;
             for col in 0..COLS {
-                write_cell(&mut grid.cells[start + col], marker.wrapping_add((col % 8) as u8), seed);
+                write_cell(
+                    &mut grid.cells[start + col],
+                    marker.wrapping_add((col % 8) as u8),
+                    seed,
+                );
             }
             Change::ScrollOneRow
         }
@@ -309,10 +328,17 @@ fn encode_delta(grid: &Grid, base_generation: u64, change: &Change) -> Vec<u8> {
     out.extend_from_slice(&base_generation.to_le_bytes());
     out.extend_from_slice(&(ROWS as u16).to_le_bytes());
     out.extend_from_slice(&(COLS as u16).to_le_bytes());
-    let kind = match change { Change::Runs(_) => 1u8, Change::ScrollOneRow => 2, Change::Full => 3 };
+    let kind = match change {
+        Change::Runs(_) => 1u8,
+        Change::ScrollOneRow => 2,
+        Change::Full => 3,
+    };
     out.push(kind);
     out.push(0);
-    let count = match change { Change::Runs(runs) => runs.len() as u16, _ => 0 };
+    let count = match change {
+        Change::Runs(runs) => runs.len() as u16,
+        _ => 0,
+    };
     out.extend_from_slice(&count.to_le_bytes());
     out.resize(HEADER_LEN, 0);
 
@@ -323,15 +349,21 @@ fn encode_delta(grid: &Grid, base_generation: u64, change: &Change) -> Vec<u8> {
                 out.extend_from_slice(&(*start as u16).to_le_bytes());
                 out.extend_from_slice(&(*len as u16).to_le_bytes());
                 let first = row * COLS + start;
-                for cell in &grid.cells[first..first + len] { out.extend_from_slice(cell); }
+                for cell in &grid.cells[first..first + len] {
+                    out.extend_from_slice(cell);
+                }
             }
         }
         Change::ScrollOneRow => {
             out.extend_from_slice(&1u16.to_le_bytes());
-            for cell in &grid.cells[(ROWS - 1) * COLS..] { out.extend_from_slice(cell); }
+            for cell in &grid.cells[(ROWS - 1) * COLS..] {
+                out.extend_from_slice(cell);
+            }
         }
         Change::Full => {
-            for cell in &grid.cells { out.extend_from_slice(cell); }
+            for cell in &grid.cells {
+                out.extend_from_slice(cell);
+            }
         }
     }
     out
@@ -346,15 +378,20 @@ fn apply_delta(grid: &mut Grid, frame: &[u8]) {
     let cols = u16::from_le_bytes(frame[22..24].try_into().unwrap()) as usize;
     assert_eq!((rows, cols), (ROWS, COLS));
     let kind = frame[24];
-    if kind != 3 { assert_eq!(base, grid.generation); }
+    if kind != 3 {
+        assert_eq!(base, grid.generation);
+    }
     let mut offset = HEADER_LEN;
     match kind {
         1 => {
             let count = u16::from_le_bytes(frame[26..28].try_into().unwrap()) as usize;
             for _ in 0..count {
-                let row = u16::from_le_bytes(frame[offset..offset + 2].try_into().unwrap()) as usize;
-                let start = u16::from_le_bytes(frame[offset + 2..offset + 4].try_into().unwrap()) as usize;
-                let len = u16::from_le_bytes(frame[offset + 4..offset + 6].try_into().unwrap()) as usize;
+                let row =
+                    u16::from_le_bytes(frame[offset..offset + 2].try_into().unwrap()) as usize;
+                let start =
+                    u16::from_le_bytes(frame[offset + 2..offset + 4].try_into().unwrap()) as usize;
+                let len =
+                    u16::from_le_bytes(frame[offset + 4..offset + 6].try_into().unwrap()) as usize;
                 offset += 6;
                 let first = row * COLS + start;
                 for index in 0..len {
@@ -387,7 +424,12 @@ fn apply_delta(grid: &mut Grid, frame: &[u8]) {
 }
 
 #[cfg(target_os = "macos")]
-fn transfer_exact(tx: &mut UnixStream, rx: &mut UnixStream, frame: &[u8], receive: &mut [u8]) -> usize {
+fn transfer_exact(
+    tx: &mut UnixStream,
+    rx: &mut UnixStream,
+    frame: &[u8],
+    receive: &mut [u8],
+) -> usize {
     let deadline = Instant::now() + TRANSFER_DEADLINE;
     let mut sent = 0usize;
     let mut read = 0usize;
@@ -396,7 +438,10 @@ fn transfer_exact(tx: &mut UnixStream, rx: &mut UnixStream, frame: &[u8], receiv
         if sent < frame.len() {
             match tx.write(&frame[sent..]) {
                 Ok(0) => panic!("socket write zero"),
-                Ok(n) => { sent += n; writes += 1; }
+                Ok(n) => {
+                    sent += n;
+                    writes += 1;
+                }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {}
                 Err(err) => panic!("socket write failed: {err}"),
             }
@@ -416,7 +461,9 @@ fn transfer_exact(tx: &mut UnixStream, rx: &mut UnixStream, frame: &[u8], receiv
 fn percentile_us(samples: &[Sample], f: impl Fn(&Sample) -> u128, pct: usize) -> u128 {
     let mut values = samples.iter().map(f).collect::<Vec<_>>();
     values.sort_unstable();
-    let index = ((values.len() * pct + 99) / 100).saturating_sub(1).min(values.len() - 1);
+    let index = ((values.len() * pct + 99) / 100)
+        .saturating_sub(1)
+        .min(values.len() - 1);
     values[index] / 1_000
 }
 
@@ -424,7 +471,9 @@ fn percentile_us(samples: &[Sample], f: impl Fn(&Sample) -> u128, pct: usize) ->
 fn percentile_usize(samples: &[Sample], f: impl Fn(&Sample) -> usize, pct: usize) -> usize {
     let mut values = samples.iter().map(f).collect::<Vec<_>>();
     values.sort_unstable();
-    let index = ((values.len() * pct + 99) / 100).saturating_sub(1).min(values.len() - 1);
+    let index = ((values.len() * pct + 99) / 100)
+        .saturating_sub(1)
+        .min(values.len() - 1);
     values[index]
 }
 
@@ -436,7 +485,10 @@ fn print_host_metadata() {
     let chip = command_output("sysctl", &["-n", "machdep.cpu.brand_string"]);
     let rust = command_output("rustc", &["--version"]);
     let commit = command_output("git", &["rev-parse", "HEAD"]);
-    println!("delta_transport_host macos_version={} macos_build={} machine_model={:?} hardware={:?} rust={:?} build_mode=release commit={}", macos, build, model, chip, rust, commit);
+    println!(
+        "delta_transport_host macos_version={} macos_build={} machine_model={:?} hardware={:?} rust={:?} build_mode=release commit={}",
+        macos, build, model, chip, rust, commit
+    );
 }
 
 #[cfg(target_os = "macos")]

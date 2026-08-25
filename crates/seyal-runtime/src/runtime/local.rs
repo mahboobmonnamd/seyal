@@ -16,7 +16,8 @@ use crate::{
         discovery,
         framing::{
             self, Attach as WireAttach, Attached as WireAttached, ErrorCode, ExecutionList,
-            ExecutionListEntry, Lifecycle as WireLifecycle, MessageType, Resize as WireResize, Role,
+            ExecutionListEntry, Lifecycle as WireLifecycle, MessageType, Resize as WireResize,
+            Role,
         },
     },
 };
@@ -260,21 +261,21 @@ impl Runtime {
             if let Some(entry) = self.entries.get_mut(&execution_id) {
                 entry.attachments.remove(&attachment_id);
             }
-            let no_viewers = self.local_ipc.as_ref().is_none_or(|state| {
-                state.attachments.attachments_for_execution(execution_id) == 0
-            });
-            if no_viewers
-                && let Some(state) = self.local_ipc.as_mut()
-            {
+            let no_viewers = self
+                .local_ipc
+                .as_ref()
+                .is_none_or(|state| state.attachments.attachments_for_execution(execution_id) == 0);
+            if no_viewers && let Some(state) = self.local_ipc.as_mut() {
                 state.published.remove(&execution_id);
             }
         }
     }
 
     fn send_mandatory_frame(&mut self, token: u64, bytes: Vec<u8>) -> bool {
-        let queued = self.local_ipc.as_mut().is_some_and(|state| {
-            state.server.enqueue_mandatory(token, bytes).is_ok()
-        });
+        let queued = self
+            .local_ipc
+            .as_mut()
+            .is_some_and(|state| state.server.enqueue_mandatory(token, bytes).is_ok());
         if !queued {
             self.close_local_connection(token);
             return false;
@@ -283,9 +284,10 @@ impl Runtime {
     }
 
     fn send_after_display_frame(&mut self, token: u64, bytes: Vec<u8>) -> bool {
-        let queued = self.local_ipc.as_mut().is_some_and(|state| {
-            state.server.enqueue_after_display(token, bytes).is_ok()
-        });
+        let queued = self
+            .local_ipc
+            .as_mut()
+            .is_some_and(|state| state.server.enqueue_after_display(token, bytes).is_ok());
         if !queued {
             self.close_local_connection(token);
             return false;
@@ -294,9 +296,10 @@ impl Runtime {
     }
 
     fn send_snapshot_batch(&mut self, token: u64, batch: EncodedDisplayBatch) -> bool {
-        let queued = self.local_ipc.as_mut().is_some_and(|state| {
-            state.server.enqueue_snapshot(token, batch).is_ok()
-        });
+        let queued = self
+            .local_ipc
+            .as_mut()
+            .is_some_and(|state| state.server.enqueue_snapshot(token, batch).is_ok());
         if !queued {
             self.close_local_connection(token);
             return false;
@@ -411,7 +414,10 @@ impl Runtime {
             .collect();
         let _ = self.send_mandatory_frame(
             token,
-            framing::encode_frame(MessageType::ExecutionList, &ExecutionList { entries }.encode()),
+            framing::encode_frame(
+                MessageType::ExecutionList,
+                &ExecutionList { entries }.encode(),
+            ),
         );
     }
 
@@ -425,14 +431,22 @@ impl Runtime {
             return;
         };
         let Some(entry) = self.entries.get(&attach.execution_id) else {
-            self.send_error(token, ErrorCode::InvalidExecution, MessageType::Attach as u16);
+            self.send_error(
+                token,
+                ErrorCode::InvalidExecution,
+                MessageType::Attach as u16,
+            );
             return;
         };
         let Some(state) = self.local_ipc.as_ref() else {
             return;
         };
         if state.attachments.len() >= MAX_LIVE_ATTACHMENTS {
-            self.send_error(token, ErrorCode::CapacityExceeded, MessageType::Attach as u16);
+            self.send_error(
+                token,
+                ErrorCode::CapacityExceeded,
+                MessageType::Attach as u16,
+            );
             return;
         }
         if attach.requested_role == Role::Controller
@@ -453,7 +467,11 @@ impl Runtime {
 
         let snapshot = entry.execution.projection_snapshot();
         let Ok(snapshot_batch) = display::encode_snapshot(&snapshot) else {
-            self.send_error(token, ErrorCode::DisplayUnavailable, MessageType::Attach as u16);
+            self.send_error(
+                token,
+                ErrorCode::DisplayUnavailable,
+                MessageType::Attach as u16,
+            );
             return;
         };
         let attachment_id = AttachmentId::new();
@@ -479,7 +497,10 @@ impl Runtime {
         }
 
         let first_viewer = self.local_ipc.as_ref().is_some_and(|state| {
-            state.attachments.attachments_for_execution(attach.execution_id) == 0
+            state
+                .attachments
+                .attachments_for_execution(attach.execution_id)
+                == 0
         });
         let Some(state) = self.local_ipc.as_mut() else {
             return;
@@ -566,7 +587,11 @@ impl Runtime {
 
     fn handle_input(&mut self, token: u64, payload: &[u8]) {
         let Ok(input) = framing::InputRef::decode(payload) else {
-            self.send_error(token, ErrorCode::MalformedPayload, MessageType::Input as u16);
+            self.send_error(
+                token,
+                ErrorCode::MalformedPayload,
+                MessageType::Input as u16,
+            );
             return;
         };
         let execution_id = match self.local_ipc.as_ref().map(|state| {
@@ -576,7 +601,11 @@ impl Runtime {
         }) {
             Some(Ok(id)) => id,
             Some(Err(AttachmentError::PermissionDenied)) => {
-                self.send_error(token, ErrorCode::PermissionDenied, MessageType::Input as u16);
+                self.send_error(
+                    token,
+                    ErrorCode::PermissionDenied,
+                    MessageType::Input as u16,
+                );
                 return;
             }
             _ => {
@@ -751,9 +780,11 @@ impl Runtime {
                 Ok(batch) => {
                     let _ = self.send_snapshot_batch(token, batch);
                 }
-                Err(_) => {
-                    self.send_error(token, ErrorCode::DisplayUnavailable, MessageType::Resync as u16)
-                }
+                Err(_) => self.send_error(
+                    token,
+                    ErrorCode::DisplayUnavailable,
+                    MessageType::Resync as u16,
+                ),
             }
         }
 
@@ -872,9 +903,7 @@ impl Runtime {
                                 state.server.try_enqueue_delta(token, delta.clone()).ok()
                             });
                             match result {
-                                Some(
-                                    DeltaEnqueueResult::Queued | DeltaEnqueueResult::Skipped,
-                                ) => {
+                                Some(DeltaEnqueueResult::Queued | DeltaEnqueueResult::Skipped) => {
                                     self.sync_local_writable(token);
                                 }
                                 Some(DeltaEnqueueResult::NeedSnapshot) => {

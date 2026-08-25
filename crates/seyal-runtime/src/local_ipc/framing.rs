@@ -87,7 +87,11 @@ pub struct FrameHeader {
 
 impl FrameHeader {
     pub fn new(message_type: u16, payload_len: u32) -> Self {
-        Self { message_type, flags: 0, payload_len }
+        Self {
+            message_type,
+            flags: 0,
+            payload_len,
+        }
     }
 
     pub fn encode(&self) -> [u8; HEADER_LEN] {
@@ -103,21 +107,41 @@ impl FrameHeader {
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, FramingError> {
-        if bytes.len() < HEADER_LEN { return Err(FramingError::TruncatedHeader); }
-        if bytes[0..8] != MAGIC { return Err(FramingError::InvalidMagic); }
+        if bytes.len() < HEADER_LEN {
+            return Err(FramingError::TruncatedHeader);
+        }
+        if bytes[0..8] != MAGIC {
+            return Err(FramingError::InvalidMagic);
+        }
         let major = u16::from_le_bytes(bytes[8..10].try_into().unwrap());
         let minor = u16::from_le_bytes(bytes[10..12].try_into().unwrap());
         let message_type = u16::from_le_bytes(bytes[12..14].try_into().unwrap());
         let flags = u16::from_le_bytes(bytes[14..16].try_into().unwrap());
         let payload_len = u32::from_le_bytes(bytes[16..20].try_into().unwrap());
         let reserved = u32::from_le_bytes(bytes[20..24].try_into().unwrap());
-        if reserved != 0 { return Err(FramingError::NonzeroReserved); }
-        if major != MAJOR { return Err(FramingError::UnsupportedMajorVersion); }
-        if minor != MINOR { return Err(FramingError::UnsupportedMinorVersion); }
-        if flags != 0 { return Err(FramingError::MalformedPayload); }
-        if payload_len > MAX_FRAME_PAYLOAD { return Err(FramingError::OversizedPayload); }
-        HEADER_LEN.checked_add(payload_len as usize).ok_or(FramingError::LengthOverflow)?;
-        Ok(Self { message_type, flags, payload_len })
+        if reserved != 0 {
+            return Err(FramingError::NonzeroReserved);
+        }
+        if major != MAJOR {
+            return Err(FramingError::UnsupportedMajorVersion);
+        }
+        if minor != MINOR {
+            return Err(FramingError::UnsupportedMinorVersion);
+        }
+        if flags != 0 {
+            return Err(FramingError::MalformedPayload);
+        }
+        if payload_len > MAX_FRAME_PAYLOAD {
+            return Err(FramingError::OversizedPayload);
+        }
+        HEADER_LEN
+            .checked_add(payload_len as usize)
+            .ok_or(FramingError::LengthOverflow)?;
+        Ok(Self {
+            message_type,
+            flags,
+            payload_len,
+        })
     }
 }
 
@@ -140,28 +164,48 @@ fn attachment_id_from(bytes: &[u8]) -> AttachmentId {
 }
 
 fn exact_len(bytes: &[u8], expected: usize) -> Result<(), FramingError> {
-    if bytes.len() != expected { return Err(FramingError::ExactLengthMismatch); }
+    if bytes.len() != expected {
+        return Err(FramingError::ExactLengthMismatch);
+    }
     Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Role { Observer = 0, Controller = 1 }
+pub enum Role {
+    Observer = 0,
+    Controller = 1,
+}
 impl Role {
     fn from_u8(value: u8) -> Result<Self, FramingError> {
-        match value { 0 => Ok(Self::Observer), 1 => Ok(Self::Controller), _ => Err(FramingError::MalformedPayload) }
+        match value {
+            0 => Ok(Self::Observer),
+            1 => Ok(Self::Controller),
+            _ => Err(FramingError::MalformedPayload),
+        }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Lifecycle { Running = 0, Terminating = 1, Finalized = 2 }
+pub enum Lifecycle {
+    Running = 0,
+    Terminating = 1,
+    Finalized = 2,
+}
 impl Lifecycle {
     fn from_u8(value: u8) -> Result<Self, FramingError> {
-        match value { 0 => Ok(Self::Running), 1 => Ok(Self::Terminating), 2 => Ok(Self::Finalized), _ => Err(FramingError::MalformedPayload) }
+        match value {
+            0 => Ok(Self::Running),
+            1 => Ok(Self::Terminating),
+            2 => Ok(Self::Finalized),
+            _ => Err(FramingError::MalformedPayload),
+        }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ClientHello { pub client_capabilities: u32 }
+pub struct ClientHello {
+    pub client_capabilities: u32,
+}
 impl ClientHello {
     pub const WIRE_LEN: usize = 8;
     pub fn encode(&self) -> Vec<u8> {
@@ -173,8 +217,12 @@ impl ClientHello {
     pub fn decode(bytes: &[u8]) -> Result<Self, FramingError> {
         exact_len(bytes, Self::WIRE_LEN)?;
         let client_capabilities = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
-        if u32::from_le_bytes(bytes[4..8].try_into().unwrap()) != 0 { return Err(FramingError::MalformedPayload); }
-        Ok(Self { client_capabilities })
+        if u32::from_le_bytes(bytes[4..8].try_into().unwrap()) != 0 {
+            return Err(FramingError::MalformedPayload);
+        }
+        Ok(Self {
+            client_capabilities,
+        })
     }
 }
 
@@ -198,7 +246,9 @@ impl ServerHello {
     }
     pub fn decode(bytes: &[u8]) -> Result<Self, FramingError> {
         exact_len(bytes, Self::WIRE_LEN)?;
-        if u32::from_le_bytes(bytes[28..32].try_into().unwrap()) != 0 { return Err(FramingError::MalformedPayload); }
+        if u32::from_le_bytes(bytes[28..32].try_into().unwrap()) != 0 {
+            return Err(FramingError::MalformedPayload);
+        }
         Ok(Self {
             runtime_id: read_u128(&bytes[0..16]),
             server_capabilities: u32::from_le_bytes(bytes[16..20].try_into().unwrap()),
@@ -217,7 +267,9 @@ pub struct ExecutionListEntry {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ExecutionList { pub entries: Vec<ExecutionListEntry> }
+pub struct ExecutionList {
+    pub entries: Vec<ExecutionListEntry>,
+}
 impl ExecutionList {
     const ENTRY_LEN: usize = 20;
     pub fn encode(&self) -> Vec<u8> {
@@ -233,23 +285,39 @@ impl ExecutionList {
         out
     }
     pub fn decode(bytes: &[u8]) -> Result<Self, FramingError> {
-        if bytes.len() < 4 { return Err(FramingError::TruncatedPayload); }
+        if bytes.len() < 4 {
+            return Err(FramingError::TruncatedPayload);
+        }
         let count = u16::from_le_bytes(bytes[0..2].try_into().unwrap());
-        if u16::from_le_bytes(bytes[2..4].try_into().unwrap()) != 0 || count > MAX_EXECUTION_LIST_ENTRIES {
+        if u16::from_le_bytes(bytes[2..4].try_into().unwrap()) != 0
+            || count > MAX_EXECUTION_LIST_ENTRIES
+        {
             return Err(FramingError::MalformedPayload);
         }
-        let expected = 4usize.checked_add((count as usize).checked_mul(Self::ENTRY_LEN).ok_or(FramingError::LengthOverflow)?).ok_or(FramingError::LengthOverflow)?;
+        let expected = 4usize
+            .checked_add(
+                (count as usize)
+                    .checked_mul(Self::ENTRY_LEN)
+                    .ok_or(FramingError::LengthOverflow)?,
+            )
+            .ok_or(FramingError::LengthOverflow)?;
         exact_len(bytes, expected)?;
         let mut entries = Vec::with_capacity(count as usize);
         let mut offset = 4;
         for _ in 0..count {
             let lifecycle = Lifecycle::from_u8(bytes[offset + 16])?;
-            let has_controller = match bytes[offset + 17] { 0 => false, 1 => true, _ => return Err(FramingError::MalformedPayload) };
+            let has_controller = match bytes[offset + 17] {
+                0 => false,
+                1 => true,
+                _ => return Err(FramingError::MalformedPayload),
+            };
             entries.push(ExecutionListEntry {
                 execution_id: execution_id_from(&bytes[offset..offset + 16]),
                 lifecycle,
                 has_controller,
-                attachment_count: u16::from_le_bytes(bytes[offset + 18..offset + 20].try_into().unwrap()),
+                attachment_count: u16::from_le_bytes(
+                    bytes[offset + 18..offset + 20].try_into().unwrap(),
+                ),
             });
             offset += Self::ENTRY_LEN;
         }
@@ -258,7 +326,10 @@ impl ExecutionList {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Attach { pub execution_id: ExecutionId, pub requested_role: Role }
+pub struct Attach {
+    pub execution_id: ExecutionId,
+    pub requested_role: Role,
+}
 impl Attach {
     pub const WIRE_LEN: usize = 20;
     pub fn encode(&self) -> Vec<u8> {
@@ -270,8 +341,13 @@ impl Attach {
     }
     pub fn decode(bytes: &[u8]) -> Result<Self, FramingError> {
         exact_len(bytes, Self::WIRE_LEN)?;
-        if bytes[17..20] != [0, 0, 0] { return Err(FramingError::MalformedPayload); }
-        Ok(Self { execution_id: execution_id_from(&bytes[..16]), requested_role: Role::from_u8(bytes[16])? })
+        if bytes[17..20] != [0, 0, 0] {
+            return Err(FramingError::MalformedPayload);
+        }
+        Ok(Self {
+            execution_id: execution_id_from(&bytes[..16]),
+            requested_role: Role::from_u8(bytes[16])?,
+        })
     }
 }
 
@@ -295,7 +371,9 @@ impl Attached {
     }
     pub fn decode(bytes: &[u8]) -> Result<Self, FramingError> {
         exact_len(bytes, Self::WIRE_LEN)?;
-        if bytes[33..40] != [0u8; 7] { return Err(FramingError::MalformedPayload); }
+        if bytes[33..40] != [0u8; 7] {
+            return Err(FramingError::MalformedPayload);
+        }
         Ok(Self {
             execution_id: execution_id_from(&bytes[0..16]),
             attachment_id: attachment_id_from(&bytes[16..32]),
@@ -306,28 +384,43 @@ impl Attached {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Detach { pub attachment_id: AttachmentId }
+pub struct Detach {
+    pub attachment_id: AttachmentId,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Detached { pub attachment_id: AttachmentId }
+pub struct Detached {
+    pub attachment_id: AttachmentId,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Resync { pub attachment_id: AttachmentId }
+pub struct Resync {
+    pub attachment_id: AttachmentId,
+}
 
 macro_rules! impl_attachment_payload {
-    ($type:ty) => { impl $type {
-        pub const WIRE_LEN: usize = 16;
-        pub fn encode(&self) -> Vec<u8> { self.attachment_id.to_bytes().to_vec() }
-        pub fn decode(bytes: &[u8]) -> Result<Self, FramingError> {
-            exact_len(bytes, Self::WIRE_LEN)?;
-            Ok(Self { attachment_id: attachment_id_from(bytes) })
+    ($type:ty) => {
+        impl $type {
+            pub const WIRE_LEN: usize = 16;
+            pub fn encode(&self) -> Vec<u8> {
+                self.attachment_id.to_bytes().to_vec()
+            }
+            pub fn decode(bytes: &[u8]) -> Result<Self, FramingError> {
+                exact_len(bytes, Self::WIRE_LEN)?;
+                Ok(Self {
+                    attachment_id: attachment_id_from(bytes),
+                })
+            }
         }
-    }};
+    };
 }
 impl_attachment_payload!(Detach);
 impl_attachment_payload!(Detached);
 impl_attachment_payload!(Resync);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct InputRef<'a> { pub attachment_id: AttachmentId, pub bytes: &'a [u8] }
+pub struct InputRef<'a> {
+    pub attachment_id: AttachmentId,
+    pub bytes: &'a [u8],
+}
 impl<'a> InputRef<'a> {
     pub const HEADER_LEN: usize = 20;
     pub fn encode(&self) -> Vec<u8> {
@@ -338,17 +431,30 @@ impl<'a> InputRef<'a> {
         out
     }
     pub fn decode(bytes: &'a [u8]) -> Result<Self, FramingError> {
-        if bytes.len() < Self::HEADER_LEN { return Err(FramingError::TruncatedPayload); }
+        if bytes.len() < Self::HEADER_LEN {
+            return Err(FramingError::TruncatedPayload);
+        }
         let byte_count = u32::from_le_bytes(bytes[16..20].try_into().unwrap());
-        if byte_count > MAX_INPUT_BYTES { return Err(FramingError::OversizedPayload); }
-        let expected = Self::HEADER_LEN.checked_add(byte_count as usize).ok_or(FramingError::LengthOverflow)?;
+        if byte_count > MAX_INPUT_BYTES {
+            return Err(FramingError::OversizedPayload);
+        }
+        let expected = Self::HEADER_LEN
+            .checked_add(byte_count as usize)
+            .ok_or(FramingError::LengthOverflow)?;
         exact_len(bytes, expected)?;
-        Ok(Self { attachment_id: attachment_id_from(&bytes[..16]), bytes: &bytes[20..] })
+        Ok(Self {
+            attachment_id: attachment_id_from(&bytes[..16]),
+            bytes: &bytes[20..],
+        })
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Resize { pub attachment_id: AttachmentId, pub rows: u16, pub columns: u16 }
+pub struct Resize {
+    pub attachment_id: AttachmentId,
+    pub rows: u16,
+    pub columns: u16,
+}
 impl Resize {
     pub const WIRE_LEN: usize = 20;
     pub fn encode(&self) -> Vec<u8> {
@@ -360,12 +466,19 @@ impl Resize {
     }
     pub fn decode(bytes: &[u8]) -> Result<Self, FramingError> {
         exact_len(bytes, Self::WIRE_LEN)?;
-        Ok(Self { attachment_id: attachment_id_from(&bytes[..16]), rows: u16::from_le_bytes(bytes[16..18].try_into().unwrap()), columns: u16::from_le_bytes(bytes[18..20].try_into().unwrap()) })
+        Ok(Self {
+            attachment_id: attachment_id_from(&bytes[..16]),
+            rows: u16::from_le_bytes(bytes[16..18].try_into().unwrap()),
+            columns: u16::from_le_bytes(bytes[18..20].try_into().unwrap()),
+        })
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LifecycleMessage { pub execution_id: ExecutionId, pub lifecycle: Lifecycle }
+pub struct LifecycleMessage {
+    pub execution_id: ExecutionId,
+    pub lifecycle: Lifecycle,
+}
 impl LifecycleMessage {
     pub const WIRE_LEN: usize = 24;
     pub fn encode(&self) -> Vec<u8> {
@@ -377,13 +490,22 @@ impl LifecycleMessage {
     }
     pub fn decode(bytes: &[u8]) -> Result<Self, FramingError> {
         exact_len(bytes, Self::WIRE_LEN)?;
-        if bytes[17..24] != [0u8; 7] { return Err(FramingError::MalformedPayload); }
-        Ok(Self { execution_id: execution_id_from(&bytes[..16]), lifecycle: Lifecycle::from_u8(bytes[16])? })
+        if bytes[17..24] != [0u8; 7] {
+            return Err(FramingError::MalformedPayload);
+        }
+        Ok(Self {
+            execution_id: execution_id_from(&bytes[..16]),
+            lifecycle: Lifecycle::from_u8(bytes[16])?,
+        })
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ErrorMessage { pub error_code: u16, pub offending_message_type: u16, pub detail_code: u32 }
+pub struct ErrorMessage {
+    pub error_code: u16,
+    pub offending_message_type: u16,
+    pub detail_code: u32,
+}
 impl ErrorMessage {
     pub const WIRE_LEN: usize = 16;
     pub fn encode(&self) -> Vec<u8> {
@@ -396,8 +518,14 @@ impl ErrorMessage {
     }
     pub fn decode(bytes: &[u8]) -> Result<Self, FramingError> {
         exact_len(bytes, Self::WIRE_LEN)?;
-        if u64::from_le_bytes(bytes[8..16].try_into().unwrap()) != 0 { return Err(FramingError::MalformedPayload); }
-        Ok(Self { error_code: u16::from_le_bytes(bytes[0..2].try_into().unwrap()), offending_message_type: u16::from_le_bytes(bytes[2..4].try_into().unwrap()), detail_code: u32::from_le_bytes(bytes[4..8].try_into().unwrap()) })
+        if u64::from_le_bytes(bytes[8..16].try_into().unwrap()) != 0 {
+            return Err(FramingError::MalformedPayload);
+        }
+        Ok(Self {
+            error_code: u16::from_le_bytes(bytes[0..2].try_into().unwrap()),
+            offending_message_type: u16::from_le_bytes(bytes[2..4].try_into().unwrap()),
+            detail_code: u32::from_le_bytes(bytes[4..8].try_into().unwrap()),
+        })
     }
 }
 
@@ -424,29 +552,65 @@ pub enum MessageType {
 impl MessageType {
     pub fn from_u16(value: u16) -> Option<Self> {
         Some(match value {
-            1 => Self::ClientHello, 2 => Self::ServerHello, 3 => Self::ListExecutions, 4 => Self::ExecutionList,
-            5 => Self::Attach, 6 => Self::Attached, 7 => Self::Detach, 8 => Self::Detached, 9 => Self::Input,
-            10 => Self::Resize, 11 => Self::Resync, 12 => Self::DisplaySnapshot, 13 => Self::DisplayDelta,
-            14 => Self::Lifecycle, 15 => Self::Error, 16 => Self::Goodbye, _ => return None,
+            1 => Self::ClientHello,
+            2 => Self::ServerHello,
+            3 => Self::ListExecutions,
+            4 => Self::ExecutionList,
+            5 => Self::Attach,
+            6 => Self::Attached,
+            7 => Self::Detach,
+            8 => Self::Detached,
+            9 => Self::Input,
+            10 => Self::Resize,
+            11 => Self::Resync,
+            12 => Self::DisplaySnapshot,
+            13 => Self::DisplayDelta,
+            14 => Self::Lifecycle,
+            15 => Self::Error,
+            16 => Self::Goodbye,
+            _ => return None,
         })
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Message<'a> {
-    ClientHello(ClientHello), ServerHello(ServerHello), ListExecutions, ExecutionList(ExecutionList),
-    Attach(Attach), Attached(Attached), Detach(Detach), Detached(Detached), Input(InputRef<'a>),
-    Resize(Resize), Resync(Resync), DisplaySnapshot(&'a [u8]), DisplayDelta(&'a [u8]),
-    Lifecycle(LifecycleMessage), Error(ErrorMessage), Goodbye,
+    ClientHello(ClientHello),
+    ServerHello(ServerHello),
+    ListExecutions,
+    ExecutionList(ExecutionList),
+    Attach(Attach),
+    Attached(Attached),
+    Detach(Detach),
+    Detached(Detached),
+    Input(InputRef<'a>),
+    Resize(Resize),
+    Resync(Resync),
+    DisplaySnapshot(&'a [u8]),
+    DisplayDelta(&'a [u8]),
+    Lifecycle(LifecycleMessage),
+    Error(ErrorMessage),
+    Goodbye,
 }
 
-pub fn decode_message<'a>(header: &FrameHeader, payload: &'a [u8]) -> Result<Message<'a>, FramingError> {
-    if payload.len() != header.payload_len as usize { return Err(FramingError::ExactLengthMismatch); }
-    let kind = MessageType::from_u16(header.message_type).ok_or(FramingError::UnknownMessageType)?;
+pub fn decode_message<'a>(
+    header: &FrameHeader,
+    payload: &'a [u8],
+) -> Result<Message<'a>, FramingError> {
+    if payload.len() != header.payload_len as usize {
+        return Err(FramingError::ExactLengthMismatch);
+    }
+    let kind =
+        MessageType::from_u16(header.message_type).ok_or(FramingError::UnknownMessageType)?;
     Ok(match kind {
         MessageType::ClientHello => Message::ClientHello(ClientHello::decode(payload)?),
         MessageType::ServerHello => Message::ServerHello(ServerHello::decode(payload)?),
-        MessageType::ListExecutions => { if !payload.is_empty() { return Err(FramingError::ExactLengthMismatch); } Message::ListExecutions },
+        MessageType::ListExecutions => {
+            if !payload.is_empty() {
+                return Err(FramingError::ExactLengthMismatch);
+            }
+            Message::ListExecutions
+        }
         MessageType::ExecutionList => Message::ExecutionList(ExecutionList::decode(payload)?),
         MessageType::Attach => Message::Attach(Attach::decode(payload)?),
         MessageType::Attached => Message::Attached(Attached::decode(payload)?),
@@ -459,7 +623,12 @@ pub fn decode_message<'a>(header: &FrameHeader, payload: &'a [u8]) -> Result<Mes
         MessageType::DisplayDelta => Message::DisplayDelta(payload),
         MessageType::Lifecycle => Message::Lifecycle(LifecycleMessage::decode(payload)?),
         MessageType::Error => Message::Error(ErrorMessage::decode(payload)?),
-        MessageType::Goodbye => { if !payload.is_empty() { return Err(FramingError::ExactLengthMismatch); } Message::Goodbye },
+        MessageType::Goodbye => {
+            if !payload.is_empty() {
+                return Err(FramingError::ExactLengthMismatch);
+            }
+            Message::Goodbye
+        }
     })
 }
 
@@ -476,8 +645,12 @@ pub fn encode_frame(message_type: MessageType, payload: &[u8]) -> Vec<u8> {
 mod tests {
     use super::*;
 
-    fn exec_id() -> ExecutionId { ExecutionId::from_bytes(1u128.to_le_bytes()) }
-    fn attach_id() -> AttachmentId { AttachmentId::from_bytes(2u128.to_le_bytes()) }
+    fn exec_id() -> ExecutionId {
+        ExecutionId::from_bytes(1u128.to_le_bytes())
+    }
+    fn attach_id() -> AttachmentId {
+        AttachmentId::from_bytes(2u128.to_le_bytes())
+    }
 
     #[test]
     fn header_round_trip_and_bounds() {
@@ -485,12 +658,20 @@ mod tests {
         assert_eq!(FrameHeader::decode(&header.encode()).unwrap(), header);
         let mut oversized = header.encode();
         oversized[16..20].copy_from_slice(&(MAX_FRAME_PAYLOAD + 1).to_le_bytes());
-        assert_eq!(FrameHeader::decode(&oversized), Err(FramingError::OversizedPayload));
+        assert_eq!(
+            FrameHeader::decode(&oversized),
+            Err(FramingError::OversizedPayload)
+        );
     }
 
     #[test]
     fn attached_has_no_projection_descriptor_metadata() {
-        let attached = Attached { execution_id: exec_id(), attachment_id: attach_id(), granted_role: Role::Observer, current_generation: 9 };
+        let attached = Attached {
+            execution_id: exec_id(),
+            attachment_id: attach_id(),
+            granted_role: Role::Observer,
+            current_generation: 9,
+        };
         let encoded = attached.encode();
         assert_eq!(encoded.len(), 48);
         assert_eq!(Attached::decode(&encoded).unwrap(), attached);
@@ -498,27 +679,46 @@ mod tests {
 
     #[test]
     fn control_payloads_round_trip() {
-        let attach = Attach { execution_id: exec_id(), requested_role: Role::Controller };
+        let attach = Attach {
+            execution_id: exec_id(),
+            requested_role: Role::Controller,
+        };
         assert_eq!(Attach::decode(&attach.encode()).unwrap(), attach);
-        let resize = Resize { attachment_id: attach_id(), rows: 24, columns: 80 };
+        let resize = Resize {
+            attachment_id: attach_id(),
+            rows: 24,
+            columns: 80,
+        };
         assert_eq!(Resize::decode(&resize.encode()).unwrap(), resize);
-        let resync = Resync { attachment_id: attach_id() };
+        let resync = Resync {
+            attachment_id: attach_id(),
+        };
         assert_eq!(Resync::decode(&resync.encode()).unwrap(), resync);
     }
 
     #[test]
     fn display_message_ids_replace_candidate_b_projection_messages() {
-        assert_eq!(MessageType::from_u16(12), Some(MessageType::DisplaySnapshot));
+        assert_eq!(
+            MessageType::from_u16(12),
+            Some(MessageType::DisplaySnapshot)
+        );
         assert_eq!(MessageType::from_u16(13), Some(MessageType::DisplayDelta));
     }
 
     #[test]
     fn input_borrows_payload_and_enforces_bound() {
-        let payload = InputRef { attachment_id: attach_id(), bytes: b"hello" }.encode();
+        let payload = InputRef {
+            attachment_id: attach_id(),
+            bytes: b"hello",
+        }
+        .encode();
         let decoded = InputRef::decode(&payload).unwrap();
         assert_eq!(decoded.bytes, b"hello");
         let mut too_large = attach_id().to_bytes().to_vec();
         too_large.extend_from_slice(&(MAX_INPUT_BYTES + 1).to_le_bytes());
-        assert_eq!(InputRef::decode(&too_large), Err(FramingError::OversizedPayload));
+        assert_eq!(
+            InputRef::decode(&too_large),
+            Err(FramingError::OversizedPayload)
+        );
     }
 }

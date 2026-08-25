@@ -12,8 +12,7 @@ use std::{
 
 use seyal_exec::{CommandSpec, WindowSize};
 use seyal_runtime::{
-    AttachmentId, ExecutionId, LocalIpcMode, Runtime, RuntimeConfig,
-    display,
+    AttachmentId, ExecutionId, LocalIpcMode, Runtime, RuntimeConfig, display,
     local_ipc::{
         fd_transfer::{self, RecvFd},
         framing::{

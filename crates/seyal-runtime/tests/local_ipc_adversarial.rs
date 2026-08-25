@@ -35,26 +35,44 @@ struct Client {
     buffered: Vec<u8>,
 }
 
-struct Harness { runtime: Runtime }
+struct Harness {
+    runtime: Runtime,
+}
 
 impl Harness {
-    fn new() -> Self { Self { runtime: Runtime::new(config()).unwrap() } }
-    fn pump(&mut self) { self.runtime.poll_once(Some(Duration::from_millis(5))).unwrap(); }
+    fn new() -> Self {
+        Self {
+            runtime: Runtime::new(config()).unwrap(),
+        }
+    }
+    fn pump(&mut self) {
+        self.runtime
+            .poll_once(Some(Duration::from_millis(5)))
+            .unwrap();
+    }
     fn spawn_cat(&mut self) -> ExecutionId {
-        self.runtime.create_execution(
-            CommandSpec::new("/bin/cat"),
-            WindowSize::new(80, 24, 0, 0).unwrap(),
-        ).unwrap()
+        self.runtime
+            .create_execution(
+                CommandSpec::new("/bin/cat"),
+                WindowSize::new(80, 24, 0, 0).unwrap(),
+            )
+            .unwrap()
     }
     fn connect(&mut self) -> Client {
         let path = self.runtime.local_ipc_socket_path().unwrap().to_path_buf();
         let stream = UnixStream::connect(path).unwrap();
         stream.set_nonblocking(true).unwrap();
         self.pump();
-        Client { stream, buffered: Vec::new() }
+        Client {
+            stream,
+            buffered: Vec::new(),
+        }
     }
     fn send(&mut self, client: &mut Client, kind: MessageType, payload: &[u8]) {
-        client.stream.write_all(&encode_frame(kind, payload)).unwrap();
+        client
+            .stream
+            .write_all(&encode_frame(kind, payload))
+            .unwrap();
         self.pump();
     }
     fn frame(&mut self, client: &mut Client) -> (MessageType, Vec<u8>) {
@@ -65,7 +83,10 @@ impl Harness {
                 let total = HEADER_LEN + header.payload_len as usize;
                 if client.buffered.len() >= total {
                     let raw = client.buffered.drain(..total).collect::<Vec<_>>();
-                    return (MessageType::from_u16(header.message_type).unwrap(), raw[HEADER_LEN..].to_vec());
+                    return (
+                        MessageType::from_u16(header.message_type).unwrap(),
+                        raw[HEADER_LEN..].to_vec(),
+                    );
                 }
             }
             let mut chunk = [0u8; 8192];
@@ -79,13 +100,33 @@ impl Harness {
         }
     }
     fn hello(&mut self, client: &mut Client) {
-        self.send(client, MessageType::ClientHello, &ClientHello { client_capabilities: 0 }.encode());
+        self.send(
+            client,
+            MessageType::ClientHello,
+            &ClientHello {
+                client_capabilities: 0,
+            }
+            .encode(),
+        );
         let (kind, payload) = self.frame(client);
         assert_eq!(kind, MessageType::ServerHello);
         ServerHello::decode(&payload).unwrap();
     }
-    fn attach(&mut self, client: &mut Client, execution_id: ExecutionId, role: Role) -> (Attached, DisplayCache) {
-        self.send(client, MessageType::Attach, &Attach { execution_id, requested_role: role }.encode());
+    fn attach(
+        &mut self,
+        client: &mut Client,
+        execution_id: ExecutionId,
+        role: Role,
+    ) -> (Attached, DisplayCache) {
+        self.send(
+            client,
+            MessageType::Attach,
+            &Attach {
+                execution_id,
+                requested_role: role,
+            }
+            .encode(),
+        );
         let (kind, payload) = self.frame(client);
         assert_eq!(kind, MessageType::Attached);
         let attached = Attached::decode(&payload).unwrap();
@@ -95,7 +136,10 @@ impl Harness {
     }
     fn apply_display(&mut self, client: &mut Client, cache: &mut DisplayCache) {
         let (kind, payload) = self.frame(client);
-        assert!(matches!(kind, MessageType::DisplaySnapshot | MessageType::DisplayDelta));
+        assert!(matches!(
+            kind,
+            MessageType::DisplaySnapshot | MessageType::DisplayDelta
+        ));
         let first = decode_chunk(&encode_frame(kind, &payload)).unwrap();
         let expected = first.chunk_count as usize;
         let mut chunks = vec![first];
@@ -129,17 +173,66 @@ fn another_connection_cannot_reuse_controller_attachment_identity() {
     harness.hello(&mut attacker);
     let (_observer, _cache) = harness.attach(&mut attacker, execution_id, Role::Observer);
 
-    harness.stale(&mut attacker, MessageType::Input, &InputRef { attachment_id: controller.attachment_id, bytes: b"EVIL" }.encode());
-    harness.stale(&mut attacker, MessageType::Resize, &Resize { attachment_id: controller.attachment_id, rows: 30, columns: 100 }.encode());
-    harness.stale(&mut attacker, MessageType::Resync, &Resync { attachment_id: controller.attachment_id }.encode());
-    harness.stale(&mut attacker, MessageType::Detach, &Detach { attachment_id: controller.attachment_id }.encode());
+    harness.stale(
+        &mut attacker,
+        MessageType::Input,
+        &InputRef {
+            attachment_id: controller.attachment_id,
+            bytes: b"EVIL",
+        }
+        .encode(),
+    );
+    harness.stale(
+        &mut attacker,
+        MessageType::Resize,
+        &Resize {
+            attachment_id: controller.attachment_id,
+            rows: 30,
+            columns: 100,
+        }
+        .encode(),
+    );
+    harness.stale(
+        &mut attacker,
+        MessageType::Resync,
+        &Resync {
+            attachment_id: controller.attachment_id,
+        }
+        .encode(),
+    );
+    harness.stale(
+        &mut attacker,
+        MessageType::Detach,
+        &Detach {
+            attachment_id: controller.attachment_id,
+        }
+        .encode(),
+    );
 
-    harness.send(&mut owner, MessageType::Input, &InputRef { attachment_id: controller.attachment_id, bytes: b"OK" }.encode());
+    harness.send(
+        &mut owner,
+        MessageType::Input,
+        &InputRef {
+            attachment_id: controller.attachment_id,
+            bytes: b"OK",
+        }
+        .encode(),
+    );
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
-        let row: String = owner_cache.cells.iter().take(owner_cache.columns as usize).map(|c| c.scalar).collect();
-        if row.starts_with("OK") { break; }
-        assert!(Instant::now() < deadline, "legitimate controller stopped making progress");
+        let row: String = owner_cache
+            .cells
+            .iter()
+            .take(owner_cache.columns as usize)
+            .map(|c| c.scalar)
+            .collect();
+        if row.starts_with("OK") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "legitimate controller stopped making progress"
+        );
         harness.apply_display(&mut owner, &mut owner_cache);
     }
 
@@ -147,5 +240,8 @@ fn another_connection_cannot_reuse_controller_attachment_identity() {
     drop(owner);
     harness.pump();
     harness.runtime.begin_shutdown().unwrap();
-    harness.runtime.run_until_empty(Instant::now() + Duration::from_secs(3)).unwrap();
+    harness
+        .runtime
+        .run_until_empty(Instant::now() + Duration::from_secs(3))
+        .unwrap();
 }

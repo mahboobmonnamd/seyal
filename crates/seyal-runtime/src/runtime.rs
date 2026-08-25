@@ -448,7 +448,8 @@ impl Runtime {
                         processed += 1;
                     }
                 }
-                ReactorEventKind::AuxiliaryReadable | ReactorEventKind::AuxiliaryWritable => {
+                ReactorEventKind::AuxiliaryReadable | ReactorEventKind::AuxiliaryWritable =>
+                {
                     #[cfg(target_os = "macos")]
                     if let Some(token) = event.token {
                         self.service_local_reactor_event(token, event.kind, event.hangup)?;

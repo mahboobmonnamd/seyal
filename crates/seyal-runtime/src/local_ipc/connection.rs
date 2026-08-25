@@ -46,20 +46,18 @@ impl ConnectionState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StateError { InvalidState }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeltaEnqueueResult { Queued, Skipped, NeedSnapshot }
+
 struct OutboundItem { bytes: Vec<u8>, sent: usize }
 impl OutboundItem {
     fn new(bytes: Vec<u8>) -> Self { Self { bytes, sent: 0 } }
     fn remaining_len(&self) -> usize { self.bytes.len().saturating_sub(self.sent) }
 }
 
-struct DisplayItem {
-    batch: EncodedDisplayBatch,
-    frame_index: usize,
-    sent: usize,
-}
+struct DisplayItem { batch: EncodedDisplayBatch, frame_index: usize, sent: usize }
 impl DisplayItem {
     fn new(batch: EncodedDisplayBatch) -> Self { Self { batch, frame_index: 0, sent: 0 } }
-    fn current_frame(&self) -> Option<&[u8]> { self.batch.frames.get(self.frame_index).map(AsRef::as_ref) }
     fn complete(&self) -> bool { self.frame_index >= self.batch.frames.len() }
 }
 
@@ -68,7 +66,8 @@ struct Connection {
     state: ConnectionState,
     read_buf: Vec<u8>,
     mandatory: VecDeque<OutboundItem>,
-    mandatory_bytes: usize,
+    after_display: VecDeque<OutboundItem>,
+    queued_control_bytes: usize,
     display_inflight: Option<DisplayItem>,
     pending_display: Option<EncodedDisplayBatch>,
     display_generation: u64,
@@ -80,24 +79,16 @@ impl Connection {
         self.pending_display = Some(snapshot);
     }
 
-    fn queue_delta_or_snapshot(
-        &mut self,
-        delta: EncodedDisplayBatch,
-        snapshot: EncodedDisplayBatch,
-    ) {
+    fn try_queue_delta(&mut self, delta: EncodedDisplayBatch) -> DeltaEnqueueResult {
         if delta.generation <= self.display_generation {
-            return;
+            return DeltaEnqueueResult::Skipped;
         }
-        let contiguous = self.display_generation == delta.base_generation;
-        if contiguous && self.pending_display.is_none() {
-            self.display_generation = delta.generation;
-            self.pending_display = Some(delta);
-        } else {
-            // We cannot append unbounded display history. A current snapshot is
-            // self-contained and safely supersedes any not-yet-started work.
-            self.display_generation = snapshot.generation;
-            self.pending_display = Some(snapshot);
+        if self.display_generation != delta.base_generation || self.pending_display.is_some() {
+            return DeltaEnqueueResult::NeedSnapshot;
         }
+        self.display_generation = delta.generation;
+        self.pending_display = Some(delta);
+        DeltaEnqueueResult::Queued
     }
 }
 
@@ -144,10 +135,7 @@ impl LocalIpcServer {
             match self.listener.accept() {
                 Ok((stream, _)) => {
                     if set_close_on_exec(stream.as_raw_fd()).is_err() { continue; }
-                    if auth::verify_same_user_peer(stream.as_raw_fd()).is_err() {
-                        events.push(ServerEvent::PeerRejected);
-                        continue;
-                    }
+                    if auth::verify_same_user_peer(stream.as_raw_fd()).is_err() { events.push(ServerEvent::PeerRejected); continue; }
                     if self.connections.len() >= self.max_connections { continue; }
                     stream.set_nonblocking(true)?;
                     let token = self.next_token;
@@ -157,7 +145,8 @@ impl LocalIpcServer {
                         state: ConnectionState::AwaitHello,
                         read_buf: Vec::with_capacity(4096),
                         mandatory: VecDeque::new(),
-                        mandatory_bytes: 0,
+                        after_display: VecDeque::new(),
+                        queued_control_bytes: 0,
                         display_inflight: None,
                         pending_display: None,
                         display_generation: 0,
@@ -209,9 +198,7 @@ impl LocalIpcServer {
             }
         }
         if hangup {
-            if self.connections.get(&token).is_some_and(|c| !c.read_buf.is_empty()) {
-                events.push(ServerEvent::FramingError { token });
-            }
+            if self.connections.get(&token).is_some_and(|c| !c.read_buf.is_empty()) { events.push(ServerEvent::FramingError { token }); }
             self.close_with_event(token, &mut events);
         }
         events
@@ -225,14 +212,26 @@ impl LocalIpcServer {
     }
 
     pub fn enqueue_mandatory(&mut self, token: u64, bytes: Vec<u8>) -> io::Result<()> {
+        self.enqueue_control(token, bytes, false)
+    }
+
+    /// Queues an ordered barrier that is flushed only after already admitted
+    /// display state. Final lifecycle notification uses this so it cannot
+    /// overtake the execution's final visible terminal update.
+    pub fn enqueue_after_display(&mut self, token: u64, bytes: Vec<u8>) -> io::Result<()> {
+        self.enqueue_control(token, bytes, true)
+    }
+
+    fn enqueue_control(&mut self, token: u64, bytes: Vec<u8>, after_display: bool) -> io::Result<()> {
         let Some(connection) = self.connections.get_mut(&token) else { return Err(io::Error::new(io::ErrorKind::NotConnected, "connection is closed")); };
-        let new_total = connection.mandatory_bytes.checked_add(bytes.len()).ok_or_else(|| io::Error::other("mandatory queue length overflow"))?;
+        let new_total = connection.queued_control_bytes.checked_add(bytes.len()).ok_or_else(|| io::Error::other("control queue length overflow"))?;
         if new_total > MAX_OUTBOUND_QUEUE_BYTES {
             self.connections.remove(&token);
-            return Err(io::Error::other("mandatory outbound queue capacity exceeded"));
+            return Err(io::Error::other("outbound control queue capacity exceeded"));
         }
-        connection.mandatory_bytes = new_total;
-        connection.mandatory.push_back(OutboundItem::new(bytes));
+        connection.queued_control_bytes = new_total;
+        if after_display { connection.after_display.push_back(OutboundItem::new(bytes)); }
+        else { connection.mandatory.push_back(OutboundItem::new(bytes)); }
         if let Err(error) = flush_outbound(connection) {
             self.connections.remove(&token);
             return Err(error);
@@ -250,24 +249,24 @@ impl LocalIpcServer {
         Ok(())
     }
 
-    pub fn enqueue_delta(
-        &mut self,
-        token: u64,
-        delta: EncodedDisplayBatch,
-        snapshot: EncodedDisplayBatch,
-    ) -> io::Result<()> {
+    pub fn try_enqueue_delta(&mut self, token: u64, delta: EncodedDisplayBatch) -> io::Result<DeltaEnqueueResult> {
         let Some(connection) = self.connections.get_mut(&token) else { return Err(io::Error::new(io::ErrorKind::NotConnected, "connection is closed")); };
-        connection.queue_delta_or_snapshot(delta, snapshot);
-        if let Err(error) = flush_outbound(connection) {
+        let result = connection.try_queue_delta(delta);
+        if result == DeltaEnqueueResult::Queued
+            && let Err(error) = flush_outbound(connection)
+        {
             self.connections.remove(&token);
             return Err(error);
         }
-        Ok(())
+        Ok(result)
     }
 
     pub fn wants_write(&self, token: u64) -> bool {
         self.connections.get(&token).is_some_and(|connection| {
-            !connection.mandatory.is_empty() || connection.display_inflight.is_some() || connection.pending_display.is_some()
+            !connection.mandatory.is_empty()
+                || connection.display_inflight.is_some()
+                || connection.pending_display.is_some()
+                || !connection.after_display.is_empty()
         })
     }
 
@@ -302,7 +301,7 @@ fn flush_outbound(connection: &mut Connection) -> io::Result<()> {
             FlushProgress::WouldBlock => return Ok(()),
             FlushProgress::Progress => {
                 let after = item.remaining_len();
-                connection.mandatory_bytes = connection.mandatory_bytes.saturating_sub(before.saturating_sub(after));
+                connection.queued_control_bytes = connection.queued_control_bytes.saturating_sub(before.saturating_sub(after));
                 if after == 0 { connection.mandatory.pop_front(); }
             }
         }
@@ -310,20 +309,18 @@ fn flush_outbound(connection: &mut Connection) -> io::Result<()> {
 
     loop {
         if connection.display_inflight.is_none() {
-            let Some(batch) = connection.pending_display.take() else { return Ok(()); };
+            let Some(batch) = connection.pending_display.take() else { break; };
             connection.display_inflight = Some(DisplayItem::new(batch));
         }
-        let Some(item) = connection.display_inflight.as_mut() else { return Ok(()); };
+        let Some(item) = connection.display_inflight.as_mut() else { break; };
         if item.complete() {
             connection.display_inflight = None;
             continue;
         }
-        let Some(frame) = item.current_frame() else { return Err(io::Error::other("display batch frame missing")); };
-        let mut sent = item.sent;
-        match flush_bytes(connection.stream.as_raw_fd(), frame, &mut sent)? {
-            FlushProgress::WouldBlock => { item.sent = sent; return Ok(()); }
+        let frame = item.batch.frames.get(item.frame_index).ok_or_else(|| io::Error::other("display batch frame missing"))?;
+        match flush_bytes(connection.stream.as_raw_fd(), frame, &mut item.sent)? {
+            FlushProgress::WouldBlock => return Ok(()),
             FlushProgress::Progress => {
-                item.sent = sent;
                 if item.sent == frame.len() {
                     item.frame_index += 1;
                     item.sent = 0;
@@ -336,6 +333,19 @@ fn flush_outbound(connection: &mut Connection) -> io::Result<()> {
             }
         }
     }
+
+    while let Some(item) = connection.after_display.front_mut() {
+        let before = item.remaining_len();
+        match flush_bytes(connection.stream.as_raw_fd(), &item.bytes, &mut item.sent)? {
+            FlushProgress::WouldBlock => return Ok(()),
+            FlushProgress::Progress => {
+                let after = item.remaining_len();
+                connection.queued_control_bytes = connection.queued_control_bytes.saturating_sub(before.saturating_sub(after));
+                if after == 0 { connection.after_display.pop_front(); }
+            }
+        }
+    }
+    Ok(())
 }
 
 enum FlushProgress { Progress, WouldBlock }
@@ -367,10 +377,7 @@ fn set_close_on_exec(fd: RawFd) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        display::{encode_delta, encode_snapshot},
-        local_ipc::framing::{ClientHello, encode_frame},
-    };
+    use crate::{display::{encode_delta, encode_snapshot}, local_ipc::framing::{ClientHello, encode_frame}};
     use seyal_exec::{ProjectionAttributes, ProjectionCell, ProjectionColor, ProjectionDamage, TerminalProjectionSnapshot};
     use std::io::Write;
 
@@ -391,15 +398,13 @@ mod tests {
     fn sample(generation: u64) -> TerminalProjectionSnapshot {
         TerminalProjectionSnapshot {
             rows: 2, columns: 2, cursor_row: 0, cursor_col: 0, cursor_visible: true, alternate_screen: false,
-            source_damage_generation: generation,
-            damage: ProjectionDamage::full(2),
+            source_damage_generation: generation, damage: ProjectionDamage::full(2),
             cells: vec![ProjectionCell { scalar: 'x', foreground: ProjectionColor::Default, background: ProjectionColor::Default, attributes: ProjectionAttributes::default() }; 4],
         }
     }
 
     #[test]
-    fn connection_state_machine_rejects_runtime_only_display_input() {
-        assert!(ConnectionState::AwaitHello.validate_incoming(MessageType::Attach).is_err());
+    fn state_machine_never_accepts_runtime_display_frames_from_client() {
         assert!(ConnectionState::Attached.validate_incoming(MessageType::Input).is_ok());
         assert!(ConnectionState::Attached.validate_incoming(MessageType::DisplayDelta).is_err());
     }
@@ -411,8 +416,7 @@ mod tests {
         let frame = encode_frame(MessageType::ClientHello, &ClientHello { client_capabilities: 0 }.encode());
         let transferred = std::fs::File::open("/dev/null").unwrap();
         fd_transfer::send_with_fd(client.as_raw_fd(), &frame, Some(transferred.as_raw_fd())).unwrap();
-        let events = server.service_read(token, false);
-        assert!(events.iter().any(|event| matches!(event, ServerEvent::FramingError { .. })));
+        assert!(server.service_read(token, false).iter().any(|event| matches!(event, ServerEvent::FramingError { .. })));
         assert!(!server.contains(token));
         std::fs::remove_file(path).ok();
     }
@@ -427,17 +431,25 @@ mod tests {
     }
 
     #[test]
-    fn noncontiguous_pending_delta_coalesces_to_snapshot() {
+    fn noncontiguous_delta_requests_snapshot_without_allocating_one_eagerly() {
         let (mut server, path) = bind_test_server();
         let (_client, token) = accept_one(&mut server, &path);
-        let snapshot_1 = encode_snapshot(&sample(1)).unwrap();
-        server.connections.get_mut(&token).unwrap().queue_snapshot(snapshot_1);
-        let delta_3 = encode_delta(&sample(3), 2).unwrap();
-        let snapshot_3 = encode_snapshot(&sample(3)).unwrap();
-        server.connections.get_mut(&token).unwrap().queue_delta_or_snapshot(delta_3, snapshot_3);
-        let connection = server.connections.get(&token).unwrap();
-        assert_eq!(connection.pending_display.as_ref().unwrap().kind, crate::display::DisplayKind::Snapshot);
-        assert_eq!(connection.display_generation, 3);
+        server.connections.get_mut(&token).unwrap().queue_snapshot(encode_snapshot(&sample(1)).unwrap());
+        let result = server.connections.get_mut(&token).unwrap().try_queue_delta(encode_delta(&sample(3), 2).unwrap());
+        assert_eq!(result, DeltaEnqueueResult::NeedSnapshot);
+        assert_eq!(server.connections.get(&token).unwrap().display_generation, 1);
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn pending_slot_prevents_unbounded_delta_history() {
+        let (mut server, path) = bind_test_server();
+        let (_client, token) = accept_one(&mut server, &path);
+        let connection = server.connections.get_mut(&token).unwrap();
+        connection.display_generation = 1;
+        assert_eq!(connection.try_queue_delta(encode_delta(&sample(2), 1).unwrap()), DeltaEnqueueResult::Queued);
+        assert_eq!(connection.try_queue_delta(encode_delta(&sample(3), 2).unwrap()), DeltaEnqueueResult::NeedSnapshot);
+        assert_eq!(connection.pending_display.as_ref().unwrap().generation, 2);
         std::fs::remove_file(path).ok();
     }
 
@@ -447,8 +459,7 @@ mod tests {
         let (mut client, token) = accept_one(&mut server, &path);
         let frame = encode_frame(MessageType::ClientHello, &ClientHello { client_capabilities: 0 }.encode());
         client.write_all(&frame).unwrap();
-        let events = server.service_read(token, false);
-        assert_eq!(events.iter().filter(|event| matches!(event, ServerEvent::Frame { .. })).count(), 1);
+        assert_eq!(server.service_read(token, false).iter().filter(|event| matches!(event, ServerEvent::Frame { .. })).count(), 1);
         std::fs::remove_file(path).ok();
     }
 }

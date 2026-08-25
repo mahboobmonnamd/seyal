@@ -1,9 +1,9 @@
-//! SPEC-004 local attachment protocol: binary framing, connection state
-//! machine, peer authentication, attachment/authority and Runtime discovery.
+//! SPEC-004 Candidate-D local attachment protocol: binary framing, connection
+//! state, peer authentication, attachment authority and display-state delivery.
 //!
-//! This module never owns a PTY, VT parser, terminal grid or canonical
-//! terminal memory; it is strictly the Runtime-side control-plane boundary
-//! described by `docs/specs/SPEC-004-M001-LOCAL-ATTACHMENT-PROJECTION.md`.
+//! This module never owns a PTY, VT parser, terminal grid or canonical terminal
+//! memory. Normal presentation is snapshot/delta over the Runtime UDS; legacy
+//! shared-projection code is isolated outside this production control boundary.
 
 pub mod attachment;
 #[cfg(target_os = "macos")]

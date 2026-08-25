@@ -25,7 +25,7 @@ jobs:
           delta = Path('crates/seyal-runtime/benches/pass5_delta_transport.rs')
           text = delta.read_text()
           old = 'use stats_alloc::{INSTRUMENTED_SYSTEM, StatsAlloc};'
-          new = 'use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};'
+          new = 'use stats_alloc::{INSTRUMENTED_SYSTEM, StatsAlloc};\n#[cfg(target_os = "macos")]\nuse stats_alloc::Region;'
           if old not in text:
               raise SystemExit('expected delta import not found')
           delta.write_text(text.replace(old, new, 1))
@@ -35,7 +35,12 @@ jobs:
           block = '''impl ProjectionId {\n    #[cfg(any(feature = "benchmark-shared-projection", test))]\n    pub(crate) fn new() -> Self {\n        Self(unique_id(0x5052_4f4a_4543_5401))\n    }\n}\n\n'''
           if block not in text:
               raise SystemExit('expected obsolete ProjectionId constructor block not found')
-          ids.write_text(text.replace(block, '', 1))
+          text = text.replace(block, '', 1)
+          old_test = '        let projection = ProjectionId::new();'
+          new_test = '        let projection = ProjectionId::from_bytes([0x5a; 16]);'
+          if old_test not in text:
+              raise SystemExit('expected ProjectionId unit-test constructor not found')
+          ids.write_text(text.replace(old_test, new_test, 1))
 
           cargo = Path('crates/seyal-runtime/Cargo.toml')
           text = cargo.read_text()
@@ -51,6 +56,7 @@ jobs:
           make bootstrap
           cargo fmt --all
           cargo clippy --workspace --all-targets --all-features -- -D warnings
+          cargo test --workspace --all-features --locked
       - name: Commit repair
         run: |
           git config user.name github-actions[bot]

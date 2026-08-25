@@ -2,110 +2,118 @@
 
 **Status:** Frozen UI reference specification  
 **Parent:** `M001-CORE-TERMINAL-REFERENCE-SCREEN.md`  
-**Scope:** Long-running streaming Block viewport behavior
+**Scope:** Long-running streaming command and Pane-level scrolling
 
 ## 1. Purpose
 
-Live-tail behavior keeps a long-running command's newest output easy to follow without trapping users at the bottom of the stream.
+Live-tail behavior keeps a long-running foreground command's newest output easy to follow without introducing a nested scrollbar inside the Block.
 
-The canonical example is a foreground command such as `npm run dev` that continuously emits logs in one live Block.
+Canonical example: `npm run dev` or another foreground process that continuously emits normal-screen terminal output.
 
-## 2. Running Block model
+## 2. Single scroll owner
+
+**The Pane/transcript is the scroll container. The live Block is not a fixed-height nested scrolling region.**
 
 While the process is active:
 
-- output remains part of the same running Block;
-- the Block has a visible live/running state;
-- new terminal output appends through the normal PTY → VT → canonical state path;
-- the shell in that pane remains occupied by the foreground process.
+- output remains part of the same Running Block;
+- the Block grows as output grows;
+- the Pane scrolls through earlier Blocks and earlier output;
+- there is no fixed maximum Block height used solely to force live output into an internal scrollbar;
+- implementation may virtualize off-screen history, but interaction remains one Pane-level scroll surface.
 
-No second log process, duplicate PTY, or copied terminal engine is created to provide live tail.
+No second log process, PTY, VT, or copied terminal engine exists for live tail.
 
 ## 3. Default follow behavior
 
-When the user is already at the live end of the Block, new output keeps the viewport following the tail.
+When the user is already at the Pane's live end, new output keeps the Pane following the tail, matching normal terminal expectations.
 
-This should feel like a normal terminal following current output.
+## 4. Scroll-away behavior
 
-## 4. User scroll-away behavior
-
-If the user scrolls upward to inspect older output:
+If the user scrolls upward in the Pane:
 
 - stop automatic viewport movement;
-- continue receiving and storing/displaying new output in the running Block;
-- clearly indicate that the user is viewing older output;
-- do not forcibly snap back to the bottom for every incoming update.
+- continue receiving terminal output normally;
+- do not force the user back to the bottom on every update;
+- keep a cheap real state indicating that the user is away from the live end.
 
-The terminal execution continues unaffected.
+## 5. Return to live
 
-## 5. Return-to-live affordance
+When away from the live end, show one compact functional affordance such as `Return to live`.
 
-When the user is away from the live end, show one compact functional affordance such as:
+It must:
 
-- `Jump to live`;
-- `Return to live tail`.
+- appear only when useful;
+- restore the Pane to the live tail;
+- disappear after returning to live.
 
-It should appear only while useful and disappear once the live end is restored.
+Do not duplicate top/bottom jump controls merely for symmetry.
 
-Do not render duplicate top and bottom controls merely for visual balance unless usability testing proves both are required.
+## 6. Composer while the foreground shell is busy
 
-## 6. New-output indication
+A normal active composer must not imply that another unrelated shell command can execute in the same occupied shell.
 
-While scrolled away, Seyal may show a compact count/status of unseen new output where that state can be tracked cheaply and correctly.
+Preferred presentation:
 
-Examples:
+- retract or disable the Pane composer while the foreground process owns the shell;
+- optionally show a compact running-process/status strip;
+- preserve the Pane's draft state;
+- restore the normal composer after the process exits/is interrupted and the shell becomes available.
 
-- `Live` indicator;
-- `new output` marker;
-- bounded unseen-line/update count.
+Parallel work belongs in another Pane/Tab/execution.
 
-The indicator must not require per-line semantic processing.
+## 7. New Blocks while running
 
-## 7. Relationship to new Blocks
+A foreground long-running process owns that shell, so unrelated same-shell commands cannot create later command Blocks until it exits or is interrupted.
 
-A foreground long-running process owns the shell, so unrelated shell commands cannot create later Blocks in the same pane until the process exits/is interrupted.
+Other panes/tabs may continue independently.
 
-Therefore live logs cannot simply be "pushed above" by arbitrary new same-shell command Blocks while the foreground process remains active.
-
-Parallel work should happen in another pane/tab/execution.
-
-If future non-shell/agent/activity Blocks can appear in the same presentation, they must not obscure the live execution focus or change terminal authority.
+Future non-shell activity/agent presentation must not obscure terminal authority or create a fake same-shell execution path.
 
 ## 8. Completion
 
-When the foreground process exits:
+When the process exits:
 
-- the Block transitions from Running to Completed/Failed according to exit state;
+- Running transitions to Completed/Failed from real lifecycle/exit state;
 - live-tail state is cleared;
-- the Block becomes ordinary navigable history;
-- the pane shell/composer becomes available for the next command where shell lifecycle permits.
+- the Block remains normal navigable transcript/history;
+- composer availability returns when shell lifecycle permits.
 
 ## 9. Pin interaction
 
-Pinning a running Block keeps it easy to find but does not freeze output or disable live-tail behavior.
-
-Pinned state is presentation/workspace metadata and must not duplicate the live terminal contents.
+Pinning a running Block affects navigation/retention metadata only. It does not freeze output, copy the grid, or change live-tail behavior.
 
 ## 10. Multipane behavior
 
-Each pane manages its own live-tail presentation state.
+Each Pane has independent transcript scroll/live-tail state.
 
-Scrolling away in one pane must not pause or alter another pane's live output.
+- scrolling away in one Pane does not alter another;
+- background panes continue receiving output;
+- focus changes do not pause the running process.
 
-Focus changes do not stop a background pane from receiving terminal output.
+## 11. Distinction from TUI takeover
 
-## 11. Performance
+A full-screen alternate-screen TUI is not treated as a growing live Block.
 
-Live-tail UI state must remain extremely cheap.
+During TUI takeover:
+
+- the TUI occupies the Pane viewport;
+- Block chrome is not overlaid;
+- the composer is hidden/disabled;
+- application/terminal semantics own interaction.
+
+See `M001-TUI-TAKEOVER.md`.
+
+## 12. Performance
 
 Requirements:
 
 - no full-history relayout on every update;
 - no synchronous semantic parsing of every line;
-- no renderer acknowledgement needed for PTY/VT progress;
-- bounded viewport/history work;
+- no renderer acknowledgement required for PTY/VT progress;
+- bounded/virtualized off-screen transcript work where needed;
 - damage-driven redraw where possible.
 
-## 12. Functional-only rule
+## 13. Functional-only rule
 
-Only show `Live`, `paused view`, unseen-output counts, or jump controls when the corresponding state is real. The UI should not manufacture progress indicators merely to make streaming output look richer.
+Only show live/paused-view/unseen-output/jump state when backed by real viewport state. Do not manufacture progress or nested scroll UI to make streaming output appear richer.

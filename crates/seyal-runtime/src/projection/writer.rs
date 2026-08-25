@@ -342,10 +342,7 @@ pub struct SnapshotRead {
 
 const MAX_READ_RETRIES: u32 = 64;
 
-fn validate_region_memory(
-    memory: &RegionMemory,
-    region: &RegionHeader,
-) -> Result<(), ReaderError> {
+fn validate_region_memory(memory: &RegionMemory, region: &RegionHeader) -> Result<(), ReaderError> {
     let encoded_len = usize::try_from(region.region_bytes).map_err(|_| ReaderError::OutOfBounds)?;
     if encoded_len < REGION_HEADER_LEN || encoded_len > memory.len() {
         return Err(ReaderError::OutOfBounds);
@@ -550,7 +547,8 @@ mod tests {
     #[test]
     fn region_header_reader_rejects_stride_that_does_not_fit_both_slots() {
         let mut region = small_region_header(2, 2, 4096);
-        region.region_bytes = REGION_HEADER_LEN as u64 + region.slot_stride + SLOT_HEADER_LEN as u64;
+        region.region_bytes =
+            REGION_HEADER_LEN as u64 + region.slot_stride + SLOT_HEADER_LEN as u64;
         let (_storage, memory) = aligned_region(region.region_bytes as usize);
         initialize_region_header(memory, region);
         assert_eq!(

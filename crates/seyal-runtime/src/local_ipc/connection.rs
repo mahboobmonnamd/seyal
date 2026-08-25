@@ -212,10 +212,7 @@ impl LocalIpcServer {
             }
             let read_len = READ_CHUNK_BYTES.min(remaining_capacity);
 
-            match fd_transfer::recv_with_fd(
-                connection.stream.as_raw_fd(),
-                &mut chunk[..read_len],
-            ) {
+            match fd_transfer::recv_with_fd(connection.stream.as_raw_fd(), &mut chunk[..read_len]) {
                 Ok((0, RecvFd::None)) => {
                     self.close_with_event(token, &mut events);
                     return events;
@@ -647,10 +644,11 @@ mod tests {
                 .any(|event| matches!(event, ServerEvent::Frame { .. }))
         );
         assert!(!server.contains(token));
+        let after = std::fs::read_dir("/dev/fd").unwrap().count();
         assert_eq!(
-            std::fs::read_dir("/dev/fd").unwrap().count(),
-            before,
-            "rejected inbound descriptor leaked"
+            after,
+            before.saturating_sub(1),
+            "only the rejected server connection descriptor should close"
         );
         std::fs::remove_file(path).ok();
     }
@@ -677,10 +675,11 @@ mod tests {
             matches!(event, ServerEvent::Disconnected { token: event_token } if *event_token == token)
         }));
         assert!(!server.contains(token));
+        let after = std::fs::read_dir("/dev/fd").unwrap().count();
         assert_eq!(
-            std::fs::read_dir("/dev/fd").unwrap().count(),
-            before,
-            "rejected inbound descriptors leaked"
+            after,
+            before.saturating_sub(1),
+            "received descriptors must close with the rejected server connection"
         );
         std::fs::remove_file(path).ok();
     }

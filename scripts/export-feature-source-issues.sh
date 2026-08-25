@@ -32,7 +32,7 @@ export_repo() {
     --repo "$repo" \
     --state all \
     --limit 10000 \
-    --json number,title,body,state,stateReason,url,author,labels,assignees,milestone,createdAt,updatedAt,closedAt \
+    --json number,title,body,comments,state,stateReason,url,author,labels,assignees,milestone,createdAt,updatedAt,closedAt \
     > "$out"
 
   local expected

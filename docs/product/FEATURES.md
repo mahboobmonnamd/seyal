@@ -1,275 +1,355 @@
 # Seyal Product Feature Inventory
 
 **Status:** Canonical product feature inventory  
-**Purpose:** Track accepted product capabilities and important product-level requirements without turning architecture documents into a feature backlog.
+**Scope:** Product capabilities and explicit rejected/superseded decisions. Architecture/ADR/spec/milestone documents remain implementation authority.
 
-This document is the canonical inventory of accepted Seyal product features. Architecture, ADRs, specs and milestone documents remain authoritative for implementation design and behavior. A feature appearing here does not bypass normal R&D, ADR, specification, security, performance or milestone gates.
+This file is the single product feature registry for Seyal OSS and the stable OSS seams consumed by higher editions. It is deliberately broader than the current implementation. A feature appearing here does **not** authorize implementation or bypass Issue → R&D/ADR/spec → milestone → tests/benchmarks/security review.
 
-Seyal OSS must remain independently excellent. `seyal` must not depend on commercial code; commercial products consume the OSS repository through stable seams.
+Legacy state is evidence only. A RILL/terminal issue being closed, merged or previously implemented never means the capability is implemented in the current Seyal architecture.
 
 ## Status vocabulary
 
-- **Accepted direction** — product capability is accepted, but implementation details or milestone may still require R&D/specification.
-- **Foundation exists** — supporting architecture already exists, but the user-facing capability may not yet be implemented.
-- **Implemented** — production capability exists and has passed its milestone definition of done.
-
-## Interaction, addressing and handoff
-
-### Seyal Resource Addressing
-
-**Status:** Accepted direction
-
-Seyal resources such as Workspace, Execution, Block, Worktree/Attempt, AgentRun and Artifact should have stable addressable identities that can be consumed by multiple UX surfaces.
-
-User-facing entry points may include:
-
-- Copy Seyal Link from a Block, execution, worktree, artifact or agent run;
-- Share action;
-- Command Palette action to copy a link to the current context;
-- `seyal link` from a terminal;
-- navigation from another application or teammate through a Seyal resource reference.
-
-Resource addresses are references, never credentials. Opening a shared/enterprise resource must still pass the receiving user's authorization and policy checks.
-
-### Context-aware Seyal CLI
-
-**Status:** Accepted direction
-
-Commands executed inside Seyal should automatically resolve the current context where safe, including Workspace, Execution, repository, worktree, remote target and relevant work/agent identity.
-
-Examples include `seyal split`, `seyal link` or other commands acting on the current context without requiring the user to copy opaque IDs manually.
-
-Context inference must remain explicit and inspectable when an action could have destructive or security-sensitive effects.
-
-### Exact teammate handoff
-
-**Status:** Accepted direction; collaboration/commercial capability consumes OSS resource identities
-
-A user should be able to share an exact Seyal resource so an authorized teammate can land on the relevant Workspace, Execution, Block, artifact, diff or work item rather than reproducing navigation manually.
-
-Potential actions for a live execution include observe, request control, fork investigation, or open an independent shell in the same authorized context. Sharing never grants permissions implicitly.
-
-## Worktrees and agent isolation
-
-### Agent Worktree Awareness
-
-**Status:** Accepted direction; foundation exists in local workflow/isolation architecture
-
-When an agent creates or uses a Git worktree, Seyal should make that worktree visible as first-class work context instead of hiding it behind an opaque agent process.
-
-The worktree association should be connected to the relevant WorkItem / Attempt / AgentRun and may expose:
-
-- repository;
-- path;
-- branch;
-- base revision;
-- changed files;
-- PR/MR association;
-- lifecycle state;
-- open shell;
-- reveal;
-- diff;
-- archive/cleanup actions where safe.
-
-### Safe worktree shell transition
-
-**Status:** Accepted direction; requires shell-integration R&D
-
-Seyal must not silently retarget the cwd of an arbitrary running shell. The preferred path is to create/focus a TerminalExecution whose initial cwd is the agent worktree.
-
-If a user explicitly chooses to adopt an agent worktree into an existing shell, Seyal may automate `cd` only when trusted shell integration proves the shell is back at an idle prompt and the target is safely escaped. Output silence alone is not sufficient evidence.
-
-Seyal must not intercept or replace `git`, inject cwd changes into a running TUI/agent, or guess prompt safety from terminal text.
-
-### Worktree lifecycle UX
-
-**Status:** Accepted direction
-
-User-facing lifecycle should support appropriate combinations of create, pin, archive, cleanup, auto-delete policy, retain-after-agent-completion, merge/review and open/reveal operations.
-
-Worktree remains an execution/work isolation primitive, not the root Seyal Workspace abstraction because many Seyal workloads are not Git-based.
-
-## Agent awareness and supervision
-
-### Tiered Agent Presence Detection
-
-**Status:** Accepted direction
-
-Seyal should support agent presence/status across agents with different integration quality using this confidence order:
-
-1. native adapter / structured protocol;
-2. official agent hooks;
-3. process identity plus shell/terminal signals;
-4. terminal-text/TUI heuristics as a last-resort fallback.
-
-Structured integrations are the primary source. Terminal text fallback exists so unknown agents can still gain basic presence UX, but heuristic state must be labeled/treated as lower confidence.
-
-Heuristic terminal text must never become trusted approval, authorization, audit truth or automatic permission input.
-
-## Source control and CI
-
-### SCM/CI capability adapters
-
-**Status:** Accepted direction
-
-Seyal should expose repository/worktree review state through provider-neutral capability adapters rather than hardcoding one vendor into core architecture.
-
-Potential providers include GitHub, GitLab, Bitbucket, Jenkins, Buildkite and enterprise/custom systems.
-
-The user experience may surface branch, changed files, PR/MR state, checks, reviewers, merge readiness and related actions in workspace/inspector/artifact surfaces.
-
-## Remote execution
-
-### Secure Remote Connection Multiplexing
-
-**Status:** Accepted direction; security R&D required
-
-Multiple compatible remote operations may reuse one authenticated SSH transport rather than repeatedly reconnecting and re-authenticating.
-
-Connection reuse must be keyed by security identity, not hostname alone. The effective identity should account for hostname, port, remote user, authentication identity, host-key/trust policy, proxy/jump chain and Workspace security policy.
-
-Transport reuse must not implicitly enable agent forwarding, port forwarding, X11 forwarding, credential propagation or cross-workspace trust. Different credentials or policy boundaries must produce distinct connection pools.
-
-## Attention and navigation
-
-### Stable Workspace ordering with attention projection
-
-**Status:** Accepted direction
-
-Seyal should not automatically reorder a user's workspace/navigation list whenever attention state changes. Stable spatial ordering is the default.
-
-Attention is projected through badges, the existing Notification/Attention area and the global Attention Stack. A user may optionally choose an attention-based sorting mode, but automatic movement of manually arranged workspaces is not the default behavior.
-
-## Integration and control APIs
-
-### Universal Seyal Integration CLI / Shell API
-
-**Status:** Accepted direction
-
-Any CLI, script or tool should be able to integrate with Seyal without requiring a first-party adapter for every product.
-
-Candidate typed operations include:
-
-- create/update an AttentionItem;
-- attach/register an Artifact;
-- report progress/status;
-- open or register a diff;
-- address/focus a Seyal resource;
-- expose bounded structured metadata to the current execution/work context.
-
-Commands invoked from inside Seyal can inherit authenticated local context where safe. The interface should prefer typed operations over arbitrary proprietary terminal escape-sequence scraping.
-
-### Capability-scoped Control API
-
-**Status:** Accepted direction; security model required before implementation
-
-External programs may control selected Seyal presentation/workflow operations through authenticated, capability-scoped APIs.
-
-Candidate capabilities include navigation, opening artifacts/diffs, creating panes, focusing executions and creating structured attention/progress state.
-
-Unrestricted arbitrary key injection into unrelated terminal executions must not be the default control model. Access is scoped to explicit identities, workspaces and granted capabilities.
-
-## Blocks
-
-### Block references and reusable actions
-
-**Status:** Accepted direction; builds on Blocks foundation
-
-A Block should be addressable and support useful actions such as:
-
-- bookmark/pin;
-- copy/share resource link;
-- re-run here;
-- re-run in a new shell/execution;
-- compare with another run/block;
-- save command;
-- promote to a reusable workflow/runbook where appropriate.
-
-These operations use Block metadata and stable execution/history references; they must not duplicate PTYs, grids or full terminal output.
-
-## Command Library and reusable workflows
-
-### Saved Commands / Command Library
-
-**Status:** Accepted direction
-
-Users should be able to save a useful command directly from a Block or create one manually, optionally parameterize it, describe it, search it and execute it later.
-
-Recommended scopes:
-
-- **Personal** — local user library;
-- **Project** — repository/project-owned definitions that can be version controlled;
-- **Team** — centrally shared definitions subject to team/enterprise permissions and policy.
-
-Saved commands should work locally without a Seyal cloud account.
-
-### Parameterized commands
-
-**Status:** Accepted direction
-
-A saved command may turn literal values into typed/user-provided parameters, for example pod, namespace, environment or service. Parameter resolution and quoting must be safe and visible before execution.
-
-### Save command sequence as workflow/runbook
-
-**Status:** Accepted direction
-
-Successful multi-command procedures may be promoted into a reusable Seyal workflow/runbook rather than forcing users to reconstruct operational sequences from history.
-
-The workflow model must use the existing effect/replay/idempotency safety model for mutating operations rather than treating a recorded sequence as blindly replayable.
-
-## Sync and portability
-
-### Local-first settings and knowledge sync
-
-**Status:** Accepted direction
-
-Seyal configuration and reusable knowledge should remain useful locally/offline while allowing optional cloud/team synchronization.
-
-Candidate syncable data includes:
-
-- settings;
-- themes;
-- keybindings;
-- saved commands;
-- runbooks/workflow definitions;
-- agent preferences;
-- selected workspace metadata where appropriate.
-
-Raw terminal history/output, secrets, SSH credentials, sensitive environment values and sensitive artifacts are not automatically synchronized. Any future synchronization of sensitive categories requires explicit user/policy controls, encryption/trust design and retention/deletion semantics.
-
-## Performance as a product feature
-
-### Keystroke latency / key-to-photon performance
-
-**Status:** Accepted direction; measurement work required
-
-Terminal responsiveness is a product feature, not only an implementation quality attribute. A correct terminal that feels materially slower than excellent native terminals is not release-quality Seyal.
-
-Seyal should measure and retain reproducible evidence across the complete interaction path where practical:
-
-physical key / NSEvent
-→ native input normalization
-→ native/Rust boundary
-→ Runtime input path
-→ PTY write
-→ child response
-→ PTY read
-→ VT/state mutation
-→ damage/projection
-→ Metal submit/presentation.
-
-No SwiftUI/application reducer state, agent state, Block state, persistence, cloud, licensing or general reactive state propagation may synchronously sit on the per-keystroke terminal hot path.
-
-Benchmark claims such as "fast" or "performance you feel in every keystroke" must be backed by reproducible measurements before Seyal makes them publicly.
+- **Implemented** — current Seyal production capability has passed its owning milestone definition of done.
+- **Foundation exists** — current Seyal has the necessary production foundation, but the complete user-facing capability is not yet shipped.
+- **Accepted direction** — capability belongs in Seyal product direction; implementation may still need R&D/specification.
+- **Deferred / decision required** — useful historical idea, but current Seyal has not committed to the exact capability or safety/UX contract.
+- **Superseded** — product need remains covered by a newer Seyal model; do not implement the legacy shape.
+- **Rejected** — deliberately not part of Seyal unless a future explicit decision supersedes this one.
+- **Historical-only** — retained as evidence, not current product direction.
+
+## Current implementation baseline
+
+Current Seyal foundation includes the deterministic engineering/toolchain gates, Seyal-owned M001 VT/TerminalState subset, macOS PTY/child lifecycle, persistent headless Runtime composition with stable Runtime/Workspace/Execution identity, and the native Swift/AppKit/Metal application boundary. Those foundations do **not** imply that the broader UI, Blocks, remote, agent, collaboration or workflow features below are implemented.
+
+## Seyal-native capabilities discovered after the RILL catalog
+
+These capabilities were accepted/refined during Seyal architecture and product research and are not represented cleanly by one historical RILL `F-*` row.
+
+| ID | Capability | Seyal status | Current product contract |
+|---|---|---|---|
+| SY-001 | Seyal Resource Addressing | Accepted direction | Stable Workspace/Session/Tab/Pane/Execution/Block/WorkItem/Attempt/AgentRun/Artifact references. References never grant authority. |
+| SY-002 | Context-aware Seyal CLI | Accepted direction | Commands such as `seyal split` or `seyal link` resolve the current authorized context without forcing users to copy opaque IDs. |
+| SY-003 | Exact teammate handoff | Accepted direction | Authorized teammate can open the exact workspace/execution/block/work item and observe, request control, fork investigation or open an independent shell. |
+| SY-004 | Agent Worktree Awareness | Accepted direction | Expose agent worktree path/branch/base/changes/PR/lifecycle as first-class work context tied to WorkItem/Attempt/AgentRun. |
+| SY-005 | Safe worktree shell transition | Accepted direction | Never silently `cd` a busy shell; open a new execution in the worktree or adopt only when trusted shell integration proves an idle prompt. |
+| SY-006 | Tiered Agent Presence Detection | Accepted direction | Structured adapter → official hooks → process/shell signals → low-confidence terminal heuristics. Heuristics never become auth/approval/audit truth. |
+| SY-007 | Provider-neutral SCM/CI adapters | Accepted direction | GitHub/GitLab/Bitbucket/Jenkins/Buildkite/custom systems consume a common capability seam for changes, PR/MR and checks. |
+| SY-008 | Secure Remote Connection Multiplexing | Accepted direction | Reuse SSH transport only when host, user, auth identity, trust policy, jump chain and workspace policy are compatible; no implicit forwarding/credential sharing. |
+| SY-009 | Stable workspace ordering + attention projection | Accepted direction | Do not auto-reorder workspaces for urgency. Use badges and Attention Stack; optional user-selected sort may exist. |
+| SY-010 | Universal Seyal Integration CLI / Shell API | Accepted direction | Typed local integration actions for attention, artifacts, progress, diffs, navigation and structured metadata. |
+| SY-011 | Capability-scoped Control API | Accepted direction | Authenticated external control is scoped by resource and capability; unrestricted arbitrary key injection is not the default API. |
+| SY-012 | Block References | Accepted direction | Stable Block identity enables bookmark/pin/link/compare/rerun/save/promote-to-workflow without copying terminal authority. |
+| SY-013 | Command Library | Accepted direction | Save commands from Blocks or manually with Personal, Project and Team scopes; local use does not require cloud. |
+| SY-014 | Parameterized Commands | Accepted direction | Saved commands may expose safe visible parameters such as namespace/service/environment before execution. |
+| SY-015 | Promote command sequence to Workflow/Runbook | Accepted direction | Turn proven procedures into reusable workflows using effect/replay/idempotency safety rather than blind transcript replay. |
+| SY-016 | Selective local-first sync | Accepted direction | Optional sync for settings/themes/keybindings/commands/runbooks/preferences/selected metadata; raw history, secrets, SSH credentials and sensitive artifacts are excluded by default. |
+| SY-017 | Key-to-photon latency contract | Accepted direction | Measure p50/p95/p99 input-to-display latency and compare on identical hardware; no reactive/agent/persistence/cloud work on the keystroke path. |
+| SY-018 | Local Context Engine | Accepted direction | OSS local repository/docs/git/artifact retrieval with provenance, freshness, sensitivity, dedupe, token budgets and inspectable context. |
+| SY-019 | Local capability/rule router | Accepted direction | Deterministic capability/provider/model routing with user rules, budgets, fallback chains and explainable decisions; learned organization routing may live above OSS. |
+| SY-020 | Durable local workflow DAG + effect/replay safety | Accepted direction | WorkflowRun/NodeRun DAG, bounded scheduling, typed handoffs, approvals, retries and reconciliation; ambiguous external side effects are never blindly retried. |
+| SY-021 | Multi-agent orchestration + writer isolation | Accepted direction | Parallel agent runs, dedicated worktrees for concurrent writers, conflict/duplicate detection, independent evaluation and explicit reconciliation. |
+| SY-022 | DevOps execution workspace | Accepted direction | Processes, agents, remotes, logs, results and typed operational actions compose around the same Runtime; Seyal does not become an IDE or a second terminal engine. |
+| SY-023 | Working-tree Changes inspector | Accepted direction | Root-bounded git status + capped read-only diff, coalesced only while visible; edit in external IDE/editor and keep git work off the terminal hot path. |
+| SY-024 | Agent evaluation, budgets and explainability | Accepted direction | Track attempts, tests/checks, elapsed time, provider token/cache/cost data, intervention and routing/status explanations without gating terminal progress. |
+
+## Historical RILL feature catalog reconciliation
+
+The original RILL competitive catalog contains **216** inventory rows. All 216 are accounted for below. This table preserves useful product discovery while recalculating status against **current Seyal**, not legacy completion state.
+
+### 5.1 — Hierarchy, dashboards and navigation
+
+| ID | Historical capability | Current Seyal disposition | Seyal mapping / constraint |
+|---|---|---|---|
+| F-001 | Host indicator | Accepted direction | Show local/remote execution host in workspace/pane chrome. |
+| F-002 | Default session | Foundation exists | One persistent headless Runtime and stable default workspace foundation exist. |
+| F-003 | Named sessions | Accepted direction | Keep stable Session identity; legacy per-session socket/state architecture is superseded. |
+| F-004 | Workspace | Foundation exists | Runtime publishes stable Workspace association for executions. |
+| F-005 | Workspace groups | Accepted direction | Collapsible/organizable workspace groups in navigation. |
+| F-006 | Tab owns layout | Accepted direction | Tabs own layout while inactive executions remain live. |
+| F-007 | Nested splits | Accepted direction | Nested horizontal/vertical split tree. |
+| F-008 | Surface stack in a pane | Deferred / decision required | Multiple pane surface types fit the model, but exact in-pane surface stack UX is not yet fixed. |
+| F-009 | Close narrowest context | Accepted direction | Close the narrowest focused UI context without killing unrelated executions. |
+| F-010 | Workspace dashboard | Accepted direction | Workspace-wide execution/status inventory and jump navigation. |
+| F-011 | Agent dashboard | Accepted direction | Cross-workspace agent/run census and navigation. |
+| F-012 | Session/process switcher | Accepted direction | Find and jump to running executions/process contexts. |
+| F-013 | Command palette | Accepted direction | Searchable command/action palette. |
+| F-014 | Quick switcher | Accepted direction | Fast workspace switcher by stable identity/name. |
+| F-015 | Focus history | Accepted direction | Back/forward focus navigation history. |
+| F-016 | Reopen closed | Accepted direction | Reopen recently closed presentation objects without pretending dead processes survived. |
+| F-017 | Drag rearrange | Accepted direction | Rearrange tabs/panes/presentations while preserving execution identity. |
+| F-018 | Pane zoom / equalize | Accepted direction | Zoom focused pane and equalize split sizes. |
+| F-019 | Layout templates | Accepted direction | Reusable workspace/tab/split/cwd launch layouts. |
+| F-020 | Sidebar hide | Accepted direction | Hide/show sidebar without changing runtime ownership. |
+| F-021 | Global summon | Deferred / decision required | Global summon hotkey is useful but not yet a Seyal product commitment. |
+| F-022 | Deep links | Superseded | Replaced by richer Seyal Resource Addressing for exact local/shared targets. |
+| F-023 | Canvas freeform layout | Rejected | Freeform canvas is not the canonical workspace/layout authority. |
+| F-024 | Vertical workspace tabs | Accepted direction | Sidebar/workspace switcher may be vertical without creating a second workspace model. |
+| F-025 | Task / resource manager | Accepted direction | Process/resource visibility fits the execution/DevOps workspace; exact scope remains later. |
+| F-026 | Goto picker | Accepted direction | Searchable workspace/tab/pane/execution/agent goto surface. |
+| F-027 | Custom interpreted sidebars | Deferred / decision required | Custom sidebars require the later capability-scoped extension model. |
+| F-028 | Nested multiplexers allowed | Foundation exists | tmux/zellij/vim/other TUIs are supported as ordinary child workloads, not Seyal runtime authority. |
+| F-029 | Agent transcript vault | Accepted direction | Searchable retained agent-run/provider-session history with explicit retention/privacy. |
+
+### 5.2 — Persistence and recovery
+
+| ID | Historical capability | Current Seyal disposition | Seyal mapping / constraint |
+|---|---|---|---|
+| F-030 | Detach keeps processes | Foundation exists | Runtime/execution ownership is independent from presentation attachment. |
+| F-031 | Reattach same IDs | Foundation exists | Stable Runtime/Workspace/Execution identities support detach/reattach; full UI restore is later. |
+| F-032 | Event replay | Accepted direction | Durable/idempotent event replay where persistence exists; never replay ambiguous terminal input blindly. |
+| F-033 | Disconnect ≠ exit | Foundation exists | Attachment loss and child/process exit are distinct lifecycle states. |
+| F-034 | Runtime crash honesty | Foundation exists | Current architecture explicitly refuses to claim journal-based live PTY resurrection. |
+| F-035 | Layout snapshot | Accepted direction | Persist presentation/layout metadata separately from live PTY truth. |
+| F-036 | Block/scrollback restore | Accepted direction | Persist bounded/redacted scrollback/Block history later; separate from live-process recovery. |
+| F-037 | Agent session resume | Accepted direction | Resume capable agent harness sessions through provider-neutral continuity metadata. |
+| F-038 | Live server handoff | Deferred / decision required | Live PTY handoff across Runtime binary replacement requires separate proven keeper/handoff architecture. |
+| F-039 | Live session restore | Foundation exists | GUI detach/reconnect to live Runtime is the intended model; end-user restore UX remains later. |
+| F-040 | Input delivery states | Accepted direction | Explicit delivery state for queued/dispatched/ambiguous input and effects. |
+| F-041 | Multi-client attach | Foundation exists | Domain/runtime model supports multiple logical attachments and observer/controller policy seams. |
+| F-042 | Quit vs detach | Accepted direction | GUI quit is detach; explicit Runtime/execution termination is separate and guarded. |
+| F-043 | Nested-launch guard | Accepted direction | Prevent accidental nested Seyal Runtime launch unless explicitly requested. |
+| F-044 | Protocol version handshake | Accepted direction | Versioned attach/control protocols fail visibly and recover safely on mismatch. |
+| F-045 | Single-process escape hatch | Deferred / decision required | Debug-only nonpersistent/single-process escape hatch needs evidence before product exposure. |
+| F-046 | Idle agent hibernation | Deferred / decision required | Only resumable agent workloads could hibernate; arbitrary shells must never be killed under this feature. |
+| F-047 | Move pane without new PTY | Accepted direction | Move/reparent a live pane presentation without creating a new PTY/execution. |
+
+### 5.3 — Mouse, input editor and Blocks
+
+| ID | Historical capability | Current Seyal disposition | Seyal mapping / constraint |
+|---|---|---|---|
+| F-050 | Mouse-first chrome | Accepted direction | Mouse-first and keyboard-first navigation are both first-class. |
+| F-051 | Click-to-place input | Accepted direction | Rich multiline composer/caret editing where composer owns input; raw/TUI semantics remain untouched. |
+| F-052 | Multi-cursor / word ops | Deferred / decision required | Advanced multi-cursor editing is optional composer UX, not terminal foundation. |
+| F-053 | Copy on select | Deferred / decision required | Optional copy-on-select policy; must not surprise users or break TUI selection. |
+| F-054 | Smart / rectangular select | Accepted direction | Terminal/Block selection should support smart and rectangular selection where semantics allow. |
+| F-055 | Clickable files & links | Accepted direction | Recognize/open safe URLs and paths, including OSC 8; preserve security prompts/policy. |
+| F-056 | Path with line/column | Accepted direction | Open file:line:column in configured external editor. |
+| F-057 | Syntax highlight + error underline | Accepted direction | Composer syntax/error affordances are additive and off terminal hot path. |
+| F-058 | Alias expansion | Deferred / decision required | Alias expansion needs shell-truth integration; do not guess from static parsing. |
+| F-059 | Command inspector | Deferred / decision required | Inline command/flag documentation is useful but not yet committed. |
+| F-060 | Autosuggest / tab complete | Accepted direction | Local history/path/argument autosuggest and completion in composer. |
+| F-061 | Quote/bracket autocomplete | Deferred / decision required | IDE-like quote/bracket pairing is optional composer behavior. |
+| F-062 | Input Vim mode | Deferred / decision required | Optional modal editing for composer; raw/TUI input stays application-owned. |
+| F-063 | Command history | Accepted direction | Secret-safe local command history with cwd/exit metadata when trusted signals exist. |
+| F-064 | Unified command search | Accepted direction | Unified search can combine history, saved commands/workflows and other typed resources. |
+| F-065 | Command corrections | Deferred / decision required | Post-failure correction suggestions are optional and must be nonblocking. |
+| F-066 | Synchronized inputs | Deferred / decision required | Broadcast input is powerful/destructive and needs explicit target/confirmation semantics. |
+| F-067 | Workflows / parameterized commands | Superseded | Folded into Saved Commands, parameterized commands and Workflow/Runbook model. |
+| F-068 | Pin input top/bottom | Superseded | Current Seyal UI direction uses a per-pane bottom composer rather than arbitrary top/bottom placement. |
+| F-069 | Classic/raw input | Accepted direction | Raw/classic path always available and sends application input directly to the same execution. |
+| F-070 | Command Blocks | Accepted direction | Blocks are fundamental same-execution presentation objects, never a second PTY/grid. |
+| F-071 | Copy command / output / both | Accepted direction | Copy command, output, or both with chrome/secret boundaries respected. |
+| F-072 | Pending Block | Accepted direction | Blocks expose running/pending lifecycle; legacy spinner behavior is not normative. |
+| F-073 | Prompt drain | Accepted direction | Block boundaries must exclude pre-command prompt/drain bytes. |
+| F-074 | Background Blocks | Accepted direction | Unattributed/background output needs an honest presentation rather than attaching to wrong command. |
+| F-075 | Sticky command header | Accepted direction | Keep relevant command identity visible while scrolling long Block output. |
+| F-076 | Block find / filter | Accepted direction | Search/filter within and across retained Blocks. |
+| F-077 | Rerun / edit-and-run | Accepted direction | Re-run/edit-and-run uses explicit execution context and safe quoting. |
+| F-078 | Bookmark Blocks | Superseded | Covered by Block References: bookmark/pin/link/compare/rerun. |
+| F-079 | Attach Block as context | Superseded | Covered by typed Context Attachments plus Block References. |
+| F-080 | Share Block permalink | Superseded | Covered by Seyal Resource Addressing and exact authorized handoff/share. |
+| F-081 | Compact Blocks / dividers | Accepted direction | Density/divider controls without sacrificing terminal readability. |
+| F-082 | Live terminal Block | Superseded | Legacy second-live-surface concept is replaced by one execution with Block/raw/TUI projections. |
+| F-083 | Raw mode same PTY | Foundation exists | Alternate-screen/raw presentation remains the same canonical TerminalExecution/TerminalState. |
+| F-084 | Shift+mouse for UI vs TUI | Accepted direction | Explicit mouse arbitration lets users select UI text without breaking app mouse reporting. |
+| F-085 | Rich input overlay for CLI agents | Accepted direction | Rich composer may submit to CLI agents only when input ownership is known and safe. |
+| F-086 | Right-click menus | Accepted direction | Context menus for pane/tab/Block/agent actions. |
+| F-087 | Keyboard copy mode | Accepted direction | Keyboard copy/navigation mode over retained terminal history. |
+| F-088 | Warpify / in-band remote cmds | Rejected | No vendor helper that silently injects commands into SSH/subshell PTYs. |
+| F-089 | Prompt chips vs PS1 | Accepted direction | Optional cwd/git/dev-tool context chips as host chrome; never replace/break PS1. |
+| F-252 | Up/Down history recall | Accepted direction | Up/Down history recall in composer, prefix-aware; raw mode leaves keys to PTY. |
+| F-253 | Ctrl+R history search | Accepted direction | Ctrl+R fuzzy history/search list with keyboard/mouse selection; raw mode leaves Ctrl+R to PTY. |
+| F-254 | Natural caret navigation | Accepted direction | Natural macOS/readline caret and kill-key behavior in composer. |
+| F-256 | Keyboard tab and pane cycle | Accepted direction | Keyboard tab/pane cycling with predictable focus-ring behavior. |
+
+### 5.4 — Terminal fidelity
+
+| ID | Historical capability | Current Seyal disposition | Seyal mapping / constraint |
+|---|---|---|---|
+| F-090 | GPU terminal engine / libghostty adapter | Superseded | Legacy libghostty production engine direction is replaced by Seyal-owned VT/state + Metal architecture. |
+| F-091 | zsh / bash / fish | Foundation exists | PTY/VT foundation exists; broad zsh/bash/fish compatibility remains a conformance workload. |
+| F-092 | Alternate screen | Foundation exists | M001 alternate-screen subset exists in canonical TerminalState; broader conformance grows incrementally. |
+| F-093 | Mouse reporting to apps | Accepted direction | Application mouse-reporting protocols are terminal-fidelity work, with host override arbitration. |
+| F-094 | Kitty keyboard protocol | Accepted direction | Kitty keyboard protocol when applications opt in, after tested compatibility. |
+| F-095 | Unicode / IME / clipboard | Accepted direction | Full Unicode/grapheme/width, IME and clipboard correctness are terminal fundamentals. |
+| F-096 | Graphics protocols | Accepted direction | Kitty/iTerm graphics protocols are later tested terminal-fidelity capabilities. |
+| F-097 | Shell integration hooks | Accepted direction | Trusted shell integration for cwd/command/exit/duration/running boundaries. |
+| F-098 | Ghostty config import | Superseded | Seyal TOML is canonical; an optional appearance-only Ghostty import may be considered without engine dependency. |
+| F-099 | Scrollback compression | Accepted direction | Bounded/compact scrollback for large hidden/detached populations. |
+| F-100 | Working directory policy | Accepted direction | Configurable cwd inheritance policy for new tab/pane/execution. |
+| F-101 | Startup shell / env | Accepted direction | Per-workspace/execution startup shell and environment policy with secret boundaries. |
+| F-102 | Nested tools in a pane | Foundation exists | Nested tmux/zellij/vim/htop/etc run as normal child workloads. |
+| F-103 | Audible bell | Accepted direction | Optional BEL behavior, configurable and nondisruptive. |
+| F-104 | Contrast / light theme | Accepted direction | Light/dark themes must preserve readable contrast and terminal colors. |
+
+### 5.5 — Attention and notifications
+
+| ID | Historical capability | Current Seyal disposition | Seyal mapping / constraint |
+|---|---|---|---|
+| F-110 | Attention queue | Accepted direction | One typed Attention model for needs-input, approval, completion, failure and disconnect. |
+| F-111 | Sidebar badges / rings | Accepted direction | Unread/attention badges on stable workspace/tab/pane navigation. |
+| F-112 | In-app mailbox | Accepted direction | Global Attention Stack/mailbox with filtering; not duplicate authoritative state. |
+| F-113 | Jump to exact target | Accepted direction | Attention selection resolves exact Workspace/Execution/Block/Agent target. |
+| F-114 | Next-attention shortcut | Accepted direction | Keyboard jump to next relevant AttentionItem. |
+| F-115 | Native OS notifications | Accepted direction | Native OS notifications when backgrounded, policy-controlled. |
+| F-116 | Suppress when focused | Accepted direction | Suppress redundant desktop notifications for actively focused target. |
+| F-117 | OSC 9 / 99 / 777 | Accepted direction | OSC notify sequences may create untrusted notification input, never privileged approvals. |
+| F-118 | CLI notify | Accepted direction | Typed CLI notification/attention entry point folds into universal Integration CLI. |
+| F-119 | Notification hooks | Accepted direction | Trusted config may filter/group notification presentation without blocking terminal progress. |
+| F-120 | Quiet / rate limit | Accepted direction | Storm grouping, cooldowns and quiet policies. |
+| F-121 | Long-command complete | Accepted direction | Optional completion notification for long commands when user is elsewhere. |
+| F-122 | Password-prompt notify | Deferred / decision required | Sensitive/password-prompt detection cannot rely on spoofable raw text as trusted state. |
+| F-123 | Agent blocked rollup | Accepted direction | Parent workspace/run rolls up highest-urgency child attention without reordering navigation. |
+| F-124 | Mark read on view | Accepted direction | Read/ack state updates when exact target is viewed, with explicit semantics. |
+
+### 5.6 — Agents
+
+| ID | Historical capability | Current Seyal disposition | Seyal mapping / constraint |
+|---|---|---|---|
+| F-130 | Task as runtime object | Superseded | Seyal uses WorkItem → Attempt → AgentRun → Execution/Artifact/Attention rather than legacy Task authority. |
+| F-131 | Replay adapter | Accepted direction | Replay/fake harness adapter for deterministic tests and offline review. |
+| F-132 | Section types | Accepted direction | Typed prompt/plan/tool/command/output/approval/diff/result/question sections. |
+| F-133 | Approve / reject / cancel | Accepted direction | Typed approve/reject/cancel actions only for trusted structured requests. |
+| F-134 | Question cards | Accepted direction | Structured question cards route through Attention and exact run identity. |
+| F-135 | Detect CLI agents | Superseded | Expanded into Tiered Agent Presence Detection with explicit source/confidence. |
+| F-136 | Lifecycle authority | Accepted direction | Structured provider/hook lifecycle beats terminal scraping; fallback stays low-confidence. |
+| F-137 | Broad agent coverage | Accepted direction | Provider-neutral support for many CLI/agent harnesses. |
+| F-138 | Native structured adapter | Accepted direction | Native structured adapters map provider events into Seyal's typed model. |
+| F-139 | CLI-native path | Accepted direction | CLI-native agents remain first-class TerminalExecution workloads with additive metadata/UI. |
+| F-140 | Prompt queue | Accepted direction | Queue/edit/reorder follow-up prompts within an AgentRun/workflow. |
+| F-141 | Permission profiles | Accepted direction | Allow/deny/ask permission profiles scoped to workspace/run/capability. |
+| F-142 | Task lists | Accepted direction | Agent/workflow task lists with explicit status and ownership. |
+| F-143 | MCP servers | Accepted direction | User-configured MCP servers behind explicit capabilities and trust. |
+| F-144 | Rules / skills | Accepted direction | Local project/user rules and skills; cloud is not required. |
+| F-145 | Context attachments | Accepted direction | Scoped context attachments: files, Blocks, selections, URLs, images, artifacts. |
+| F-146 | Diff review | Accepted direction | Diff review surface; mutating apply/reject actions require explicit safe semantics. |
+| F-147 | Checkpoints | Accepted direction | Agent/workflow checkpoints for inspect/revert where underlying effects are actually reversible. |
+| F-148 | Conversation fork | Accepted direction | Fork an investigation/conversation into a new Attempt/AgentRun/execution context. |
+| F-149 | Direct agent attach | Accepted direction | Attach/associate an existing execution with an agent run without creating duplicate terminal state. |
+| F-150 | Agent CLI orchestration | Accepted direction | Typed CLI orchestration for start/wait/prompt/read/cancel where harness supports it. |
+| F-151 | Integrations install | Accepted direction | Install/configure official agent integrations/hooks explicitly. |
+| F-152 | Custom labels / metadata | Accepted direction | Human labels plus provider-reported metadata such as tokens/cost/status. |
+| F-153 | Worktrees for parallel tasks | Accepted direction | Parallel agent writers use dedicated worktrees; read-only work may share safe views. |
+| F-154 | Model picker / BYOK | Accepted direction | Provider/model selection and BYOK/local-provider use without requiring Seyal cloud. |
+| F-155 | Voice input | Deferred / decision required | Voice input is optional and outside terminal foundation. |
+| F-156 | Computer / browser use | Deferred / decision required | Browser/computer use may be capability-gated later; never terminal hot-path authority. |
+| F-157 | Cloud agents / hosted orchestration | Accepted direction | Optional hosted/background agent execution may be provided above OSS seams; local use needs no account. |
+| F-158 | Cloud-synced conversations | Accepted direction | Optional account/team conversation sync; complete local operation remains possible without it. |
+| F-159 | Agent session sharing | Accepted direction | Explicit, revocable, authorization-checked agent/session sharing and teammate handoff. |
+| F-160 | Vendor terminal UI lock-in | Rejected | Seyal will not clone a vendor terminal/agent UI as its core architecture. |
+| F-161 | HITL feed cards | Superseded | Folded into typed Attention Stack/HITL actions bound to WorkItem/AgentRun. |
+| F-162 | Agent explain | Accepted direction | Explain why an agent/run is classified waiting/blocked/idle, including signal source/confidence. |
+| F-163 | Agent drives TUI | Deferred / decision required | Agent-driven TUI input requires explicit scoped authority; unrestricted key injection is not acceptable. |
+| F-164 | NL autodetection | Rejected | Implicit shell-vs-agent natural-language classifier is not default input routing; keep explicit typed actions. |
+
+### 5.7 — Remote
+
+| ID | Historical capability | Current Seyal disposition | Seyal mapping / constraint |
+|---|---|---|---|
+| F-170 | Runtime on the host | Foundation exists | Headless Runtime owns executions on the host; remote hosts use the same authority model later. |
+| F-171 | SSH attach | Accepted direction | Secure SSH attach to a remote Seyal Runtime/execution environment. |
+| F-172 | Thin local client | Accepted direction | Thin local client keeps native input/clipboard/navigation while execution remains remote. |
+| F-173 | SSH-then-attach | Accepted direction | Classic SSH-then-attach compatibility path may coexist with richer client flow. |
+| F-174 | Reconnect + backoff | Accepted direction | Reconnect/backoff with identity/version checks and state resynchronization. |
+| F-175 | Remote notify relay | Accepted direction | Remote structured attention/notification relay to authorized local client. |
+| F-176 | Remote cwd / scp drop | Accepted direction | Remote cwd awareness and explicit file transfer/drop with policy controls. |
+| F-177 | Browser via remote network | Deferred / decision required | Remote localhost/browser exposure requires explicit tunnel/security UX. |
+| F-178 | Mosh transport | Deferred / decision required | Mosh/roaming transport is optional after SSH correctness and semantics are proven. |
+| F-179 | Remote tmux mirror | Rejected | Do not mirror an external tmux hierarchy as Seyal-native panes; tmux remains a child workload. |
+| F-180 | Host key / version check | Accepted direction | Host-key, server identity and protocol/version checks before attach. |
+
+### 5.8 — Extra surfaces
+
+| ID | Historical capability | Current Seyal disposition | Seyal mapping / constraint |
+|---|---|---|---|
+| F-190 | Embedded browser pane | Deferred / decision required | Embedded browser is a cold non-terminal surface candidate, not current core scope. |
+| F-191 | File explorer | Accepted direction | Read-only root-bounded workspace file tree/preview; external editor for editing. |
+| F-192 | Markdown viewer | Accepted direction | Markdown/notebook viewing and executable runbook content as cold surfaces. |
+| F-193 | Diff viewer pane | Accepted direction | Read-only/capability-scoped diff review surface. |
+| F-194 | Built-in editor + LSP | Rejected | Do not author a built-in IDE/editor+LSP as Seyal's product core. |
+| F-195 | Git worktree UI | Accepted direction | Git worktree create/open/reveal/archive UX tied to WorkItem/Attempt. |
+| F-196 | iOS / mobile companion | Accepted direction | Mobile companion/remote control later over the same secure attach/resource model. |
+| F-197 | Simulator panes | Deferred / decision required | Simulator-as-pane is optional platform tooling, not core terminal scope. |
+| F-198 | Dock panes | Deferred / decision required | Dock/auxiliary terminal presentations are low-priority platform UX. |
+| F-199 | Sleepy / menubar keep-awake | Deferred / decision required | Keep-awake/menubar mode needs explicit power/user-intent policy. |
+| F-200 | Popup floating terminals | Rejected | No untracked popup PTY; a popup may only present an existing tracked execution. |
+| F-201 | Workspace pin / colors / icons | Accepted direction | Pin/color/icon metadata for stable workspace navigation. |
+| F-202 | Workspace status lanes | Accepted direction | Workspace status labels may summarize state, but must not auto-reorder user navigation by default. |
+| F-203 | Workspace todos | Accepted direction | Per-workspace checklist/todos as cold workflow metadata. |
+| F-204 | Per-workspace env and ports | Accepted direction | Workspace environment metadata and advertised/listening ports with security boundaries. |
+| F-205 | Warp Drive “workspaces” | Rejected | Do not overload Seyal Workspace with Warp-Drive-style cloud-space naming; knowledge/sync is separate. |
+
+### 5.9 — Appearance, configuration, platform and security
+
+| ID | Historical capability | Current Seyal disposition | Seyal mapping / constraint |
+|---|---|---|---|
+| F-210 | Canonical theme schema | Accepted direction | One canonical Seyal theme/look schema; importers are adapters. |
+| F-211 | OS light/dark sync | Accepted direction | Follow system appearance when configured. |
+| F-212 | Pane dimming / mouse focus | Accepted direction | Inactive-pane dimming and optional focus-follows-mouse. |
+| F-213 | Opacity / blur | Accepted direction | Native opacity/blur effects only if they preserve readability/performance. |
+| F-214 | Custom dock icons | Deferred / decision required | Custom dock icons are cosmetic and low priority. |
+| F-215 | Settings sync via cloud | Superseded | Expanded into selective local-first sync; local config remains authoritative and sensitive data is excluded by default. |
+| F-216 | Local settings file | Accepted direction | Canonical local TOML configuration works without an account. |
+| F-217 | Project-local trusted config | Accepted direction | Project-local config requires explicit trust before actions/capabilities execute. |
+| F-218 | Custom keybindings | Accepted direction | Custom keybindings/chords with conflict detection and raw/TUI correctness. |
+| F-219 | Command palette custom actions | Accepted direction | User/project custom typed actions can appear in Command Palette. |
+| F-220 | Plugins (out of process) | Accepted direction | Later out-of-process extensions/plugins with declared, reviewable capabilities. |
+| F-221 | Plugin marketplace | Deferred / decision required | Marketplace/discovery comes only after a secure extension model exists. |
+| F-222 | Socket + CLI | Superseded | Expanded into Universal Seyal Integration CLI plus capability-scoped Control API. |
+| F-223 | Secret redaction | Accepted direction | Secrets/PII must not leak through logs, Blocks, diagnostics, sync or agent context. |
+| F-224 | No account for local use | Accepted direction | Excellent local terminal and local agent workflows require no Seyal account. |
+| F-225 | Signed updates | Accepted direction | Signed/notarized updates and safe rollback are release-security requirements. |
+| F-226 | macOS native windowing | Foundation exists | Native Swift/AppKit/Metal macOS application boundary exists. |
+| F-227 | Linux UI | Accepted direction | Linux later, reusing portable Rust semantics but proving platform-specific UI/renderer gates. |
+| F-228 | Windows UI | Accepted direction | Windows later with the same portable core and native platform layer. |
+| F-229 | Accessibility | Accepted direction | Keyboard accessibility, labels, focus order and VoiceOver are product requirements. |
+| F-230 | Auto-update pill | Accepted direction | Native in-app update UX may sit above signed update mechanism. |
+| F-231 | Multi-OS shared core | Foundation exists | Portable Rust core + native-per-platform UI principle is established; macOS is first. |
+
+### 5.10 — Development / IDE boundary
+
+| ID | Historical capability | Current Seyal disposition | Seyal mapping / constraint |
+|---|---|---|---|
+| F-240 | Native code editor | Rejected | Seyal is an execution workspace, not a home-grown text editor/IDE. |
+| F-241 | Language servers (LSP) | Rejected | No core LSP client without a future separate embedded-editor decision. |
+| F-242 | Find and replace | Accepted direction | Workspace/file search fits; destructive project-wide replace needs an explicit undo/effect model. |
+| F-243 | Code review panel | Accepted direction | Working-tree/PR diff and code-review inspector is a useful cold surface. |
+| F-244 | Interactive review comments | Accepted direction | Structured review comments may steer an agent/run without turning Seyal into an editor. |
+| F-245 | Open in external IDE | Accepted direction | Open exact path/line in configured external IDE/editor. |
+| F-246 | Zero-state open / clone | Accepted direction | Zero-state create/open/clone project/workspace onboarding. |
+| F-247 | Local codebase index | Accepted direction | Local codebase index is part of the Local Context Engine, with provenance and invalidation. |
+| F-248 | Local notebooks | Accepted direction | Local runnable notebooks/runbooks as user-owned files; cloud not required. |
+| F-249 | Browser DevTools / design | Deferred / decision required | Browser DevTools/design depends on a future accepted embedded-browser surface. |
+| F-250 | Debugger / DAP | Rejected | No built-in debugger/DAP client as core product without a future explicit ADR. |
+
+## Non-negotiable product decisions exposed by the registry
+
+- Terminal fundamentals remain OSS and use the Seyal-owned PTY → VT/state → damage → Metal stack; no legacy libghostty production engine is revived.
+- Blocks, raw terminal and TUI are presentations of the same TerminalExecution and canonical TerminalState. No second PTY/grid is created for Blocks.
+- Seyal is an execution/operations workspace, not a home-grown IDE. External editors/IDEs are first-class; built-in editor/LSP/debugger rows remain rejected unless explicitly reconsidered.
+- GUI close/detach is distinct from terminating a process. Persistence metadata never claims to resurrect a dead PTY.
+- Agent and workflow features are additive. Terminal input/output/rendering never synchronously wait on agent, semantic, persistence, cloud, licensing, telemetry or collaboration work.
+- Raw terminal text is untrusted. It may support low-confidence detection/notifications but cannot become permission, approval, policy or audit authority.
+- Stable navigation is the default. Attention uses badges and the global Attention Stack rather than constantly reordering the user's workspace list.
+- Local use, local configuration and useful local agent/workflow capabilities do not require a Seyal account.
+
+## Source completeness and local export
+
+Feature archaeology uses current Seyal documents plus every open/closed Issue and comment from `mahboobmonnamd/RILL` and `mahboobmonnamd/terminal`. Run:
+
+```bash
+bash scripts/export-feature-source-issues.sh
+```
+
+The script writes read-only local evidence under `.feature-sources/`, verifies the GitHub issue count for each repository, and hard-checks that the RILL `inventory` label still contains exactly **216** rows. It does not create or modify GitHub issues.
+
+`terminal` contains many implementation regressions, tests and obsolete architecture experiments. Those are source evidence, not product capabilities. A defect becomes a feature row only when it reveals a distinct product behavior that is not already represented above (for example the Changes inspector or DevOps workspace).
 
 ## Inventory maintenance rule
 
-When a product capability is accepted in design/research discussion, add or update it here in the same PR that updates the relevant architecture/R&D document when one exists.
-
-Do not use this inventory as an implementation specification. Significant capabilities still require the repository's normal Issue → R&D/ADR/spec → milestone → tested implementation process.
-
-## Historical feature backfill
-
-Earlier Seyal/RILL product discussions contain a much larger set of feature ideas and accepted directions. They were not previously consolidated into one authoritative feature catalog. Until the historical backfill is completed, architecture/R&D documents and accepted repository decisions remain the source for those older capabilities.
-
-A dedicated backfill issue should enumerate, deduplicate, categorize and classify those historical features into this inventory without importing obsolete RILL architecture decisions into Seyal.
+1. Add/update this file when a product capability or rejection is accepted.
+2. Link/refine the owning R&D/ADR/spec in the same change when implementation behavior is being fixed.
+3. Never mark a feature Implemented from a legacy issue state or a design document.
+4. Competitive research must inspect both major capabilities and recurring 2–10 second workflow friction across shell ↔ terminal ↔ agent ↔ GUI ↔ teammate ↔ remote boundaries.
+5. New features must state whether they alter terminal hot paths, trust boundaries, persistence semantics or OSS/commercial seams.
+6. Do not create a second competing product feature list; source-disposition/audit files may exist only as traceability ledgers pointing back here.

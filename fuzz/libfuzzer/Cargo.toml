@@ -1,0 +1,30 @@
+[package]
+name = "seyal-pass5-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+seyal-exec = { path = "../../crates/seyal-exec" }
+seyal-runtime = { path = "../../crates/seyal-runtime" }
+
+[[bin]]
+name = "display_decode"
+path = "fuzz_targets/display_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "display_state_machine"
+path = "fuzz_targets/display_state_machine.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]

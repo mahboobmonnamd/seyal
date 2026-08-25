@@ -1,5 +1,5 @@
-use std::alloc::System;
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
+use std::alloc::System;
 
 #[global_allocator]
 static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
@@ -27,8 +27,8 @@ use seyal_runtime::{
     },
     projection::{
         layout::{
-            CELL_LEN, DAMAGE_LEN, REGION_HEADER_LEN, SLOT_HEADER_LEN, CellRecord, DamageRecord,
-            ModeFlags, RegionHeader, WireAttributes, WireColor,
+            CELL_LEN, CellRecord, DAMAGE_LEN, DamageRecord, ModeFlags, REGION_HEADER_LEN,
+            RegionHeader, SLOT_HEADER_LEN, WireAttributes, WireColor,
         },
         lifecycle::{ProjectionRegion, ReadOnlyMapping},
         producer::OwnedSnapshot,
@@ -482,8 +482,8 @@ fn mutate_snapshot(snapshot: &mut OwnedSnapshot, generation: u64) {
     let row = ((generation - 1) % ROWS as u64) as u16;
     let column = ((generation * 7) % COLUMNS as u64) as u16;
     let index = row as usize * COLUMNS as usize + column as usize;
-    snapshot.cells[index].scalar = char::from_u32(b'!' as u32 + (generation % 80) as u32)
-        .expect("ASCII benchmark scalar");
+    snapshot.cells[index].scalar =
+        char::from_u32(b'!' as u32 + (generation % 80) as u32).expect("ASCII benchmark scalar");
     snapshot.cursor_row = row;
     snapshot.cursor_col = column;
     snapshot.damages[0] = DamageRecord {
@@ -496,9 +496,8 @@ fn mutate_snapshot(snapshot: &mut OwnedSnapshot, generation: u64) {
 
 #[cfg(target_os = "macos")]
 fn slot_stride() -> u64 {
-    let bytes = SLOT_HEADER_LEN
-        + ROWS as usize * COLUMNS as usize * CELL_LEN
-        + ROWS as usize * DAMAGE_LEN;
+    let bytes =
+        SLOT_HEADER_LEN + ROWS as usize * COLUMNS as usize * CELL_LEN + ROWS as usize * DAMAGE_LEN;
     bytes.next_multiple_of(8) as u64
 }
 

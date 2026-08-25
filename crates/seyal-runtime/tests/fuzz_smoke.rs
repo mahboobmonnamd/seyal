@@ -3,7 +3,7 @@
 
 use std::{
     env, fs,
-    io::{Read, Write},
+    io::Write,
     os::fd::{AsRawFd, OwnedFd},
     os::unix::net::UnixStream,
     path::PathBuf,
@@ -14,7 +14,7 @@ use seyal_exec::{CommandSpec, WindowSize};
 use seyal_runtime::local_ipc::fd_transfer::{self, RecvFd};
 use seyal_runtime::local_ipc::framing::{
     Attach, Attached, ClientHello, Detach, FrameHeader, HEADER_LEN, MessageType, Resync, Role,
-    ServerHello, encode_frame, decode_message,
+    ServerHello, decode_message, encode_frame,
 };
 use seyal_runtime::projection::layout::{
     CELL_LEN, CellRecord, DAMAGE_LEN, DamageRecord, MAX_REGION_BYTES, REGION_HEADER_LEN,
@@ -202,11 +202,7 @@ impl RuntimeFuzzHarness {
         }
     }
 
-    fn attach(
-        &mut self,
-        stream: &mut UnixStream,
-        role: Role,
-    ) -> Option<AttachmentId> {
+    fn attach(&mut self, stream: &mut UnixStream, role: Role) -> Option<AttachmentId> {
         self.send(
             stream,
             MessageType::Attach,

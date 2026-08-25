@@ -197,9 +197,8 @@ impl LocalIpcServer {
             // receive buffer. A valid maximum-size frame may be immediately
             // followed by another frame in the socket; reading across that
             // boundary must not turn the valid first frame into an overflow.
-            let remaining_capacity = MAX_RECEIVE_BUFFER_BYTES
-                .checked_sub(connection.read_buf.len())
-                .unwrap_or(0);
+            let remaining_capacity =
+                MAX_RECEIVE_BUFFER_BYTES.saturating_sub(connection.read_buf.len());
             if remaining_capacity == 0 {
                 events.push(ServerEvent::FramingError { token });
                 self.close_with_event(token, &mut events);

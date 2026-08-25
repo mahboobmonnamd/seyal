@@ -63,6 +63,7 @@ case "$cmd" in
     python3 scripts/benchmark-smoke.py
     if find crates -type f -path '*/benches/*.rs' -print -quit 2>/dev/null | grep -q .; then
       cargo_pinned bench --workspace --locked
+      cargo_pinned bench -p seyal-runtime --bench pass5_production_transport --features benchmark-instrumentation --locked
     else
       echo "[seyal task] bench: harness metadata recorder passed; no production benchmark target exists yet and no performance result is claimed."
     fi

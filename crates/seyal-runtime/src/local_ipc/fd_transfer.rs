@@ -9,7 +9,41 @@ use std::{
     os::fd::{FromRawFd, OwnedFd, RawFd},
 };
 
+#[cfg(feature = "benchmark-instrumentation")]
+use std::sync::atomic::{AtomicU64, Ordering};
+
 const ANCILLARY_BUFFER_BYTES: usize = 256;
+
+#[cfg(feature = "benchmark-instrumentation")]
+static BENCH_SEND_SYSCALLS: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "benchmark-instrumentation")]
+static BENCH_SENDMSG_SYSCALLS: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "benchmark-instrumentation")]
+static BENCH_RECVMSG_SYSCALLS: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(feature = "benchmark-instrumentation")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BenchmarkSyscallCounters {
+    pub send: u64,
+    pub sendmsg: u64,
+    pub recvmsg: u64,
+}
+
+#[cfg(feature = "benchmark-instrumentation")]
+pub fn reset_benchmark_syscall_counters() {
+    BENCH_SEND_SYSCALLS.store(0, Ordering::Relaxed);
+    BENCH_SENDMSG_SYSCALLS.store(0, Ordering::Relaxed);
+    BENCH_RECVMSG_SYSCALLS.store(0, Ordering::Relaxed);
+}
+
+#[cfg(feature = "benchmark-instrumentation")]
+pub fn benchmark_syscall_counters() -> BenchmarkSyscallCounters {
+    BenchmarkSyscallCounters {
+        send: BENCH_SEND_SYSCALLS.load(Ordering::Relaxed),
+        sendmsg: BENCH_SENDMSG_SYSCALLS.load(Ordering::Relaxed),
+        recvmsg: BENCH_RECVMSG_SYSCALLS.load(Ordering::Relaxed),
+    }
+}
 
 // `cmsghdr` requires native alignment. Keep the stack buffer more strictly
 // aligned than Darwin requires so the CMSG macros never observe an unaligned
@@ -61,6 +95,8 @@ pub fn send_with_fd(socket: RawFd, bytes: &[u8], fd: Option<RawFd>) -> io::Resul
     let Some(fd) = fd else {
         // SAFETY: `bytes` is a valid slice for the duration of the call and
         // `socket` is a live caller-owned descriptor.
+        #[cfg(feature = "benchmark-instrumentation")]
+        BENCH_SEND_SYSCALLS.fetch_add(1, Ordering::Relaxed);
         let result = unsafe {
             libc::send(
                 socket,
@@ -115,6 +151,8 @@ pub fn send_with_fd(socket: RawFd, bytes: &[u8], fd: Option<RawFd>) -> io::Resul
 
     // SAFETY: `msg` is fully initialized above and `socket` remains owned by
     // the caller.
+    #[cfg(feature = "benchmark-instrumentation")]
+    BENCH_SENDMSG_SYSCALLS.fetch_add(1, Ordering::Relaxed);
     let result = unsafe { libc::sendmsg(socket, &msg, 0) };
     if result < 0 {
         return Err(io::Error::last_os_error());
@@ -146,6 +184,8 @@ pub fn recv_with_fd(socket: RawFd, buffer: &mut [u8]) -> io::Result<(usize, Recv
 
     // SAFETY: `msg` is fully initialized with an aligned control buffer and
     // `socket` is a live caller-owned descriptor.
+    #[cfg(feature = "benchmark-instrumentation")]
+    BENCH_RECVMSG_SYSCALLS.fetch_add(1, Ordering::Relaxed);
     let result = unsafe { libc::recvmsg(socket, &mut msg, 0) };
     if result < 0 {
         return Err(io::Error::last_os_error());

@@ -21,9 +21,12 @@ use seyal_exec::{CommandSpec, WindowSize};
 use seyal_runtime::{
     ExecutionId, LocalIpcMode, Runtime, RuntimeConfig,
     display::{DecodedDisplayChunk, DisplayCache, decode_chunk, empty_cache},
-    local_ipc::framing::{
-        Attach, Attached, ClientHello, FrameHeader, HEADER_LEN, InputRef, MessageType, Role,
-        ServerHello, encode_frame,
+    local_ipc::{
+        fd_transfer::{benchmark_syscall_counters, reset_benchmark_syscall_counters},
+        framing::{
+            Attach, Attached, ClientHello, FrameHeader, HEADER_LEN, InputRef, MessageType, Role,
+            ServerHello, encode_frame,
+        },
     },
 };
 
@@ -95,7 +98,7 @@ fn run_macos() {
         "pass5_production_transport architecture=Candidate-D performance_claim=false path=real_child->PTY->Seyal_VT->canonical_damage->damage_sized_model_update->production_UDS->client_DisplayCache"
     );
     println!(
-        "measurement_labels=MEASURED|PLATFORM_LIMITED percentile_method=nearest_rank repetitions_interactive=32 server_sendmsg_syscalls=NOT_INSTRUMENTED queue_depth=bounded_by_production_contract"
+        "measurement_labels=MEASURED|PLATFORM_LIMITED percentile_method=nearest_rank repetitions_interactive=32 syscall_counts=feature_gated_exact_invocations queue_depth=bounded_by_production_contract"
     );
     print_host_metadata();
 
@@ -272,6 +275,7 @@ fn worker() {
         client.reset_measurement_counters();
     }
 
+    reset_benchmark_syscall_counters();
     let allocation_region = Region::new(GLOBAL);
     let measurement = if workload == Workload::Interactive {
         measure_interactive(
@@ -284,6 +288,7 @@ fn worker() {
         measure_streaming(&mut runtime, &mut clients, controller_attachment, workload)
     };
     let allocation_stats = allocation_region.change();
+    let syscall_counters = benchmark_syscall_counters();
     assert!(clients.iter().all(|client| client.cache.generation > 0));
 
     let reconnect_start = Instant::now();
@@ -332,7 +337,7 @@ fn worker() {
         "PLATFORM_LIMITED"
     };
     println!(
-        "pass5_production_result workload={} population_requested={} population_created={} fanout_requested={} fanout_attached={} geometry={}x{} classification={} create_us={} attach_setup_us={} latency_p50_us={} latency_p95_us={} latency_p99_us={} runtime_poll_phase_us={} client_decode_apply_phase_us={} elapsed_us={} throughput_payload_bytes_per_sec={} socket_bytes_received={} client_read_syscalls={} server_sendmsg_syscalls=NOT_INSTRUMENTED display_batches={} snapshots={} deltas={} resync_or_recovery_snapshots={} allocations={} reallocations={} bytes_allocated={} reconnect_full_snapshot_us={} rss_baseline_kib={} rss_populated_kib={} rss_final_kib={} incremental_rss_kib={} cpu_percent_sample={} threads_baseline={} threads_populated={} threads_final={} fd_baseline={} fd_populated={} fd_final={} teardown_us={} shutdown_ok={} aggregate_pending_input_final={} semantic_generation={} platform_error={:?}",
+        "pass5_production_result workload={} population_requested={} population_created={} fanout_requested={} fanout_attached={} geometry={}x{} classification={} create_us={} attach_setup_us={} latency_p50_us={} latency_p95_us={} latency_p99_us={} runtime_poll_phase_us={} client_decode_apply_phase_us={} elapsed_us={} throughput_payload_bytes_per_sec={} socket_bytes_received={} client_read_syscalls={} server_send_syscalls={} server_sendmsg_syscalls={} runtime_recvmsg_syscalls={} display_batches={} snapshots={} deltas={} resync_or_recovery_snapshots={} allocations={} reallocations={} bytes_allocated={} reconnect_full_snapshot_us={} rss_baseline_kib={} rss_populated_kib={} rss_final_kib={} incremental_rss_kib={} cpu_percent_sample={} threads_baseline={} threads_populated={} threads_final={} fd_baseline={} fd_populated={} fd_final={} teardown_us={} shutdown_ok={} aggregate_pending_input_final={} semantic_generation={} platform_error={:?}",
         workload.name(),
         requested_population,
         ids.len(),
@@ -352,6 +357,9 @@ fn worker() {
         measurement.throughput_payload_bytes_per_sec,
         bytes_received,
         client_read_syscalls,
+        syscall_counters.send,
+        syscall_counters.sendmsg,
+        syscall_counters.recvmsg,
         display_batches,
         snapshots,
         deltas,

@@ -13,6 +13,7 @@ build = "build.rs"
 default = []
 test-fault-injection = []
 benchmark-shared-projection = []
+benchmark-instrumentation = []
 
 [dependencies]
 seyal-exec = { path = "../seyal-exec" }
@@ -33,3 +34,4 @@ harness = false
 [[bench]]
 name = "pass5_production_transport"
 harness = false
+required-features = ["benchmark-instrumentation"]

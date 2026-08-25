@@ -182,12 +182,12 @@ fn assert_no_published_attachment(runtime: &Runtime, execution_id: ExecutionId) 
     );
 }
 
-fn expect_internal_failure(runtime: &mut Runtime, stream: &mut UnixStream) {
+fn expect_projection_unavailable(runtime: &mut Runtime, stream: &mut UnixStream) {
     let (message_type, payload) =
         expect_plain_frame(runtime, stream, Instant::now() + Duration::from_secs(2));
     assert_eq!(message_type, MessageType::Error as u16);
     let error = ErrorMessage::decode(&payload).expect("valid Error response");
-    assert_eq!(error.error_code, ErrorCode::InternalFailure as u16);
+    assert_eq!(error.error_code, ErrorCode::ProjectionUnavailable as u16);
 }
 
 fn expect_disconnect(runtime: &mut Runtime, stream: &mut UnixStream) {
@@ -218,6 +218,10 @@ fn failed_first_attach_rolls_back_resources_and_controller_authority() {
         )
         .expect("execution");
 
+    // Projection-resource creation failures are a recoverable inability to
+    // produce the requested display projection, so SPEC-004's specific wire
+    // error is ProjectionUnavailable. They must still publish no attachment or
+    // controller authority and leave later projection creation possible.
     for point in [
         FaultPoint::ShmOpenWriter,
         FaultPoint::Truncate,
@@ -229,7 +233,7 @@ fn failed_first_attach_rolls_back_resources_and_controller_authority() {
         hello(&mut runtime, &mut client);
         test_fault::fail_next(point);
         send_controller_attach(&mut runtime, &mut client, execution_id);
-        expect_internal_failure(&mut runtime, &mut client);
+        expect_projection_unavailable(&mut runtime, &mut client);
         assert_no_published_attachment(&runtime, execution_id);
         drop(client);
         pump(&mut runtime);
@@ -237,7 +241,9 @@ fn failed_first_attach_rolls_back_resources_and_controller_authority() {
 
     // Descriptor delivery failure occurs after the private projection exists
     // and has a committed first generation, but before Runtime publishes the
-    // attachment/controller/projection authority.
+    // attachment/controller/projection authority. Transport failure closes the
+    // connection rather than publishing an attachment whose descriptor was not
+    // accepted by the bounded outbound path.
     let mut failed_send_client = connect(&mut runtime);
     hello(&mut runtime, &mut failed_send_client);
     test_fault::fail_next(FaultPoint::SendAttachedDescriptor);

@@ -176,7 +176,7 @@ pub fn recv_with_fd(socket: RawFd, buffer: &mut [u8]) -> io::Result<(usize, Recv
             } else {
                 let payload_bytes = len - header_len;
                 let fd_bytes = std::mem::size_of::<RawFd>();
-                if payload_bytes == 0 || payload_bytes % fd_bytes != 0 {
+                if payload_bytes == 0 || !payload_bytes.is_multiple_of(fd_bytes) {
                     malformed = true;
                 }
                 let count = payload_bytes / fd_bytes;

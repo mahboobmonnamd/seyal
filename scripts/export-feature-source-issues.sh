@@ -51,7 +51,10 @@ export_repo() {
 export_repo "mahboobmonnamd/RILL" "rill"
 export_repo "mahboobmonnamd/terminal" "terminal"
 
-rill_inventory="$(gh issue list \
+# The RILL `inventory` label is also attached to the catalog epic (#33), so the
+# label count is 217. The product catalog itself is the set of inventory issues
+# whose title begins with an F-* feature id; that set must contain 216 unique rows.
+rill_inventory_total="$(gh issue list \
   --repo "mahboobmonnamd/RILL" \
   --state all \
   --limit 10000 \
@@ -59,8 +62,24 @@ rill_inventory="$(gh issue list \
   --json number \
   --jq 'length')"
 
-if [[ "$rill_inventory" != "216" ]]; then
-  echo "error: expected 216 RILL inventory rows, found $rill_inventory" >&2
+rill_feature_rows="$(gh issue list \
+  --repo "mahboobmonnamd/RILL" \
+  --state all \
+  --limit 10000 \
+  --label inventory \
+  --json title \
+  --jq '[.[] | select(.title | test("^F-[0-9]+ "))] | length')"
+
+rill_unique_feature_ids="$(gh issue list \
+  --repo "mahboobmonnamd/RILL" \
+  --state all \
+  --limit 10000 \
+  --label inventory \
+  --json title \
+  --jq '[.[] | .title | select(test("^F-[0-9]+ ")) | split(" ")[0]] | unique | length')"
+
+if [[ "$rill_feature_rows" != "216" || "$rill_unique_feature_ids" != "216" ]]; then
+  echo "error: expected 216 unique RILL F-* feature rows, found rows=$rill_feature_rows unique_ids=$rill_unique_feature_ids" >&2
   exit 1
 fi
 
@@ -73,5 +92,5 @@ fi
   printf '\n}\n'
 } > "$OUT_DIR/all-issues.json"
 
-echo "Verified RILL inventory rows: 216"
+echo "Verified RILL feature catalog: 216 unique F-* rows ($rill_inventory_total inventory-labeled issues including the catalog epic)"
 echo "Combined export: $OUT_DIR/all-issues.json"

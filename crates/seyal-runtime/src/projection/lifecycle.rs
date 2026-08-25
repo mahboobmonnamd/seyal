@@ -50,7 +50,9 @@ impl ProjectionRegion {
 
         #[cfg(feature = "test-fault-injection")]
         if test_fault::take(FaultPoint::ShmOpenWriter) {
-            return Err(LifecycleError::ShmOpenWriter(injected_error("shm_open writer")));
+            return Err(LifecycleError::ShmOpenWriter(injected_error(
+                "shm_open writer",
+            )));
         }
 
         // macOS shm_open(2) does not accept O_CLOEXEC. Create the object with

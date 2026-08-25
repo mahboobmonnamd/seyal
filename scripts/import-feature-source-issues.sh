@@ -65,60 +65,29 @@ if [[ "$APPLY" != true ]]; then
   exit 0
 fi
 
-# Source-specific labels make imported historical evidence easy to filter without
-# recreating every legacy label/milestone as current Seyal workflow state.
-gh label create legacy-rill \
-  --repo "$DEST_REPO" \
-  --description "Historical issue imported from mahboobmonnamd/RILL" \
-  --color BFD4F2 \
-  --force >/dev/null
-
-gh label create legacy-terminal \
-  --repo "$DEST_REPO" \
-  --description "Historical issue imported from mahboobmonnamd/terminal" \
-  --color D4C5F9 \
-  --force >/dev/null
-
-gh label create historical-evidence \
-  --repo "$DEST_REPO" \
-  --description "Preserved historical product/implementation evidence; not current implementation authority" \
-  --color EDEDED \
-  --force >/dev/null
+gh label create legacy-rill --repo "$DEST_REPO" --description "Historical issue imported from mahboobmonnamd/RILL" --color BFD4F2 --force >/dev/null
+gh label create legacy-terminal --repo "$DEST_REPO" --description "Historical issue imported from mahboobmonnamd/terminal" --color D4C5F9 --force >/dev/null
+gh label create historical-evidence --repo "$DEST_REPO" --description "Preserved historical evidence; not current implementation authority" --color EDEDED --force >/dev/null
 
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 DEST_CACHE="$TMP_DIR/destination-issues.json"
 
-gh issue list \
-  --repo "$DEST_REPO" \
-  --state all \
-  --limit 10000 \
-  --json number,body,state \
-  > "$DEST_CACHE"
+gh issue list --repo "$DEST_REPO" --state all --limit 10000 --json number,body,state > "$DEST_CACHE"
 
 find_existing_issue() {
   local marker="$1"
-  jq -r --arg marker "$marker" \
-    '.[] | select((.body // "") | contains($marker)) | .number' \
-    "$DEST_CACHE" | head -n 1
+  jq -r --arg marker "$marker" '.[] | select((.body // "") | contains($marker)) | .number' "$DEST_CACHE" | head -n 1
 }
 
 cache_issue() {
-  local number="$1"
-  local body="$2"
-  local state="$3"
-  local next="$TMP_DIR/cache-next.json"
-  jq --argjson number "$number" --arg body "$body" --arg state "$state" \
-    '. + [{number:$number,body:$body,state:$state}]' \
-    "$DEST_CACHE" > "$next"
+  local number="$1" body="$2" state="$3" next="$TMP_DIR/cache-next.json"
+  jq --argjson number "$number" --arg body "$body" --arg state "$state" '. + [{number:$number,body:$body,state:$state}]' "$DEST_CACHE" > "$next"
   mv "$next" "$DEST_CACHE"
 }
 
 sync_issue_state() {
-  local dest_number="$1"
-  local source_state="$2"
-  local source_reason="$3"
-
+  local dest_number="$1" source_state="$2" source_reason="$3"
   if [[ "$source_state" == "CLOSED" ]]; then
     if [[ "$source_reason" == "NOT_PLANNED" || "$source_reason" == "DUPLICATE" ]]; then
       gh issue close "$dest_number" --repo "$DEST_REPO" --reason "not planned" >/dev/null 2>&1 || true
@@ -131,22 +100,12 @@ sync_issue_state() {
 }
 
 import_comments() {
-  local dest_number="$1"
-  local issue_json="$2"
-  local existing_comments="$TMP_DIR/comments-$dest_number.json"
-
-  gh api --paginate "repos/$DEST_REPO/issues/$dest_number/comments?per_page=100" \
-    --jq '.[] | {body: .body}' > "$existing_comments.jsonl"
-
-  if [[ -s "$existing_comments.jsonl" ]]; then
-    jq -s '.' "$existing_comments.jsonl" > "$existing_comments"
-  else
-    printf '[]\n' > "$existing_comments"
-  fi
+  local dest_number="$1" issue_json="$2" existing_comments="$TMP_DIR/comments-$1.json"
+  gh api --paginate "repos/$DEST_REPO/issues/$dest_number/comments?per_page=100" --jq '.[] | {body: .body}' > "$existing_comments.jsonl"
+  if [[ -s "$existing_comments.jsonl" ]]; then jq -s '.' "$existing_comments.jsonl" > "$existing_comments"; else printf '[]\n' > "$existing_comments"; fi
 
   local comment_count
   comment_count="$(jq '.comments | length' <<<"$issue_json")"
-
   for ((i=0; i<comment_count; i++)); do
     local comment_json comment_url marker existing author created body payload
     comment_json="$(jq -c --argjson i "$i" '.comments[$i]' <<<"$issue_json")"
@@ -154,21 +113,9 @@ import_comments() {
     created="$(jq -r '.createdAt // "unknown"' <<<"$comment_json")"
     author="$(jq -r '.author.login // "unknown"' <<<"$comment_json")"
     body="$(jq -r '.body // ""' <<<"$comment_json")"
-
-    if [[ -n "$comment_url" ]]; then
-      marker="Legacy-Comment: $comment_url"
-    else
-      marker="Legacy-Comment: $author@$created#$i"
-    fi
-
-    existing="$(jq -r --arg marker "$marker" \
-      '.[] | select((.body // "") | contains($marker)) | .body' \
-      "$existing_comments" | head -n 1)"
-
-    if [[ -n "$existing" ]]; then
-      continue
-    fi
-
+    if [[ -n "$comment_url" ]]; then marker="Legacy-Comment: $comment_url"; else marker="Legacy-Comment: $author@$created#$i"; fi
+    existing="$(jq -r --arg marker "$marker" '.[] | select((.body // "") | contains($marker)) | .body' "$existing_comments" | head -n 1)"
+    [[ -n "$existing" ]] && continue
     payload="$(cat <<EOF
 <!-- seyal-legacy-comment -->
 **Legacy comment metadata**
@@ -182,27 +129,19 @@ import_comments() {
 $body
 EOF
 )"
-
     gh issue comment "$dest_number" --repo "$DEST_REPO" --body "$payload" >/dev/null
-
     jq --arg body "$payload" '. + [{body:$body}]' "$existing_comments" > "$existing_comments.next"
     mv "$existing_comments.next" "$existing_comments"
   done
 }
 
 import_file() {
-  local source_repo="$1"
-  local source_file="$2"
-  local source_label="$3"
-  local total
+  local source_repo="$1" source_file="$2" source_label="$3" total
   total="$(jq 'length' "$source_file")"
-
   echo "Importing $total issues from $source_repo ..."
 
   for ((index=0; index<total; index++)); do
-    local issue_json number title original_body url state state_reason author created updated closed
-    local labels assignees milestone marker existing dest_number dest_url destination_body
-
+    local issue_json number title original_body url state state_reason author created updated closed labels assignees milestone marker existing dest_number dest_url destination_body
     issue_json="$(jq -c --argjson i "$index" '.[$i]' "$source_file")"
     number="$(jq -r '.number' <<<"$issue_json")"
     title="$(jq -r '.title' <<<"$issue_json")"
@@ -217,7 +156,6 @@ import_file() {
     labels="$(jq '[.labels[]?.name] | if length == 0 then "—" else join(", ") end' -r <<<"$issue_json")"
     assignees="$(jq '[.assignees[]?.login] | if length == 0 then "—" else join(", ") end' -r <<<"$issue_json")"
     milestone="$(jq -r '.milestone.title // "—"' <<<"$issue_json")"
-
     marker="Legacy-Source: $source_repo#$number"
     existing="$(find_existing_issue "$marker")"
 
@@ -249,35 +187,21 @@ EOF
       dest_number="$existing"
       echo "  skip existing $source_repo#$number -> $DEST_REPO#$dest_number"
     else
-      dest_url="$(gh issue create \
-        --repo "$DEST_REPO" \
-        --title "$title" \
-        --body "$destination_body" \
-        --label historical-evidence \
-        --label "$source_label")"
+      dest_url="$(gh issue create --repo "$DEST_REPO" --title "$title" --body "$destination_body" --label historical-evidence --label "$source_label")"
       dest_number="${dest_url##*/}"
       cache_issue "$dest_number" "$destination_body" "OPEN"
       echo "  created $source_repo#$number -> $DEST_REPO#$dest_number"
     fi
-
     import_comments "$dest_number" "$issue_json"
     sync_issue_state "$dest_number" "$state" "$state_reason"
   done
 }
 
-import_file "mahboobmonnamd/RILL" "$SOURCE_DIR/rill-issues.json" "legacy-rill"
-import_file "mahboobmonnamd/terminal" "$SOURCE_DIR/terminal-issues.json" "legacy-terminal"
+import_file "mahboobmonnamd/RILL" "$SOURCE_DIR/rill-issues.json" legacy-rill
+import_file "mahboobmonnamd/terminal" "$SOURCE_DIR/terminal-issues.json" legacy-terminal
 
-# Re-enumerate destination Issues independently and require every source marker to
-# exist. This detects a partial import even when the loop itself reached the end.
 FINAL_CACHE="$TMP_DIR/final-destination-issues.json"
-gh issue list \
-  --repo "$DEST_REPO" \
-  --state all \
-  --limit 10000 \
-  --json number,body \
-  > "$FINAL_CACHE"
-
+gh issue list --repo "$DEST_REPO" --state all --limit 10000 --json number,body > "$FINAL_CACHE"
 rill_expected="$(jq 'length' "$SOURCE_DIR/rill-issues.json")"
 terminal_expected="$(jq 'length' "$SOURCE_DIR/terminal-issues.json")"
 rill_imported="$(jq '[.[] | select((.body // "") | contains("Legacy-Source: mahboobmonnamd/RILL#"))] | length' "$FINAL_CACHE")"
@@ -294,6 +218,6 @@ fi
 echo "Import reconciled successfully:"
 echo "  RILL: $rill_imported/$rill_expected"
 echo "  terminal: $terminal_imported/$terminal_expected"
-echo "Rerunning this command is safe: source issue/comment markers prevent duplicates."
-echo "If GitHub rate-limits a large write burst, rerun the same command later; it resumes by source marker instead of duplicating completed imports."
-echo "Do not delete the legacy repositories yet; this preserves Issues/comments, not PR diffs or Git commit objects."
+echo "Rerunning is safe: source issue/comment markers prevent duplicates."
+echo "If GitHub rate-limits the large write burst, rerun later; completed imports are skipped."
+echo "Do not delete legacy repositories yet; Issues/comments are preserved here, but PR diffs and Git commit objects still need a separate archive."

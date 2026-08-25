@@ -28,6 +28,7 @@ unsafe_code = "deny"
 [[bench]]
 name = "runtime_scalability"
 harness = false
+required-features = ["benchmark-shared-projection"]
 
 [[bench]]
 name = "pass5_transport_stress"

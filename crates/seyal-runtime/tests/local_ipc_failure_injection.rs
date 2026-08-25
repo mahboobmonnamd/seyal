@@ -269,10 +269,14 @@ fn failed_first_attach_rolls_back_resources_and_controller_authority() {
     drop(fd);
     assert_eq!(runtime.lookup(execution_id).unwrap().attachment_count, 1);
 
+    // Connection loss is an implicit local detach. Runtime membership must
+    // return to zero together with controller/connection/projection metadata.
     drop(final_client);
     for _ in 0..8 {
         pump(&mut runtime);
     }
+    assert_eq!(runtime.lookup(execution_id).unwrap().attachment_count, 0);
+
     runtime.begin_shutdown().expect("begin shutdown");
     runtime
         .run_until_empty(Instant::now() + Duration::from_secs(4))

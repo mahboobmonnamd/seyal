@@ -21,6 +21,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate migration tool
+        shell: bash
+        run: python3 -m py_compile migration/legacy-issues/migrate_issues.py
+
       - name: Require cross-repository migration token
         shell: bash
         run: |
@@ -29,7 +33,7 @@ jobs:
             exit 1
           }
 
-      - name: Export both legacy repositories
+      - name: Export every open and closed legacy Issue
         shell: bash
         run: |
           python3 migration/legacy-issues/migrate_issues.py export \
@@ -51,7 +55,7 @@ jobs:
             --dest mahboobmonnamd/seyal \
             --map migration/legacy-issues/issue-map.json
 
-      - name: Reconcile source and destination
+      - name: Reconcile every source issue and comment
         shell: bash
         run: |
           python3 migration/legacy-issues/migrate_issues.py reconcile \

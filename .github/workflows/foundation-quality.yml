@@ -27,6 +27,10 @@ jobs:
         run: python3 scripts/check-doc-links.py
       - name: Architecture layering
         run: python3 scripts/check-layering.py
+      - name: Hot-path structural performance guardrails
+        run: python3 scripts/check-hot-path.py
+      - name: Benchmark contract guardrails
+        run: python3 scripts/check-benchmark-contract.py
       - name: Harness contracts
         run: python3 scripts/test-harnesses.py
       - name: Fuzz registry smoke

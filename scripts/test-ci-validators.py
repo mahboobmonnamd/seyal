@@ -42,58 +42,38 @@ def main() -> None:
 
         governance = base / "governance"
         governance.mkdir()
-        run_negative(
-            ["bash", str(ROOT / "scripts/validate-governance.sh")],
-            governance,
-            "missing required file: AGENTS.md",
-        )
+        run_negative(["bash", str(ROOT / "scripts/validate-governance.sh")], governance, "missing required file: AGENTS.md")
 
         docs = base / "doc-links"
         docs.mkdir()
         write(docs / "README.md", "[broken local link](missing.md)\n")
-        run_negative(
-            ["python3", str(ROOT / "scripts/check-doc-links.py")],
-            docs,
-            "Broken local Markdown links:",
-        )
+        run_negative(["python3", str(ROOT / "scripts/check-doc-links.py")], docs, "Broken local Markdown links:")
 
         layering = base / "layering-terminal"
-        write(
-            layering / "crates/seyal-terminal/Cargo.toml",
-            '[package]\nname = "seyal-terminal"\nversion = "0.0.0"\n\n[dependencies]\nseyal-runtime = { path = "../seyal-runtime" }\n',
-        )
-        run_negative(
-            ["python3", str(ROOT / "scripts/check-layering.py")],
-            layering,
-            "seyal-terminal has forbidden dependencies: seyal-runtime",
-        )
+        write(layering / "crates/seyal-terminal/Cargo.toml", '[package]\nname = "seyal-terminal"\nversion = "0.0.0"\n\n[dependencies]\nseyal-runtime = { path = "../seyal-runtime" }\n')
+        run_negative(["python3", str(ROOT / "scripts/check-layering.py")], layering, "seyal-terminal has forbidden dependencies: seyal-runtime")
 
         exec_layering = base / "layering-exec"
-        write(
-            exec_layering / "crates/seyal-exec/Cargo.toml",
-            '[package]\nname = "seyal-exec"\nversion = "0.0.0"\n\n[dependencies]\nseyal-runtime = { path = "../seyal-runtime" }\n',
-        )
-        run_negative(
-            ["python3", str(ROOT / "scripts/check-layering.py")],
-            exec_layering,
-            "seyal-exec has forbidden dependencies: seyal-runtime",
-        )
+        write(exec_layering / "crates/seyal-exec/Cargo.toml", '[package]\nname = "seyal-exec"\nversion = "0.0.0"\n\n[dependencies]\nseyal-runtime = { path = "../seyal-runtime" }\n')
+        run_negative(["python3", str(ROOT / "scripts/check-layering.py")], exec_layering, "seyal-exec has forbidden dependencies: seyal-runtime")
+
+        hot = base / "hot-path"
+        write(hot / "crates/seyal-terminal/src/terminal.rs", "impl TerminalState { pub fn feed(&mut self, bytes: &[u8]) { let _ = bytes.to_vec(); } pub fn finish_input(&mut self) {} }")
+        write(hot / "crates/seyal-runtime/src/runtime.rs", "impl Runtime { fn poll_once(&mut self) {} fn drain_control(&mut self) {} fn service_reads(&mut self) {} fn service_writes(&mut self) {} }")
+        write(hot / "crates/seyal-runtime/src/input.rs", "impl InputIngress { pub fn try_submit(&self) {} }")
+        run_negative(["python3", str(ROOT / "scripts/check-hot-path.py")], hot, "avoidable allocation")
+
+        benchmark = base / "benchmark-contract"
+        write(benchmark / "crates/seyal-terminal/benches/bad.rs", 'fn main() { println!("performance_claim=true"); }\n')
+        run_negative(["python3", str(ROOT / "scripts/check-benchmark-contract.py")], benchmark, "performance_claim=false")
 
         workspace = base / "workspace"
         workspace.mkdir()
-        run_negative(
-            ["python3", str(ROOT / "scripts/test-workspace.py")],
-            workspace,
-            "missing root Cargo.toml",
-        )
+        run_negative(["python3", str(ROOT / "scripts/test-workspace.py")], workspace, "missing root Cargo.toml")
 
         harness = base / "harness"
         harness.mkdir()
-        run_negative(
-            ["python3", str(ROOT / "scripts/test-harnesses.py")],
-            harness,
-            "missing integration-test harness location",
-        )
+        run_negative(["python3", str(ROOT / "scripts/test-harnesses.py")], harness, "missing integration-test harness location")
 
     print("[seyal CI validator self-test] controlled negative fixtures were rejected by every repository validator.")
 

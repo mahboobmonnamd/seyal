@@ -70,10 +70,6 @@ impl Workload {
             _ => panic!("unknown workload {value}"),
         }
     }
-
-    fn gated(self) -> bool {
-        self != Self::Interactive
-    }
 }
 
 #[cfg(target_os = "macos")]
@@ -176,7 +172,10 @@ fn run_worker(executable: &std::path::Path, case: Case) {
         .args(args)
         .status()
         .expect("launch measured Pass-5 worker");
-    assert!(status.success(), "Pass-5 production benchmark worker failed");
+    assert!(
+        status.success(),
+        "Pass-5 production benchmark worker failed"
+    );
 }
 
 #[cfg(target_os = "macos")]
@@ -280,23 +279,14 @@ fn worker() {
             execution_id,
         )
     } else {
-        measure_streaming(
-            &mut runtime,
-            &mut clients,
-            controller_attachment,
-            workload,
-        )
+        measure_streaming(&mut runtime, &mut clients, controller_attachment, workload)
     };
     let allocation_stats = allocation_region.change();
     assert!(clients.iter().all(|client| client.cache.generation > 0));
 
     let reconnect_start = Instant::now();
-    let mut reconnect = BenchClient::connect_and_attach(
-        &mut runtime,
-        &socket_path,
-        execution_id,
-        Role::Observer,
-    );
+    let mut reconnect =
+        BenchClient::connect_and_attach(&mut runtime, &socket_path, execution_id, Role::Observer);
     let reconnect_us = reconnect_start.elapsed().as_micros();
     let reconnect_generation = reconnect.cache.generation;
     let current_generation = clients
@@ -309,8 +299,14 @@ fn worker() {
     drop(reconnect);
 
     let populated = process_metrics();
-    let bytes_received = clients.iter().map(|client| client.bytes_received).sum::<usize>();
-    let display_batches = clients.iter().map(|client| client.display_batches).sum::<usize>();
+    let bytes_received = clients
+        .iter()
+        .map(|client| client.bytes_received)
+        .sum::<usize>();
+    let display_batches = clients
+        .iter()
+        .map(|client| client.display_batches)
+        .sum::<usize>();
     let snapshots = clients.iter().map(|client| client.snapshots).sum::<usize>();
     let deltas = clients.iter().map(|client| client.deltas).sum::<usize>();
     let client_read_syscalls = clients
@@ -334,7 +330,7 @@ fn worker() {
         "PLATFORM_LIMITED"
     };
     println!(
-        "pass5_production_result workload={} population_requested={} population_created={} fanout_requested={} fanout_attached={} geometry={}x{} classification={} create_us={} attach_setup_us={} latency_p50_us={} latency_p95_us={} latency_p99_us={} runtime_poll_phase_us={} client_decode_apply_phase_us={} elapsed_us={} throughput_payload_bytes_per_sec={} socket_bytes_received={} client_read_syscalls={} server_sendmsg_syscalls=NOT_INSTRUMENTED display_batches={} snapshots={} deltas={} resync_or_recovery_snapshots={} allocations={} reallocations={} bytes_allocated={} bytes_reallocated={} reconnect_full_snapshot_us={} rss_baseline_kib={} rss_populated_kib={} rss_final_kib={} incremental_rss_kib={} cpu_percent_sample={} threads_baseline={} threads_populated={} threads_final={} fd_baseline={} fd_populated={} fd_final={} teardown_us={} shutdown_ok={} aggregate_pending_input_final={} semantic_generation={} platform_error={:?}",
+        "pass5_production_result workload={} population_requested={} population_created={} fanout_requested={} fanout_attached={} geometry={}x{} classification={} create_us={} attach_setup_us={} latency_p50_us={} latency_p95_us={} latency_p99_us={} runtime_poll_phase_us={} client_decode_apply_phase_us={} elapsed_us={} throughput_payload_bytes_per_sec={} socket_bytes_received={} client_read_syscalls={} server_sendmsg_syscalls=NOT_INSTRUMENTED display_batches={} snapshots={} deltas={} resync_or_recovery_snapshots={} allocations={} reallocations={} bytes_allocated={} reconnect_full_snapshot_us={} rss_baseline_kib={} rss_populated_kib={} rss_final_kib={} incremental_rss_kib={} cpu_percent_sample={} threads_baseline={} threads_populated={} threads_final={} fd_baseline={} fd_populated={} fd_final={} teardown_us={} shutdown_ok={} aggregate_pending_input_final={} semantic_generation={} platform_error={:?}",
         workload.name(),
         requested_population,
         ids.len(),
@@ -361,7 +357,6 @@ fn worker() {
         allocation_stats.allocations,
         allocation_stats.reallocations,
         allocation_stats.bytes_allocated,
-        allocation_stats.bytes_reallocated,
         reconnect_us,
         baseline.rss_kib,
         populated.rss_kib,
@@ -471,7 +466,10 @@ fn measure_interactive(
             {
                 break;
             }
-            assert!(Instant::now() < deadline, "interactive display latency timed out");
+            assert!(
+                Instant::now() < deadline,
+                "interactive display latency timed out"
+            );
         }
         samples.push(started.elapsed().as_micros());
     }
@@ -538,7 +536,10 @@ fn measure_streaming(
     }
 
     let elapsed = started.elapsed();
-    let total_bytes = clients.iter().map(|client| client.bytes_received).sum::<usize>();
+    let total_bytes = clients
+        .iter()
+        .map(|client| client.bytes_received)
+        .sum::<usize>();
     let bytes_per_sec = if elapsed.as_nanos() == 0 {
         0
     } else {
@@ -594,13 +595,13 @@ impl BenchClient {
         execution_id: ExecutionId,
         role: Role,
     ) -> Self {
-        let mut stream = UnixStream::connect(socket_path).expect("connect production UDS");
+        let stream = UnixStream::connect(socket_path).expect("connect production UDS");
         stream.set_nonblocking(true).expect("nonblocking client");
         let mut client = Self {
             stream,
             buffered: Vec::new(),
             cache: empty_cache(),
-            attachment_id: seyal_runtime::AttachmentId::new(),
+            attachment_id: seyal_runtime::AttachmentId::from_bytes([0; 16]),
             pending: None,
             bytes_received: 0,
             read_syscalls: 0,
@@ -676,7 +677,8 @@ impl BenchClient {
             ) {
                 continue;
             }
-            let chunk = decode_chunk(&encode_frame(message_type, &payload)).expect("display decode");
+            let chunk =
+                decode_chunk(&encode_frame(message_type, &payload)).expect("display decode");
             let expected = chunk.chunk_count as usize;
             if self.pending.is_none() {
                 self.pending = Some(PendingBatch {
@@ -686,7 +688,10 @@ impl BenchClient {
                 });
             }
             let pending = self.pending.as_mut().expect("pending batch");
-            assert_eq!(pending.kind, message_type, "display chunks must remain contiguous");
+            assert_eq!(
+                pending.kind, message_type,
+                "display chunks must remain contiguous"
+            );
             assert_eq!(pending.expected, expected, "chunk count changed mid-batch");
             pending.chunks.push(chunk);
             if pending.chunks.len() == pending.expected {
@@ -720,11 +725,9 @@ fn send_client_frame(
         match client.stream.write(&frame[sent..]) {
             Ok(0) => panic!("client socket closed while writing"),
             Ok(count) => sent += count,
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                runtime
-                    .poll_once(Some(Duration::from_millis(1)))
-                    .expect("Runtime poll")
-            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => runtime
+                .poll_once(Some(Duration::from_millis(1)))
+                .expect("Runtime poll"),
             Err(error) => panic!("client write failed: {error}"),
         }
         assert!(Instant::now() < deadline, "client send timed out");
@@ -821,9 +824,18 @@ fn process_metrics() -> Metrics {
         .expect("ps metrics");
     let line = String::from_utf8_lossy(&output.stdout);
     let mut fields = line.split_whitespace();
-    let rss_kib = fields.next().and_then(|value| value.parse().ok()).unwrap_or(0);
-    let cpu_percent = fields.next().and_then(|value| value.parse().ok()).unwrap_or(0.0);
-    let threads = fields.next().and_then(|value| value.parse().ok()).unwrap_or(0);
+    let rss_kib = fields
+        .next()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
+    let cpu_percent = fields
+        .next()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0.0);
+    let threads = fields
+        .next()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
     let fds = fs::read_dir("/dev/fd")
         .map(|entries| entries.count())
         .unwrap_or(0);

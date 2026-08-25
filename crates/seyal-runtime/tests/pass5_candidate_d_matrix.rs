@@ -294,17 +294,19 @@ fn same_execution_fanout_is_consistent_at_4_8_and_16_viewers() {
 #[test]
 fn alternate_screen_state_is_delivered_over_candidate_d() {
     let mut harness = Harness::new();
-    let execution_id = harness.spawn(CommandSpec::new("/bin/sh").args([
-        "-c",
-        "sleep 0.2; printf '\\033[?1049hALT'; sleep 2",
-    ]));
+    let execution_id = harness.spawn(
+        CommandSpec::new("/bin/sh").args(["-c", "sleep 0.2; printf '\\033[?1049hALT'; sleep 2"]),
+    );
     let mut client = harness.connect();
     harness.hello(&mut client);
     let (_attached, mut cache) = harness.attach(&mut client, execution_id, Role::Observer);
 
     let deadline = Instant::now() + Duration::from_secs(5);
     while !cache.alternate_screen || !contains(&cache, "ALT") {
-        assert!(Instant::now() < deadline, "alternate-screen delivery timed out");
+        assert!(
+            Instant::now() < deadline,
+            "alternate-screen delivery timed out"
+        );
         harness.apply_next(&mut client, &mut cache);
     }
     assert!(cache.alternate_screen);

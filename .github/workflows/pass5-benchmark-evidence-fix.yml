@@ -1,0 +1,80 @@
+name: Pass 5 Benchmark Evidence Fix
+
+on:
+  push:
+    branches:
+      - issue/105-m001-pass-5-implementation
+    paths:
+      - .github/workflows/pass5-benchmark-evidence-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: issue/105-m001-pass-5-implementation
+      - name: Apply evidence fixes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/seyal-runtime/benches/pass5_production_transport.rs')
+          s = p.read_text()
+
+          def replace_once(old, new):
+              global s
+              count = s.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected exactly one match, got {count}: {old[:80]!r}')
+              s = s.replace(old, new, 1)
+
+          replace_once(
+              '    Interactive,\n    Token,\n    Burst,\n    Sustained,\n    Tui,\n    Alternate,',
+              '    Interactive,\n    Command,\n    Token,\n    Burst,\n    Sustained,\n    TuiPartial,\n    Tui,\n    Alternate,'
+          )
+          replace_once(
+              '            Self::Interactive => "interactive",\n            Self::Token => "token_stream",\n            Self::Burst => "burst_scroll",\n            Self::Sustained => "sustained_high_output_2s",\n            Self::Tui => "tui_full_redraw",\n            Self::Alternate => "alternate_screen",',
+              '            Self::Interactive => "interactive",\n            Self::Command => "normal_command",\n            Self::Token => "token_stream",\n            Self::Burst => "burst_scroll",\n            Self::Sustained => "sustained_high_output_2s",\n            Self::TuiPartial => "tui_partial_redraw",\n            Self::Tui => "tui_full_redraw",\n            Self::Alternate => "alternate_screen",'
+          )
+          replace_once(
+              '            "interactive" => Self::Interactive,\n            "token_stream" => Self::Token,\n            "burst_scroll" => Self::Burst,\n            "sustained_high_output_2s" => Self::Sustained,\n            "tui_full_redraw" => Self::Tui,\n            "alternate_screen" => Self::Alternate,',
+              '            "interactive" => Self::Interactive,\n            "normal_command" => Self::Command,\n            "token_stream" => Self::Token,\n            "burst_scroll" => Self::Burst,\n            "sustained_high_output_2s" => Self::Sustained,\n            "tui_partial_redraw" => Self::TuiPartial,\n            "tui_full_redraw" => Self::Tui,\n            "alternate_screen" => Self::Alternate,'
+          )
+          replace_once(
+              '    for workload in [\n        Workload::Token,\n        Workload::Burst,\n        Workload::Tui,\n        Workload::Alternate,\n    ] {',
+              '    for workload in [\n        Workload::Command,\n        Workload::Token,\n        Workload::Burst,\n        Workload::TuiPartial,\n        Workload::Tui,\n        Workload::Alternate,\n    ] {'
+          )
+          replace_once(
+              '        Workload::Interactive => CommandSpec::new("/bin/cat"),\n        Workload::Token => CommandSpec::new("/bin/sh").args([',
+              '        Workload::Interactive => CommandSpec::new("/bin/cat"),\n        Workload::Command => CommandSpec::new("/bin/sh").args([\n            "-c",\n            "read _; /bin/ls -la /usr/bin | /usr/bin/head -n 200; printf \'DONE\\\\r\\\\n\'; sleep 1",\n        ]),\n        Workload::Token => CommandSpec::new("/bin/sh").args(['
+          )
+          replace_once(
+              '        Workload::Tui => CommandSpec::new("/bin/sh").args([',
+              '        Workload::TuiPartial => CommandSpec::new("/bin/sh").args([\n            "-c",\n            "read _; printf \'\\\\033[2J\'; i=0; while [ $i -lt 100 ]; do printf \'\\\\033[2;1HPART%04d\' \\\"$i\\\"; printf \'\\\\033[10;1Hvalue%04d\' \\\"$i\\\"; sleep 0.01; i=$((i+1)); done; printf \'\\\\033[1;1HDONE\'; sleep 1",\n        ]),\n        Workload::Tui => CommandSpec::new("/bin/sh").args(['
+          )
+          replace_once(
+              '        snapshots.saturating_sub(fanout),',
+              '        snapshots,'
+          )
+          replace_once(
+              '    let threads = fields\n        .next()\n        .and_then(|value| value.parse().ok())\n        .unwrap_or(0);',
+              '    let parsed_threads = fields\n        .next()\n        .and_then(|value| value.parse().ok())\n        .unwrap_or(0);\n    let threads = if parsed_threads == 0 {\n        Command::new("/bin/ps")\n            .args(["-M", "-p", &pid.to_string()])\n            .output()\n            .ok()\n            .map(|output| {\n                String::from_utf8_lossy(&output.stdout)\n                    .lines()\n                    .skip(1)\n                    .count()\n            })\n            .unwrap_or(0)\n    } else {\n        parsed_threads\n    };'
+          )
+
+          p.write_text(s)
+          PY
+      - name: Bootstrap pinned formatter
+        run: make bootstrap
+      - name: Format Rust workspace
+        run: cargo fmt --all
+      - name: Commit benchmark-only corrections
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/seyal-runtime/benches/pass5_production_transport.rs
+          git diff --cached --check
+          git commit -m 'bench: complete Candidate-D evidence matrix'
+          git push origin HEAD:issue/105-m001-pass-5-implementation

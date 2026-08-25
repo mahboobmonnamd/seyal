@@ -1,22 +1,24 @@
-//! SPEC-004 local Unix-domain control transport (macOS).
+//! Candidate-D local Unix-domain transport.
 //!
-//! This layer owns nonblocking listener/client sockets and bounded framing
-//! buffers only. Readiness is supplied by `ExecutionReactor`, so Pass 5 uses
-//! the same Runtime kqueue as PTY/process/control events rather than a second
-//! polled event loop.
+//! Control and presentation share the Runtime kqueue but have different queue
+//! semantics: control is ordered/bounded; display state is replaceable and may
+//! coalesce to a current snapshot without ever blocking PTY progress.
 
 use std::{
     collections::{HashMap, VecDeque},
     io,
-    os::fd::{AsRawFd, OwnedFd, RawFd},
+    os::fd::{AsRawFd, RawFd},
     os::unix::net::{UnixListener, UnixStream},
     path::Path,
 };
 
-use crate::local_ipc::{
-    auth,
-    fd_transfer::{self, RecvFd},
-    framing::{FrameHeader, HEADER_LEN, MAX_FRAME_PAYLOAD, MessageType},
+use crate::{
+    display::EncodedDisplayBatch,
+    local_ipc::{
+        auth,
+        fd_transfer::{self, RecvFd},
+        framing::{FrameHeader, HEADER_LEN, MAX_FRAME_PAYLOAD, MessageType},
+    },
 };
 
 pub const MAX_CONNECTIONS: usize = 16;
@@ -26,12 +28,7 @@ const READ_CHUNK_BYTES: usize = HEADER_LEN * 32;
 const MAX_FRAMES_PER_READINESS: usize = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ConnectionState {
-    AwaitHello,
-    Ready,
-    Attached,
-    Closing,
-}
+pub enum ConnectionState { AwaitHello, Ready, Attached, Closing }
 
 impl ConnectionState {
     pub fn validate_incoming(self, message_type: MessageType) -> Result<(), StateError> {
@@ -47,24 +44,23 @@ impl ConnectionState {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum StateError {
-    InvalidState,
-}
+pub enum StateError { InvalidState }
 
-struct OutboundItem {
-    bytes: Vec<u8>,
-    sent: usize,
-    fd: Option<OwnedFd>,
-}
-
+struct OutboundItem { bytes: Vec<u8>, sent: usize }
 impl OutboundItem {
-    fn new(bytes: Vec<u8>, fd: Option<OwnedFd>) -> Self {
-        Self { bytes, sent: 0, fd }
-    }
+    fn new(bytes: Vec<u8>) -> Self { Self { bytes, sent: 0 } }
+    fn remaining_len(&self) -> usize { self.bytes.len().saturating_sub(self.sent) }
+}
 
-    fn remaining_len(&self) -> usize {
-        self.bytes.len().saturating_sub(self.sent)
-    }
+struct DisplayItem {
+    batch: EncodedDisplayBatch,
+    frame_index: usize,
+    sent: usize,
+}
+impl DisplayItem {
+    fn new(batch: EncodedDisplayBatch) -> Self { Self { batch, frame_index: 0, sent: 0 } }
+    fn current_frame(&self) -> Option<&[u8]> { self.batch.frames.get(self.frame_index).map(AsRef::as_ref) }
+    fn complete(&self) -> bool { self.frame_index >= self.batch.frames.len() }
 }
 
 struct Connection {
@@ -73,34 +69,44 @@ struct Connection {
     read_buf: Vec<u8>,
     mandatory: VecDeque<OutboundItem>,
     mandatory_bytes: usize,
-    wake_inflight: Option<OutboundItem>,
-    pending_wake: Option<Vec<u8>>,
+    display_inflight: Option<DisplayItem>,
+    pending_display: Option<EncodedDisplayBatch>,
+    display_generation: u64,
 }
 
 impl Connection {
-    fn queue_wake(&mut self, bytes: Vec<u8>) {
-        // Exactly one not-yet-started wake is retained. A newer generation
-        // replaces the previous pending one instead of growing history.
-        self.pending_wake = Some(bytes);
+    fn queue_snapshot(&mut self, snapshot: EncodedDisplayBatch) {
+        self.display_generation = snapshot.generation;
+        self.pending_display = Some(snapshot);
+    }
+
+    fn queue_delta_or_snapshot(
+        &mut self,
+        delta: EncodedDisplayBatch,
+        snapshot: EncodedDisplayBatch,
+    ) {
+        if delta.generation <= self.display_generation {
+            return;
+        }
+        let contiguous = self.display_generation == delta.base_generation;
+        if contiguous && self.pending_display.is_none() {
+            self.display_generation = delta.generation;
+            self.pending_display = Some(delta);
+        } else {
+            // We cannot append unbounded display history. A current snapshot is
+            // self-contained and safely supersedes any not-yet-started work.
+            self.display_generation = snapshot.generation;
+            self.pending_display = Some(snapshot);
+        }
     }
 }
 
 #[derive(Debug)]
 pub enum ServerEvent {
-    Connected {
-        token: u64,
-    },
-    Frame {
-        token: u64,
-        message_type: u16,
-        payload: Vec<u8>,
-    },
-    FramingError {
-        token: u64,
-    },
-    Disconnected {
-        token: u64,
-    },
+    Connected { token: u64 },
+    Frame { token: u64, message_type: u16, payload: Vec<u8> },
+    FramingError { token: u64 },
+    Disconnected { token: u64 },
     PeerRejected,
 }
 
@@ -118,64 +124,44 @@ impl LocalIpcServer {
         listener.set_nonblocking(true)?;
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-        Ok(Self {
-            listener,
-            connections: HashMap::new(),
-            next_token: 1,
-            max_connections,
-        })
+        Ok(Self { listener, connections: HashMap::new(), next_token: 1, max_connections })
     }
 
-    pub fn listener_fd(&self) -> RawFd {
-        self.listener.as_raw_fd()
+    pub fn listener_fd(&self) -> RawFd { self.listener.as_raw_fd() }
+    pub fn connection_fd(&self, token: u64) -> Option<RawFd> { self.connections.get(&token).map(|c| c.stream.as_raw_fd()) }
+    pub fn connection_count(&self) -> usize { self.connections.len() }
+    pub fn contains(&self, token: u64) -> bool { self.connections.contains_key(&token) }
+    pub fn state_of(&self, token: u64) -> Option<ConnectionState> { self.connections.get(&token).map(|c| c.state) }
+    pub fn presentation_generation(&self, token: u64) -> Option<u64> { self.connections.get(&token).map(|c| c.display_generation) }
+
+    pub fn set_state(&mut self, token: u64, state: ConnectionState) {
+        if let Some(connection) = self.connections.get_mut(&token) { connection.state = state; }
     }
 
-    pub fn connection_fd(&self, token: u64) -> Option<RawFd> {
-        self.connections
-            .get(&token)
-            .map(|connection| connection.stream.as_raw_fd())
-    }
-
-    pub fn connection_count(&self) -> usize {
-        self.connections.len()
-    }
-
-    pub fn contains(&self, token: u64) -> bool {
-        self.connections.contains_key(&token)
-    }
-
-    /// Accepts every currently pending client. Same-UID authentication is
-    /// performed before a connection record is published.
     pub fn accept_ready(&mut self) -> io::Result<Vec<ServerEvent>> {
         let mut events = Vec::new();
         loop {
             match self.listener.accept() {
                 Ok((stream, _)) => {
-                    if set_close_on_exec(stream.as_raw_fd()).is_err() {
-                        continue;
-                    }
+                    if set_close_on_exec(stream.as_raw_fd()).is_err() { continue; }
                     if auth::verify_same_user_peer(stream.as_raw_fd()).is_err() {
                         events.push(ServerEvent::PeerRejected);
                         continue;
                     }
-                    if self.connections.len() >= self.max_connections {
-                        continue;
-                    }
+                    if self.connections.len() >= self.max_connections { continue; }
                     stream.set_nonblocking(true)?;
                     let token = self.next_token;
                     self.next_token = self.next_token.wrapping_add(1).max(1);
-                    self.connections.insert(
-                        token,
-                        Connection {
-                            stream,
-                            state: ConnectionState::AwaitHello,
-                            read_buf: Vec::with_capacity(4096),
-                            mandatory: VecDeque::new(),
-                            mandatory_bytes: 0,
-                            wake_inflight: None,
-                            pending_wake: None,
-                        },
-                    );
+                    self.connections.insert(token, Connection {
+                        stream,
+                        state: ConnectionState::AwaitHello,
+                        read_buf: Vec::with_capacity(4096),
+                        mandatory: VecDeque::new(),
+                        mandatory_bytes: 0,
+                        display_inflight: None,
+                        pending_display: None,
+                        display_generation: 0,
+                    });
                     events.push(ServerEvent::Connected { token });
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
@@ -185,80 +171,45 @@ impl LocalIpcServer {
         Ok(events)
     }
 
-    /// Services one client read-readiness notification with bounded work.
-    ///
-    /// C→Runtime protocol traffic never carries file descriptors. The Runtime
-    /// therefore receives with `recvmsg(2)` even for ordinary byte frames so
-    /// unexpected/truncated ancillary data is observable and protocol-fatal
-    /// rather than silently discarded by `read(2)`.
     pub fn service_read(&mut self, token: u64, hangup: bool) -> Vec<ServerEvent> {
         let mut events = Vec::new();
-        let Some(connection) = self.connections.get_mut(&token) else {
-            return events;
-        };
+        let Some(connection) = self.connections.get_mut(&token) else { return events; };
         let mut chunk = [0u8; READ_CHUNK_BYTES];
-
         while events.len() < MAX_FRAMES_PER_READINESS {
-            // Do not ask the kernel for bytes that cannot fit in the bounded
-            // receive buffer. A valid maximum-size frame may be immediately
-            // followed by another frame in the socket; reading across that
-            // boundary must not turn the valid first frame into an overflow.
-            let remaining_capacity =
-                MAX_RECEIVE_BUFFER_BYTES.saturating_sub(connection.read_buf.len());
+            let remaining_capacity = MAX_RECEIVE_BUFFER_BYTES.saturating_sub(connection.read_buf.len());
             if remaining_capacity == 0 {
                 events.push(ServerEvent::FramingError { token });
                 self.close_with_event(token, &mut events);
                 return events;
             }
             let read_len = READ_CHUNK_BYTES.min(remaining_capacity);
-
             match fd_transfer::recv_with_fd(connection.stream.as_raw_fd(), &mut chunk[..read_len]) {
-                Ok((0, RecvFd::None)) => {
-                    self.close_with_event(token, &mut events);
-                    return events;
-                }
+                Ok((0, RecvFd::None)) => { self.close_with_event(token, &mut events); return events; }
                 Ok((count, RecvFd::None)) => {
-                    debug_assert!(count <= remaining_capacity);
                     connection.read_buf.extend_from_slice(&chunk[..count]);
                     if drain_frames(connection, token, &mut events).is_err() {
                         self.close_with_event(token, &mut events);
                         return events;
                     }
-                    if events.len() >= MAX_FRAMES_PER_READINESS {
-                        break;
-                    }
+                    if events.len() >= MAX_FRAMES_PER_READINESS { break; }
                 }
                 Ok((_count, RecvFd::One(fd))) => {
-                    // No client-to-Runtime frame is permitted to carry a
-                    // descriptor. Dropping the OwnedFd closes it before the
-                    // offending connection is removed.
                     drop(fd);
                     events.push(ServerEvent::FramingError { token });
                     self.close_with_event(token, &mut events);
                     return events;
                 }
                 Ok((_count, RecvFd::Malformed)) => {
-                    // `recv_with_fd` has already closed every descriptor it
-                    // could safely recover from malformed/truncated control
-                    // data. The protocol connection is still fatal.
                     events.push(ServerEvent::FramingError { token });
                     self.close_with_event(token, &mut events);
                     return events;
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
-                Err(_) => {
-                    self.close_with_event(token, &mut events);
-                    return events;
-                }
+                Err(_) => { self.close_with_event(token, &mut events); return events; }
             }
         }
-
         if hangup {
-            let partial = self
-                .connections
-                .get(&token)
-                .is_some_and(|connection| !connection.read_buf.is_empty());
-            if partial {
+            if self.connections.get(&token).is_some_and(|c| !c.read_buf.is_empty()) {
                 events.push(ServerEvent::FramingError { token });
             }
             self.close_with_event(token, &mut events);
@@ -268,41 +219,20 @@ impl LocalIpcServer {
 
     pub fn service_write(&mut self, token: u64) -> Vec<ServerEvent> {
         let mut events = Vec::new();
-        let Some(connection) = self.connections.get_mut(&token) else {
-            return events;
-        };
-        if flush_outbound(connection).is_err() {
-            self.close_with_event(token, &mut events);
-        }
+        let Some(connection) = self.connections.get_mut(&token) else { return events; };
+        if flush_outbound(connection).is_err() { self.close_with_event(token, &mut events); }
         events
     }
 
-    /// Queues a non-coalescible control response. Queue overflow closes the
-    /// slow client; terminal execution remains independent.
-    pub fn enqueue_mandatory(
-        &mut self,
-        token: u64,
-        bytes: Vec<u8>,
-        fd: Option<OwnedFd>,
-    ) -> io::Result<()> {
-        let Some(connection) = self.connections.get_mut(&token) else {
-            return Err(io::Error::new(
-                io::ErrorKind::NotConnected,
-                "connection is closed",
-            ));
-        };
-        let new_total = connection
-            .mandatory_bytes
-            .checked_add(bytes.len())
-            .ok_or_else(|| io::Error::other("mandatory queue length overflow"))?;
+    pub fn enqueue_mandatory(&mut self, token: u64, bytes: Vec<u8>) -> io::Result<()> {
+        let Some(connection) = self.connections.get_mut(&token) else { return Err(io::Error::new(io::ErrorKind::NotConnected, "connection is closed")); };
+        let new_total = connection.mandatory_bytes.checked_add(bytes.len()).ok_or_else(|| io::Error::other("mandatory queue length overflow"))?;
         if new_total > MAX_OUTBOUND_QUEUE_BYTES {
             self.connections.remove(&token);
-            return Err(io::Error::other(
-                "mandatory outbound queue capacity exceeded",
-            ));
+            return Err(io::Error::other("mandatory outbound queue capacity exceeded"));
         }
         connection.mandatory_bytes = new_total;
-        connection.mandatory.push_back(OutboundItem::new(bytes, fd));
+        connection.mandatory.push_back(OutboundItem::new(bytes));
         if let Err(error) = flush_outbound(connection) {
             self.connections.remove(&token);
             return Err(error);
@@ -310,17 +240,24 @@ impl LocalIpcServer {
         Ok(())
     }
 
-    /// Keeps at most one not-yet-started advisory wake. If a wake frame is
-    /// already partially in flight, one newer pending frame may replace any
-    /// older pending frame; no generation history is accumulated.
-    pub fn enqueue_wake(&mut self, token: u64, bytes: Vec<u8>) -> io::Result<()> {
-        let Some(connection) = self.connections.get_mut(&token) else {
-            return Err(io::Error::new(
-                io::ErrorKind::NotConnected,
-                "connection is closed",
-            ));
-        };
-        connection.queue_wake(bytes);
+    pub fn enqueue_snapshot(&mut self, token: u64, snapshot: EncodedDisplayBatch) -> io::Result<()> {
+        let Some(connection) = self.connections.get_mut(&token) else { return Err(io::Error::new(io::ErrorKind::NotConnected, "connection is closed")); };
+        connection.queue_snapshot(snapshot);
+        if let Err(error) = flush_outbound(connection) {
+            self.connections.remove(&token);
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    pub fn enqueue_delta(
+        &mut self,
+        token: u64,
+        delta: EncodedDisplayBatch,
+        snapshot: EncodedDisplayBatch,
+    ) -> io::Result<()> {
+        let Some(connection) = self.connections.get_mut(&token) else { return Err(io::Error::new(io::ErrorKind::NotConnected, "connection is closed")); };
+        connection.queue_delta_or_snapshot(delta, snapshot);
         if let Err(error) = flush_outbound(connection) {
             self.connections.remove(&token);
             return Err(error);
@@ -330,70 +267,30 @@ impl LocalIpcServer {
 
     pub fn wants_write(&self, token: u64) -> bool {
         self.connections.get(&token).is_some_and(|connection| {
-            !connection.mandatory.is_empty()
-                || connection.wake_inflight.is_some()
-                || connection.pending_wake.is_some()
+            !connection.mandatory.is_empty() || connection.display_inflight.is_some() || connection.pending_display.is_some()
         })
     }
 
-    pub fn close(&mut self, token: u64) -> bool {
-        self.connections.remove(&token).is_some()
-    }
-
-    pub fn state_of(&self, token: u64) -> Option<ConnectionState> {
-        self.connections
-            .get(&token)
-            .map(|connection| connection.state)
-    }
-
-    pub fn set_state(&mut self, token: u64, state: ConnectionState) {
-        if let Some(connection) = self.connections.get_mut(&token) {
-            connection.state = state;
-        }
-    }
+    pub fn close(&mut self, token: u64) -> bool { self.connections.remove(&token).is_some() }
 
     fn close_with_event(&mut self, token: u64, events: &mut Vec<ServerEvent>) {
-        if self.connections.remove(&token).is_some() {
-            events.push(ServerEvent::Disconnected { token });
-        }
+        if self.connections.remove(&token).is_some() { events.push(ServerEvent::Disconnected { token }); }
     }
 }
 
 struct FramingCutError;
-
-fn drain_frames(
-    connection: &mut Connection,
-    token: u64,
-    events: &mut Vec<ServerEvent>,
-) -> Result<(), FramingCutError> {
+fn drain_frames(connection: &mut Connection, token: u64, events: &mut Vec<ServerEvent>) -> Result<(), FramingCutError> {
     while events.len() < MAX_FRAMES_PER_READINESS {
-        if connection.read_buf.len() < HEADER_LEN {
-            return Ok(());
-        }
+        if connection.read_buf.len() < HEADER_LEN { return Ok(()); }
         let header = match FrameHeader::decode(&connection.read_buf[..HEADER_LEN]) {
             Ok(header) => header,
-            Err(_) => {
-                events.push(ServerEvent::FramingError { token });
-                return Err(FramingCutError);
-            }
+            Err(_) => { events.push(ServerEvent::FramingError { token }); return Err(FramingCutError); }
         };
-        if header.payload_len > MAX_FRAME_PAYLOAD {
-            events.push(ServerEvent::FramingError { token });
-            return Err(FramingCutError);
-        }
-        let total_len = HEADER_LEN
-            .checked_add(header.payload_len as usize)
-            .ok_or(FramingCutError)?;
-        if connection.read_buf.len() < total_len {
-            return Ok(());
-        }
+        let total_len = HEADER_LEN.checked_add(header.payload_len as usize).ok_or(FramingCutError)?;
+        if connection.read_buf.len() < total_len { return Ok(()); }
         let payload = connection.read_buf[HEADER_LEN..total_len].to_vec();
         connection.read_buf.drain(..total_len);
-        events.push(ServerEvent::Frame {
-            token,
-            message_type: header.message_type,
-            payload,
-        });
+        events.push(ServerEvent::Frame { token, message_type: header.message_type, payload });
     }
     Ok(())
 }
@@ -401,66 +298,54 @@ fn drain_frames(
 fn flush_outbound(connection: &mut Connection) -> io::Result<()> {
     while let Some(item) = connection.mandatory.front_mut() {
         let before = item.remaining_len();
-        match flush_item(connection.stream.as_raw_fd(), item)? {
+        match flush_bytes(connection.stream.as_raw_fd(), &item.bytes, &mut item.sent)? {
             FlushProgress::WouldBlock => return Ok(()),
             FlushProgress::Progress => {
                 let after = item.remaining_len();
-                connection.mandatory_bytes = connection
-                    .mandatory_bytes
-                    .saturating_sub(before.saturating_sub(after));
-                if after == 0 {
-                    connection.mandatory.pop_front();
-                }
+                connection.mandatory_bytes = connection.mandatory_bytes.saturating_sub(before.saturating_sub(after));
+                if after == 0 { connection.mandatory.pop_front(); }
             }
         }
     }
 
     loop {
-        if connection.wake_inflight.is_none() {
-            let Some(bytes) = connection.pending_wake.take() else {
+        if connection.display_inflight.is_none() {
+            let Some(batch) = connection.pending_display.take() else { return Ok(()); };
+            connection.display_inflight = Some(DisplayItem::new(batch));
+        }
+        let Some(item) = connection.display_inflight.as_mut() else { return Ok(()); };
+        if item.complete() {
+            connection.display_inflight = None;
+            continue;
+        }
+        let Some(frame) = item.current_frame() else { return Err(io::Error::other("display batch frame missing")); };
+        let mut sent = item.sent;
+        match flush_bytes(connection.stream.as_raw_fd(), frame, &mut sent)? {
+            FlushProgress::WouldBlock => { item.sent = sent; return Ok(()); }
+            FlushProgress::Progress => {
+                item.sent = sent;
+                if item.sent == frame.len() {
+                    item.frame_index += 1;
+                    item.sent = 0;
+                    if item.complete() {
+                        connection.display_inflight = None;
+                        continue;
+                    }
+                }
                 return Ok(());
-            };
-            connection.wake_inflight = Some(OutboundItem::new(bytes, None));
-        }
-        let Some(item) = connection.wake_inflight.as_mut() else {
-            return Ok(());
-        };
-        match flush_item(connection.stream.as_raw_fd(), item)? {
-            FlushProgress::WouldBlock => return Ok(()),
-            FlushProgress::Progress if item.remaining_len() == 0 => {
-                connection.wake_inflight = None;
-                continue;
             }
-            FlushProgress::Progress => return Ok(()),
         }
     }
 }
 
-enum FlushProgress {
-    Progress,
-    WouldBlock,
-}
-
-fn flush_item(socket: RawFd, item: &mut OutboundItem) -> io::Result<FlushProgress> {
-    if item.sent >= item.bytes.len() {
-        return Ok(FlushProgress::Progress);
-    }
-    let remaining = &item.bytes[item.sent..];
-    let fd = if item.sent == 0 {
-        item.fd.as_ref().map(AsRawFd::as_raw_fd)
-    } else {
-        None
-    };
-    match fd_transfer::send_with_fd(socket, remaining, fd) {
+enum FlushProgress { Progress, WouldBlock }
+fn flush_bytes(socket: RawFd, bytes: &[u8], sent: &mut usize) -> io::Result<FlushProgress> {
+    if *sent >= bytes.len() { return Ok(FlushProgress::Progress); }
+    match fd_transfer::send_with_fd(socket, &bytes[*sent..], None) {
         Ok(0) => Ok(FlushProgress::WouldBlock),
-        Ok(sent) => {
-            if sent > remaining.len() {
-                return Err(io::Error::other("sendmsg reported impossible byte count"));
-            }
-            if sent > 0 && item.sent == 0 {
-                item.fd = None;
-            }
-            item.sent += sent;
+        Ok(count) => {
+            if count > bytes.len() - *sent { return Err(io::Error::other("sendmsg reported impossible byte count")); }
+            *sent += count;
             Ok(FlushProgress::Progress)
         }
         Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(FlushProgress::WouldBlock),
@@ -471,14 +356,10 @@ fn flush_item(socket: RawFd, item: &mut OutboundItem) -> io::Result<FlushProgres
 fn set_close_on_exec(fd: RawFd) -> io::Result<()> {
     // SAFETY: `fd` is a live descriptor borrowed from an owning socket.
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
-    if flags < 0 {
-        return Err(io::Error::last_os_error());
-    }
+    if flags < 0 { return Err(io::Error::last_os_error()); }
     if flags & libc::FD_CLOEXEC == 0 {
         // SAFETY: same live descriptor and flags returned immediately above.
-        if unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0 {
-            return Err(io::Error::last_os_error());
-        }
+        if unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0 { return Err(io::Error::last_os_error()); }
     }
     Ok(())
 }
@@ -486,265 +367,52 @@ fn set_close_on_exec(fd: RawFd) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::local_ipc::framing::{ClientHello, GenerationWake, encode_frame};
+    use crate::{
+        display::{encode_delta, encode_snapshot},
+        local_ipc::framing::{ClientHello, encode_frame},
+    };
+    use seyal_exec::{ProjectionAttributes, ProjectionCell, ProjectionColor, ProjectionDamage, TerminalProjectionSnapshot};
     use std::io::Write;
 
     fn bind_test_server() -> (LocalIpcServer, std::path::PathBuf) {
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let unique = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "syl-c{}-{unique}.sock",
-            std::process::id() % 10_000
-        ));
+        let path = std::env::temp_dir().join(format!("syl-c{}-{unique}.sock", std::process::id() % 10_000));
         let _ = std::fs::remove_file(&path);
         (LocalIpcServer::bind(&path, MAX_CONNECTIONS).unwrap(), path)
     }
 
     fn accept_one(server: &mut LocalIpcServer, path: &Path) -> (UnixStream, u64) {
         let client = UnixStream::connect(path).unwrap();
-        let events = server.accept_ready().unwrap();
-        let token = events
-            .iter()
-            .find_map(|event| match event {
-                ServerEvent::Connected { token } => Some(*token),
-                _ => None,
-            })
-            .unwrap();
+        let token = server.accept_ready().unwrap().iter().find_map(|event| match event { ServerEvent::Connected { token } => Some(*token), _ => None }).unwrap();
         (client, token)
     }
 
-    fn client_hello_frame() -> Vec<u8> {
-        encode_frame(
-            MessageType::ClientHello,
-            &ClientHello {
-                client_capabilities: 0,
-            }
-            .encode(),
-        )
-    }
-
-    fn send_multiple_fds(socket: RawFd, bytes: &[u8], fds: &[RawFd]) -> io::Result<usize> {
-        let payload_bytes = std::mem::size_of_val(fds);
-        // SAFETY: CMSG_SPACE only calculates a byte count.
-        let control_len = unsafe { libc::CMSG_SPACE(payload_bytes as u32) as usize };
-        #[repr(align(16))]
-        struct Control([u8; 256]);
-        assert!(control_len <= 256);
-        let mut control = Control([0; 256]);
-        let mut iov = libc::iovec {
-            iov_base: bytes.as_ptr() as *mut libc::c_void,
-            iov_len: bytes.len(),
-        };
-        // SAFETY: zeroed msghdr is a valid empty starting point and all fields
-        // consumed by sendmsg are initialized below.
-        let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
-        msg.msg_iov = &mut iov;
-        msg.msg_iovlen = 1;
-        msg.msg_control = control.0.as_mut_ptr().cast();
-        msg.msg_controllen = control_len as _;
-        // SAFETY: aligned control buffer has CMSG_SPACE for every descriptor.
-        let cmsg = unsafe { libc::CMSG_FIRSTHDR(&msg) };
-        assert!(!cmsg.is_null());
-        // SAFETY: `CMSG_DATA(cmsg)` has `payload_bytes` writable bytes.
-        unsafe {
-            (*cmsg).cmsg_level = libc::SOL_SOCKET;
-            (*cmsg).cmsg_type = libc::SCM_RIGHTS;
-            (*cmsg).cmsg_len = libc::CMSG_LEN(payload_bytes as u32) as _;
-            for (index, fd) in fds.iter().copied().enumerate() {
-                std::ptr::write_unaligned(
-                    libc::CMSG_DATA(cmsg)
-                        .cast::<u8>()
-                        .add(index * std::mem::size_of::<RawFd>())
-                        .cast::<RawFd>(),
-                    fd,
-                );
-            }
-        }
-        // SAFETY: msghdr and ancillary payload are fully initialized above.
-        let result = unsafe { libc::sendmsg(socket, &msg, 0) };
-        if result < 0 {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(result as usize)
+    fn sample(generation: u64) -> TerminalProjectionSnapshot {
+        TerminalProjectionSnapshot {
+            rows: 2, columns: 2, cursor_row: 0, cursor_col: 0, cursor_visible: true, alternate_screen: false,
+            source_damage_generation: generation,
+            damage: ProjectionDamage::full(2),
+            cells: vec![ProjectionCell { scalar: 'x', foreground: ProjectionColor::Default, background: ProjectionColor::Default, attributes: ProjectionAttributes::default() }; 4],
         }
     }
 
     #[test]
-    fn connection_state_machine_rejects_invalid_transitions() {
-        assert!(
-            ConnectionState::AwaitHello
-                .validate_incoming(MessageType::Attach)
-                .is_err()
-        );
-        assert!(
-            ConnectionState::Ready
-                .validate_incoming(MessageType::ClientHello)
-                .is_err()
-        );
-        assert!(
-            ConnectionState::Attached
-                .validate_incoming(MessageType::Input)
-                .is_ok()
-        );
+    fn connection_state_machine_rejects_runtime_only_display_input() {
+        assert!(ConnectionState::AwaitHello.validate_incoming(MessageType::Attach).is_err());
+        assert!(ConnectionState::Attached.validate_incoming(MessageType::Input).is_ok());
+        assert!(ConnectionState::Attached.validate_incoming(MessageType::DisplayDelta).is_err());
     }
 
     #[test]
-    fn listener_and_accepted_client_are_close_on_exec() {
-        let (mut server, path) = bind_test_server();
-        let (_client, token) = accept_one(&mut server, &path);
-        for fd in [server.listener_fd(), server.connection_fd(token).unwrap()] {
-            // SAFETY: both are live descriptors owned by `server`.
-            let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
-            assert!(flags >= 0);
-            assert_ne!(flags & libc::FD_CLOEXEC, 0);
-        }
-        std::fs::remove_file(path).ok();
-    }
-
-    #[test]
-    fn complete_frame_is_reported_once() {
-        let (mut server, path) = bind_test_server();
-        let (mut client, token) = accept_one(&mut server, &path);
-        let frame = client_hello_frame();
-        client.write_all(&frame).unwrap();
-        let events = server.service_read(token, false);
-        assert_eq!(
-            events
-                .iter()
-                .filter(|event| matches!(event, ServerEvent::Frame { .. }))
-                .count(),
-            1
-        );
-        std::fs::remove_file(path).ok();
-    }
-
-    #[test]
-    fn inbound_descriptor_is_protocol_fatal_and_is_closed() {
+    fn inbound_descriptor_is_protocol_fatal() {
         let (mut server, path) = bind_test_server();
         let (client, token) = accept_one(&mut server, &path);
+        let frame = encode_frame(MessageType::ClientHello, &ClientHello { client_capabilities: 0 }.encode());
         let transferred = std::fs::File::open("/dev/null").unwrap();
-        fd_transfer::send_with_fd(
-            client.as_raw_fd(),
-            &client_hello_frame(),
-            Some(transferred.as_raw_fd()),
-        )
-        .unwrap();
-
+        fd_transfer::send_with_fd(client.as_raw_fd(), &frame, Some(transferred.as_raw_fd())).unwrap();
         let events = server.service_read(token, false);
-        assert!(events.iter().any(|event| {
-            matches!(event, ServerEvent::FramingError { token: event_token } if *event_token == token)
-        }));
-        assert!(events.iter().any(|event| {
-            matches!(event, ServerEvent::Disconnected { token: event_token } if *event_token == token)
-        }));
-        assert!(
-            !events
-                .iter()
-                .any(|event| matches!(event, ServerEvent::Frame { .. }))
-        );
-        assert!(!server.contains(token));
-        std::fs::remove_file(path).ok();
-    }
-
-    #[test]
-    fn multiple_inbound_descriptors_are_protocol_fatal() {
-        let (mut server, path) = bind_test_server();
-        let (client, token) = accept_one(&mut server, &path);
-        let first = std::fs::File::open("/dev/null").unwrap();
-        let second = std::fs::File::open("/dev/null").unwrap();
-        send_multiple_fds(
-            client.as_raw_fd(),
-            &client_hello_frame(),
-            &[first.as_raw_fd(), second.as_raw_fd()],
-        )
-        .unwrap();
-
-        let events = server.service_read(token, false);
-        assert!(events.iter().any(|event| {
-            matches!(event, ServerEvent::FramingError { token: event_token } if *event_token == token)
-        }));
-        assert!(events.iter().any(|event| {
-            matches!(event, ServerEvent::Disconnected { token: event_token } if *event_token == token)
-        }));
-        assert!(
-            !events
-                .iter()
-                .any(|event| matches!(event, ServerEvent::Frame { .. }))
-        );
-        assert!(!server.contains(token));
-        std::fs::remove_file(path).ok();
-    }
-
-    #[test]
-    fn fragmented_frame_is_buffered_within_the_hard_receive_cap() {
-        let (mut server, path) = bind_test_server();
-        let (mut client, token) = accept_one(&mut server, &path);
-        let frame = client_hello_frame();
-        client.write_all(&frame[..10]).unwrap();
-        assert!(server.service_read(token, false).is_empty());
-        client.write_all(&frame[10..]).unwrap();
-        assert!(
-            server
-                .service_read(token, false)
-                .iter()
-                .any(|event| matches!(event, ServerEvent::Frame { .. }))
-        );
-        std::fs::remove_file(path).ok();
-    }
-
-    #[test]
-    fn max_sized_frame_followed_by_pipelined_frame_stays_within_receive_cap() {
-        let (mut server, path) = bind_test_server();
-        let (client, token) = accept_one(&mut server, &path);
-        let mut writer_client = client.try_clone().unwrap();
-        let mut bytes = encode_frame(
-            MessageType::Goodbye,
-            &vec![0x5a; MAX_FRAME_PAYLOAD as usize],
-        );
-        bytes.extend_from_slice(&client_hello_frame());
-
-        let writer = std::thread::spawn(move || writer_client.write_all(&bytes).unwrap());
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        let mut frame_count = 0usize;
-        while frame_count < 2 {
-            let events = server.service_read(token, false);
-            assert!(
-                !events
-                    .iter()
-                    .any(|event| matches!(event, ServerEvent::FramingError { .. })),
-                "valid pipelined frames must not exceed the receive cap"
-            );
-            frame_count += events
-                .iter()
-                .filter(|event| matches!(event, ServerEvent::Frame { .. }))
-                .count();
-            assert!(
-                server.contains(token),
-                "valid pipeline closed the connection"
-            );
-            assert!(
-                std::time::Instant::now() < deadline,
-                "timed out draining pipelined frames"
-            );
-            std::thread::yield_now();
-        }
-        writer.join().unwrap();
-        assert_eq!(frame_count, 2);
-        drop(client);
-        std::fs::remove_file(path).ok();
-    }
-
-    #[test]
-    fn malformed_header_closes_connection() {
-        let (mut server, path) = bind_test_server();
-        let (mut client, token) = accept_one(&mut server, &path);
-        client.write_all(&[0xff; HEADER_LEN]).unwrap();
-        let events = server.service_read(token, false);
-        assert!(
-            events
-                .iter()
-                .any(|event| matches!(event, ServerEvent::FramingError { .. }))
-        );
+        assert!(events.iter().any(|event| matches!(event, ServerEvent::FramingError { .. })));
         assert!(!server.contains(token));
         std::fs::remove_file(path).ok();
     }
@@ -753,43 +421,34 @@ mod tests {
     fn mandatory_queue_cap_disconnects_slow_client() {
         let (mut server, path) = bind_test_server();
         let (_client, token) = accept_one(&mut server, &path);
-        let bytes = vec![0u8; MAX_OUTBOUND_QUEUE_BYTES + 1];
-        assert!(server.enqueue_mandatory(token, bytes, None).is_err());
+        assert!(server.enqueue_mandatory(token, vec![0; MAX_OUTBOUND_QUEUE_BYTES + 1]).is_err());
         assert!(!server.contains(token));
         std::fs::remove_file(path).ok();
     }
 
     #[test]
-    fn pending_generation_wakes_replace_older_pending_generation() {
+    fn noncontiguous_pending_delta_coalesces_to_snapshot() {
         let (mut server, path) = bind_test_server();
         let (_client, token) = accept_one(&mut server, &path);
-        let connection = server.connections.get_mut(&token).unwrap();
+        let snapshot_1 = encode_snapshot(&sample(1)).unwrap();
+        server.connections.get_mut(&token).unwrap().queue_snapshot(snapshot_1);
+        let delta_3 = encode_delta(&sample(3), 2).unwrap();
+        let snapshot_3 = encode_snapshot(&sample(3)).unwrap();
+        server.connections.get_mut(&token).unwrap().queue_delta_or_snapshot(delta_3, snapshot_3);
+        let connection = server.connections.get(&token).unwrap();
+        assert_eq!(connection.pending_display.as_ref().unwrap().kind, crate::display::DisplayKind::Snapshot);
+        assert_eq!(connection.display_generation, 3);
+        std::fs::remove_file(path).ok();
+    }
 
-        let frame_2 = encode_frame(
-            MessageType::GenerationWake,
-            &GenerationWake {
-                attachment_id: crate::AttachmentId::from_bytes(1u128.to_le_bytes()),
-                projection_id: crate::ProjectionId::from_bytes(2u128.to_le_bytes()),
-                committed_generation: 2,
-            }
-            .encode(),
-        );
-        let frame_99 = encode_frame(
-            MessageType::GenerationWake,
-            &GenerationWake {
-                attachment_id: crate::AttachmentId::from_bytes(1u128.to_le_bytes()),
-                projection_id: crate::ProjectionId::from_bytes(2u128.to_le_bytes()),
-                committed_generation: 99,
-            }
-            .encode(),
-        );
-        connection.queue_wake(frame_2);
-        connection.queue_wake(frame_99.clone());
-        assert_eq!(
-            connection.pending_wake.as_deref(),
-            Some(frame_99.as_slice())
-        );
-        assert!(connection.mandatory.is_empty());
+    #[test]
+    fn complete_frame_is_reported_once() {
+        let (mut server, path) = bind_test_server();
+        let (mut client, token) = accept_one(&mut server, &path);
+        let frame = encode_frame(MessageType::ClientHello, &ClientHello { client_capabilities: 0 }.encode());
+        client.write_all(&frame).unwrap();
+        let events = server.service_read(token, false);
+        assert_eq!(events.iter().filter(|event| matches!(event, ServerEvent::Frame { .. })).count(), 1);
         std::fs::remove_file(path).ok();
     }
 }

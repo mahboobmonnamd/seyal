@@ -66,6 +66,8 @@ pub struct TerminalProjectionSnapshot {
     pub cursor_visible: bool,
     pub alternate_screen: bool,
     pub source_damage_generation: u64,
+    /// Full-redraw guidance retained for comparator/reference compatibility.
+    pub damage: ProjectionDamage,
     pub cells: Vec<ProjectionCell>,
 }
 
@@ -101,6 +103,7 @@ pub(crate) fn snapshot(
         cursor_visible: terminal.cursor().visible,
         alternate_screen: terminal.modes().alternate_screen,
         source_damage_generation,
+        damage: ProjectionDamage::full(rows),
         cells: copy_rows(terminal, 0, rows),
     }
 }
@@ -175,6 +178,7 @@ mod tests {
         assert_eq!(snapshot.cells[0].scalar, 'h');
         assert_eq!(snapshot.cells[1].scalar, 'i');
         assert_eq!(snapshot.source_damage_generation, 7);
+        assert_eq!(snapshot.damage, ProjectionDamage::full(2));
     }
 
     #[test]

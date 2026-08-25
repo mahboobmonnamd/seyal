@@ -49,6 +49,15 @@ fn cmsg_len(payload_bytes: usize) -> usize {
 /// this path, so ordinary display notification does not allocate merely to
 /// construct an empty control message.
 pub fn send_with_fd(socket: RawFd, bytes: &[u8], fd: Option<RawFd>) -> io::Result<usize> {
+    #[cfg(feature = "test-fault-injection")]
+    if fd.is_some()
+        && crate::test_fault::take(crate::test_fault::FaultPoint::SendAttachedDescriptor)
+    {
+        return Err(io::Error::other(
+            "injected Pass-5 Attached descriptor send failure",
+        ));
+    }
+
     let Some(fd) = fd else {
         // SAFETY: `bytes` is a valid slice for the duration of the call and
         // `socket` is a live caller-owned descriptor.

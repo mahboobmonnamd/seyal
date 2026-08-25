@@ -52,3 +52,13 @@ impl SingletonGuard {
         }
     }
 }
+
+#[cfg(target_os = "macos")]
+impl Drop for SingletonGuard {
+    fn drop(&mut self) {
+        // Release deliberately instead of relying only on descriptor-close
+        // semantics. Drop cannot report failure; closing the owned descriptor
+        // immediately afterward remains the final kernel cleanup boundary.
+        let _ = crate::platform::unlock(self.file.as_raw_fd());
+    }
+}

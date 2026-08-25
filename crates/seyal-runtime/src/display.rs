@@ -1,14 +1,17 @@
 //! Candidate-D presentation-neutral display transport.
 //!
 //! Terminal authority remains in `TerminalExecution`; this module only converts
-//! an owned projection-neutral snapshot into immutable binary UDS frames and
-//! provides a disposable client-cache decoder for protocol tests/consumers.
+//! owned projection-neutral snapshots/updates into immutable binary UDS frames
+//! and provides a disposable client-cache decoder for protocol consumers.
 
 use std::sync::Arc;
 
-use seyal_exec::{ProjectionAttributes, ProjectionCell, ProjectionColor, TerminalProjectionSnapshot};
+use seyal_exec::{
+    ProjectionAttributes, ProjectionCell, ProjectionColor, TerminalProjectionSnapshot,
+    TerminalProjectionUpdate,
+};
 
-use crate::local_ipc::framing::{self, FrameHeader, MessageType, HEADER_LEN, MAX_FRAME_PAYLOAD};
+use crate::local_ipc::framing::{self, FrameHeader, HEADER_LEN, MAX_FRAME_PAYLOAD, MessageType};
 
 pub const DISPLAY_CHUNK_HEADER_LEN: usize = 40;
 pub const DISPLAY_CELL_LEN: usize = 16;
@@ -133,59 +136,87 @@ pub struct DecodedDisplayChunk {
     pub cells: Vec<DisplayCell>,
 }
 
+#[derive(Clone, Copy)]
+struct DisplayMeta {
+    generation: u64,
+    rows: u16,
+    columns: u16,
+    cursor_row: u16,
+    cursor_col: u16,
+    cursor_visible: bool,
+    alternate_screen: bool,
+}
+
 pub fn encode_snapshot(
     snapshot: &TerminalProjectionSnapshot,
 ) -> Result<EncodedDisplayBatch, DisplayError> {
-    encode(snapshot, DisplayKind::Snapshot, 0, 0, snapshot.rows)
+    validate_snapshot(snapshot)?;
+    encode_rows(
+        DisplayMeta {
+            generation: snapshot.source_damage_generation,
+            rows: snapshot.rows,
+            columns: snapshot.columns,
+            cursor_row: snapshot.cursor_row,
+            cursor_col: snapshot.cursor_col,
+            cursor_visible: snapshot.cursor_visible,
+            alternate_screen: snapshot.alternate_screen,
+        },
+        DisplayKind::Snapshot,
+        0,
+        0,
+        snapshot.rows,
+        &snapshot.cells,
+    )
 }
 
 pub fn encode_delta(
-    snapshot: &TerminalProjectionSnapshot,
+    update: &TerminalProjectionUpdate,
     base_generation: u64,
 ) -> Result<EncodedDisplayBatch, DisplayError> {
-    validate_snapshot(snapshot)?;
-    let (first_row, row_count) = if snapshot.damage.full {
-        (0, snapshot.rows)
-    } else {
-        if snapshot.damage.first_row > snapshot.damage.last_row
-            || snapshot.damage.last_row >= snapshot.rows
-        {
-            return Err(DisplayError::InvalidDamage);
-        }
-        (
-            snapshot.damage.first_row,
-            snapshot
-                .damage
-                .last_row
-                .checked_sub(snapshot.damage.first_row)
-                .and_then(|v| v.checked_add(1))
-                .ok_or(DisplayError::Overflow)?,
-        )
-    };
-    encode(
-        snapshot,
+    validate_update(update)?;
+    let first_row = update.damage.first_row;
+    let row_count = update.damage.row_count();
+    encode_rows(
+        DisplayMeta {
+            generation: update.source_damage_generation,
+            rows: update.rows,
+            columns: update.columns,
+            cursor_row: update.cursor_row,
+            cursor_col: update.cursor_col,
+            cursor_visible: update.cursor_visible,
+            alternate_screen: update.alternate_screen,
+        },
         DisplayKind::Delta,
         base_generation,
         first_row,
         row_count,
+        &update.cells,
     )
 }
 
-fn encode(
-    snapshot: &TerminalProjectionSnapshot,
+fn encode_rows(
+    meta: DisplayMeta,
     kind: DisplayKind,
     base_generation: u64,
     first_row: u16,
     row_count: u16,
+    cells: &[ProjectionCell],
 ) -> Result<EncodedDisplayBatch, DisplayError> {
-    validate_snapshot(snapshot)?;
+    validate_geometry(meta.rows, meta.columns, meta.cursor_row, meta.cursor_col)?;
     if row_count == 0
-        || first_row >= snapshot.rows
-        || first_row as u32 + row_count as u32 > snapshot.rows as u32
+        || first_row >= meta.rows
+        || first_row as u32 + row_count as u32 > meta.rows as u32
     {
         return Err(DisplayError::InvalidDamage);
     }
-    let bytes_per_row = (snapshot.columns as usize)
+    let expected_cells = (row_count as usize)
+        .checked_mul(meta.columns as usize)
+        .ok_or(DisplayError::Overflow)?;
+    if cells.len() != expected_cells {
+        return Err(DisplayError::InvalidDamage);
+    }
+
+    let bytes_per_row = (meta.columns as usize)
         .checked_mul(DISPLAY_CELL_LEN)
         .ok_or(DisplayError::Overflow)?;
     let available = (MAX_FRAME_PAYLOAD as usize)
@@ -199,13 +230,13 @@ fn encode(
     let chunk_count_u16 = u16::try_from(chunk_count).map_err(|_| DisplayError::Overflow)?;
     let mut frames = Vec::with_capacity(chunk_count);
     let mut total_bytes = 0usize;
-    let mut emitted = 0usize;
+    let mut emitted_rows = 0usize;
 
     for chunk_index in 0..chunk_count {
-        let chunk_rows = rows_per_chunk.min(row_count as usize - emitted);
-        let chunk_first = first_row as usize + emitted;
+        let chunk_rows = rows_per_chunk.min(row_count as usize - emitted_rows);
+        let chunk_first_row = first_row as usize + emitted_rows;
         let cell_count = chunk_rows
-            .checked_mul(snapshot.columns as usize)
+            .checked_mul(meta.columns as usize)
             .ok_or(DisplayError::Overflow)?;
         let payload_len = DISPLAY_CHUNK_HEADER_LEN
             .checked_add(
@@ -217,34 +248,36 @@ fn encode(
         if payload_len > MAX_FRAME_PAYLOAD as usize {
             return Err(DisplayError::InvalidLength);
         }
+
         let mut payload = Vec::with_capacity(payload_len);
-        payload.extend_from_slice(&snapshot.source_damage_generation.to_le_bytes());
+        payload.extend_from_slice(&meta.generation.to_le_bytes());
         payload.extend_from_slice(&base_generation.to_le_bytes());
-        payload.extend_from_slice(&snapshot.rows.to_le_bytes());
-        payload.extend_from_slice(&snapshot.columns.to_le_bytes());
-        payload.extend_from_slice(&snapshot.cursor_row.to_le_bytes());
-        payload.extend_from_slice(&snapshot.cursor_col.to_le_bytes());
-        payload.push(snapshot.cursor_visible as u8);
-        payload.push(snapshot.alternate_screen as u8);
-        payload.push(0); // cursor style: M001 block/default
+        payload.extend_from_slice(&meta.rows.to_le_bytes());
+        payload.extend_from_slice(&meta.columns.to_le_bytes());
+        payload.extend_from_slice(&meta.cursor_row.to_le_bytes());
+        payload.extend_from_slice(&meta.cursor_col.to_le_bytes());
+        payload.push(meta.cursor_visible as u8);
+        payload.push(meta.alternate_screen as u8);
         payload.push(0);
-        payload.extend_from_slice(&(chunk_first as u16).to_le_bytes());
+        payload.push(0);
+        payload.extend_from_slice(&(chunk_first_row as u16).to_le_bytes());
         payload.extend_from_slice(&(chunk_rows as u16).to_le_bytes());
         payload.extend_from_slice(&(chunk_index as u16).to_le_bytes());
         payload.extend_from_slice(&chunk_count_u16.to_le_bytes());
         payload.extend_from_slice(&(cell_count as u32).to_le_bytes());
         debug_assert_eq!(payload.len(), DISPLAY_CHUNK_HEADER_LEN);
 
-        let first_cell = chunk_first
-            .checked_mul(snapshot.columns as usize)
+        let source_first = emitted_rows
+            .checked_mul(meta.columns as usize)
             .ok_or(DisplayError::Overflow)?;
-        let last_cell = first_cell
+        let source_last = source_first
             .checked_add(cell_count)
             .ok_or(DisplayError::Overflow)?;
-        for cell in &snapshot.cells[first_cell..last_cell] {
+        for cell in &cells[source_first..source_last] {
             encode_projection_cell(*cell, &mut payload);
         }
         debug_assert_eq!(payload.len(), payload_len);
+
         let frame = framing::encode_frame(kind.message_type(), &payload);
         total_bytes = total_bytes
             .checked_add(frame.len())
@@ -253,15 +286,15 @@ fn encode(
             return Err(DisplayError::BatchTooLarge);
         }
         frames.push(Arc::<[u8]>::from(frame));
-        emitted += chunk_rows;
+        emitted_rows += chunk_rows;
     }
 
     Ok(EncodedDisplayBatch {
         kind,
-        generation: snapshot.source_damage_generation,
+        generation: meta.generation,
         base_generation,
-        rows: snapshot.rows,
-        columns: snapshot.columns,
+        rows: meta.rows,
+        columns: meta.columns,
         frames,
         total_bytes,
     })
@@ -271,14 +304,16 @@ pub fn decode_chunk(frame: &[u8]) -> Result<DecodedDisplayChunk, DisplayError> {
     if frame.len() < HEADER_LEN {
         return Err(DisplayError::InvalidLength);
     }
-    let header = FrameHeader::decode(&frame[..HEADER_LEN]).map_err(|_| DisplayError::InvalidLength)?;
+    let header =
+        FrameHeader::decode(&frame[..HEADER_LEN]).map_err(|_| DisplayError::InvalidLength)?;
     let expected = HEADER_LEN
         .checked_add(header.payload_len as usize)
         .ok_or(DisplayError::Overflow)?;
     if frame.len() != expected {
         return Err(DisplayError::InvalidLength);
     }
-    let message_type = MessageType::from_u16(header.message_type).ok_or(DisplayError::WrongMessageType)?;
+    let message_type =
+        MessageType::from_u16(header.message_type).ok_or(DisplayError::WrongMessageType)?;
     let kind = DisplayKind::from_message_type(message_type)?;
     decode_payload(kind, &frame[HEADER_LEN..])
 }
@@ -482,6 +517,31 @@ fn validate_snapshot(snapshot: &TerminalProjectionSnapshot) -> Result<(), Displa
     Ok(())
 }
 
+fn validate_update(update: &TerminalProjectionUpdate) -> Result<(), DisplayError> {
+    validate_geometry(
+        update.rows,
+        update.columns,
+        update.cursor_row,
+        update.cursor_col,
+    )?;
+    if update.damage.first_row > update.damage.last_row || update.damage.last_row >= update.rows {
+        return Err(DisplayError::InvalidDamage);
+    }
+    if update.damage.full
+        && (update.damage.first_row != 0
+            || update.damage.last_row != update.rows.saturating_sub(1))
+    {
+        return Err(DisplayError::InvalidDamage);
+    }
+    let expected = (update.damage.row_count() as usize)
+        .checked_mul(update.columns as usize)
+        .ok_or(DisplayError::Overflow)?;
+    if expected > MAX_DISPLAY_CELLS || update.cells.len() != expected {
+        return Err(DisplayError::InvalidDamage);
+    }
+    Ok(())
+}
+
 fn validate_geometry(
     rows: u16,
     columns: u16,
@@ -593,17 +653,18 @@ fn decode_bool(value: u8) -> Result<bool, DisplayError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use seyal_exec::{ProjectionDamage, ProjectionAttributes};
+    use seyal_exec::{ProjectionDamage, TerminalProjectionUpdate};
 
-    fn sample(rows: u16, columns: u16, generation: u64) -> TerminalProjectionSnapshot {
-        let cells = (0..rows as usize * columns as usize)
-            .map(|index| ProjectionCell {
-                scalar: char::from_u32(b'a' as u32 + (index % 26) as u32).unwrap(),
-                foreground: ProjectionColor::Default,
-                background: ProjectionColor::Default,
-                attributes: ProjectionAttributes::default(),
-            })
-            .collect();
+    fn cell(index: usize) -> ProjectionCell {
+        ProjectionCell {
+            scalar: char::from_u32(b'a' as u32 + (index % 26) as u32).unwrap(),
+            foreground: ProjectionColor::Default,
+            background: ProjectionColor::Default,
+            attributes: ProjectionAttributes::default(),
+        }
+    }
+
+    fn sample_snapshot(rows: u16, columns: u16, generation: u64) -> TerminalProjectionSnapshot {
         TerminalProjectionSnapshot {
             rows,
             columns,
@@ -612,14 +673,34 @@ mod tests {
             cursor_visible: true,
             alternate_screen: false,
             source_damage_generation: generation,
-            damage: ProjectionDamage::full(rows),
-            cells,
+            cells: (0..rows as usize * columns as usize).map(cell).collect(),
+        }
+    }
+
+    fn sample_update(
+        rows: u16,
+        columns: u16,
+        generation: u64,
+        damage: ProjectionDamage,
+    ) -> TerminalProjectionUpdate {
+        TerminalProjectionUpdate {
+            rows,
+            columns,
+            cursor_row: 0,
+            cursor_col: 0,
+            cursor_visible: true,
+            alternate_screen: false,
+            source_damage_generation: generation,
+            damage,
+            cells: (0..damage.row_count() as usize * columns as usize)
+                .map(cell)
+                .collect(),
         }
     }
 
     #[test]
     fn snapshot_round_trip_rebuilds_disposable_cache() {
-        let snapshot = sample(24, 80, 7);
+        let snapshot = sample_snapshot(24, 80, 7);
         let batch = encode_snapshot(&snapshot).unwrap();
         let mut cache = empty_cache();
         cache.apply_batch(&batch).unwrap();
@@ -630,26 +711,35 @@ mod tests {
 
     #[test]
     fn large_snapshot_is_chunked_under_frame_limit() {
-        let snapshot = sample(256, 512, 8);
+        let snapshot = sample_snapshot(256, 512, 8);
         let batch = encode_snapshot(&snapshot).unwrap();
         assert!(batch.frames.len() > 1);
-        assert!(batch.frames.iter().all(|frame| frame.len() <= HEADER_LEN + MAX_FRAME_PAYLOAD as usize));
+        assert!(
+            batch
+                .frames
+                .iter()
+                .all(|frame| frame.len() <= HEADER_LEN + MAX_FRAME_PAYLOAD as usize)
+        );
         let mut cache = empty_cache();
         cache.apply_batch(&batch).unwrap();
         assert_eq!(cache.cells.len(), 131_072);
     }
 
     #[test]
-    fn delta_only_carries_canonical_damage_rows() {
-        let mut initial = sample(24, 80, 10);
-        let initial_batch = encode_snapshot(&initial).unwrap();
+    fn delta_carries_only_projection_update_cells() {
+        let initial = sample_snapshot(24, 80, 10);
         let mut cache = empty_cache();
-        cache.apply_batch(&initial_batch).unwrap();
-        initial.source_damage_generation = 11;
-        initial.damage = ProjectionDamage { full: false, first_row: 10, last_row: 11 };
-        initial.cells[10 * 80].scalar = 'Z';
-        let delta = encode_delta(&initial, 10).unwrap();
-        assert_eq!(delta.kind, DisplayKind::Delta);
+        cache.apply_batch(&encode_snapshot(&initial).unwrap()).unwrap();
+
+        let damage = ProjectionDamage {
+            full: false,
+            first_row: 10,
+            last_row: 11,
+        };
+        let mut update = sample_update(24, 80, 11, damage);
+        update.cells[0].scalar = 'Z';
+        assert_eq!(update.cells.len(), 160);
+        let delta = encode_delta(&update, 10).unwrap();
         let decoded = decode_chunk(&delta.frames[0]).unwrap();
         assert_eq!((decoded.first_row, decoded.row_count), (10, 2));
         cache.apply_batch(&delta).unwrap();
@@ -659,25 +749,69 @@ mod tests {
 
     #[test]
     fn delta_generation_gap_is_rejected_without_partial_commit() {
-        let mut snapshot = sample(24, 80, 3);
+        let snapshot = sample_snapshot(24, 80, 3);
         let mut cache = empty_cache();
         cache.apply_batch(&encode_snapshot(&snapshot).unwrap()).unwrap();
-        snapshot.source_damage_generation = 5;
-        snapshot.damage = ProjectionDamage { full: false, first_row: 0, last_row: 0 };
-        let delta = encode_delta(&snapshot, 4).unwrap();
+        let update = sample_update(
+            24,
+            80,
+            5,
+            ProjectionDamage {
+                full: false,
+                first_row: 0,
+                last_row: 0,
+            },
+        );
+        let delta = encode_delta(&update, 4).unwrap();
         let before = cache.clone();
-        assert_eq!(cache.apply_batch(&delta), Err(DisplayError::GenerationMismatch));
+        assert_eq!(
+            cache.apply_batch(&delta),
+            Err(DisplayError::GenerationMismatch)
+        );
         assert_eq!(cache, before);
     }
 
     #[test]
     fn incomplete_chunked_snapshot_does_not_mutate_cache() {
-        let snapshot = sample(256, 512, 9);
+        let snapshot = sample_snapshot(256, 512, 9);
         let batch = encode_snapshot(&snapshot).unwrap();
-        let chunks = batch.frames.iter().map(|frame| decode_chunk(frame)).collect::<Result<Vec<_>, _>>().unwrap();
+        let chunks = batch
+            .frames
+            .iter()
+            .map(|frame| decode_chunk(frame))
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
         let mut cache = empty_cache();
         let before = cache.clone();
-        assert_eq!(cache.apply_chunks(&chunks[..chunks.len() - 1]), Err(DisplayError::IncompleteBatch));
+        assert_eq!(
+            cache.apply_chunks(&chunks[..chunks.len() - 1]),
+            Err(DisplayError::IncompleteBatch)
+        );
         assert_eq!(cache, before);
+    }
+
+    #[test]
+    fn incomplete_multi_chunk_delta_does_not_partially_mutate_cache() {
+        let snapshot = sample_snapshot(256, 512, 20);
+        let mut cache = empty_cache();
+        cache.apply_batch(&encode_snapshot(&snapshot).unwrap()).unwrap();
+        let mut update = sample_update(256, 512, 21, ProjectionDamage::full(256));
+        update.cells[0].scalar = 'Z';
+        let batch = encode_delta(&update, 20).unwrap();
+        assert!(batch.frames.len() > 1);
+        let chunks = batch
+            .frames
+            .iter()
+            .map(|frame| decode_chunk(frame))
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let before = cache.clone();
+        assert_eq!(
+            cache.apply_chunks(&chunks[..chunks.len() - 1]),
+            Err(DisplayError::IncompleteBatch)
+        );
+        assert_eq!(cache, before);
+        cache.apply_chunks(&chunks).unwrap();
+        assert_eq!(cache.cells[0].scalar, 'Z');
     }
 }

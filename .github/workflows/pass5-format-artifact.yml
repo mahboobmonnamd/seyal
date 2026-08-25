@@ -1,0 +1,32 @@
+name: Pass 5 Format Artifact
+
+on:
+  push:
+    branches:
+      - issue/105-m001-pass-5-implementation
+    paths:
+      - .github/workflows/pass5-format-artifact.yml
+
+permissions:
+  contents: read
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Bootstrap pinned toolchain
+        run: make bootstrap
+      - name: Format Rust workspace
+        run: cargo fmt --all
+      - name: Capture formatter output
+        run: |
+          git diff --name-only > /tmp/formatted-files.txt
+          tar --exclude=.git --exclude=target -czf /tmp/formatted-source.tgz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pass5-rustfmt-output
+          path: |
+            /tmp/formatted-files.txt
+            /tmp/formatted-source.tgz
+          if-no-files-found: error

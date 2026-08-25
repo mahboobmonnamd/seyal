@@ -44,9 +44,11 @@ fn main() {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Workload {
     Interactive,
+    Command,
     Token,
     Burst,
     Sustained,
+    TuiPartial,
     Tui,
     Alternate,
 }
@@ -56,9 +58,11 @@ impl Workload {
     fn name(self) -> &'static str {
         match self {
             Self::Interactive => "interactive",
+            Self::Command => "normal_command",
             Self::Token => "token_stream",
             Self::Burst => "burst_scroll",
             Self::Sustained => "sustained_high_output_2s",
+            Self::TuiPartial => "tui_partial_redraw",
             Self::Tui => "tui_full_redraw",
             Self::Alternate => "alternate_screen",
         }
@@ -67,9 +71,11 @@ impl Workload {
     fn parse(value: &str) -> Self {
         match value {
             "interactive" => Self::Interactive,
+            "normal_command" => Self::Command,
             "token_stream" => Self::Token,
             "burst_scroll" => Self::Burst,
             "sustained_high_output_2s" => Self::Sustained,
+            "tui_partial_redraw" => Self::TuiPartial,
             "tui_full_redraw" => Self::Tui,
             "alternate_screen" => Self::Alternate,
             _ => panic!("unknown workload {value}"),
@@ -142,8 +148,10 @@ fn run_macos() {
         });
     }
     for workload in [
+        Workload::Command,
         Workload::Token,
         Workload::Burst,
+        Workload::TuiPartial,
         Workload::Tui,
         Workload::Alternate,
     ] {
@@ -398,7 +406,7 @@ fn worker() {
         display_batches,
         snapshots,
         deltas,
-        snapshots.saturating_sub(fanout),
+        snapshots,
         allocation_stats.allocations,
         allocation_stats.reallocations,
         allocation_stats.bytes_allocated,
@@ -429,6 +437,10 @@ fn worker() {
 fn workload_command(workload: Workload) -> CommandSpec {
     match workload {
         Workload::Interactive => CommandSpec::new("/bin/cat"),
+        Workload::Command => CommandSpec::new("/bin/sh").args([
+            "-c",
+            "read _; /bin/ls -la /usr/bin | /usr/bin/head -n 200; printf 'DONE\\r\\n'; sleep 1",
+        ]),
         Workload::Token => CommandSpec::new("/bin/sh").args([
             "-c",
             "read _; i=0; while [ $i -lt 200 ]; do printf 'tok%04d ' \"$i\"; sleep 0.005; i=$((i+1)); done; printf 'DONE\\r\\n'; sleep 1",
@@ -440,6 +452,10 @@ fn workload_command(workload: Workload) -> CommandSpec {
         Workload::Sustained => CommandSpec::new("/bin/sh").args([
             "-c",
             "read _; i=0; while [ $i -lt 220 ]; do printf '%04096d\\r\\n' 0; sleep 0.01; i=$((i+1)); done; printf 'DONE\\r\\n'; sleep 1",
+        ]),
+        Workload::TuiPartial => CommandSpec::new("/bin/sh").args([
+            "-c",
+            "read _; printf '\\033[2J'; i=0; while [ $i -lt 100 ]; do printf '\\033[2;1HPART%04d' \"$i\"; printf '\\033[10;1Hvalue%04d' \"$i\"; sleep 0.01; i=$((i+1)); done; printf '\\033[1;1HDONE'; sleep 1",
         ]),
         Workload::Tui => CommandSpec::new("/bin/sh").args([
             "-c",
@@ -881,10 +897,25 @@ fn process_metrics() -> Metrics {
         .next()
         .and_then(|value| value.parse().ok())
         .unwrap_or(0.0);
-    let threads = fields
+    let parsed_threads = fields
         .next()
         .and_then(|value| value.parse().ok())
         .unwrap_or(0);
+    let threads = if parsed_threads == 0 {
+        Command::new("/bin/ps")
+            .args(["-M", "-p", &pid.to_string()])
+            .output()
+            .ok()
+            .map(|output| {
+                String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .skip(1)
+                    .count()
+            })
+            .unwrap_or(0)
+    } else {
+        parsed_threads
+    };
     let fds = fs::read_dir("/dev/fd")
         .map(|entries| entries.count())
         .unwrap_or(0);

@@ -5,7 +5,7 @@ on:
     paths:
       - "crates/seyal-runtime/**"
       - "crates/seyal-exec/**"
-      - "fuzz/libfuzzer/**"
+      - "fuzz/**"
       - ".github/workflows/pass5-fuzz.yml"
   workflow_dispatch:
 
@@ -23,15 +23,15 @@ jobs:
           rustup toolchain install nightly-2026-08-20 --profile minimal
           cargo install cargo-fuzz --version 0.13.2 --locked
       - name: Build production fuzz targets
-        working-directory: fuzz/libfuzzer
+        working-directory: fuzz
         run: cargo +nightly-2026-08-20 fuzz build
       - name: Fuzz Candidate-D display decoder
-        working-directory: fuzz/libfuzzer
+        working-directory: fuzz
         run: |
-          cargo +nightly-2026-08-20 fuzz run display_decode ../corpus/display-binary-decode -- \
+          cargo +nightly-2026-08-20 fuzz run display_decode corpus/display-binary-decode -- \
             -max_total_time=30 -timeout=10 -rss_limit_mb=1024 -print_final_stats=1
       - name: Fuzz Candidate-D display cache state machine
-        working-directory: fuzz/libfuzzer
+        working-directory: fuzz
         run: |
-          cargo +nightly-2026-08-20 fuzz run display_state_machine ../corpus/reconnect-resync-state-machine -- \
+          cargo +nightly-2026-08-20 fuzz run display_state_machine corpus/reconnect-resync-state-machine -- \
             -max_total_time=30 -timeout=10 -rss_limit_mb=1024 -print_final_stats=1

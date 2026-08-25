@@ -5,6 +5,7 @@
 //! continues to own its PTY, primary child and sole canonical TerminalState.
 
 mod capability;
+pub mod display;
 mod error;
 mod ids;
 mod input;
@@ -12,6 +13,8 @@ pub mod local_ipc;
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 mod platform;
+/// Legacy Candidate-B shared-projection machinery retained only for isolated
+/// comparator/reference evidence. Production text/grid delivery uses `display`.
 pub mod projection;
 mod runtime;
 mod singleton;

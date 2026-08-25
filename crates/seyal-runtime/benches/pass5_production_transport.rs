@@ -200,18 +200,13 @@ fn worker() {
     let rows = args[5].parse::<u16>().expect("rows");
     let requested_fanout = args[6].parse::<usize>().expect("fanout");
 
-    let suffix = format!(
-        "{}-{}-{}-{}x{}-{}",
-        process::id(),
-        workload.name(),
-        requested_population,
-        columns,
-        rows,
-        requested_fanout
-    );
+    // Keep benchmark-owned filesystem paths intentionally short. Darwin Unix-domain
+    // sockets have a 104-byte sun_path limit; workload identity is reported separately.
+    // Each worker is a fresh process, so its PID uniquely scopes temporary paths.
+    let suffix = format!("{:x}", process::id());
     let mut config = RuntimeConfig::m001().expect("M001 config");
     config.singleton_path = env::temp_dir().join(format!("s5p-{suffix}.lock"));
-    let runtime_dir = env::temp_dir().join(format!("s5pd-{suffix}"));
+    let runtime_dir = env::temp_dir().join(format!("s5d-{suffix}"));
     config.local_ipc = LocalIpcMode::Enabled {
         runtime_dir_override: Some(runtime_dir.clone()),
     };

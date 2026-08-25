@@ -87,7 +87,10 @@ fn run_macos() {
         "method=fresh_worker_per_population_and_transport socket_only=full_fixed_width_snapshot_over_unix_stream hybrid=production_uds_plus_readonly_shm"
     );
     println!(
-        "semantic_rule=delivered_snapshot_must_equal_same_worker_canonical_projection visible_attachment_cap={MAX_VISIBLE_ATTACHMENTS}"
+        "semantic_rule=delivered_snapshot_must_equal_same_worker_canonical_projection visible_attachment_cap={MAX_VISIBLE_ATTACHMENTS} update_damage_reference=visible_state_delta"
+    );
+    println!(
+        "evidence_scope=single_sample update_hybrid_socket_write_calls=not_instrumented allocations=not_instrumented"
     );
     print_host_metadata();
 
@@ -272,16 +275,17 @@ fn worker() {
         "PLATFORM_LIMITED"
     };
     println!(
-        "runtime_resource transport={} population_requested={requested} population_created={} visible_attached={visible_count} geometry={}x{} screen={} classification={classification} create_us={creation_us} display_setup_us={display_setup_us} registry_100x_us={registry_us} update_to_readable_us={:?} signal_to_readable_us={:?} update_transfer_bytes={:?} update_write_calls={:?} resync_us={:?} reconnect_us={:?} semantic_match={} display_bytes={} projection_region_bytes={} rss_baseline_kib={} rss_populated_kib={} rss_final_kib={} incremental_runtime_kib={} child_rss_kib={} idle_cpu_percent={} threads_baseline={} threads_populated={} threads_final={} fd_baseline={} fd_populated={} fd_final={} teardown_us={teardown_us} pending_final={} shutdown_ok={} platform_error={:?}",
+        "runtime_resource transport={} population_requested={requested} population_created={} visible_attached={visible_count} hidden_detached={} geometry={}x{} screen={} classification={classification} create_us={creation_us} display_setup_us={display_setup_us} registry_100x_us={registry_us} update_to_readable_us={:?} signal_to_readable_us={:?} update_transfer_bytes={:?} update_socket_write_calls={:?} hybrid_wake_write_calls=not_instrumented resync_us={:?} reconnect_us={:?} semantic_match={} display_bytes={} projection_region_bytes={} rss_baseline_kib={} rss_populated_kib={} rss_final_kib={} incremental_runtime_kib={} child_rss_kib={} idle_cpu_percent={} threads_baseline={} threads_populated={} threads_final={} fd_baseline={} fd_populated={} fd_final={} teardown_us={teardown_us} pending_final={} shutdown_ok={} platform_error={:?}",
         transport.as_arg(),
         ids.len(),
+        ids.len().saturating_sub(visible_count),
         columns,
         rows,
         if alternate { "alternate" } else { "primary" },
         progress.as_ref().map(|value| value.total_us),
         progress.as_ref().map(|value| value.signal_to_readable_us),
         progress.as_ref().map(|value| value.transfer_bytes),
-        progress.as_ref().map(|value| value.write_calls),
+        progress.as_ref().and_then(|value| value.write_calls),
         resync.as_ref().map(|value| value.total_us),
         reconnect.as_ref().map(|value| value.total_us),
         initial_semantic_match
@@ -325,7 +329,7 @@ struct ProgressResult {
     total_us: u128,
     signal_to_readable_us: u128,
     transfer_bytes: usize,
-    write_calls: usize,
+    write_calls: Option<usize>,
     semantic_match: bool,
 }
 
@@ -499,6 +503,7 @@ fn measure_socket_progress(
     client: &mut SocketClient,
 ) -> Option<ProgressResult> {
     let ingress = runtime.input_ingress(execution_id).ok()?;
+    let before = canonical_snapshot(runtime, execution_id);
     let before_generation = runtime
         .execution(execution_id)?
         .terminal()
@@ -517,7 +522,8 @@ fn measure_socket_progress(
             return None;
         }
     }
-    let expected = canonical_snapshot(runtime, execution_id);
+    let after = canonical_snapshot(runtime, execution_id);
+    let expected = incremental_expected(&before, after);
     let frame = encode_reference_snapshot(&expected);
     let transfer = transfer_reference_frame(&mut client.tx, &mut client.rx, &frame);
     let decoded = decode_reference_snapshot(&transfer.bytes);
@@ -528,7 +534,7 @@ fn measure_socket_progress(
         total_us: start.elapsed().as_micros(),
         signal_to_readable_us: transfer.first_read_to_complete_us,
         transfer_bytes: transfer.bytes.len(),
-        write_calls: transfer.write_calls,
+        write_calls: Some(transfer.write_calls),
         semantic_match,
     })
 }
@@ -540,26 +546,75 @@ fn measure_hybrid_progress(
     client: &mut HybridClient,
 ) -> Option<ProgressResult> {
     let ingress = runtime.input_ingress(execution_id).ok()?;
-    let before = read_latest(&client.mapping.memory(), &client.region).ok()?;
+    let before_canonical = canonical_snapshot(runtime, execution_id);
+    let before_projection = read_latest(&client.mapping.memory(), &client.region).ok()?;
     let start = Instant::now();
     ingress.try_submit(b"z".to_vec()).ok()?;
     let (wake, wake_observed) = wait_generation_wake(
         runtime,
         &mut client.stream,
         client.attached.attachment_id,
-        before.generation + 1,
+        before_projection.generation + 1,
     )?;
     let read = wait_projection_generation(runtime, client, wake.committed_generation)?;
     let signal_to_readable_us = wake_observed.elapsed().as_micros();
-    let expected = canonical_snapshot(runtime, execution_id);
+    let after = canonical_snapshot(runtime, execution_id);
+    let expected = incremental_expected(&before_canonical, after);
     let transfer_bytes = projection_payload_bytes(&expected);
     Some(ProgressResult {
         total_us: start.elapsed().as_micros(),
         signal_to_readable_us,
         transfer_bytes,
-        write_calls: 1,
+        write_calls: None,
         semantic_match: snapshot_read_matches(&read, &expected),
     })
+}
+
+#[cfg(target_os = "macos")]
+fn incremental_expected(before: &OwnedSnapshot, mut after: OwnedSnapshot) -> OwnedSnapshot {
+    let full = before.rows != after.rows
+        || before.columns != after.columns
+        || before.mode_flags.alternate_screen != after.mode_flags.alternate_screen;
+    if full {
+        after.damages = vec![DamageRecord {
+            first_row: 0,
+            last_row: after.rows.saturating_sub(1),
+            full: true,
+        }];
+        return after;
+    }
+
+    let columns = after.columns as usize;
+    let mut first_row = None;
+    let mut last_row = 0u16;
+    for (index, (old, new)) in before.cells.iter().zip(&after.cells).enumerate() {
+        if old != new {
+            let row = (index / columns) as u16;
+            first_row = Some(first_row.map_or(row, |first: u16| first.min(row)));
+            last_row = last_row.max(row);
+        }
+    }
+
+    if before.cursor_row != after.cursor_row
+        || before.cursor_col != after.cursor_col
+        || before.cursor_visible != after.cursor_visible
+        || before.mode_flags.cursor_visible != after.mode_flags.cursor_visible
+    {
+        for row in [before.cursor_row, after.cursor_row] {
+            if row < after.rows {
+                first_row = Some(first_row.map_or(row, |first| first.min(row)));
+                last_row = last_row.max(row);
+            }
+        }
+    }
+
+    let first_row = first_row.unwrap_or(0);
+    after.damages = vec![DamageRecord {
+        first_row,
+        last_row: last_row.max(first_row),
+        full: false,
+    }];
+    after
 }
 
 #[cfg(target_os = "macos")]
@@ -1058,11 +1113,13 @@ fn rss_for_pid(pid: u32) -> usize {
 fn print_host_metadata() {
     let product = command_text("/usr/bin/sw_vers", &["-productVersion"]);
     let build = command_text("/usr/bin/sw_vers", &["-buildVersion"]);
+    let machine_model = command_text("/usr/sbin/sysctl", &["-n", "hw.model"]);
     let hardware = command_text("/usr/sbin/sysctl", &["-n", "machdep.cpu.brand_string"]);
     let pty_max = command_text("/usr/sbin/sysctl", &["-n", "kern.tty.ptmx_max"]);
     let rustc = command_text("rustc", &["--version"]);
+    let commit = command_text("git", &["rev-parse", "HEAD"]);
     println!(
-        "host macos_version={product} macos_build={build} hardware={hardware:?} rust={rustc:?} pty_max={pty_max}"
+        "host macos_version={product} macos_build={build} machine_model={machine_model:?} hardware={hardware:?} rust={rustc:?} pty_max={pty_max} build_mode=release commit={commit}"
     );
 }
 

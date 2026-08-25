@@ -1,0 +1,85 @@
+name: Migrate legacy issues
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "export, import, or reconcile"
+        required: true
+        type: choice
+        options:
+          - export
+          - import
+          - reconcile
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.LEGACY_MIGRATION_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require cross-repository migration token
+        shell: bash
+        run: |
+          test -n "$GH_TOKEN" || {
+            echo "LEGACY_MIGRATION_TOKEN is required. It must read issues in private RILL/terminal and write issues/comments in seyal." >&2
+            exit 1
+          }
+
+      - name: Export legacy issues
+        if: inputs.mode == 'export'
+        shell: bash
+        run: |
+          python3 migration/legacy-issues/migrate_issues.py export \
+            --repo mahboobmonnamd/RILL \
+            --out migration/legacy-issues/rill-issues.json
+          python3 migration/legacy-issues/migrate_issues.py export \
+            --repo mahboobmonnamd/terminal \
+            --out migration/legacy-issues/terminal-issues.json
+
+      - name: Import legacy issues
+        if: inputs.mode == 'import'
+        shell: bash
+        run: |
+          test -f migration/legacy-issues/rill-issues.json
+          test -f migration/legacy-issues/terminal-issues.json
+          python3 migration/legacy-issues/migrate_issues.py import \
+            --in migration/legacy-issues/rill-issues.json \
+            --dest mahboobmonnamd/seyal \
+            --map migration/legacy-issues/issue-map.json
+          python3 migration/legacy-issues/migrate_issues.py import \
+            --in migration/legacy-issues/terminal-issues.json \
+            --dest mahboobmonnamd/seyal \
+            --map migration/legacy-issues/issue-map.json
+
+      - name: Reconcile legacy issues
+        if: inputs.mode == 'reconcile'
+        shell: bash
+        run: |
+          test -f migration/legacy-issues/rill-issues.json
+          test -f migration/legacy-issues/terminal-issues.json
+          python3 migration/legacy-issues/migrate_issues.py reconcile \
+            --in migration/legacy-issues/rill-issues.json \
+            --dest mahboobmonnamd/seyal \
+            --map migration/legacy-issues/issue-map.json
+          python3 migration/legacy-issues/migrate_issues.py reconcile \
+            --in migration/legacy-issues/terminal-issues.json \
+            --dest mahboobmonnamd/seyal \
+            --map migration/legacy-issues/issue-map.json
+
+      - name: Upload migration ledger
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: legacy-issue-migration-${{ inputs.mode }}
+          if-no-files-found: warn
+          path: |
+            migration/legacy-issues/rill-issues.json
+            migration/legacy-issues/terminal-issues.json
+            migration/legacy-issues/issue-map.json

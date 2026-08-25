@@ -35,3 +35,7 @@ harness = false
 [[bench]]
 name = "pass5_shared_projection"
 harness = false
+
+[[bench]]
+name = "pass5_delta_transport"
+harness = false

@@ -22,6 +22,13 @@ corpus = "fuzz/corpus/local-binary-protocol-decode"
 adapter = "fuzz/targets/local-binary-protocol-decode"
 
 [[target]]
+name = "display-binary-decode"
+owner_pass = 5
+status = "active"
+corpus = "fuzz/corpus/display-binary-decode"
+adapter = "fuzz/targets/display-binary-decode"
+
+[[target]]
 name = "shared-projection-validation"
 owner_pass = 5
 status = "active"
@@ -30,7 +37,7 @@ adapter = "fuzz/targets/shared-projection-validation"
 
 [[target]]
 name = "reconnect-resync-state-machine"
-owner_pass = 5  # corrected from 9: SPEC-004 section 16.6 explicitly assigns this activation to Pass 5
+owner_pass = 5
 status = "active"
 corpus = "fuzz/corpus/reconnect-resync-state-machine"
 adapter = "fuzz/targets/reconnect-resync-state-machine"

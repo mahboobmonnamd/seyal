@@ -119,6 +119,9 @@ impl RegionHeader {
         if region_bytes > MAX_REGION_BYTES {
             return Err(LayoutError::RegionTooLarge);
         }
+        if region_bytes < REGION_HEADER_LEN as u64 {
+            return Err(LayoutError::SlotOutOfBounds);
+        }
         let execution_id = u128::from_le_bytes(bytes[24..40].try_into().unwrap());
         let attachment_id = u128::from_le_bytes(bytes[40..56].try_into().unwrap());
         let projection_id = u128::from_le_bytes(bytes[56..72].try_into().unwrap());
@@ -148,21 +151,26 @@ impl RegionHeader {
         if capacity_rows > MAX_CAPACITY_ROWS || capacity_cols > MAX_CAPACITY_COLS {
             return Err(LayoutError::CapacityExceedsMaximum);
         }
-        if slot0_offset % 64 != 0 {
+        if slot0_offset < REGION_HEADER_LEN as u64 {
+            return Err(LayoutError::InvalidOffsets);
+        }
+        if !slot0_offset.is_multiple_of(64) || !slot_stride.is_multiple_of(8) {
             return Err(LayoutError::SlotNotAligned);
         }
-        // Both slots must fit fully inside region_bytes; every offset/length
-        // computation here is checked for overflow before use.
-        let slot1_offset = slot0_offset
+        if slot_stride < SLOT_HEADER_LEN as u64 {
+            return Err(LayoutError::SlotOutOfBounds);
+        }
+
+        // Every ABI-1.0 slot has `slot_stride` bytes. Validate complete slot
+        // extents, not only the 64-byte headers, so the standalone decoder and
+        // the mapped reader enforce the same fixed-layout contract.
+        let slot0_end = slot0_offset
             .checked_add(slot_stride)
             .ok_or(LayoutError::LengthOverflow)?;
-        let slot1_end = slot1_offset
-            .checked_add(SLOT_HEADER_LEN as u64)
+        let slot1_end = slot0_end
+            .checked_add(slot_stride)
             .ok_or(LayoutError::LengthOverflow)?;
-        let slot0_end = slot0_offset
-            .checked_add(SLOT_HEADER_LEN as u64)
-            .ok_or(LayoutError::LengthOverflow)?;
-        if slot0_end > region_bytes || slot1_end > region_bytes {
+        if slot1_end > region_bytes {
             return Err(LayoutError::SlotOutOfBounds);
         }
 
@@ -583,11 +591,23 @@ mod tests {
         header.region_bytes = MAX_REGION_BYTES + 1;
         let mut bytes = [0u8; REGION_HEADER_LEN];
         header.encode(&mut bytes).unwrap();
-        // encode() writes the actual field regardless; decode must reject it.
         bytes[16..24].copy_from_slice(&header.region_bytes.to_le_bytes());
         assert_eq!(
             RegionHeader::decode(&bytes),
             Err(LayoutError::RegionTooLarge)
+        );
+    }
+
+    #[test]
+    fn region_header_decode_rejects_region_smaller_than_header() {
+        let mut header = sample_region_header();
+        header.region_bytes = (REGION_HEADER_LEN - 1) as u64;
+        let mut bytes = [0u8; REGION_HEADER_LEN];
+        header.encode(&mut bytes).unwrap();
+        bytes[16..24].copy_from_slice(&header.region_bytes.to_le_bytes());
+        assert_eq!(
+            RegionHeader::decode(&bytes),
+            Err(LayoutError::SlotOutOfBounds)
         );
     }
 
@@ -605,6 +625,19 @@ mod tests {
     }
 
     #[test]
+    fn region_header_decode_rejects_slot0_before_header() {
+        let mut header = sample_region_header();
+        header.slot0_offset = 64;
+        let mut bytes = [0u8; REGION_HEADER_LEN];
+        header.encode(&mut bytes).unwrap();
+        bytes[88..96].copy_from_slice(&header.slot0_offset.to_le_bytes());
+        assert_eq!(
+            RegionHeader::decode(&bytes),
+            Err(LayoutError::InvalidOffsets)
+        );
+    }
+
+    #[test]
     fn region_header_decode_rejects_unaligned_slot0_offset() {
         let mut header = sample_region_header();
         header.slot0_offset = REGION_HEADER_LEN as u64 + 1;
@@ -618,9 +651,35 @@ mod tests {
     }
 
     #[test]
+    fn region_header_decode_rejects_unaligned_slot_stride() {
+        let mut header = sample_region_header();
+        header.slot_stride = 4097;
+        let mut bytes = [0u8; REGION_HEADER_LEN];
+        header.encode(&mut bytes).unwrap();
+        bytes[80..88].copy_from_slice(&header.slot_stride.to_le_bytes());
+        assert_eq!(
+            RegionHeader::decode(&bytes),
+            Err(LayoutError::SlotNotAligned)
+        );
+    }
+
+    #[test]
+    fn region_header_decode_rejects_slot_stride_smaller_than_header() {
+        let mut header = sample_region_header();
+        header.slot_stride = 56;
+        let mut bytes = [0u8; REGION_HEADER_LEN];
+        header.encode(&mut bytes).unwrap();
+        bytes[80..88].copy_from_slice(&header.slot_stride.to_le_bytes());
+        assert_eq!(
+            RegionHeader::decode(&bytes),
+            Err(LayoutError::SlotOutOfBounds)
+        );
+    }
+
+    #[test]
     fn region_header_decode_rejects_slot_out_of_bounds() {
         let mut header = sample_region_header();
-        header.region_bytes = REGION_HEADER_LEN as u64 + 10; // too small for a 4096 slot
+        header.region_bytes = REGION_HEADER_LEN as u64 + 4096 + 64;
         let mut bytes = [0u8; REGION_HEADER_LEN];
         header.encode(&mut bytes).unwrap();
         bytes[16..24].copy_from_slice(&header.region_bytes.to_le_bytes());
@@ -768,7 +827,6 @@ mod tests {
     #[test]
     fn cell_record_decode_rejects_invalid_unicode_scalar() {
         let mut bytes = [0u8; CELL_LEN];
-        // 0xD800 is a surrogate: not a valid Unicode scalar value.
         bytes[0..4].copy_from_slice(&0xD800u32.to_le_bytes());
         assert_eq!(
             CellRecord::decode(&bytes),

@@ -32,7 +32,9 @@ def main() -> None:
         status = target["status"]
         if status == "pending-production-surface":
             pending += 1
-            print(f"[seyal fuzz smoke] pending {name}: corpus validated; production adapter not yet allowed")
+            print(
+                f"[seyal fuzz smoke] pending {name}: corpus validated; production adapter not yet allowed"
+            )
             continue
         if status != "active":
             fail(f"fuzz target {name} has invalid status: {status}")
@@ -41,12 +43,18 @@ def main() -> None:
         if not adapter.is_file():
             fail(f"active fuzz target {name} is missing adapter: {target['adapter']}")
 
+        # All registry adapters are checked-in POSIX shell entry points. Invoke
+        # them through bash so a Contents-API-created fuzz adapter cannot become
+        # a false CI failure merely because its executable mode was not
+        # preserved by the remote write path.
         for seed in seeds:
-            subprocess.run([str(adapter), str(seed)], cwd=ROOT, check=True)
+            subprocess.run(["bash", str(adapter), str(seed)], cwd=ROOT, check=True)
         active += 1
         print(f"[seyal fuzz smoke] active {name}: {len(seeds)} retained seed(s) passed")
 
-    print(f"[seyal fuzz smoke] registry valid: {active} active, {pending} pending production target(s).")
+    print(
+        f"[seyal fuzz smoke] registry valid: {active} active, {pending} pending production target(s)."
+    )
 
 
 if __name__ == "__main__":

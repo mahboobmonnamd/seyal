@@ -310,7 +310,7 @@ The original RILL competitive catalog contains **216** inventory rows. All 216 a
 
 | ID | Historical capability | Current Seyal disposition | Seyal mapping / constraint |
 |---|---|---|---|
-| F-240 | Native code editor | Rejected | Seyal is an execution workspace, not a home-grown text editor/IDE. |
+| F-240 | Native code editor | Deferred / decision required | A bounded first-class editor surface is under explicit R&D reconsideration in #209. This does not authorize full IDE/LSP/debugger parity. |
 | F-241 | Language servers (LSP) | Rejected | No core LSP client without a future separate embedded-editor decision. |
 | F-242 | Find and replace | Accepted direction | Workspace/file search fits; destructive project-wide replace needs an explicit undo/effect model. |
 | F-243 | Code review panel | Accepted direction | Working-tree/PR diff and code-review inspector is a useful cold surface. |
@@ -326,36 +326,26 @@ The original RILL competitive catalog contains **216** inventory rows. All 216 a
 
 - Terminal fundamentals remain OSS and use the Seyal-owned PTY → VT/state → damage → Metal stack; no legacy libghostty production engine is revived.
 - Blocks, raw terminal and TUI are presentations of the same TerminalExecution and canonical TerminalState. No second PTY/grid is created for Blocks.
-- Seyal is an execution/operations workspace, not a home-grown IDE. External editors/IDEs are first-class; built-in editor/LSP/debugger rows remain rejected unless explicitly reconsidered.
+- Seyal remains an execution/operations workspace. A bounded first-class editor surface may be reconsidered through #209, but full IDE, LSP and debugger/DAP ownership remain separate explicit decisions.
 - GUI close/detach is distinct from terminating a process. Persistence metadata never claims to resurrect a dead PTY.
 - Agent and workflow features are additive. Terminal input/output/rendering never synchronously wait on agent, semantic, persistence, cloud, licensing, telemetry or collaboration work.
 - Raw terminal text is untrusted. It may support low-confidence detection/notifications but cannot become permission, approval, policy or audit authority.
 - Stable navigation is the default. Attention uses badges and the global Attention Stack rather than constantly reordering the user's workspace list.
 - Local use, local configuration and useful local agent/workflow capabilities do not require a Seyal account.
 
-## Source completeness and local export/import
+## Legacy evidence status
 
-Feature archaeology uses current Seyal documents plus every open/closed Issue and comment from `mahboobmonnamd/RILL` and `mahboobmonnamd/terminal`.
+The one-time legacy import is complete: **511/511** RILL/terminal source issues were reconciled into Seyal as `historical-evidence`, with source-specific legacy labels and exact source markers. Their destination issue state preserves historical evidence only; it is not current implementation status.
 
-Export the complete source evidence first:
+The temporary export/import workflow, migration package and local helper scripts were consolidation tools and are intentionally not part of the product repository after this PR. Do not document or depend on those removed scripts as an ongoing workflow.
 
-```bash
-bash scripts/export-feature-source-issues.sh
-```
+Imported Issues/comments do not preserve Git commit objects, PR diffs/reviews, releases or every repository artifact. Do not delete the legacy repositories solely because issue migration completed; archive full repository/PR history separately before any retirement decision.
 
-The exporter writes read-only local evidence under `.feature-sources/`, verifies the independent GitHub Issue count for both legacy repositories, fetches **all Issue comments through GitHub's paginated comments API**, and validates the 216 unique RILL `F-*` catalog rows. The RILL `inventory` label currently contains 217 issues because catalog epic #33 carries the same label.
+`terminal` also contains implementation regressions, tests and obsolete architecture experiments. Those remain historical evidence unless they reveal a distinct current product behavior captured in this registry or its current backlog owner.
 
-To recreate those historical Issues and comments in Seyal:
+## Current backlog tracking
 
-```bash
-bash scripts/import-feature-source-issues.sh --apply .feature-sources
-```
-
-The importer creates source-specific `legacy-rill`, `legacy-terminal`, and `historical-evidence` labels, preserves original state/state reason, timestamps, author, labels, assignees, milestone and source URL as metadata, recreates all exported comments, and uses stable source markers so rerunning it does not duplicate completed imports. A final reconciliation requires every exported source Issue to have a destination Issue. GitHub may rate-limit a migration this large; rerunning the same command safely resumes from source markers.
-
-The Issue importer does **not** preserve PR diffs or Git commit objects. Do not delete the legacy repositories until those histories are archived separately.
-
-`terminal` contains many implementation regressions, tests and obsolete architecture experiments. Those are source evidence, not product capabilities. A defect becomes a feature row only when it reveals a distinct product behavior that is not already represented above (for example the Changes inspector or DevOps workspace).
+`docs/product/CURRENT_BACKLOG.md` and GitHub issue #650 are the current implementation-tracking entry points. Unfinished accepted/foundation/deferred capabilities remain open there until current Seyal evidence closes them. Rejected, superseded and historical-only shapes stay closed and map to their replacement/decision where applicable.
 
 ## Inventory maintenance rule
 

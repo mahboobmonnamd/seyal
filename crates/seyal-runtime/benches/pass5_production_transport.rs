@@ -291,21 +291,7 @@ fn worker() {
     let syscall_counters = benchmark_syscall_counters();
     assert!(clients.iter().all(|client| client.cache.generation > 0));
 
-    let reconnect_start = Instant::now();
-    let mut reconnect =
-        BenchClient::connect_and_attach(&mut runtime, &socket_path, execution_id, Role::Observer);
-    let reconnect_us = reconnect_start.elapsed().as_micros();
-    let reconnect_generation = reconnect.cache.generation;
-    let current_generation = clients
-        .iter()
-        .map(|client| client.cache.generation)
-        .max()
-        .unwrap_or(0);
-    assert!(reconnect_generation >= current_generation);
-    reconnect.drain_available().expect("reconnect drain");
-    drop(reconnect);
-
-    let populated = process_metrics();
+    // Capture measured fanout counters before reconnect changes connection membership.
     let bytes_received = clients
         .iter()
         .map(|client| client.bytes_received)
@@ -320,6 +306,55 @@ fn worker() {
         .iter()
         .map(|client| client.read_syscalls)
         .sum::<usize>();
+    let current_generation = clients
+        .iter()
+        .map(|client| client.cache.generation)
+        .max()
+        .unwrap_or(0);
+
+    // The production server intentionally caps live connections at 16. At the
+    // 16-viewer case, reconnect must model a real disconnect/reconnect rather
+    // than opening a 17th connection and treating the correct rejection as a
+    // benchmark failure. Drop one observer, wait until Runtime reclaims its
+    // attachment, then replace that viewer with the reconnecting observer.
+    let replace_existing_viewer = clients.len() == 16;
+    if replace_existing_viewer {
+        let disconnected = clients.pop().expect("observer available for reconnect");
+        drop(disconnected);
+        let disconnect_deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            runtime
+                .poll_once(Some(Duration::from_millis(1)))
+                .expect("Runtime poll while reclaiming disconnected viewer");
+            let attachment_count = runtime
+                .lookup(execution_id)
+                .map(|summary| summary.attachment_count)
+                .unwrap_or(0);
+            if attachment_count < fanout {
+                break;
+            }
+            assert!(
+                Instant::now() < disconnect_deadline,
+                "disconnected viewer was not reclaimed before reconnect"
+            );
+        }
+    }
+
+    let reconnect_start = Instant::now();
+    let mut reconnect =
+        BenchClient::connect_and_attach(&mut runtime, &socket_path, execution_id, Role::Observer);
+    let reconnect_us = reconnect_start.elapsed().as_micros();
+    let reconnect_generation = reconnect.cache.generation;
+    assert!(reconnect_generation >= current_generation);
+    reconnect.drain_available().expect("reconnect drain");
+    if replace_existing_viewer {
+        clients.push(reconnect);
+        assert_eq!(clients.len(), fanout);
+    } else {
+        drop(reconnect);
+    }
+
+    let populated = process_metrics();
 
     drop(clients);
     for _ in 0..8 {

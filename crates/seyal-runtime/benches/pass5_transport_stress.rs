@@ -657,11 +657,15 @@ fn decode_reference_snapshot(bytes: &[u8]) -> OwnedSnapshot {
     assert_eq!(expected_len, bytes.len());
     let cells_end = REFERENCE_HEADER_LEN + cell_count * CELL_LEN;
     let cells = bytes[REFERENCE_HEADER_LEN..cells_end]
-        .chunks_exact(CELL_LEN)
+        .as_chunks::<CELL_LEN>()
+        .0
+        .iter()
         .map(|chunk| CellRecord::decode(chunk).expect("decode reference cell"))
         .collect();
     let damages = bytes[cells_end..]
-        .chunks_exact(DAMAGE_LEN)
+        .as_chunks::<DAMAGE_LEN>()
+        .0
+        .iter()
         .map(|chunk| DamageRecord::decode(chunk, rows).expect("decode reference damage"))
         .collect();
     let cursor_visible = bytes[20] != 0;
@@ -703,11 +707,10 @@ fn print_summary(
     let client_bytes = values(samples, |sample| sample.client_bytes_allocated as u128);
     let write_calls = values(samples, |sample| sample.write_calls as u128);
     let total_ns: u128 = total.iter().sum();
-    let updates_per_second = if total_ns == 0 {
-        0
-    } else {
-        repetitions as u128 * 1_000_000_000 / total_ns
-    };
+    let updates_per_second = (repetitions as u128)
+        .saturating_mul(1_000_000_000)
+        .checked_div(total_ns)
+        .unwrap_or(0);
     let socket_bytes = samples.last().map_or(0, |sample| sample.socket_bytes);
     let shm_bytes = samples.last().map_or(0, |sample| sample.shm_bytes);
     println!(

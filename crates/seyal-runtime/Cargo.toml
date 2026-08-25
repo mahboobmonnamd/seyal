@@ -31,3 +31,7 @@ harness = false
 [[bench]]
 name = "pass5_transport_stress"
 harness = false
+
+[[bench]]
+name = "pass5_shared_projection"
+harness = false

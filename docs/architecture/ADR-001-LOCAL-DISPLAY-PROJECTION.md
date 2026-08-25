@@ -1,6 +1,6 @@
 # ADR-001 — Local Display Projection for macOS M001
 
-**Status:** Accepted for M001 implementation
+**Status:** Accepted for M001 implementation; Pass-5 evidence revisit open
 
 **Date:** 2026-08-23
 
@@ -130,3 +130,43 @@ The hybrid design remains selected unless the socket-only implementation is meas
 ## Consequences
 
 This adds a small amount of projection management complexity in exchange for preserving persistent Runtime ownership without forcing the local display path through repeated high-level serialization. The mechanism is local-only; future remote/mobile transport can use bounded binary snapshot/delta streams derived from the same canonical state without sharing this memory layout.
+
+## Pass-5 evidence revisit — 2026-08-25
+
+The first real equivalent-state comparator run was captured on implementation commit `2f3140ba8a0e7318b8c99e3e1421878ffe20d92c` using Apple M5 Pro, macOS 26.5.2 build 25F84 and Rust 1.98.0. It is valid diagnostic evidence, but it is **not yet sufficient to close this ADR benchmark gate**.
+
+### What the run established
+
+- Every reported socket-only and hybrid scenario delivered state matching the same canonical `TerminalExecution` snapshot (`semantic_match=true`).
+- Requested populations 1 and 10 were measured directly. Requests for 50 and 100 reached the same host PTY ceiling at 31 created executions and were correctly reported as `PLATFORM_LIMITED`, not hidden.
+- At 80x24 primary, single-update end-to-readable latency was socket/hybrid 118/132 µs at population 1, 109/108 µs at population 10, 56/60 µs at the 31-execution host ceiling for requested 50, and 48/64 µs at the same ceiling for requested 100.
+- At one execution, geometry measurements were 236/200 µs at 120x40, 398/405 µs at 200x60, and 140/135 µs for the 80x24 alternate screen. These single samples show no clear steady-state latency winner.
+- Runtime-owned descriptors and projection memory returned to bounded teardown state; final FD counts returned to their respective baselines and `pending_final=0`/`shutdown_ok=true` in every record.
+- Hybrid uses more live projection resources by design. At the 31-execution/16-visible-surface host ceiling, the recorded process RSS increment was about 4.0 MiB hybrid versus about 2.3 MiB socket reference, and populated FD count was 102 versus 69.
+
+### Evidence that must not be over-interpreted
+
+The run printed much lower socket-reference display setup/reconnect cost than hybrid. Those values are **not an architecture decision metric yet** because the socket reference creates an in-process `UnixStream::pair` and directly transfers a snapshot, while the hybrid path includes the production Unix-socket connect, hello/attach protocol, peer validation, `SCM_RIGHTS`, shared-memory mapping and projection setup. The setup/reconnect semantics are therefore not equivalent enough for a fair ratio.
+
+Likewise, `update_write_calls=1` for hybrid is currently a benchmark model value for its one advisory wake, not an instrumented count of production `sendmsg` syscalls. It must not be presented as a measured syscall advantage.
+
+### Remaining comparator gaps
+
+Before this evidence can justify retaining or replacing the hybrid choice, the comparator/evidence record still needs to resolve the SPEC-004 requirements that are not measured equivalently today:
+
+- allocations per update;
+- equivalent reconnect/full-snapshot setup boundaries;
+- Runtime versus client CPU/RSS accounting, or an explicit justified classification where the benchmark process model makes separation impossible;
+- same-execution multiple-client fanout behavior rather than only one display client per execution;
+- high-output display-delivery behavior;
+- repetitions and percentile methodology rather than a single timing sample;
+- exact build mode and commit SHA in the benchmark output itself;
+- measured versus modeled copy/write counters clearly distinguished.
+
+Stalled/killed-client correctness and cleanup already have production integration coverage, but benchmark evidence must cross-reference that coverage instead of implying the single-sample comparator measured those cases.
+
+### Revisit decision
+
+Do **not** switch production to socket-only from this run, and do **not** claim that this run has justified hybrid either. The steady-state measurements are close enough that the simpler socket-only option remains credible, while the current harness has material asymmetries and missing metrics that prevent a sound architectural conclusion.
+
+ADR-001 therefore remains the implementation authority provisionally while the comparator is corrected. This is an explicit evidence revisit, not silent preservation of the original decision. Pass-5 acceptance remains blocked until the corrected evidence either justifies hybrid or supports a deliberate ADR change.

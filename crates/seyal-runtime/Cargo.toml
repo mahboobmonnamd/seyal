@@ -11,6 +11,7 @@ build = "build.rs"
 [features]
 default = []
 test-fault-injection = []
+benchmark-shared-projection = []
 
 [dependencies]
 seyal-exec = { path = "../seyal-exec" }
@@ -31,10 +32,12 @@ harness = false
 [[bench]]
 name = "pass5_transport_stress"
 harness = false
+required-features = ["benchmark-shared-projection"]
 
 [[bench]]
 name = "pass5_shared_projection"
 harness = false
+required-features = ["benchmark-shared-projection"]
 
 [[bench]]
 name = "pass5_delta_transport"

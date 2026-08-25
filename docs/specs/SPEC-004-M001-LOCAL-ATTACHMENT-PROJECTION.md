@@ -299,7 +299,7 @@ u16 capacity_cols
 u32 reserved1
 ```
 
-The descriptor is a read-only descriptor for the projection object. Missing, extra or wrong-context descriptors are protocol-fatal to that connection; the Runtime rolls back the partial attachment.
+The descriptor is a read-only descriptor for the projection object. Missing, extra or wrong-context descriptors on Runtime→client descriptor-bearing frames are protocol-fatal to that client-side attachment transaction. No client→Runtime M001 frame carries an `SCM_RIGHTS` descriptor; any inbound descriptor, extra descriptor set or truncated/malformed ancillary data is protocol-fatal to that connection, and every descriptor delivered to the Runtime on the rejected path must be closed during bounded cleanup.
 
 `Detach` payload is one `u128 AttachmentId`.
 
@@ -420,13 +420,15 @@ Each live attachment owns at most one current projection region in Runtime resou
 
 For macOS M001 the Runtime:
 
-1. creates a collision-resistant named POSIX shared-memory object with `O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC`, mode `0600`;
+1. creates a collision-resistant named POSIX shared-memory object with `O_CREAT | O_EXCL | O_RDWR`, mode `0600`, then immediately enforces `FD_CLOEXEC` with `fcntl` before the descriptor can escape the creation function;
 2. sizes it after overflow-checked layout computation;
 3. maps the Runtime descriptor writable;
-4. opens the same object independently `O_RDONLY | O_CLOEXEC` for client transfer;
+4. opens the same object independently `O_RDONLY` for client transfer and likewise enforces `FD_CLOEXEC` before retaining/transferring it;
 5. immediately `shm_unlink`s the name after both descriptors are acquired;
 6. sends only the read-only descriptor via `SCM_RIGHTS`;
 7. never sends or logs the shared-memory name.
+
+The explicit `fcntl(FD_CLOEXEC)` step is normative for Darwin M001 because macOS `shm_open` does not accept `O_CLOEXEC` as a portable creation flag. A descriptor received over `SCM_RIGHTS` must also have close-on-exec enforced at the receiving boundary before it is retained.
 
 The client maps the received descriptor `PROT_READ` only. A writable client mapping is a protocol/security implementation failure.
 
@@ -669,18 +671,23 @@ Projection production may be scheduled after canonical terminal mutation, but te
 
 ### 11.2 First attach
 
-Successful attach order:
+Successful first attach is one transaction with a private-resource preparation phase and a Runtime-authority commit point:
 
 ```text
 validate peer/state/role/ExecutionId/capacity
-→ allocate AttachmentId + ProjectionId/resources transactionally
+→ allocate AttachmentId + ProjectionId/resources privately
 → read current canonical visible TerminalState
-→ publish a complete snapshot generation
-→ publish attachment in Runtime registry
-→ send Attached + read-only descriptor
+→ publish a complete snapshot generation into the private projection
+→ enqueue/begin nonblocking Attached + read-only descriptor delivery successfully
+→ publish attachment/controller/projection authority in Runtime registries
+→ transition the connection to Attached
 ```
 
-A partially failed attach leaves no attachment/controller lease/projection resource behind.
+“Delivery successfully” here means the mandatory `Attached` response and descriptor were accepted by the Runtime's bounded nonblocking send/queue path without an enqueue/send failure. It is **not** a client acknowledgement and terminal progress never waits for it.
+
+Before Runtime authority publication, the IDs, projection mapping, writer descriptor and read-only transfer descriptor are private transaction resources. Any failure in projection creation/publication or initial descriptor delivery drops those resources and leaves no attachment/controller lease/projection registry record behind. After Runtime authority publication, later socket loss is handled by normal idempotent disconnect cleanup.
+
+This ordering deliberately avoids publishing a controller lease before a descriptor-send failure and is the normative M001 commit point defined with ADR-001.
 
 ### 11.3 Missed generations
 
@@ -718,7 +725,7 @@ The implementation must fail closed and remain bounded for:
 - invalid magic/version/type/flags/reserved fields;
 - lengths that overflow or exceed maxima;
 - disconnect mid-frame or mid-descriptor transfer;
-- extra/missing `SCM_RIGHTS` descriptors;
+- unexpected/missing/extra `SCM_RIGHTS` descriptors and truncated ancillary control data;
 - invalid `ExecutionId`/`AttachmentId`/`ProjectionId`;
 - stale controller/attachment identities;
 - unauthorized observer input/resize;
@@ -739,16 +746,18 @@ A malformed client may lose its connection; it must not panic the Runtime, mutat
 Every attachment creation is transactional across:
 
 ```text
-role lease reservation
+role/authority validation
 AttachmentId allocation
 ProjectionId allocation
 shared-memory writer fd/map
 read-only transfer fd
-attachment registry publication
-socket descriptor transfer
+first complete projection generation
+bounded Attached + descriptor send/queue acceptance
+attachment/controller/projection registry publication
+connection Attached-state transition
 ```
 
-On failure before registry publication, all acquired resources and role reservations roll back. After publication, disconnect cleanup is idempotent.
+The authoritative commit point is Runtime registry publication after the initial mandatory descriptor-bearing response has been accepted by the bounded outbound path. Before that commit point all acquired IDs, mappings, descriptors and projection state are private and must roll back on failure. No controller lease is published merely because its requested role passed validation. After publication, disconnect cleanup is idempotent.
 
 Repeated attach/detach and failed creation must return Runtime-owned:
 
@@ -836,6 +845,7 @@ Canonical VT/state remains Runtime/`TerminalExecution` authority regardless of c
 - invalid state transitions;
 - disconnect mid-frame;
 - missing/extra descriptor transfer;
+- unexpected inbound descriptors and truncated/malformed ancillary data;
 - bounded receive/outbound queues.
 
 ### 16.2 Authorization

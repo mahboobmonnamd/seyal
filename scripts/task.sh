@@ -62,6 +62,13 @@ case "$cmd" in
     python3 scripts/check-benchmark-contract.py
     python3 scripts/benchmark-smoke.py
     if find crates -type f -path '*/benches/*.rs' -print -quit 2>/dev/null | grep -q .; then
+      # Darwin Unix-domain sockets have a 104-byte sun_path limit. The production
+      # benchmark deliberately uses temporary Runtime directories; keep the
+      # benchmark root deterministic and short instead of inheriting a potentially
+      # long hosted-runner TMPDIR. Production runtime discovery is unchanged.
+      if [[ "$(uname -s)" == "Darwin" ]]; then
+        export TMPDIR=/tmp
+      fi
       cargo_pinned bench --workspace --locked
       cargo_pinned bench -p seyal-runtime --bench pass5_production_transport --features benchmark-instrumentation --locked
     else

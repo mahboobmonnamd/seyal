@@ -1,16 +1,14 @@
 # M001 Core Terminal Reference Screen
 
 **Status:** Frozen reference for design/spec alignment  
-**Scope:** Core terminal screen only  
+**Scope:** Core terminal screen and shared interaction rules  
 **Reference image:** `docs/architecture/ui/assets/m001-core-terminal-reference.jpg`
 
 ## 1. Purpose
 
-This document freezes the canonical M001 Core Terminal screen so design and implementation can proceed consistently.
+This document freezes the canonical Core Terminal information architecture and interaction rules so later implementation does not drift across mockups.
 
-This is a reference screen spec, not permission to implement out-of-order milestone work.
-
-It defines the screen hierarchy, visible regions, functional meaning of each region, interaction rules, and constraints needed for future implementation.
+This is design/spec authority only. It does not authorize implementation ahead of the M001 dependency frontier.
 
 ## 2. Canonical object hierarchy
 
@@ -20,434 +18,379 @@ App
     └── Tab
         └── Pane tree
             └── Pane
-                └── TerminalExecution
+                └── TerminalExecution / non-terminal surface
 ```
-
-- **Workspace**: durable working context, typically bound to a repo/project/environment.
-- **Tab**: task-oriented view within the active workspace.
-- **Pane**: split region inside a tab.
-- **TerminalExecution**: actual shell/process owner for a pane.
 
 Rules:
-- one app can contain many workspaces;
-- one workspace can contain many tabs;
-- one tab can contain one or more panes;
-- each pane owns its own execution context and pane-scoped composer state.
 
-## 3. Screen layout
+- one app can contain many Workspaces;
+- one Workspace can contain many Tabs;
+- one Tab owns a nested split tree;
+- each terminal Pane owns at most one `TerminalExecution`;
+- `TerminalExecution` remains the sole PTY/child/canonical terminal-state authority;
+- UI/Blocks/agents/inspector never create a second VT/grid authority.
 
-The frozen screen has four primary regions:
+## 3. Canonical screen layout
 
 ```text
-[Top tab row]
-[Left contextual navigation] [Center active tab/pane] [Right inspector]
+[macOS window chrome]
+[workspace-scoped top tab row + split/layout + notifications]
+[left context panel] [active tab / pane tree] [right contextual inspector]
 ```
 
-### 3.1 Top row
-Contains active-workspace tabs, new-tab affordance, split/layout controls, and notifications.
+The design is optimized for terminal power users on a 15-inch display: high information density, minimal permanent chrome, keyboard-first navigation, and no decorative panels.
 
-Tabs are not placed inside the macOS title bar.
-
-### 3.2 Left panel
-Contains workspace inventory, active-workspace agents, and active-workspace tab inventory.
-
-### 3.3 Center
-Contains the focused pane with Block history/live output and a pane-scoped composer anchored at the bottom.
-
-### 3.4 Right inspector
-Contextual details for current workspace/tab/pane/process/selection. It complements rather than duplicates the left panel.
-
-## 4. Top row
+## 4. Top tab row
 
 ### 4.1 Workspace-scoped tabs
-Shows tabs belonging to the active workspace.
+
+The top row shows tabs belonging to the active Workspace.
 
 A tab may show:
-- title;
-- compact activity/attention status.
 
-Example titles:
-- Core Terminal
-- Agent Development
-- Logs & Monitoring
-- PR Review
+- title;
+- activity/attention state;
+- close affordance where appropriate.
+
+The tab strip must be adaptive:
+
+- preserve the active tab as visible;
+- shrink tabs to a documented minimum width;
+- when space is still insufficient, use horizontal scrolling/overflow rather than wrapping to multiple rows;
+- do not consume vertical terminal space with a second wrapped tab row.
 
 ### 4.2 New tab
-`+` creates a new tab in the active workspace.
+
+`+` creates a new tab in the active Workspace.
 
 ### 4.3 Split/layout controls
-Minimum intended actions:
+
+Primary split controls live with the tab/layout chrome and apply to the focused Pane:
+
 - split right;
-- split down.
+- split down;
+- other layout actions only when they have real implementation semantics.
 
-Additional layout controls may be added only when backed by real behavior. Do not add decorative layout icons.
+Pane-local context menus/shortcuts may expose the same actions, but do not duplicate a permanent cluster of split buttons inside every Pane merely for appearance.
 
-### 4.4 Notifications
-A notification/attention icon remains visible in the top-right area.
+### 4.4 Notifications / attention
 
-It exists to surface actionable attention without forcing tab switching, including future:
-- agent approvals;
-- command completion/failure;
-- long-running execution attention;
-- background task completion.
+A compact top-right attention indicator is retained.
 
-## 5. Left panel
+It surfaces actionable events without forcing tab switching, including:
 
-The left panel is intentionally dense for terminal power users and must remain practical on a 15-inch display.
+- agent approval required;
+- command/background task completion;
+- failure requiring attention;
+- long-running task attention.
+
+The popover behavior is defined by `M001-NOTIFICATIONS-ATTENTION-POPOVER.md`.
+
+### 4.5 Global command palette
+
+The earlier approved references included a global command-palette entry point. That capability is retained as a keyboard-first global navigation/action surface.
+
+It may expose actions such as:
+
+- switch Workspace/Tab/Pane;
+- create tab;
+- split focused Pane;
+- open Sessions/Agents/Resources;
+- toggle inspector modes;
+- invoke documented product actions.
+
+A permanent toolbar button is not required. The exact shortcut belongs to the native-input/keybinding specification and must not conflict with terminal/application key semantics.
+
+## 5. Left context panel
+
+The left panel remains compact and stable while its content reflects product context.
 
 ### 5.1 Workspaces
-Shows known workspaces.
 
-Each row may show:
-- workspace name;
-- root/project path;
+Show known Workspaces with only useful metadata:
+
+- name;
+- project/root path when helpful;
 - tab count;
-- compact status where useful.
+- compact status/attention where backed by real state.
+
+Do not use oversized cards when a dense list communicates the same information better.
 
 ### 5.2 Agents
-Shows agent sessions in the current workspace by default, with future ability to switch to an all-agents view.
 
-Examples:
-- Claude Code;
-- Codex;
-- OpenCode;
-- Seyal Agent.
+Show current-Workspace agent sessions such as Claude Code, Codex, OpenCode, and Seyal agents.
 
-Each row may show:
+A row may show:
+
 - provider/session name;
-- state such as Running, Waiting, Online, Attention.
+- Running / Waiting / Attention / Idle state;
+- compact activity status.
 
-This is the primary visible agent list on this screen. The inspector must not repeat a full duplicate agent list.
+This is the primary compact agent inventory on the Core Terminal screen. The inspector must not repeat the same full agent list.
 
-### 5.3 Tabs — active workspace
-Shows tabs belonging to the active workspace as a persistent inventory/navigation aid.
+### 5.3 Tabs — active Workspace
 
-This complements the top tab strip:
-- top strip = immediate active tab switching;
-- left list = persistent workspace-local inventory/status.
+Show a persistent active-Workspace tab inventory with compact activity/attention state.
 
-Each row may show:
-- tab title;
-- compact activity/attention marker.
+This complements the top strip:
 
-## 6. Center pane and Blocks
+- top strip = immediate active tabs;
+- left list = stable Workspace-local inventory/navigation.
 
-### 6.1 Block model
-Normal command execution is represented as a durable **Block**, not one undifferentiated scroll surface.
+### 5.4 Runtime/connection status
 
-A standard Block contains:
+The earlier approved references included connection state. Retain the capability, but not necessarily as a permanently large footer.
 
-#### Header
+Rules:
+
+- local healthy state may be visually minimal;
+- remote, detached, reconnecting, degraded, or disconnected state must be clearly surfaced;
+- connection state must come from real Runtime/session state, never decorative telemetry.
+
+## 6. Pane scroll ownership and Block sizing
+
+This section supersedes earlier mockup language that suggested a fixed maximum Block height with internal Block scrolling.
+
+**Canonical rule: the Pane owns normal transcript scrolling. Blocks do not introduce a second nested scrollbar.**
+
+For normal and long-running non-TUI command output:
+
+- Block height is intrinsic to its visible content;
+- a Block may grow as output grows;
+- the Pane/transcript is the scroll container;
+- there is no fixed-height output box with its own internal scroll simply to constrain a long-running process;
+- users scroll the Pane to inspect earlier Blocks/output.
+
+This avoids nested scrolling, preserves normal terminal expectations, and makes wheel/trackpad/keyboard navigation predictable.
+
+Implementation may virtualize off-screen history for performance, but virtualization must not change the single-scroll-container interaction model.
+
+## 7. Block model
+
+Normal command execution is represented as a durable Block over real terminal execution.
+
+A Block contains:
+
+### Header
+
 - command text;
 - execution state;
 - elapsed time;
 - timestamp where useful;
-- supported Block actions.
+- supported actions.
 
-#### Body
-- actual terminal output.
+### Body
 
-#### Optional structured summary
-Command-aware summaries may appear only when backed by real product logic or integration.
+- actual terminal output/presentation;
+- no copied second terminal engine.
 
-Examples:
-- Git file-change summary;
-- additions/deletions;
-- process/service state;
-- Kubernetes/resource summary.
+### Optional structured enrichment
 
-Fallback is always correct command + output. No plugin/integration is required for basic Block correctness.
+High-value commands may gain asynchronous structured summaries when backed by real integration/recognizer data, for example:
 
-### 6.2 Block actions
-Visible actions in the reference have intended functional meaning:
+- Git file changes/diff summary;
+- test summary;
+- service endpoint/process state;
+- Kubernetes resource summary.
+
+Fallback is always correct command + output. Enrichment is additive and must never block PTY → VT → state → render progress.
+
+## 8. Block actions
+
+Reference actions have real intended behavior:
+
 - **Copy** — copy command/output according to target;
 - **Rerun** — rerun in the appropriate execution context;
-- **Pin** — retain/promote a Block for quick return/reference;
-- **Expand** — focus/enlarge the Block for inspection.
+- **Pin** — retain/promote a Block for deliberate quick return/reference;
+- **Expand** — focus/enlarge Block inspection without creating terminal authority;
+- overflow — only for additional real actions.
 
-Do not add actions purely for visual balance.
+Pinning is presentation/workspace metadata. It must not snapshot or duplicate a live grid.
 
-### 6.3 Pin semantics
-Pinning must not duplicate terminal authority or copy the live grid. A pinned Block is a presentation/navigation state over existing execution/history identity.
+## 9. Long-running foreground commands
 
-Exact persistence/retention policy is deferred to its owning implementation spec, but the UI meaning is: “keep this Block easy to find and intentionally retained in the user’s workflow.”
+A command such as `npm run dev` is a long-running streaming command, not automatically a full-screen TUI.
 
-## 7. Long-running commands and live output
+While it owns the foreground shell:
 
-The reference `npm run dev` example is a **long-running streaming command**, not a full-screen alternate-screen TUI.
+- output stays in the same Running Block;
+- the Running Block grows with output;
+- Pane-level scrolling owns navigation through the transcript;
+- the Pane may follow the live tail while the user remains at the end;
+- scrolling away pauses auto-follow but never terminal progress;
+- a compact `Return to live` affordance appears only when useful.
 
-While it runs:
-- its Block remains live and continues receiving output;
-- new output stays associated with that running Block;
-- the underlying pane shell is busy;
-- the user cannot execute an unrelated new shell command in that same shell until the running foreground process exits or is interrupted.
+### 9.1 Composer while shell is busy
 
-### 7.1 Visibility when more Blocks exist
-Live output must remain discoverable even if later Blocks/history exist.
+Do not present a fully active composer that falsely suggests an unrelated command can run in the same occupied shell.
 
-Expected behavior:
-- while the process is foreground-active, its live Block is the active execution focus;
-- the viewport may follow the live tail by default;
-- if the user scrolls away, Seyal must not forcibly snap back on every update;
-- provide a lightweight “return to live/tail” affordance/state when the user is away from the live end;
-- after the command exits, the Block becomes normal completed history.
+Preferred behavior:
 
-This avoids hiding live logs beneath newly added content.
+- retract or disable the Pane composer while the foreground process owns the shell;
+- replace it with a compact process-running/status surface when useful;
+- retain explicit interrupt/stop guidance only when backed by real behavior;
+- preserve any existing Pane draft and restore the normal composer when the shell is available again.
 
-### 7.2 Busy-shell guidance
-When a pane’s foreground shell is occupied, Seyal may show compact guidance such as:
-- current running command;
-- `Ctrl+C` to stop;
-- split pane or open another tab to run something concurrently.
+Parallel commands should run in another Pane/Tab/execution.
 
-This must remain informational and compact.
+Detailed live-tail behavior is defined by `M001-LIVE-TAIL-BEHAVIOR.md`.
 
-## 8. Composer
+## 10. Pane-scoped multiline composer
 
-The composer lives **inside each pane** and is pane-scoped.
+Every terminal Pane has its own composer state.
 
-Therefore:
-- a tab with four panes has four pane composers;
-- each pane preserves its own composer state;
-- only the focused pane composer is visually/interaction dominant;
-- inactive pane composers may be visually subdued.
+The composer is not global and is never shared across panes.
 
-### 8.1 Minimal visible controls
-The composer should remain compact and avoid unnecessary controls.
+### 10.1 Multiline editing
 
-Core behavior:
-- type shell command;
-- history/fuzzy search trigger;
-- agent invocation trigger;
-- action trigger;
-- submit/execute.
+The earlier approved multiline composer behavior is retained:
 
-### 8.2 History fuzzy search
-History search is a composer capability, not a permanently open panel.
+- ordinary text entry supports shell commands, scripts, and pipelines;
+- the editor expands vertically to a comfortable bounded editing size;
+- additional editor content scrolls within the **composer editor only** when necessary; this does not create output/Block nested scrolling;
+- `Shift+Return` is the intended default for newline;
+- a dedicated execute shortcut/action submits the composed command; exact final keybindings remain configurable/documented by the input spec.
 
-When invoked, it opens contextually above the composer and supports fuzzy command-history retrieval.
+### 10.2 Minimal visible controls
 
-### 8.3 Agent/action discovery
-Agent and action suggestions also open contextually from the composer.
+Keep the default composer visually minimal.
 
-The helper surface is **not shown permanently by default**.
+Capabilities may include:
 
-## 9. Raw terminal and TUI distinction
+- execute;
+- history fuzzy search;
+- agent invocation;
+- product/action invocation;
+- shell/context affordance only where the user can actually change it.
 
-Seyal must distinguish three presentation cases over the same execution authority:
+Do not permanently display cwd, shell selector, utility buttons, or agent/action chips if the same information is already clear from Pane context and the control has no immediate functional need.
 
-### 9.1 Normal Block mode
-Command/output is grouped into Blocks.
+### 10.3 Helper surfaces
 
-### 9.2 Long-running streaming command
-Foreground process produces continuously updating output in its active Block.
+History/Agents/Actions open contextually above the focused Pane composer. They are not permanently visible panels.
 
-### 9.3 Full-screen TUI / alternate-screen takeover
-Applications such as Vim/Neovim/htop/tmux-like TUIs take over the pane surface using the same `TerminalExecution` and canonical terminal state.
+History behavior is defined in `M001-COMPOSER-HISTORY-FUZZY-SEARCH.md`.
 
-In TUI takeover:
-- Block chrome and composer must not intercept terminal semantics;
-- the pane behaves as a direct terminal surface;
-- when the application exits alternate-screen mode, Seyal returns to the appropriate normal presentation.
+## 11. TUI / alternate-screen takeover
 
-## 10. Sessions, Agents, Resources bottom/global navigation
+Full-screen TUIs such as Vim/Neovim/htop/tmux use the same `TerminalExecution` and canonical terminal state.
 
-The frozen direction favors minimizing stacked permanent navigation on a 15-inch screen.
+During canonical TUI takeover:
 
-Where global category navigation is used, it should remain compact and avoid duplicating the content already visible in the left panel.
+- the application surface expands to the Pane viewport;
+- normal Block chrome is not drawn over the TUI;
+- the Pane composer is hidden/disabled;
+- input goes through the terminal input path directly to the application;
+- no client-only fake TUI exit is allowed;
+- Pane scrolling is not used to emulate TUI scrolling; the application/terminal mode owns its interaction.
 
-### 10.1 Sessions
-A Sessions view should show runtime/session inventory rather than workspace structure.
+When canonical terminal state exits TUI/alternate-screen mode, Seyal returns to the normal Block/transcript presentation and restores the Pane composer where the shell is available.
 
-Expected content:
-- active attached terminal sessions;
-- detached but surviving sessions;
-- session host/runtime identity;
-- workspace association;
-- foreground process summary;
-- last activity;
-- reconnect/jump target.
+See `M001-TUI-TAKEOVER.md`.
 
-### 10.2 Agents
-A dedicated Agents view provides the complete cross-workspace agent inventory.
-
-Expected content:
-- provider/session;
-- workspace/tab/pane association;
-- running/waiting/attention state;
-- current task/activity summary;
-- jump-to-agent target;
-- approvals/attention where applicable.
-
-The left-panel Agents section is the compact current-workspace version of this broader inventory.
-
-### 10.3 Resources
-A Resources view provides operational/runtime resources and hosts, not decorative metrics.
-
-Possible backed-by-real-data content:
-- local/remote hosts;
-- active Runtime instances;
-- containers;
-- Kubernetes contexts/resources when explicitly integrated;
-- environment/runtime resources;
-- CPU/memory/network/process summaries.
-
-Do not expose a resource category until Seyal has a real data source/integration for it.
-
-## 11. Multipane behavior
+## 12. Multipane
 
 A tab may contain one or more panes in a nested split tree.
 
-### 11.1 Pane rules
-Each terminal pane owns:
-- one `TerminalExecution`;
-- one pane-local presentation state;
-- one pane-scoped composer.
+Rules:
 
-### 11.2 Focus
-Only one pane is focused at a time.
+- each terminal Pane has its own `TerminalExecution` and own composer state;
+- only one Pane is focused for primary keyboard input at a time;
+- focus determines composer/input target, split target, and default inspector context;
+- a busy/TUI Pane may have its composer retracted/disabled while other panes remain fully usable;
+- do not show a deeply nested pane tree in the left sidebar by default;
+- indicate pane count/activity compactly and expose a pane navigator only when useful.
 
-Focus determines:
-- active composer;
-- keyboard target;
-- inspector default context;
-- which execution receives pane-scoped actions.
+See `M001-MULTIPANE-VIEW.md`.
 
-### 11.3 Left-panel pane tree
-Do **not** show a full pane tree by default simply because a tab has multiple panes.
+## 13. Inspector
 
-For power-user efficiency:
-- keep workspace/tab inventory stable;
-- indicate pane count/activity compactly;
-- expose a pane-tree navigator only when useful or explicitly invoked.
-
-This prevents the sidebar from becoming a deeply nested tree on small screens.
-
-## 12. Inspector
-
-The inspector is contextual.
-
-### 12.1 Resolution priority
+Inspector context resolves in this priority order:
 
 ```text
 explicit selection
 → focused object
-→ active pane
-→ active tab
-→ active workspace
+→ active Pane
+→ active Tab
+→ active Workspace
 ```
 
-Examples:
-- selected Block → Block details;
-- selected process → process details;
-- selected agent → agent details;
-- otherwise focused pane/execution details;
-- then tab/workspace context.
+For a focused terminal Pane, useful data includes:
 
-### 12.2 Stable sections for focused terminal pane
-Useful data includes:
+- Workspace/path/repo context;
+- active Tab/Pane identity;
+- shell/cwd/execution state;
+- foreground process name, PID/PPID, duration, CPU/memory where available;
+- process tree;
+- backed-by-real-data resources.
 
-#### Workspace
-- workspace name;
-- path/repo context;
-- branch where known;
-- last activity.
+### 13.1 Inspector modes
 
-#### Active tab
-- tab identity;
-- pane count/layout summary where useful.
+The earlier approved right-side utility concepts are retained as **contextual inspector modes**, not a permanently duplicated utility sidebar.
 
-#### Active pane
-- pane identity;
-- focused state;
-- shell;
-- cwd;
-- execution duration/state.
+Potential documented modes:
 
-#### Active process
-Seyal should surface the foreground/running process created from the terminal.
+- Context / Info;
+- Process / Runtime;
+- Files / Diff / Artifacts;
+- Activity / Attention / History.
 
-Useful fields:
-- command/process name;
-- PID/PPID where available;
-- running/exited state;
-- started time;
-- duration;
-- CPU;
-- memory;
-- port when reliably detected;
-- process-tree affordance.
+Each mode/icon must have a real data contract before shipping.
 
-This is a major value of the inspector and should be driven by actual OS/runtime information rather than shell-output scraping.
+Do not repeat the full agent inventory here. If an agent is selected, show that agent's details only.
 
-#### Resources
-Only backed-by-real-data metrics:
-- CPU;
-- memory;
-- disk/network where available and meaningful.
+## 14. Sessions / Agents / Resources views
 
-### 12.3 Inspector mode icons
-The compact inspector mode icons from earlier approved visual exploration may be retained as the right-pane mode switcher if each maps to a defined functional inspector mode.
+Dedicated views are defined separately:
 
-Potential modes include:
-- info/context;
-- process/runtime;
-- artifacts/files/diff;
-- activity/attention/history.
+- `M001-SESSIONS-VIEW.md`
+- `M001-AGENTS-VIEW.md`
+- `M001-RESOURCES-VIEW.md`
 
-Do not add an icon until its corresponding view and data contract are documented.
+They must reuse the same Workspace/Tab/Pane identities and must not create terminal authority merely by opening an inventory view.
 
-### 12.4 No duplicate agent list
-Do not show the same full agent inventory simultaneously in both left navigation and inspector.
+## 15. Functional-only UI rule
 
-When an agent is explicitly selected, the inspector may show **that agent’s details**.
+Every visible region, icon, button, metric, status, and panel must have:
 
-## 13. Structured Block enrichments
-
-Rich Block summaries are not guaranteed for every command.
-
-Three levels are expected:
-
-1. **Default** — command + terminal output, always available.
-2. **Built-in recognizers/integrations** — selected high-value commands can produce structured summaries asynchronously.
-3. **Future extension/plugin/adaptor** — additional command-specific presentations may be contributed without changing terminal authority.
-
-Rules:
-- terminal correctness never depends on enrichment;
-- enrichment never blocks PTY/VT/render progress;
-- unknown commands remain fully correct raw/Block output;
-- no second VT/grid/output authority is created.
-
-## 14. Functional-only UI rule
-
-Every visible region, icon, button, metric, status, and panel in implementation must have:
-- a real product behavior;
-- a real backing state/data contract;
-- or an explicitly accepted implementation issue/spec.
+- real product behavior;
+- a real backing state/data source;
+- or an accepted implementation issue/spec.
 
 Forbidden:
-- fake buttons for appearance;
+
+- fake buttons for balance;
 - duplicate navigation purely for symmetry;
-- placeholder metrics presented as production data;
-- speculative inspector modules with no backing source;
-- controls that cannot be implemented when the screen ships.
+- placeholder metrics presented as production state;
+- always-visible controls with no actionable purpose;
+- nested output scroll regions introduced only to make a mockup fit.
 
-## 15. Frozen design intent
+## 16. Reconciliation with earlier approved mockups
 
-The frozen screen should communicate that Seyal is:
-- workspace-first;
-- terminal-correct;
-- Block-native;
-- pane/composer scoped;
-- process-aware;
-- agent-native without making agents terminal authority;
-- information-dense but efficient on a 15-inch screen;
-- contextual rather than cluttered;
-- functional rather than decorative.
+Older design explorations are not being committed as visual authority, but useful non-conflicting interaction ideas are preserved here.
 
-## 16. Companion state specifications
+Retained:
 
-The generated follow-up mockups are specified in:
+- multiline Pane composer;
+- keyboard-first global command palette;
+- adaptive/scrollable top tab strip;
+- current-Workspace Workspaces/Agents/Tabs context;
+- runtime/connection status when meaningful;
+- pane-scoped composers in multipane;
+- notification/agent-attention popover;
+- right-side contextual Files/Activity/Process-style inspector modes;
+- Block-based command/output presentation.
+
+Explicitly superseded:
+
+- global/shared composer;
+- fixed maximum Block height with internal output scrolling;
+- a long-running Node/log process scrolling inside its own nested output box;
+- showing an active composer as usable while its shell is occupied;
+- duplicate full agent inventories in both left and right sidebars;
+- decorative pane/layout/action controls without implementation semantics.
+
+## 17. Companion state specifications
 
 - `M001-SESSIONS-VIEW.md`
 - `M001-AGENTS-VIEW.md`
@@ -459,18 +402,17 @@ The generated follow-up mockups are specified in:
 - `M001-COMPOSER-HISTORY-FUZZY-SEARCH.md`
 - `M001-LIVE-TAIL-BEHAVIOR.md`
 
-`M001-CORE-TERMINAL-REFERENCE-INDEX.md` provides the complete mapping and cross-screen invariants.
+`M001-CORE-TERMINAL-REFERENCE-INDEX.md` maps the complete set.
 
-Generated mockups are visual references; when a mockup conflicts with architecture or a functional rule, these specifications are authoritative.
+Generated mockups are visual references; where a mockup conflicts with these functional rules or accepted terminal architecture, the specifications are authoritative.
 
-## 17. Authority boundary
+## 18. Authority boundary
 
-This reference freezes the **visual/information architecture direction** for the Core Terminal screen.
+This reference freezes visual/information architecture only.
 
 It does not override:
-- M001 dependency order;
-- accepted Runtime/TerminalExecution/TerminalState ownership;
-- Pass-specific implementation scope;
-- future specs required for Sessions, Agents, Resources, multipane navigation, notifications, inspector modes, or rich Block integrations.
 
-Implementation work must remain subordinate to the milestone/ADR/spec authority active at the time it is scheduled.
+- M001 pass ordering;
+- accepted Runtime/TerminalExecution/TerminalState ownership;
+- Pass-specific implementation authority;
+- terminal correctness/performance requirements.

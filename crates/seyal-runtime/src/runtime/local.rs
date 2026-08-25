@@ -307,6 +307,30 @@ impl Runtime {
         self.sync_local_writable(token)
     }
 
+    /// Records that a connection must converge from a fresh canonical
+    /// snapshot. Repeated continuity failures collapse to one token. If an
+    /// older snapshot is already pending/in-flight we retain the request but do
+    /// not wake-spin; the writable event that completes the older snapshot will
+    /// return through `publish_display_updates`, where the latest snapshot can
+    /// be materialized.
+    fn schedule_snapshot_recovery(&mut self, token: u64) {
+        let should_wake = if let Some(state) = self.local_ipc.as_mut() {
+            if !state.connections.contains_key(&token) || !state.server.contains(token) {
+                false
+            } else if state.pending_resync_set.insert(token) {
+                state.pending_resync.push_back(token);
+                !state.server.has_snapshot_delivery(token)
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if should_wake {
+            let _ = self.reactor.waker().wake();
+        }
+    }
+
     fn send_error(&mut self, token: u64, code: ErrorCode, offending: u16) {
         let message = framing::ErrorMessage {
             error_code: code as u16,
@@ -713,35 +737,33 @@ impl Runtime {
             return;
         }
 
-        let queued = if let Some(state) = self.local_ipc.as_mut() {
-            if state.server.has_snapshot_delivery(token) {
-                false
-            } else if state.pending_resync_set.insert(token) {
-                state.pending_resync.push_back(token);
-                true
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-        if queued {
-            let _ = self.reactor.waker().wake();
-        }
+        self.schedule_snapshot_recovery(token);
     }
 
     /// Performs bounded expensive recovery work after normal reactor events.
-    /// Many Resync frames from one connection collapse to one full snapshot.
+    /// Explicit resync and continuity loss share the same deduplicated queue.
+    /// A token whose older snapshot is still being delivered stays queued but
+    /// is not repeatedly materialized or used to wake-spin the runtime.
     pub(super) fn service_pending_resyncs(&mut self) {
+        let scan_limit = self
+            .local_ipc
+            .as_ref()
+            .map_or(0, |state| state.pending_resync.len());
+        let mut inspected = 0usize;
         let mut serviced = 0usize;
-        while serviced < RESYNC_SNAPSHOT_BUDGET_PER_POLL {
+
+        while inspected < scan_limit && serviced < RESYNC_SNAPSHOT_BUDGET_PER_POLL {
             let token = {
                 let Some(state) = self.local_ipc.as_mut() else {
                     return;
                 };
                 let mut next = None;
-                while let Some(candidate) = state.pending_resync.pop_front() {
-                    if state.pending_resync_set.remove(&candidate) {
+                while inspected < scan_limit {
+                    let Some(candidate) = state.pending_resync.pop_front() else {
+                        break;
+                    };
+                    inspected += 1;
+                    if state.pending_resync_set.contains(&candidate) {
                         next = Some(candidate);
                         break;
                     }
@@ -751,16 +773,29 @@ impl Runtime {
             let Some(token) = token else {
                 break;
             };
-            serviced += 1;
 
-            if !self.local_connection_exists(token)
-                || self
-                    .local_ipc
-                    .as_ref()
-                    .is_some_and(|state| state.server.has_snapshot_delivery(token))
-            {
+            if !self.local_connection_exists(token) {
+                if let Some(state) = self.local_ipc.as_mut() {
+                    state.pending_resync_set.remove(&token);
+                }
                 continue;
             }
+
+            let snapshot_active = self
+                .local_ipc
+                .as_ref()
+                .is_some_and(|state| state.server.has_snapshot_delivery(token));
+            if snapshot_active {
+                if let Some(state) = self.local_ipc.as_mut() {
+                    state.pending_resync.push_back(token);
+                }
+                continue;
+            }
+
+            if let Some(state) = self.local_ipc.as_mut() {
+                state.pending_resync_set.remove(&token);
+            }
+            serviced += 1;
 
             let execution_id = self.local_ipc.as_ref().and_then(|state| {
                 let attachment_id = state.connections.get(&token)?.attachment?;
@@ -788,11 +823,17 @@ impl Runtime {
             }
         }
 
-        if self
-            .local_ipc
-            .as_ref()
-            .is_some_and(|state| !state.pending_resync_set.is_empty())
-        {
+        // If the budget, rather than an in-flight snapshot, left ready work in
+        // the queue, schedule one more bounded turn. Blocked tokens rely on the
+        // socket writable event that advances their existing snapshot.
+        let ready_pending = self.local_ipc.as_ref().is_some_and(|state| {
+            state.pending_resync.iter().any(|token| {
+                state.pending_resync_set.contains(token)
+                    && state.server.contains(*token)
+                    && !state.server.has_snapshot_delivery(*token)
+            })
+        });
+        if ready_pending {
             let _ = self.reactor.waker().wake();
         }
     }
@@ -897,7 +938,6 @@ impl Runtime {
                 let base_generation = previous.generation;
                 match display::encode_delta(&update, base_generation) {
                     Ok(delta) => {
-                        let mut recovery_snapshot: Option<EncodedDisplayBatch> = None;
                         for (_, token) in viewers {
                             let result = self.local_ipc.as_mut().and_then(|state| {
                                 state.server.try_enqueue_delta(token, delta.clone()).ok()
@@ -907,24 +947,12 @@ impl Runtime {
                                     self.sync_local_writable(token);
                                 }
                                 Some(DeltaEnqueueResult::NeedSnapshot) => {
-                                    if recovery_snapshot.is_none() {
-                                        recovery_snapshot = self
-                                            .entries
-                                            .get(&execution_id)
-                                            .map(|entry| entry.execution.projection_snapshot())
-                                            .and_then(|snapshot| {
-                                                display::encode_snapshot(&snapshot).ok()
-                                            });
-                                    }
-                                    if let Some(batch) = recovery_snapshot.clone() {
-                                        let _ = self.send_snapshot_batch(token, batch);
-                                    } else {
-                                        self.send_error(
-                                            token,
-                                            ErrorCode::DisplayUnavailable,
-                                            MessageType::DisplaySnapshot as u16,
-                                        );
-                                    }
+                                    // Continuity loss is a state requirement,
+                                    // not a command to encode a full grid on
+                                    // every source generation. Defer and
+                                    // coalesce until this connection can accept
+                                    // one current snapshot.
+                                    self.schedule_snapshot_recovery(token);
                                 }
                                 None => self.close_local_connection(token),
                             }

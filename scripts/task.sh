@@ -44,6 +44,8 @@ case "$cmd" in
     bash scripts/validate-governance.sh
     python3 scripts/check-doc-links.py
     python3 scripts/check-layering.py
+    python3 scripts/check-hot-path.py
+    python3 scripts/check-benchmark-contract.py
     bash scripts/test-tooling.sh
     python3 scripts/test-workspace.py
     python3 scripts/test-harnesses.py
@@ -57,6 +59,7 @@ case "$cmd" in
     ;;
   bench)
     bash scripts/check-toolchain.sh
+    python3 scripts/check-benchmark-contract.py
     python3 scripts/benchmark-smoke.py
     if find crates -type f -path '*/benches/*.rs' -print -quit 2>/dev/null | grep -q .; then
       cargo_pinned bench --workspace --locked

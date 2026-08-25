@@ -1,0 +1,130 @@
+name: Pass 5 Syscall Instrumentation
+
+on:
+  push:
+    branches:
+      - issue/105-m001-pass-5-implementation
+    paths:
+      - .github/workflows/pass5-syscall-instrumentation.yml
+
+permissions:
+  contents: write
+
+jobs:
+  instrument:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: issue/105-m001-pass-5-implementation
+      - name: Add zero-cost production-benchmark syscall counters
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          cargo = Path('crates/seyal-runtime/Cargo.toml')
+          s = cargo.read_text()
+          old = 'benchmark-shared-projection = []\n'
+          new = 'benchmark-shared-projection = []\nbenchmark-instrumentation = []\n'
+          if old not in s or 'benchmark-instrumentation = []' in s:
+              raise SystemExit('Cargo feature anchor mismatch')
+          s = s.replace(old, new, 1)
+          old = '[[bench]]\nname = "pass5_production_transport"\nharness = false\n'
+          new = '[[bench]]\nname = "pass5_production_transport"\nharness = false\nrequired-features = ["benchmark-instrumentation"]\n'
+          if old not in s:
+              raise SystemExit('production bench target anchor missing')
+          cargo.write_text(s.replace(old, new, 1))
+
+          fd = Path('crates/seyal-runtime/src/local_ipc/fd_transfer.rs')
+          s = fd.read_text()
+          import_anchor = '''use std::{\n    io,\n    os::fd::{FromRawFd, OwnedFd, RawFd},\n};\n'''
+          import_replacement = import_anchor + '''\n#[cfg(feature = "benchmark-instrumentation")]\nuse std::sync::atomic::{AtomicU64, Ordering};\n'''
+          if import_anchor not in s:
+              raise SystemExit('fd_transfer import anchor missing')
+          s = s.replace(import_anchor, import_replacement, 1)
+
+          const_anchor = 'const ANCILLARY_BUFFER_BYTES: usize = 256;\n'
+          counters = '''const ANCILLARY_BUFFER_BYTES: usize = 256;\n\n#[cfg(feature = "benchmark-instrumentation")]\nstatic BENCH_SEND_SYSCALLS: AtomicU64 = AtomicU64::new(0);\n#[cfg(feature = "benchmark-instrumentation")]\nstatic BENCH_SENDMSG_SYSCALLS: AtomicU64 = AtomicU64::new(0);\n#[cfg(feature = "benchmark-instrumentation")]\nstatic BENCH_RECVMSG_SYSCALLS: AtomicU64 = AtomicU64::new(0);\n\n#[cfg(feature = "benchmark-instrumentation")]\n#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]\npub struct BenchmarkSyscallCounters {\n    pub send: u64,\n    pub sendmsg: u64,\n    pub recvmsg: u64,\n}\n\n#[cfg(feature = "benchmark-instrumentation")]\npub fn reset_benchmark_syscall_counters() {\n    BENCH_SEND_SYSCALLS.store(0, Ordering::Relaxed);\n    BENCH_SENDMSG_SYSCALLS.store(0, Ordering::Relaxed);\n    BENCH_RECVMSG_SYSCALLS.store(0, Ordering::Relaxed);\n}\n\n#[cfg(feature = "benchmark-instrumentation")]\npub fn benchmark_syscall_counters() -> BenchmarkSyscallCounters {\n    BenchmarkSyscallCounters {\n        send: BENCH_SEND_SYSCALLS.load(Ordering::Relaxed),\n        sendmsg: BENCH_SENDMSG_SYSCALLS.load(Ordering::Relaxed),\n        recvmsg: BENCH_RECVMSG_SYSCALLS.load(Ordering::Relaxed),\n    }\n}\n'''
+          if const_anchor not in s:
+              raise SystemExit('fd_transfer constant anchor missing')
+          s = s.replace(const_anchor, counters, 1)
+
+          send_anchor = '''        let result = unsafe {\n            libc::send(\n'''
+          send_replacement = '''        #[cfg(feature = "benchmark-instrumentation")]\n        BENCH_SEND_SYSCALLS.fetch_add(1, Ordering::Relaxed);\n        let result = unsafe {\n            libc::send(\n'''
+          if send_anchor not in s:
+              raise SystemExit('send syscall anchor missing')
+          s = s.replace(send_anchor, send_replacement, 1)
+
+          sendmsg_anchor = '    let result = unsafe { libc::sendmsg(socket, &msg, 0) };\n'
+          sendmsg_replacement = '''    #[cfg(feature = "benchmark-instrumentation")]\n    BENCH_SENDMSG_SYSCALLS.fetch_add(1, Ordering::Relaxed);\n    let result = unsafe { libc::sendmsg(socket, &msg, 0) };\n'''
+          if sendmsg_anchor not in s:
+              raise SystemExit('sendmsg syscall anchor missing')
+          s = s.replace(sendmsg_anchor, sendmsg_replacement, 1)
+
+          recvmsg_anchor = '    let result = unsafe { libc::recvmsg(socket, &mut msg, 0) };\n'
+          recvmsg_replacement = '''    #[cfg(feature = "benchmark-instrumentation")]\n    BENCH_RECVMSG_SYSCALLS.fetch_add(1, Ordering::Relaxed);\n    let result = unsafe { libc::recvmsg(socket, &mut msg, 0) };\n'''
+          if recvmsg_anchor not in s:
+              raise SystemExit('recvmsg syscall anchor missing')
+          fd.write_text(s.replace(recvmsg_anchor, recvmsg_replacement, 1))
+
+          bench = Path('crates/seyal-runtime/benches/pass5_production_transport.rs')
+          s = bench.read_text()
+          old = '''    display::{DecodedDisplayChunk, DisplayCache, decode_chunk, empty_cache},\n    local_ipc::framing::{\n'''
+          new = '''    display::{DecodedDisplayChunk, DisplayCache, decode_chunk, empty_cache},\n    local_ipc::{\n        fd_transfer::{benchmark_syscall_counters, reset_benchmark_syscall_counters},\n        framing::{\n'''
+          if old not in s:
+              raise SystemExit('benchmark local_ipc import anchor missing')
+          s = s.replace(old, new, 1)
+          old = '''        ServerHello, encode_frame,\n    },\n};\n'''
+          new = '''            ServerHello, encode_frame,\n        },\n    },\n};\n'''
+          if old not in s:
+              raise SystemExit('benchmark import close anchor missing')
+          s = s.replace(old, new, 1)
+          s = s.replace(
+              'repetitions_interactive=32 server_sendmsg_syscalls=NOT_INSTRUMENTED queue_depth=bounded_by_production_contract',
+              'repetitions_interactive=32 syscall_counts=feature_gated_exact_invocations queue_depth=bounded_by_production_contract',
+              1,
+          )
+          anchor = '''    let allocation_region = Region::new(GLOBAL);\n    let measurement = if workload == Workload::Interactive {\n'''
+          replacement = '''    reset_benchmark_syscall_counters();\n    let allocation_region = Region::new(GLOBAL);\n    let measurement = if workload == Workload::Interactive {\n'''
+          if anchor not in s:
+              raise SystemExit('benchmark measurement start anchor missing')
+          s = s.replace(anchor, replacement, 1)
+          anchor = '''    let allocation_stats = allocation_region.change();\n    assert!(clients.iter().all(|client| client.cache.generation > 0));\n'''
+          replacement = '''    let allocation_stats = allocation_region.change();\n    let syscall_counters = benchmark_syscall_counters();\n    assert!(clients.iter().all(|client| client.cache.generation > 0));\n'''
+          if anchor not in s:
+              raise SystemExit('benchmark measurement end anchor missing')
+          s = s.replace(anchor, replacement, 1)
+          old = 'client_read_syscalls={} server_sendmsg_syscalls=NOT_INSTRUMENTED display_batches={}'
+          new = 'client_read_syscalls={} server_send_syscalls={} server_sendmsg_syscalls={} runtime_recvmsg_syscalls={} display_batches={}'
+          if old not in s:
+              raise SystemExit('benchmark output syscall anchor missing')
+          s = s.replace(old, new, 1)
+          anchor = '''        bytes_received,\n        client_read_syscalls,\n        display_batches,\n'''
+          replacement = '''        bytes_received,\n        client_read_syscalls,\n        syscall_counters.send,\n        syscall_counters.sendmsg,\n        syscall_counters.recvmsg,\n        display_batches,\n'''
+          if anchor not in s:
+              raise SystemExit('benchmark output args anchor missing')
+          bench.write_text(s.replace(anchor, replacement, 1))
+
+          task = Path('scripts/task.sh')
+          s = task.read_text()
+          anchor = '''    if find crates -type f -path '*/benches/*.rs' -print -quit 2>/dev/null | grep -q .; then\n      cargo_pinned bench --workspace --locked\n'''
+          replacement = '''    if find crates -type f -path '*/benches/*.rs' -print -quit 2>/dev/null | grep -q .; then\n      cargo_pinned bench --workspace --locked\n      cargo_pinned bench -p seyal-runtime --bench pass5_production_transport --features benchmark-instrumentation --locked\n'''
+          if anchor not in s:
+              raise SystemExit('task bench anchor missing')
+          task.write_text(s.replace(anchor, replacement, 1))
+          PY
+      - name: Validate instrumentation without production hot-path overhead
+        run: |
+          make bootstrap
+          cargo fmt --all
+          bash -n scripts/task.sh
+          cargo clippy --workspace --all-targets --all-features -- -D warnings
+          cargo test --workspace --all-features --locked
+          cargo bench -p seyal-runtime --bench pass5_production_transport --features benchmark-instrumentation --no-run --locked
+      - name: Commit validated instrumentation
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/seyal-runtime/Cargo.toml crates/seyal-runtime/src/local_ipc/fd_transfer.rs crates/seyal-runtime/benches/pass5_production_transport.rs scripts/task.sh
+          git commit -m 'bench: measure Candidate-D transport syscall invocations'
+          git push origin HEAD:issue/105-m001-pass-5-implementation

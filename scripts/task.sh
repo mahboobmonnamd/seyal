@@ -12,6 +12,10 @@ cargo_pinned() {
   rustup run "$channel" cargo "$@"
 }
 
+pass5_failure_matrix() {
+  cargo_pinned test -p seyal-runtime --locked --features test-fault-injection --test local_ipc_failure_injection
+}
+
 case "$cmd" in
   bootstrap)
     bash scripts/bootstrap-toolchain.sh
@@ -31,6 +35,7 @@ case "$cmd" in
     python3 scripts/fuzz-smoke.py
     bash scripts/check-toolchain.sh
     cargo_pinned test --workspace --locked
+    pass5_failure_matrix
     bash scripts/test-macos-skeleton.sh
     ;;
   check)
@@ -47,6 +52,7 @@ case "$cmd" in
     cargo_pinned fmt --all -- --check
     cargo_pinned clippy --workspace --all-targets --all-features -- -D warnings
     cargo_pinned test --workspace --locked
+    pass5_failure_matrix
     bash scripts/test-macos-skeleton.sh
     ;;
   bench)

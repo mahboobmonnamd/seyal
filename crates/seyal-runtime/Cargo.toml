@@ -42,3 +42,7 @@ required-features = ["benchmark-shared-projection"]
 [[bench]]
 name = "pass5_delta_transport"
 harness = false
+
+[[bench]]
+name = "pass5_production_transport"
+harness = false

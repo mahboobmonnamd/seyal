@@ -206,7 +206,11 @@ struct Sample {
 
 #[cfg(target_os = "macos")]
 fn allocation_fields(stats: Stats) -> (usize, usize, usize) {
-    (stats.allocations, stats.reallocations, stats.bytes_allocated)
+    (
+        stats.allocations,
+        stats.reallocations,
+        stats.bytes_allocated,
+    )
 }
 
 #[cfg(target_os = "macos")]
@@ -359,7 +363,10 @@ fn run_hybrid_worker(fanout: usize, repetitions: usize, workload: &str) {
             receive_exact(&mut client.wake_rx, &mut client.wake_receive);
             let frame_header =
                 FrameHeader::decode(&client.wake_receive[..HEADER_LEN]).expect("wake header");
-            assert_eq!(frame_header.message_type, MessageType::GenerationWake as u16);
+            assert_eq!(
+                frame_header.message_type,
+                MessageType::GenerationWake as u16
+            );
             let wake =
                 GenerationWake::decode(&client.wake_receive[HEADER_LEN..]).expect("wake body");
             assert_eq!(wake.attachment_id, client.attachment_id);

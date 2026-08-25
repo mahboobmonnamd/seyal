@@ -11,17 +11,17 @@ use std::{
 };
 
 use seyal_exec::{CommandSpec, WindowSize};
-use seyal_runtime::local_ipc::fd_transfer::{self, RecvFd};
-use seyal_runtime::local_ipc::framing::{
-    Attach, Attached, ClientHello, Detach, FrameHeader, HEADER_LEN, MessageType, Resync, Role,
-    ServerHello, decode_message, encode_frame,
+use seyal_runtime::{
+    AttachmentId, ExecutionId, LocalIpcMode, Runtime, RuntimeConfig,
+    display,
+    local_ipc::{
+        fd_transfer::{self, RecvFd},
+        framing::{
+            Attach, Attached, ClientHello, Detach, FrameHeader, HEADER_LEN, MessageType, Resync,
+            Role, ServerHello, decode_message, encode_frame,
+        },
+    },
 };
-use seyal_runtime::projection::layout::{
-    CELL_LEN, CellRecord, DAMAGE_LEN, DamageRecord, MAX_REGION_BYTES, REGION_HEADER_LEN,
-    SLOT_HEADER_LEN, SlotHeader,
-};
-use seyal_runtime::projection::writer::{RegionMemory, read_latest, read_region_header};
-use seyal_runtime::{AttachmentId, ExecutionId, LocalIpcMode, Runtime, RuntimeConfig};
 
 fn input() -> Vec<u8> {
     let path =
@@ -46,42 +46,22 @@ fn local_binary_protocol_decode_seed() {
     if payload.len() != header.payload_len as usize {
         return;
     }
-    let _ = decode_message(&header, payload);
+
+    if matches!(
+        MessageType::from_u16(header.message_type),
+        Some(MessageType::DisplaySnapshot | MessageType::DisplayDelta)
+    ) {
+        let _ = display::decode_chunk(&bytes[..payload_end]);
+    } else {
+        let _ = decode_message(&header, payload);
+    }
 }
 
 #[test]
-#[ignore = "executed by fuzz/targets/shared-projection-validation with a retained seed"]
-fn shared_projection_validation_seed() {
+#[ignore = "executed by fuzz/targets/display-binary-decode with a retained seed"]
+fn display_binary_decode_seed() {
     let bytes = input();
-    let bounded_len = bytes.len().min(MAX_REGION_BYTES as usize);
-    let storage_bytes = bounded_len.max(REGION_HEADER_LEN).div_ceil(8) * 8;
-    let mut storage = vec![0u64; storage_bytes / 8].into_boxed_slice();
-    for (index, chunk) in bytes[..bounded_len].chunks(8).enumerate() {
-        let mut word = [0u8; 8];
-        word[..chunk.len()].copy_from_slice(chunk);
-        storage[index] = u64::from_le_bytes(word);
-    }
-
-    // SAFETY: boxed `u64` storage is 8-byte aligned, remains alive for the
-    // entire reader exercise, and `storage_bytes` exactly describes its span.
-    let memory = unsafe { RegionMemory::new(storage.as_mut_ptr().cast(), storage_bytes) };
-    if let Ok(region) = read_region_header(&memory) {
-        let _ = read_latest(&memory, &region);
-    }
-
-    // Retain direct fixed-record decoder coverage as a supplement to the
-    // production mapped-reader path above.
-    if bytes.len() >= SLOT_HEADER_LEN {
-        let _ = SlotHeader::decode(&bytes[..SLOT_HEADER_LEN], 256, 512);
-    }
-    let (cell_chunks, _) = bytes.as_chunks::<CELL_LEN>();
-    for chunk in cell_chunks {
-        let _ = CellRecord::decode(chunk);
-    }
-    let (damage_chunks, _) = bytes.as_chunks::<DAMAGE_LEN>();
-    for chunk in damage_chunks {
-        let _ = DamageRecord::decode(chunk, 256);
-    }
+    let _ = display::decode_chunk(&bytes);
 }
 
 struct RuntimeFuzzHarness {
@@ -246,9 +226,6 @@ fn reconnect_resync_state_machine_seed() {
     let mut client = harness.connect();
     let mut attachment = None;
 
-    // Cap state-machine work per seed. The retained/mutated bytes choose
-    // operations and identities, but cannot create unbounded sockets/PTys or
-    // queue work inside one fuzz invocation.
     for chunk in bytes.chunks(3).take(32) {
         if chunk.len() < 3 {
             break;
@@ -313,8 +290,6 @@ fn reconnect_resync_state_machine_seed() {
                 }
             }
             _ => {
-                // Repeated attach attempts exercise real one-attachment and
-                // one-controller state transitions rather than a copied model.
                 let role = if chunk[2] & 1 == 0 {
                     Role::Observer
                 } else {

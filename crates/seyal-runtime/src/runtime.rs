@@ -979,14 +979,25 @@ impl Runtime {
     }
 
     fn release_local_attachment(&mut self, attachment_id: AttachmentId) {
-        let Some(state) = self.local_ipc.as_mut() else {
-            return;
-        };
-        let _ = state.attachments.detach(attachment_id);
-        if let Some(projection) = state.projections.remove(&attachment_id) {
-            state.aggregate_projection_bytes = state
-                .aggregate_projection_bytes
-                .saturating_sub(projection.region.region_bytes());
+        let execution_id = self.local_ipc.as_ref().and_then(|state| {
+            state
+                .attachments
+                .execution_of(attachment_id)
+                .ok()
+        });
+        if let Some(state) = self.local_ipc.as_mut() {
+            let _ = state.attachments.detach(attachment_id);
+            if let Some(projection) = state.projections.remove(&attachment_id) {
+                state.aggregate_projection_bytes = state
+                    .aggregate_projection_bytes
+                    .saturating_sub(projection.region.region_bytes());
+            }
+        }
+        if let Some(execution_id) = execution_id
+            && let Some(entry) = self.entries.get_mut(&execution_id)
+        {
+            let removed = entry.attachments.remove(&attachment_id);
+            debug_assert!(removed);
         }
     }
 
@@ -1118,7 +1129,7 @@ impl Runtime {
                     _ => WireLifecycle::Terminating,
                 },
                 has_controller: state.attachments.has_controller(summary.id),
-                attachment_count: state.attachments.attachments_for_execution(summary.id) as u16,
+                attachment_count: summary.attachment_count.min(u16::MAX as usize) as u16,
             })
             .collect();
         let frame = framing::encode_frame(
@@ -1216,25 +1227,35 @@ impl Runtime {
             return;
         }
 
-        let Some(state) = self.local_ipc.as_mut() else {
+        {
+            let Some(state) = self.local_ipc.as_mut() else {
+                return;
+            };
+            if !state.connections.contains_key(&token) {
+                return;
+            }
+            state.attachments.insert_prevalidated(
+                attachment_id,
+                attach.execution_id,
+                attach.requested_role,
+                projection.projection_id,
+                token,
+            );
+            state.aggregate_projection_bytes += new_bytes;
+            state.projections.insert(attachment_id, projection);
+            if let Some(meta) = state.connections.get_mut(&token) {
+                meta.attachment = Some(attachment_id);
+            }
+            state.server.set_state(token, LocalIpcConnState::Attached);
+        }
+
+        let Some(entry) = self.entries.get_mut(&attach.execution_id) else {
+            self.release_local_attachment(attachment_id);
+            self.close_local_connection(token);
             return;
         };
-        if !state.connections.contains_key(&token) {
-            return;
-        }
-        state.attachments.insert_prevalidated(
-            attachment_id,
-            attach.execution_id,
-            attach.requested_role,
-            projection.projection_id,
-            token,
-        );
-        state.aggregate_projection_bytes += new_bytes;
-        state.projections.insert(attachment_id, projection);
-        if let Some(meta) = state.connections.get_mut(&token) {
-            meta.attachment = Some(attachment_id);
-        }
-        state.server.set_state(token, LocalIpcConnState::Attached);
+        let inserted = entry.attachments.insert(attachment_id);
+        debug_assert!(inserted);
     }
 
     fn handle_detach(&mut self, token: u64, payload: &[u8]) {
@@ -1245,6 +1266,21 @@ impl Runtime {
                 MessageType::Detach as u16,
             );
             return;
+        };
+        let execution_id = match self.local_ipc.as_ref().map(|state| {
+            state
+                .attachments
+                .execution_for_connection(token, detach.attachment_id)
+        }) {
+            Some(Ok(id)) => id,
+            Some(Err(AttachmentError::WrongConnection)) => {
+                self.send_error(token, ErrorCode::StaleIdentity, MessageType::Detach as u16);
+                return;
+            }
+            _ => {
+                self.send_error(token, ErrorCode::StaleIdentity, MessageType::Detach as u16);
+                return;
+            }
         };
         let result = self.local_ipc.as_mut().map(|state| {
             state
@@ -1272,6 +1308,10 @@ impl Runtime {
                 meta.attachment = None;
             }
             state.server.set_state(token, LocalIpcConnState::Ready);
+        }
+        if let Some(entry) = self.entries.get_mut(&execution_id) {
+            let removed = entry.attachments.remove(&detach.attachment_id);
+            debug_assert!(removed);
         }
         let response = framing::Detached {
             attachment_id: detach.attachment_id,

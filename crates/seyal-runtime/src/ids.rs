@@ -47,7 +47,7 @@ impl AttachmentId {
 }
 
 impl ProjectionId {
-    #[cfg(any(target_os = "macos", test))]
+    #[cfg(any(feature = "benchmark-shared-projection", test))]
     pub(crate) fn new() -> Self {
         Self(unique_id(0x5052_4f4a_4543_5401))
     }

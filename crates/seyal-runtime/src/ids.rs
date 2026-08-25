@@ -46,13 +46,6 @@ impl AttachmentId {
     }
 }
 
-impl ProjectionId {
-    #[cfg(any(feature = "benchmark-shared-projection", test))]
-    pub(crate) fn new() -> Self {
-        Self(unique_id(0x5052_4f4a_4543_5401))
-    }
-}
-
 macro_rules! impl_id_wire_bytes {
     ($type:ty) => {
         impl $type {
@@ -131,7 +124,7 @@ mod tests {
         let runtime = RuntimeId::new();
         let execution = ExecutionId::new();
         let attachment = AttachmentId::new();
-        let projection = ProjectionId::new();
+        let projection = ProjectionId::from_bytes([0x5a; 16]);
         assert_eq!(RuntimeId::from_bytes(runtime.to_bytes()), runtime);
         assert_eq!(ExecutionId::from_bytes(execution.to_bytes()), execution);
         assert_eq!(AttachmentId::from_bytes(attachment.to_bytes()), attachment);

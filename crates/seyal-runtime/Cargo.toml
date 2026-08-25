@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
+autobenches = false
 build = "build.rs"
 
 [features]
@@ -24,11 +25,6 @@ stats_alloc = "=0.1.10"
 
 [lints.rust]
 unsafe_code = "deny"
-
-[[bench]]
-name = "runtime_scalability"
-harness = false
-required-features = ["benchmark-shared-projection"]
 
 [[bench]]
 name = "pass5_transport_stress"

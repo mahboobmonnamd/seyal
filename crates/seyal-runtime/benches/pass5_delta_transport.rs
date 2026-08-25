@@ -1,3 +1,5 @@
+#[cfg(target_os = "macos")]
+use stats_alloc::Region;
 use stats_alloc::{INSTRUMENTED_SYSTEM, StatsAlloc};
 use std::alloc::System;
 

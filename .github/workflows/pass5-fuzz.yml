@@ -15,7 +15,7 @@ permissions:
 jobs:
   candidate-d-libfuzzer:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Install pinned nightly and cargo-fuzz
@@ -34,4 +34,27 @@ jobs:
         working-directory: fuzz
         run: |
           cargo +nightly-2026-08-20 fuzz run display_state_machine corpus/reconnect-resync-state-machine -- \
+            -max_total_time=30 -timeout=10 -rss_limit_mb=1024 -print_final_stats=1
+      - name: Fuzz Candidate-D control/binary protocol decoder
+        working-directory: fuzz
+        run: |
+          cargo +nightly-2026-08-20 fuzz run local_binary_protocol_decode corpus/local-binary-protocol-decode -- \
+            -max_total_time=30 -timeout=10 -rss_limit_mb=1024 -print_final_stats=1
+
+  candidate-d-macos-state-fuzz:
+    runs-on: macos-14
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Install pinned nightly and cargo-fuzz
+        run: |
+          rustup toolchain install nightly-2026-08-20 --profile minimal
+          cargo install cargo-fuzz --version 0.13.2 --locked
+      - name: Build production fuzz targets
+        working-directory: fuzz
+        run: cargo +nightly-2026-08-20 fuzz build
+      - name: Fuzz Candidate-D attachment/reconnect/resync state machine
+        working-directory: fuzz
+        run: |
+          cargo +nightly-2026-08-20 fuzz run reconnect_resync_state_machine corpus/reconnect-resync-state-machine -- \
             -max_total_time=30 -timeout=10 -rss_limit_mb=1024 -print_final_stats=1

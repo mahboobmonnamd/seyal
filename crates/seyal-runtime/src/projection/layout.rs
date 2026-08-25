@@ -349,8 +349,9 @@ impl SlotHeader {
     }
 
     /// Computes and validates the byte ranges of the cell/damage arrays
-    /// within a slot of `slot_stride` total bytes, rejecting any offset or
-    /// count that would read outside the slot.
+    /// within a slot of `slot_stride` total bytes. ABI 1.0 arrays must begin
+    /// after the slot header, must not overlap/reverse, must remain inside the
+    /// slot, and `payload_bytes` must equal the declared cell+damage bytes.
     pub fn cell_and_damage_ranges(
         &self,
         slot_stride: u64,
@@ -370,9 +371,17 @@ impl SlotHeader {
         let damages_end = damages_start
             .checked_add(damages_len)
             .ok_or(LayoutError::LengthOverflow)?;
+        let payload_len = cells_len
+            .checked_add(damages_len)
+            .ok_or(LayoutError::LengthOverflow)?;
+        let stride = usize::try_from(slot_stride).map_err(|_| LayoutError::LengthOverflow)?;
 
-        let stride = slot_stride as usize;
-        if cells_end > stride || damages_end > stride {
+        if cells_start < SLOT_HEADER_LEN
+            || damages_start < cells_end
+            || self.payload_bytes as usize != payload_len
+            || cells_end > stride
+            || damages_end > stride
+        {
             return Err(LayoutError::InvalidOffsets);
         }
         Ok((cells_start..cells_end, damages_start..damages_end))
@@ -704,7 +713,7 @@ mod tests {
     fn sample_slot_header() -> SlotHeader {
         SlotHeader {
             generation: 5,
-            payload_bytes: 24 * 80 * CELL_LEN as u32,
+            payload_bytes: 24 * 80 * CELL_LEN as u32 + DAMAGE_LEN as u32,
             rows: 24,
             columns: 80,
             cursor_row: 0,
@@ -794,11 +803,50 @@ mod tests {
     }
 
     #[test]
+    fn cell_and_damage_ranges_accept_canonical_layout() {
+        let header = sample_slot_header();
+        let (cells, damages) = header.cell_and_damage_ranges(65_536).unwrap();
+        assert_eq!(cells.start, SLOT_HEADER_LEN);
+        assert_eq!(damages.start, cells.end);
+        assert_eq!(damages.len(), DAMAGE_LEN);
+    }
+
+    #[test]
+    fn cell_and_damage_ranges_reject_cells_inside_slot_header() {
+        let mut header = sample_slot_header();
+        header.cells_offset = 8;
+        assert_eq!(
+            header.cell_and_damage_ranges(65_536),
+            Err(LayoutError::InvalidOffsets)
+        );
+    }
+
+    #[test]
+    fn cell_and_damage_ranges_reject_overlapping_damage_array() {
+        let mut header = sample_slot_header();
+        header.damages_offset -= DAMAGE_LEN as u32;
+        assert_eq!(
+            header.cell_and_damage_ranges(65_536),
+            Err(LayoutError::InvalidOffsets)
+        );
+    }
+
+    #[test]
+    fn cell_and_damage_ranges_reject_payload_byte_mismatch() {
+        let mut header = sample_slot_header();
+        header.payload_bytes -= 1;
+        assert_eq!(
+            header.cell_and_damage_ranges(65_536),
+            Err(LayoutError::InvalidOffsets)
+        );
+    }
+
+    #[test]
     fn cell_and_damage_ranges_reject_offsets_beyond_slot_stride() {
         let mut header = sample_slot_header();
         header.damages_offset = 1_000_000;
         assert_eq!(
-            header.cell_and_damage_ranges(4096),
+            header.cell_and_damage_ranges(65_536),
             Err(LayoutError::InvalidOffsets)
         );
     }

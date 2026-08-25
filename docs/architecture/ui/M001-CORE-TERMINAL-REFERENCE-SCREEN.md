@@ -445,7 +445,25 @@ The frozen screen should communicate that Seyal is:
 - contextual rather than cluttered;
 - functional rather than decorative.
 
-## 16. Authority boundary
+## 16. Companion state specifications
+
+The generated follow-up mockups are specified in:
+
+- `M001-SESSIONS-VIEW.md`
+- `M001-AGENTS-VIEW.md`
+- `M001-RESOURCES-VIEW.md`
+- `M001-MULTIPANE-VIEW.md`
+- `M001-NOTIFICATIONS-ATTENTION-POPOVER.md`
+- `M001-TUI-TAKEOVER.md`
+- `M001-BLOCK-DETAILS-INSPECTOR.md`
+- `M001-COMPOSER-HISTORY-FUZZY-SEARCH.md`
+- `M001-LIVE-TAIL-BEHAVIOR.md`
+
+`M001-CORE-TERMINAL-REFERENCE-INDEX.md` provides the complete mapping and cross-screen invariants.
+
+Generated mockups are visual references; when a mockup conflicts with architecture or a functional rule, these specifications are authoritative.
+
+## 17. Authority boundary
 
 This reference freezes the **visual/information architecture direction** for the Core Terminal screen.
 

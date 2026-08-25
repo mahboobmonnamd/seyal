@@ -22,7 +22,7 @@ pub use error::ExecError;
 pub use execution::TerminalExecution;
 pub use projection::{
     ProjectionAttributes, ProjectionCell, ProjectionColor, ProjectionDamage,
-    TerminalProjectionSnapshot,
+    TerminalProjectionSnapshot, TerminalProjectionUpdate,
 };
 pub use reactor::{
     ExecutionReactor, ReactorEvent, ReactorEventKind, ReactorWaker, RegistrationToken,

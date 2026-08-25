@@ -1,46 +1,113 @@
-# Approved UI visual references
+# Historical UI visual references
 
-These images are the user-approved visual references for Seyal UI work. They are **visual authority only**: the product constitution, accepted architecture/ADRs, specifications and milestone contracts remain higher authority. Before native implementation, agents must also follow `.agents/skills/image-to-code/SKILL.md` and applicable macOS/Metal/accessibility/testing skills.
+The images in this directory are **historical design inputs**, not current implementation visual authority.
 
-## UI-REF-001 — Multiline command composer
+The current frozen Core Terminal direction is defined by:
 
-![Multiline command composer](UI-REF-001-MULTILINE-COMPOSER.png)
+- `../M001-CORE-TERMINAL-REFERENCE-SCREEN.md`
+- `../M001-CORE-TERMINAL-REFERENCE-INDEX.md`
+- the companion state specifications linked from that index
+- the frozen Core Terminal reference image owned by the current design PR
 
-Visual authority for the composer geometry and controls when composer mode is eligible: multiline auto-growing editor, prompt/input area, utility row, working-directory/shell controls and Run action.
+Product constitution, accepted architecture/ADRs/specifications, milestone contracts, terminal correctness, and pass ordering remain higher authority than any mockup.
 
-Runtime correctness still wins: when an application takes terminal ownership (for example `nvim`), the **entire terminal pane becomes the live TUI** and the composer yields/retracts. Unsupported/ambiguous shell states, raw interaction, secrets/password prompts and interactive REPL states use direct terminal input rather than forcing the composer.
+## Why these references remain
 
-## UI-REF-002 — Light workspace composition
+The earlier references helped establish useful interaction ideas, but the later Core Terminal design changed the information architecture and removed some earlier visual/behavioral choices.
 
-![Light workspace composition](UI-REF-002-APPROVED-LIGHT-WORKSPACE.png)
+Do **not** implement these screenshots literally. Non-conflicting capabilities have been carried forward into the current textual specifications.
 
-Broader workspace direction showing the approved relationships between larger workspace navigation, tabs, Block-based terminal panes, a composer inside each terminal pane, pane split controls, collapsible utility surfaces and the actionable attention popover.
+## Retained capabilities from the earlier references
 
-Features outside the active M001 scope remain future work; this image does not authorize implementing them early.
+### Multiline Pane composer
 
-## UI-REF-003 — Light component reference board
+Retained:
 
-![Light component reference board](UI-REF-003-APPROVED-LIGHT-COMPONENT-BOARD.png)
+- one composer state per terminal Pane;
+- multiline command/script/pipeline editing;
+- `Shift+Return` as intended newline behavior;
+- explicit execute action/shortcut;
+- composer retracts/disables when the foreground shell cannot accept a new command;
+- full-screen TUI takeover hides/disables the composer and uses the same `TerminalExecution`.
 
-Component-level visual reference for adaptive/scrollable tabs, workspace navigation, Command Palette entry, pane headers/split controls, adaptive execution Blocks, per-terminal-pane multiline composer, attention stack and utility pane.
+The current design intentionally keeps default composer chrome smaller than the old component mockup. cwd/shell/utility controls appear only when they are genuinely actionable and not redundant with Pane context.
 
-## Approved clarifications
+### Workspace / Tab / Pane structure
 
-- There is **no common/global command composer**. Each terminal pane has its own composer presentation when composer eligibility is proven.
-- Non-terminal surfaces such as inspector, activity and artifact views do **not** receive a composer by default.
-- Normal Flow panes present command/output as **Blocks**, not raw unstructured text panes.
-- Block visual style uses lightweight Block boundaries/surfaces with **no persistent execution rail/gutter** and no decorative left timestamp rail.
-- Blocks grow from result content up to the configured maximum height, then scroll internally.
-- Block actions include clean **Copy command**, **Copy output**, **Copy both**, in-block search and navigation/jump to persisted Blocks. Clipboard output must not include UI borders/box-line artifacts.
-- The Attention Stack is a **global structured attention model**. Agent approval/question is one scenario, not the entire model. Other typed items may include failures, completions, disconnects, security/policy decisions and review-ready results.
-- Seyal should expose a typed API/protocol so shells/tools designed for Seyal can publish supported structured attention items instead of relying on scraped terminal text.
-- Tabs are comfortably sized, then progressively compress; once minimum width is reached the tab strip scrolls.
-- Workspace rows are larger and multi-line; global navigation/search belongs in the Command Palette rather than a dedicated workspace-search field.
-- Split controls belong to each terminal pane.
-- Light and dark appearances are both first-class.
-- Shell/zsh/bash/fish theme configuration owns prompt/ANSI/terminal-content appearance.
-- Seyal application chrome, Blocks, composer, layout and appearance are configured through typed **TOML** settings, with future optional **Lua** customization through a separately approved capability/security design.
-- TOML/Lua parsing or callbacks must never enter PTY → VT → damage → render/input hot paths.
-- Visual references do not authorize fake/POC UI, duplicate terminal state, a temporary renderer, a second VT/grid, or parallel old/new production paths.
+Retained:
 
-If a textual design artifact conflicts with these approved visual details, reconcile the owning artifact **before implementation** rather than guessing or creating another implementation path.
+- multiple Workspaces;
+- Workspace-scoped Tabs;
+- Tab-owned nested Pane layout;
+- one pane-local composer per available terminal Pane;
+- adaptive/scrollable top Tab strip;
+- Block-based normal command/output presentation.
+
+### Global command palette
+
+Retained as a keyboard-first global navigation/action surface. A permanent command-palette toolbar button is not required.
+
+### Agent attention
+
+Retained as the structured notification/attention model. Approval/question is one typed attention case among failures, completions, disconnects, policy/security decisions, and review-ready events.
+
+### Right-side utility concepts
+
+Earlier Activity/Files/Agent utility concepts are reconciled into the **contextual Inspector modes**:
+
+- Context / Info;
+- Process / Runtime;
+- Files / Diff / Artifacts;
+- Activity / Attention / History.
+
+Do not duplicate the full agent inventory in both the left panel and inspector.
+
+### Connection/runtime state
+
+Retained as real product state. Healthy local state may be subtle; remote/detached/reconnecting/degraded state must be surfaced clearly.
+
+## Explicitly superseded behavior
+
+The following old-reference details are **not current authority**:
+
+- fixed maximum Block height with internal output scrolling;
+- nested scrolling inside a long-running Node/log Block;
+- a global/shared command composer;
+- a fully active composer while its foreground shell is occupied;
+- permanent split-control clusters repeated inside every Pane;
+- duplicate full agent lists in left and right sidebars;
+- large utility/control rows added only for visual completeness.
+
+### Current Block scrolling rule
+
+Normal Block/transcript presentation has **one scroll owner: the Pane**.
+
+- Blocks grow intrinsically with output;
+- long-running normal-screen output grows its Running Block;
+- users scroll the Pane to inspect earlier Blocks/output;
+- no fixed max-height output box is introduced just to constrain command output;
+- implementation may virtualize off-screen transcript content without exposing nested scroll regions.
+
+### Current TUI rule
+
+A full-screen alternate-screen TUI is not a growing Block with an internal scrollbar.
+
+- the TUI takes over the Pane viewport;
+- Block chrome yields;
+- composer is hidden/disabled;
+- canonical terminal/application input and scrolling semantics win;
+- exiting canonical TUI state returns to normal Pane transcript presentation.
+
+### Current split-control rule
+
+Primary split/layout controls live with the active Tab/layout chrome and target the focused Pane. Pane context menus/keyboard shortcuts may expose equivalent actions, but permanent duplicate split controls are not required in every Pane header.
+
+## Configuration and performance
+
+- light and dark appearances remain first-class;
+- shell themes own prompt/ANSI terminal-content appearance;
+- application chrome/layout/composer settings use typed configuration;
+- future optional Lua/customization requires separate capability/security authority;
+- configuration parsing, semantic enrichment, agents, persistence, and UI metadata must never synchronously block PTY → VT → damage → render/input paths.
+
+If an old screenshot conflicts with the current frozen specification, **the current specification wins**. Do not create a parallel implementation path to preserve the old mockup.

@@ -15,6 +15,9 @@ mod platform;
 pub mod projection;
 mod runtime;
 mod singleton;
+#[cfg(feature = "test-fault-injection")]
+#[doc(hidden)]
+pub mod test_fault;
 
 pub use capability::{CapabilityPolicy, m001_term_name};
 pub use error::RuntimeError;

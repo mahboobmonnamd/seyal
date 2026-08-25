@@ -742,17 +742,18 @@ impl Runtime {
 
     /// Performs bounded expensive recovery work after normal reactor events.
     /// Explicit resync and continuity loss share the same deduplicated queue.
-    /// A token whose older snapshot is still being delivered stays queued but
-    /// is not repeatedly materialized or used to wake-spin the runtime.
+    /// Snapshot materialization is budgeted per execution, not per viewer: all
+    /// ready viewers for one execution reuse one encoded immutable batch.
     pub(super) fn service_pending_resyncs(&mut self) {
         let scan_limit = self
             .local_ipc
             .as_ref()
             .map_or(0, |state| state.pending_resync.len());
         let mut inspected = 0usize;
-        let mut serviced = 0usize;
+        let mut materialized = 0usize;
+        let mut shared_batches: HashMap<ExecutionId, EncodedDisplayBatch> = HashMap::new();
 
-        while inspected < scan_limit && serviced < RESYNC_SNAPSHOT_BUDGET_PER_POLL {
+        while inspected < scan_limit {
             let token = {
                 let Some(state) = self.local_ipc.as_mut() else {
                     return;
@@ -792,11 +793,6 @@ impl Runtime {
                 continue;
             }
 
-            if let Some(state) = self.local_ipc.as_mut() {
-                state.pending_resync_set.remove(&token);
-            }
-            serviced += 1;
-
             let execution_id = self.local_ipc.as_ref().and_then(|state| {
                 let attachment_id = state.connections.get(&token)?.attachment?;
                 state
@@ -805,27 +801,57 @@ impl Runtime {
                     .ok()
             });
             let Some(execution_id) = execution_id else {
-                continue;
-            };
-            let Some(entry) = self.entries.get(&execution_id) else {
-                continue;
-            };
-            let snapshot = entry.execution.projection_snapshot();
-            match display::encode_snapshot(&snapshot) {
-                Ok(batch) => {
-                    let _ = self.send_snapshot_batch(token, batch);
+                if let Some(state) = self.local_ipc.as_mut() {
+                    state.pending_resync_set.remove(&token);
                 }
-                Err(_) => self.send_error(
-                    token,
-                    ErrorCode::DisplayUnavailable,
-                    MessageType::Resync as u16,
-                ),
+                continue;
+            };
+
+            let batch = if let Some(batch) = shared_batches.get(&execution_id) {
+                Some(batch.clone())
+            } else if materialized >= RESYNC_SNAPSHOT_BUDGET_PER_POLL {
+                if let Some(state) = self.local_ipc.as_mut() {
+                    state.pending_resync.push_back(token);
+                }
+                continue;
+            } else {
+                materialized += 1;
+                let encoded = self
+                    .entries
+                    .get(&execution_id)
+                    .map(|entry| entry.execution.projection_snapshot())
+                    .and_then(|snapshot| display::encode_snapshot(&snapshot).ok());
+                match encoded {
+                    Some(batch) => {
+                        shared_batches.insert(execution_id, batch.clone());
+                        Some(batch)
+                    }
+                    None => {
+                        if let Some(state) = self.local_ipc.as_mut() {
+                            state.pending_resync_set.remove(&token);
+                        }
+                        self.send_error(
+                            token,
+                            ErrorCode::DisplayUnavailable,
+                            MessageType::Resync as u16,
+                        );
+                        None
+                    }
+                }
+            };
+
+            let Some(batch) = batch else {
+                continue;
+            };
+            if let Some(state) = self.local_ipc.as_mut() {
+                state.pending_resync_set.remove(&token);
             }
+            let _ = self.send_snapshot_batch(token, batch);
         }
 
-        // If the budget, rather than an in-flight snapshot, left ready work in
-        // the queue, schedule one more bounded turn. Blocked tokens rely on the
-        // socket writable event that advances their existing snapshot.
+        // If the materialization budget left ready work in the queue, schedule
+        // one more bounded turn. Tokens blocked on an in-flight snapshot rely
+        // on their socket writable event rather than causing a wake spin.
         let ready_pending = self.local_ipc.as_ref().is_some_and(|state| {
             state.pending_resync.iter().any(|token| {
                 state.pending_resync_set.contains(token)

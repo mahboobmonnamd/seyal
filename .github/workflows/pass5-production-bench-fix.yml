@@ -17,12 +17,13 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: issue/105-m001-pass-5-implementation
-      - name: Repair Candidate-D production benchmark compile errors
+      - name: Repair Candidate-D macOS validation surface
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('crates/seyal-runtime/benches/pass5_production_transport.rs')
-          s = p.read_text()
+
+          bench = Path('crates/seyal-runtime/benches/pass5_production_transport.rs')
+          s = bench.read_text()
           old = 'use stats_alloc::{INSTRUMENTED_SYSTEM, StatsAlloc};\n'
           new = 'use stats_alloc::{INSTRUMENTED_SYSTEM, StatsAlloc};\n#[cfg(target_os = "macos")]\nuse stats_alloc::Region;\n'
           if old not in s:
@@ -32,19 +33,27 @@ jobs:
           new_branch = '''Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {\n                runtime\n                    .poll_once(Some(Duration::from_millis(1)))\n                    .expect("Runtime poll");\n            }'''
           if s.count(old_branch) != 2:
               raise SystemExit(f'expected 2 WouldBlock branches, found {s.count(old_branch)}')
-          s = s.replace(old_branch, new_branch)
-          p.write_text(s)
+          bench.write_text(s.replace(old_branch, new_branch))
+
+          local = Path('crates/seyal-runtime/src/runtime/local.rs')
+          s = local.read_text()
+          old = '''            } else {\n                let base_generation = previous.expect("checked above").generation;\n                match display::encode_delta(&update, base_generation) {'''
+          new = '''            } else if let Some(previous) = previous {\n                let base_generation = previous.generation;\n                match display::encode_delta(&update, base_generation) {'''
+          if old not in s:
+              raise SystemExit('macOS publication control-flow anchor missing')
+          local.write_text(s.replace(old, new, 1))
           PY
-      - name: Validate pinned format and macOS benchmark compilation
+      - name: Validate pinned format clippy tests and macOS benchmark compilation
         run: |
           make bootstrap
           cargo fmt --all
           cargo clippy --workspace --all-targets --all-features -- -D warnings
+          cargo test --workspace --all-features --locked
           cargo bench -p seyal-runtime --bench pass5_production_transport --no-run --locked
       - name: Commit repair
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add crates/seyal-runtime/benches/pass5_production_transport.rs
-          git commit -m 'fix(bench): compile Candidate-D production benchmark on macOS'
+          git add crates/seyal-runtime/benches/pass5_production_transport.rs crates/seyal-runtime/src/runtime/local.rs
+          git commit -m 'fix: validate Candidate-D production path on macOS'
           git push origin HEAD:issue/105-m001-pass-5-implementation

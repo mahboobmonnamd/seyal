@@ -42,6 +42,17 @@ jobs:
           if old not in s:
               raise SystemExit('macOS publication control-flow anchor missing')
           local.write_text(s.replace(old, new, 1))
+
+          cargo = Path('crates/seyal-runtime/Cargo.toml')
+          s = cargo.read_text()
+          for legacy in [
+              '''[[bench]]\nname = "pass5_transport_stress"\nharness = false\nrequired-features = ["benchmark-shared-projection"]\n\n''',
+              '''[[bench]]\nname = "pass5_shared_projection"\nharness = false\nrequired-features = ["benchmark-shared-projection"]\n\n''',
+          ]:
+              if legacy not in s:
+                  raise SystemExit('expected obsolete shared-projection benchmark target missing')
+              s = s.replace(legacy, '', 1)
+          cargo.write_text(s)
           PY
       - name: Validate pinned format clippy tests and macOS benchmark compilation
         run: |
@@ -54,6 +65,6 @@ jobs:
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add crates/seyal-runtime/benches/pass5_production_transport.rs crates/seyal-runtime/src/runtime/local.rs
+          git add crates/seyal-runtime/Cargo.toml crates/seyal-runtime/benches/pass5_production_transport.rs crates/seyal-runtime/src/runtime/local.rs
           git commit -m 'fix: validate Candidate-D production path on macOS'
           git push origin HEAD:issue/105-m001-pass-5-implementation

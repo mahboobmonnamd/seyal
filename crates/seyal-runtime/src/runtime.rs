@@ -31,6 +31,23 @@ const READ_BUFFER_SIZE: usize = 16 * 1024;
 const CONTROL_DISPATCH_QUANTUM: usize = 64;
 const ROLLBACK_REAP_TICK: Duration = Duration::from_millis(10);
 
+#[cfg(feature = "benchmark-instrumentation")]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BenchmarkRuntimeDiagnostics {
+    pub pty_bytes_read: u64,
+    pub pty_read_calls: u64,
+    pub source_timestamp_samples: usize,
+    pub latest_damage_generation: u64,
+}
+
+#[cfg(feature = "benchmark-instrumentation")]
+#[derive(Default)]
+struct BenchmarkRuntimeState {
+    pty_bytes_read: u64,
+    pty_read_calls: u64,
+    source_times: HashMap<(ExecutionId, u64), Instant>,
+}
+
 #[derive(Clone, Debug)]
 pub enum LocalIpcMode {
     Disabled,
@@ -167,6 +184,8 @@ pub struct Runtime {
     rollback_reap: Vec<TerminalExecution>,
     #[cfg(target_os = "macos")]
     local_ipc: Option<LocalIpcState>,
+    #[cfg(feature = "benchmark-instrumentation")]
+    benchmark: BenchmarkRuntimeState,
 }
 
 impl Runtime {
@@ -203,6 +222,8 @@ impl Runtime {
             rollback_reap: Vec::new(),
             #[cfg(target_os = "macos")]
             local_ipc,
+            #[cfg(feature = "benchmark-instrumentation")]
+            benchmark: BenchmarkRuntimeState::default(),
         })
     }
 
@@ -233,6 +254,44 @@ impl Runtime {
 
     pub fn aggregate_accepted_but_unwritten_bytes(&self) -> usize {
         self.aggregate_reserved.load(Ordering::Acquire)
+    }
+
+    #[cfg(feature = "benchmark-instrumentation")]
+    pub fn reset_benchmark_runtime_counters(&mut self) {
+        self.benchmark = BenchmarkRuntimeState::default();
+    }
+
+    #[cfg(feature = "benchmark-instrumentation")]
+    pub fn benchmark_source_timestamp(
+        &self,
+        execution_id: ExecutionId,
+        generation: u64,
+    ) -> Option<Instant> {
+        self.benchmark
+            .source_times
+            .get(&(execution_id, generation))
+            .copied()
+    }
+
+    #[cfg(feature = "benchmark-instrumentation")]
+    pub fn benchmark_runtime_diagnostics(
+        &self,
+        execution_id: ExecutionId,
+    ) -> BenchmarkRuntimeDiagnostics {
+        BenchmarkRuntimeDiagnostics {
+            pty_bytes_read: self.benchmark.pty_bytes_read,
+            pty_read_calls: self.benchmark.pty_read_calls,
+            source_timestamp_samples: self
+                .benchmark
+                .source_times
+                .keys()
+                .filter(|(id, _)| *id == execution_id)
+                .count(),
+            latest_damage_generation: self
+                .entries
+                .get(&execution_id)
+                .map_or(0, |entry| entry.execution.terminal().damage_generation()),
+        }
     }
 
     pub fn list(&self) -> Vec<ExecutionSummary> {
@@ -505,14 +564,17 @@ impl Runtime {
         while consumed < self.config.read_dispatch_bytes {
             let remaining = self.config.read_dispatch_bytes - consumed;
             let read_len = remaining.min(self.read_buffer.len());
-            let outcome = {
+            let (outcome, generation_before, generation_after) = {
                 let entry = self
                     .entries
                     .get_mut(&id)
                     .ok_or(RuntimeError::UnknownExecution)?;
-                entry
+                let generation_before = entry.execution.terminal().damage_generation();
+                let outcome = entry
                     .execution
-                    .read_output(&mut self.read_buffer[..read_len])?
+                    .read_output(&mut self.read_buffer[..read_len])?;
+                let generation_after = entry.execution.terminal().damage_generation();
+                (outcome, generation_before, generation_after)
             };
             match outcome {
                 ReadOutcome::Bytes(0) | ReadOutcome::WouldBlock | ReadOutcome::Eof => {
@@ -522,7 +584,23 @@ impl Runtime {
                     );
                     break;
                 }
-                ReadOutcome::Bytes(count) => consumed += count,
+                ReadOutcome::Bytes(count) => {
+                    consumed += count;
+                    #[cfg(feature = "benchmark-instrumentation")]
+                    {
+                        self.benchmark.pty_bytes_read = self
+                            .benchmark
+                            .pty_bytes_read
+                            .saturating_add(count as u64);
+                        self.benchmark.pty_read_calls =
+                            self.benchmark.pty_read_calls.saturating_add(1);
+                        if generation_after > generation_before {
+                            self.benchmark
+                                .source_times
+                                .insert((id, generation_after), Instant::now());
+                        }
+                    }
+                }
             }
         }
         if drain_complete {

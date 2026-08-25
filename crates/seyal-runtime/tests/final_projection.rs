@@ -1,14 +1,10 @@
 #![cfg(target_os = "macos")]
 
-//! Regression for SPEC-004 final display publication ordering.
-//!
-//! The command emits more than Runtime's 64 KiB PTY read quantum and places a
-//! unique marker in the tail. An attached client must still observe that tail
-//! from its already-mapped projection after the execution has finalized.
+//! Regression for SPEC-004 final display ordering. The tail marker must reach
+//! the disposable display cache before Runtime emits `Lifecycle::Finalized`.
 
 use std::{
     io::{Read, Write},
-    os::fd::{AsRawFd, OwnedFd},
     os::unix::net::UnixStream,
     time::{Duration, Instant},
 };
@@ -16,16 +12,10 @@ use std::{
 use seyal_exec::{CommandSpec, WindowSize};
 use seyal_runtime::{
     ExecutionId, LocalIpcMode, Runtime, RuntimeConfig,
-    local_ipc::{
-        fd_transfer::{self, RecvFd},
-        framing::{
-            Attach, Attached, ClientHello, FrameHeader, HEADER_LEN, MessageType, Role, ServerHello,
-            encode_frame,
-        },
-    },
-    projection::{
-        lifecycle::ReadOnlyMapping,
-        writer::{read_latest, read_region_header},
+    display::{DecodedDisplayChunk, DisplayCache, decode_chunk, empty_cache},
+    local_ipc::framing::{
+        Attach, Attached, ClientHello, FrameHeader, HEADER_LEN, Lifecycle, LifecycleMessage,
+        MessageType, Role, ServerHello, encode_frame,
     },
 };
 
@@ -39,6 +29,11 @@ fn config() -> RuntimeConfig {
     };
     config.final_drain = Duration::from_millis(100);
     config
+}
+
+struct Client {
+    stream: UnixStream,
+    buffered: Vec<u8>,
 }
 
 struct Harness {
@@ -70,7 +65,7 @@ impl Harness {
             .expect("execution")
     }
 
-    fn connect(&mut self) -> UnixStream {
+    fn connect(&mut self) -> Client {
         let path = self
             .runtime
             .local_ipc_socket_path()
@@ -80,8 +75,12 @@ impl Harness {
         loop {
             match UnixStream::connect(&path) {
                 Ok(stream) => {
-                    stream.set_nonblocking(true).expect("nonblocking client");
-                    return stream;
+                    stream.set_nonblocking(true).unwrap();
+                    self.pump();
+                    return Client {
+                        stream,
+                        buffered: Vec::new(),
+                    };
                 }
                 Err(_) => {
                     assert!(Instant::now() < deadline, "connect timed out");
@@ -91,85 +90,72 @@ impl Harness {
         }
     }
 
-    fn send(&mut self, stream: &mut UnixStream, kind: MessageType, payload: &[u8]) {
-        stream
+    fn send(&mut self, client: &mut Client, kind: MessageType, payload: &[u8]) {
+        client
+            .stream
             .write_all(&encode_frame(kind, payload))
-            .expect("send protocol frame");
+            .expect("send frame");
         self.pump();
     }
 
-    fn expect_frame(&mut self, stream: &mut UnixStream) -> (u16, Vec<u8>) {
-        let deadline = Instant::now() + Duration::from_secs(2);
-        let mut buffer = Vec::new();
+    fn frame(&mut self, client: &mut Client, deadline: Instant) -> (MessageType, Vec<u8>) {
         loop {
-            let mut chunk = [0u8; 4096];
-            match stream.read(&mut chunk) {
-                Ok(0) => panic!("connection closed while waiting for frame"),
-                Ok(count) => buffer.extend_from_slice(&chunk[..count]),
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-                Err(error) => panic!("client read failed: {error}"),
-            }
-            if buffer.len() >= HEADER_LEN {
-                let header = FrameHeader::decode(&buffer[..HEADER_LEN]).expect("frame header");
+            if client.buffered.len() >= HEADER_LEN {
+                let header = FrameHeader::decode(&client.buffered[..HEADER_LEN]).unwrap();
                 let total = HEADER_LEN + header.payload_len as usize;
-                if buffer.len() >= total {
-                    return (header.message_type, buffer[HEADER_LEN..total].to_vec());
-                }
-            }
-            assert!(Instant::now() < deadline, "frame timed out");
-            self.pump();
-        }
-    }
-
-    fn expect_frame_with_fd(&mut self, stream: &UnixStream) -> (u16, Vec<u8>, OwnedFd) {
-        let deadline = Instant::now() + Duration::from_secs(2);
-        let mut buffer = Vec::new();
-        let mut descriptor = None;
-        loop {
-            if buffer.len() >= HEADER_LEN {
-                let header = FrameHeader::decode(&buffer[..HEADER_LEN]).expect("frame header");
-                let total = HEADER_LEN + header.payload_len as usize;
-                if buffer.len() >= total {
+                if client.buffered.len() >= total {
+                    let raw = client.buffered.drain(..total).collect::<Vec<_>>();
                     return (
-                        header.message_type,
-                        buffer[HEADER_LEN..total].to_vec(),
-                        descriptor.expect("fd-bearing frame omitted descriptor"),
+                        MessageType::from_u16(header.message_type).expect("known frame"),
+                        raw[HEADER_LEN..].to_vec(),
                     );
                 }
             }
-
-            let mut chunk = [0u8; 4096];
-            match fd_transfer::recv_with_fd(stream.as_raw_fd(), &mut chunk) {
-                Ok((0, _)) => panic!("connection closed while waiting for descriptor"),
-                Ok((count, RecvFd::One(fd))) => {
-                    assert!(descriptor.replace(fd).is_none(), "multiple descriptors");
-                    buffer.extend_from_slice(&chunk[..count]);
-                }
-                Ok((count, RecvFd::None)) => buffer.extend_from_slice(&chunk[..count]),
-                Ok((_, RecvFd::Malformed)) => panic!("malformed descriptor transfer"),
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-                Err(error) => panic!("recvmsg failed: {error}"),
+            let mut chunk = [0u8; 16 * 1024];
+            match client.stream.read(&mut chunk) {
+                Ok(0) => panic!("connection closed"),
+                Ok(count) => client.buffered.extend_from_slice(&chunk[..count]),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => self.pump(),
+                Err(error) => panic!("read failed: {error}"),
             }
-            assert!(Instant::now() < deadline, "fd-bearing frame timed out");
-            self.pump();
+            assert!(Instant::now() < deadline, "frame timed out");
         }
     }
 
-    fn attach(&mut self, stream: &mut UnixStream, execution_id: ExecutionId) -> ReadOnlyMapping {
+    fn display_batch(
+        &mut self,
+        client: &mut Client,
+        first_kind: MessageType,
+        first_payload: Vec<u8>,
+        deadline: Instant,
+    ) -> Vec<DecodedDisplayChunk> {
+        let first = decode_chunk(&encode_frame(first_kind, &first_payload)).unwrap();
+        let mut chunks = vec![first];
+        let expected = chunks[0].chunk_count as usize;
+        while chunks.len() < expected {
+            let (kind, payload) = self.frame(client, deadline);
+            assert_eq!(kind, first_kind);
+            chunks.push(decode_chunk(&encode_frame(kind, &payload)).unwrap());
+        }
+        chunks
+    }
+
+    fn attach(&mut self, client: &mut Client, execution_id: ExecutionId) -> DisplayCache {
         self.send(
-            stream,
+            client,
             MessageType::ClientHello,
             &ClientHello {
                 client_capabilities: 0,
             }
             .encode(),
         );
-        let (message_type, payload) = self.expect_frame(stream);
-        assert_eq!(message_type, MessageType::ServerHello as u16);
-        ServerHello::decode(&payload).expect("ServerHello");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let (kind, payload) = self.frame(client, deadline);
+        assert_eq!(kind, MessageType::ServerHello);
+        ServerHello::decode(&payload).unwrap();
 
         self.send(
-            stream,
+            client,
             MessageType::Attach,
             &Attach {
                 execution_id,
@@ -177,35 +163,49 @@ impl Harness {
             }
             .encode(),
         );
-        let (message_type, payload, fd) = self.expect_frame_with_fd(stream);
-        assert_eq!(message_type, MessageType::Attached as u16);
-        let attached = Attached::decode(&payload).expect("Attached");
-        ReadOnlyMapping::new(fd, attached.region_bytes as usize).expect("projection mapping")
+        let (kind, payload) = self.frame(client, deadline);
+        assert_eq!(kind, MessageType::Attached);
+        let attached = Attached::decode(&payload).unwrap();
+        let (kind, payload) = self.frame(client, deadline);
+        assert_eq!(kind, MessageType::DisplaySnapshot);
+        let chunks = self.display_batch(client, kind, payload, deadline);
+        let mut cache = empty_cache();
+        cache.apply_chunks(&chunks).unwrap();
+        assert_eq!(cache.generation, attached.current_generation);
+        cache
     }
 }
 
 #[test]
-fn final_tail_bytes_are_published_before_execution_teardown() {
+fn final_tail_bytes_are_committed_before_finalized_lifecycle() {
     let mut harness = Harness::new();
     let execution_id = harness.spawn();
     let mut client = harness.connect();
-    let mapping = harness.attach(&mut client, execution_id);
-    let region = read_region_header(&mapping.memory()).expect("region header");
+    let mut cache = harness.attach(&mut client, execution_id);
+    let deadline = Instant::now() + Duration::from_secs(8);
 
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while harness.runtime.execution_count() != 0 {
-        assert!(Instant::now() < deadline, "execution never finalized");
-        harness.pump();
+    loop {
+        let (kind, payload) = harness.frame(&mut client, deadline);
+        match kind {
+            MessageType::DisplaySnapshot | MessageType::DisplayDelta => {
+                let chunks = harness.display_batch(&mut client, kind, payload, deadline);
+                cache.apply_chunks(&chunks).expect("display apply");
+            }
+            MessageType::Lifecycle => {
+                let lifecycle = LifecycleMessage::decode(&payload).unwrap();
+                assert_eq!(lifecycle.execution_id, execution_id);
+                assert_eq!(lifecycle.lifecycle, Lifecycle::Finalized);
+                break;
+            }
+            other => panic!("unexpected frame before finalization: {other:?}"),
+        }
+        assert!(Instant::now() < deadline, "finalization timed out");
     }
 
-    let snapshot = read_latest(&mapping.memory(), &region).expect("final readable projection");
-    let visible = snapshot
-        .cells
-        .iter()
-        .map(|cell| cell.scalar)
-        .collect::<String>();
+    let visible = cache.cells.iter().map(|cell| cell.scalar).collect::<String>();
     assert!(
         visible.contains("FINAL"),
-        "final projection omitted terminal tail marker: {visible:?}"
+        "final display state omitted terminal tail marker: {visible:?}"
     );
+    assert_eq!(harness.runtime.execution_count(), 0);
 }

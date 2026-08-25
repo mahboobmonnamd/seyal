@@ -2,10 +2,8 @@
 set -euo pipefail
 
 # Import every exported RILL/terminal issue into Seyal using the local gh login.
-#
-# This is intentionally separate from export so evidence can be inspected first.
-# The importer is idempotent: each destination issue and comment carries a stable
-# legacy-source marker, so rerunning the script skips already-imported records.
+# This is intentionally separate from export so the JSON evidence can be inspected first.
+# Source markers make the importer idempotent and safe to rerun after interruption/rate limiting.
 #
 # Usage:
 #   bash scripts/export-feature-source-issues.sh
@@ -19,49 +17,23 @@ DEST_REPO="${DEST_REPO:-mahboobmonnamd/seyal}"
 SOURCE_DIR=".feature-sources"
 APPLY=false
 
-if [[ "${1:-}" == "--apply" ]]; then
-  APPLY=true
-  shift
-fi
+if [[ "${1:-}" == "--apply" ]]; then APPLY=true; shift; fi
+if [[ $# -gt 0 ]]; then SOURCE_DIR="$1"; shift; fi
+if [[ $# -gt 0 ]]; then echo "error: unexpected arguments: $*" >&2; exit 2; fi
 
-if [[ $# -gt 0 ]]; then
-  SOURCE_DIR="$1"
-  shift
-fi
-
-if [[ $# -gt 0 ]]; then
-  echo "error: unexpected arguments: $*" >&2
-  exit 2
-fi
-
-command -v gh >/dev/null 2>&1 || {
-  echo "error: GitHub CLI (gh) is required" >&2
-  exit 1
-}
-
-command -v jq >/dev/null 2>&1 || {
-  echo "error: jq is required" >&2
-  exit 1
-}
-
-gh auth status >/dev/null 2>&1 || {
-  echo "error: run 'gh auth login' first" >&2
-  exit 1
-}
+command -v gh >/dev/null 2>&1 || { echo "error: GitHub CLI (gh) is required" >&2; exit 1; }
+command -v jq >/dev/null 2>&1 || { echo "error: jq is required" >&2; exit 1; }
+gh auth status >/dev/null 2>&1 || { echo "error: run 'gh auth login' first" >&2; exit 1; }
 
 for file in "$SOURCE_DIR/rill-issues.json" "$SOURCE_DIR/terminal-issues.json"; do
-  [[ -f "$file" ]] || {
-    echo "error: missing $file; run scripts/export-feature-source-issues.sh first" >&2
-    exit 1
-  }
+  [[ -f "$file" ]] || { echo "error: missing $file; run scripts/export-feature-source-issues.sh first" >&2; exit 1; }
 done
 
 if [[ "$APPLY" != true ]]; then
   rill_count="$(jq 'length' "$SOURCE_DIR/rill-issues.json")"
   terminal_count="$(jq 'length' "$SOURCE_DIR/terminal-issues.json")"
   echo "Dry run only. Would import $rill_count RILL issues + $terminal_count terminal issues into $DEST_REPO."
-  echo "Run with --apply to create/update destination issues:"
-  echo "  bash scripts/import-feature-source-issues.sh --apply $SOURCE_DIR"
+  echo "Run with --apply: bash scripts/import-feature-source-issues.sh --apply $SOURCE_DIR"
   exit 0
 fi
 
@@ -72,7 +44,6 @@ gh label create historical-evidence --repo "$DEST_REPO" --description "Preserved
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 DEST_CACHE="$TMP_DIR/destination-issues.json"
-
 gh issue list --repo "$DEST_REPO" --state all --limit 10000 --json number,body,state > "$DEST_CACHE"
 
 find_existing_issue() {

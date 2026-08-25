@@ -1,6 +1,6 @@
 # M001 local attachment and display projection
 
-This document is the contributor map for the M001 Pass 5 implementation. The normative behavior remains `docs/specs/SPEC-004-local-attachment-display-projection.md` and its accepted ADRs; this page explains where the implementation lives, how ownership is split, how to validate it, and how to debug failures without creating a second terminal authority.
+This document is the contributor map for the M001 Pass 5 implementation. The normative behavior remains `docs/specs/SPEC-004-M001-LOCAL-ATTACHMENT-PROJECTION.md` and its accepted ADRs; this page explains where the implementation lives, how ownership is split, how to validate it, and how to debug failures without creating a second terminal authority.
 
 ## Ownership
 
@@ -47,7 +47,7 @@ Pass 5 registers the listener and accepted local sockets into the same Darwin kq
 
 The PTY/VT path never waits synchronously for an attachment, projection reader, renderer, persistence system or agent. A stalled client is bounded by the local connection queue policy and may be disconnected without stopping terminal progress.
 
-Canonical damage is consumed exactly once per execution and then fanned out to all live projections. Attach and resync use non-destructive current-state snapshots; they must never call the destructive damage consumer.
+Canonical damage is consumed exactly once per execution and then fanned out to all live projections. The projection-neutral execution snapshot carries the canonical `full/first_row/last_row` redraw guidance; ordinary row-local damage is not promoted to full-screen damage. Attach and resync use non-destructive current-state snapshots and therefore deliberately carry full redraw guidance; they must never call the destructive damage consumer.
 
 ## Discovery and trust boundary
 
@@ -80,6 +80,8 @@ Runtime is the sole writer of projection memory. A projection is created from a 
 
 The ABI uses two slots. Publication sequence/generation words and concurrently accessed payload words are accessed atomically. Writers publish with release ordering and readers validate with acquire ordering. Do not create normal Rust references/slices over concurrently mutated shared bytes; helper reads copy atomically into owned memory.
 
+Reader safety is tied to the actual mapped length, not just the encoded header. `read_region_header` rejects an encoded region larger than its `RegionMemory`; `read_latest` revalidates full two-slot bounds/alignment before using decoded offsets; and atomic word accessors enforce alignment and bounds in release builds before pointer arithmetic. Malformed projection metadata must become a validation error rather than an out-of-bounds access or panic.
+
 Limits are 8 MiB per projection region and 128 MiB aggregate projection memory per Runtime.
 
 ## Attach, replacement, resync and finalization
@@ -88,7 +90,7 @@ Initial attach is transactional: build the projection, enforce aggregate budget,
 
 A resize always updates the canonical terminal first. If the existing projection is too small, Runtime builds a replacement and transfers `ProjectionReplaced`+fd before committing the registry switch. If replacement cannot be completed, the canonical resize remains valid and the projection may become temporarily unavailable. A later `Resync` rebuilds from canonical state.
 
-When an execution finalizes, Runtime notifies every still-live attachment connection with `Lifecycle::Finalized` even if that attachment's projection was temporarily unavailable, then releases attachment/projection/controller state.
+When an execution reaches finalization, Runtime first publishes any canonical damage still pending from the PTY drain while `TerminalExecution` remains alive. Only after that final projection publication does Runtime remove the execution, notify every still-live attachment connection with `Lifecycle::Finalized`, and release attachment/projection/controller state. This ordering prevents bytes read immediately before EOF from disappearing from an already attached client's final projection. Attachments whose projection was already unavailable still receive the lifecycle notification.
 
 ## Validation
 
@@ -111,10 +113,11 @@ cargo test -p seyal-runtime local_ipc -- --nocapture
 cargo test -p seyal-runtime projection -- --nocapture
 cargo test -p seyal-runtime --test local_ipc_protocol -- --nocapture
 cargo test -p seyal-runtime --test local_ipc_adversarial -- --nocapture
+cargo test -p seyal-runtime --test final_projection -- --nocapture
 cargo bench -p seyal-runtime --bench runtime_scalability -- --nocapture
 ```
 
-Retained fuzz targets cover binary protocol decoding, shared-projection validation and reconnect/resync state transitions. A retained seed run is a deterministic smoke gate; it must not be described as a long mutational fuzz campaign.
+Retained fuzz targets cover binary protocol decoding, the production shared-projection reader (`read_region_header` → `read_latest`) and real Runtime reconnect/resync state transitions over the Unix-domain protocol. Fuzz seeds are operation/resource bounded. A retained seed run is a deterministic smoke gate; it must not be described as a long mutational fuzz campaign.
 
 ## Transport comparator
 
@@ -124,6 +127,8 @@ Retained fuzz targets cover binary protocol decoding, shared-projection validati
 2. the production hybrid path using the real control UDS, `SCM_RIGHTS`, read-only shared memory and `GenerationWake`.
 
 The comparator covers populations 1/10/50/100, representative terminal geometries, primary/alternate screen, update/readable latency, signal/readable latency, bytes/writes, RSS/CPU/fd/thread counts, resync, reconnect and cleanup. Host PTY ceilings are reported as `PLATFORM_LIMITED`, never silently discarded or converted into performance claims.
+
+The current ADR evidence gate remains open until the comparator also records the missing allocation/fanout/repetition evidence defined by SPEC-004. Do not infer that shared memory is justified merely because the hybrid path is implemented, and do not switch to socket-only from an asymmetric or single-sample run.
 
 See `docs/engineering/PERFORMANCE.md` for evidence rules. Benchmark output is evidence only for the exact commit/environment that produced it.
 

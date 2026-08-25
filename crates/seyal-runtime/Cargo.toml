@@ -27,16 +27,6 @@ stats_alloc = "=0.1.10"
 unsafe_code = "deny"
 
 [[bench]]
-name = "pass5_transport_stress"
-harness = false
-required-features = ["benchmark-shared-projection"]
-
-[[bench]]
-name = "pass5_shared_projection"
-harness = false
-required-features = ["benchmark-shared-projection"]
-
-[[bench]]
 name = "pass5_delta_transport"
 harness = false
 

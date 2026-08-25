@@ -893,8 +893,8 @@ impl Runtime {
                         }
                     }
                 }
-            } else {
-                let base_generation = previous.expect("checked above").generation;
+            } else if let Some(previous) = previous {
+                let base_generation = previous.generation;
                 match display::encode_delta(&update, base_generation) {
                     Ok(delta) => {
                         let mut recovery_snapshot: Option<EncodedDisplayBatch> = None;

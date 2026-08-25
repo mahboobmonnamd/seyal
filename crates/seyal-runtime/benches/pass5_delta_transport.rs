@@ -463,7 +463,8 @@ fn transfer_exact(
 fn percentile_us(samples: &[Sample], f: impl Fn(&Sample) -> u128, pct: usize) -> u128 {
     let mut values = samples.iter().map(f).collect::<Vec<_>>();
     values.sort_unstable();
-    let index = ((values.len() * pct + 99) / 100)
+    let index = (values.len() * pct)
+        .div_ceil(100)
         .saturating_sub(1)
         .min(values.len() - 1);
     values[index] / 1_000
@@ -473,7 +474,8 @@ fn percentile_us(samples: &[Sample], f: impl Fn(&Sample) -> u128, pct: usize) ->
 fn percentile_usize(samples: &[Sample], f: impl Fn(&Sample) -> usize, pct: usize) -> usize {
     let mut values = samples.iter().map(f).collect::<Vec<_>>();
     values.sort_unstable();
-    let index = ((values.len() * pct + 99) / 100)
+    let index = (values.len() * pct)
+        .div_ceil(100)
         .saturating_sub(1)
         .min(values.len() - 1);
     values[index]

@@ -1,3 +1,5 @@
+#[cfg(target_os = "macos")]
+use stats_alloc::Region;
 use stats_alloc::{INSTRUMENTED_SYSTEM, StatsAlloc};
 use std::alloc::System;
 
@@ -725,9 +727,11 @@ fn send_client_frame(
         match client.stream.write(&frame[sent..]) {
             Ok(0) => panic!("client socket closed while writing"),
             Ok(count) => sent += count,
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => runtime
-                .poll_once(Some(Duration::from_millis(1)))
-                .expect("Runtime poll"),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                runtime
+                    .poll_once(Some(Duration::from_millis(1)))
+                    .expect("Runtime poll");
+            }
             Err(error) => panic!("client write failed: {error}"),
         }
         assert!(Instant::now() < deadline, "client send timed out");
@@ -753,9 +757,11 @@ fn await_frame(
         match client.stream.read(&mut buffer) {
             Ok(0) => panic!("client socket closed"),
             Ok(count) => client.buffered.extend_from_slice(&buffer[..count]),
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => runtime
-                .poll_once(Some(Duration::from_millis(1)))
-                .expect("Runtime poll"),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                runtime
+                    .poll_once(Some(Duration::from_millis(1)))
+                    .expect("Runtime poll");
+            }
             Err(error) => panic!("client read failed: {error}"),
         }
         assert!(Instant::now() < deadline, "frame wait timed out");

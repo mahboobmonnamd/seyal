@@ -82,7 +82,8 @@ pub fn benchmark_connection_counters() -> BenchmarkConnectionCounters {
         pending_supersessions: BENCH_PENDING_SUPERSESSIONS.load(Ordering::Relaxed),
         snapshot_completed: BENCH_SNAPSHOT_COMPLETED.load(Ordering::Relaxed),
         delta_completed: BENCH_DELTA_COMPLETED.load(Ordering::Relaxed),
-        display_queue_high_water_bytes: BENCH_DISPLAY_QUEUE_HIGH_WATER_BYTES.load(Ordering::Relaxed),
+        display_queue_high_water_bytes: BENCH_DISPLAY_QUEUE_HIGH_WATER_BYTES
+            .load(Ordering::Relaxed),
     }
 }
 

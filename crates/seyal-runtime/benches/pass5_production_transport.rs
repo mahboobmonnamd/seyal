@@ -471,31 +471,31 @@ fn workload_command(workload: Workload) -> CommandSpec {
         Workload::Interactive => CommandSpec::new("/bin/cat"),
         Workload::Command => CommandSpec::new("/bin/sh").args([
             "-c",
-            "read _; /bin/ls -la /usr/bin | /usr/bin/head -n 200; printf 'DONE\\r\\n'; sleep 1",
+            "read _; /bin/ls -la /usr/bin | /usr/bin/head -n 200; printf 'DONE\r\n'; sleep 1",
         ]),
         Workload::Token => CommandSpec::new("/bin/sh").args([
             "-c",
-            "read _; i=0; while [ $i -lt 200 ]; do printf 'tok%04d ' \"$i\"; sleep 0.005; i=$((i+1)); done; printf 'DONE\\r\\n'; sleep 1",
+            "read _; i=0; while [ $i -lt 200 ]; do printf 'tok%04d ' \"$i\"; sleep 0.005; i=$((i+1)); done; printf 'DONE\r\n'; sleep 1",
         ]),
         Workload::Burst => CommandSpec::new("/bin/sh").args([
             "-c",
-            "read _; yes BURST | head -n 10000; printf 'DONE\\r\\n'; sleep 1",
+            "read _; yes BURST | head -n 10000; printf 'DONE\r\n'; sleep 1",
         ]),
         Workload::Sustained => CommandSpec::new("/bin/sh").args([
             "-c",
-            "read _; i=0; while [ $i -lt 220 ]; do printf '%04096d\\r\\n' 0; sleep 0.01; i=$((i+1)); done; printf 'DONE\\r\\n'; sleep 1",
+            "read _; i=0; while [ $i -lt 220 ]; do printf '%04096d\r\n' 0; sleep 0.01; i=$((i+1)); done; printf 'DONE\r\n'; sleep 1",
         ]),
         Workload::TuiPartial => CommandSpec::new("/bin/sh").args([
             "-c",
-            "read _; printf '\\033[2J'; i=0; while [ $i -lt 100 ]; do printf '\\033[2;1HPART%04d' \"$i\"; printf '\\033[10;1Hvalue%04d' \"$i\"; sleep 0.01; i=$((i+1)); done; printf '\\033[1;1HDONE'; sleep 1",
+            "read _; printf '\033[2J'; i=0; while [ $i -lt 100 ]; do printf '\033[2;1HPART%04d' \"$i\"; printf '\033[10;1Hvalue%04d' \"$i\"; sleep 0.01; i=$((i+1)); done; printf '\033[1;1HDONE'; sleep 1",
         ]),
         Workload::Tui => CommandSpec::new("/bin/sh").args([
             "-c",
-            "read _; i=0; while [ $i -lt 100 ]; do printf '\\033[HFRAME%04d\\r\\n' \"$i\"; j=0; while [ $j -lt 30 ]; do printf 'row%02d value%04d\\r\\n' \"$j\" \"$i\"; j=$((j+1)); done; sleep 0.01; i=$((i+1)); done; printf 'DONE\\r\\n'; sleep 1",
+            "read _; i=0; while [ $i -lt 100 ]; do printf '\033[HFRAME%04d\r\n' \"$i\"; j=0; while [ $j -lt 30 ]; do printf 'row%02d value%04d\r\n' \"$j\" \"$i\"; j=$((j+1)); done; sleep 0.01; i=$((i+1)); done; printf 'DONE\r\n'; sleep 1",
         ]),
         Workload::Alternate => CommandSpec::new("/bin/sh").args([
             "-c",
-            "read _; printf '\\033[?1049h'; i=0; while [ $i -lt 100 ]; do printf '\\033[HAFRAME%04d\\r\\n' \"$i\"; j=0; while [ $j -lt 30 ]; do printf 'alt%02d value%04d\\r\\n' \"$j\" \"$i\"; j=$((j+1)); done; sleep 0.01; i=$((i+1)); done; printf 'DONE\\r\\n'; sleep 1",
+            "read _; printf '\033[?1049h'; i=0; while [ $i -lt 100 ]; do printf '\033[HAFRAME%04d\r\n' \"$i\"; j=0; while [ $j -lt 30 ]; do printf 'alt%02d value%04d\r\n' \"$j\" \"$i\"; j=$((j+1)); done; sleep 0.01; i=$((i+1)); done; printf 'DONE\r\n'; sleep 1",
         ]),
     }
 }
@@ -713,11 +713,9 @@ fn percentile(sorted: &[u128], percentile: usize) -> u128 {
 
 #[cfg(target_os = "macos")]
 fn bytes_per_second(bytes: u64, elapsed_us: u128) -> u128 {
-    if elapsed_us == 0 {
-        0
-    } else {
-        (bytes as u128 * 1_000_000) / elapsed_us
-    }
+    (bytes as u128 * 1_000_000)
+        .checked_div(elapsed_us)
+        .unwrap_or(0)
 }
 
 #[cfg(target_os = "macos")]
@@ -879,9 +877,11 @@ fn send_client_frame(
         match client.stream.write(&frame[sent..]) {
             Ok(0) => panic!("client socket closed while writing"),
             Ok(count) => sent += count,
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => runtime
-                .poll_once(Some(Duration::from_millis(1)))
-                .expect("Runtime poll"),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                runtime
+                    .poll_once(Some(Duration::from_millis(1)))
+                    .expect("Runtime poll");
+            }
             Err(error) => panic!("client write failed: {error}"),
         }
         assert!(Instant::now() < deadline, "client send timed out");
@@ -907,9 +907,11 @@ fn await_frame(
         match client.stream.read(&mut buffer) {
             Ok(0) => panic!("client socket closed"),
             Ok(count) => client.buffered.extend_from_slice(&buffer[..count]),
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => runtime
-                .poll_once(Some(Duration::from_millis(1)))
-                .expect("Runtime poll"),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                runtime
+                    .poll_once(Some(Duration::from_millis(1)))
+                    .expect("Runtime poll");
+            }
             Err(error) => panic!("client read failed: {error}"),
         }
         assert!(Instant::now() < deadline, "frame wait timed out");

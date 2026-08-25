@@ -127,6 +127,26 @@ The hybrid design remains selected unless the socket-only implementation is meas
 - Missed generations cause coalescing/resync, never PTY backpressure.
 - Projection protocol/layout is versioned independently of Rust internal structs.
 
+## First-attach transaction commit point
+
+The first-attach transaction deliberately keeps attachment/controller authority private until the initial `Attached` frame and read-only projection descriptor have been accepted by the Runtime's bounded nonblocking outbound path.
+
+The order is:
+
+```text
+validate peer/state/role/ExecutionId/capacity
+→ allocate AttachmentId + ProjectionId + projection resources privately
+→ read current canonical visible TerminalState
+→ publish the first complete projection generation
+→ enqueue/begin nonblocking Attached + read-only descriptor delivery successfully
+→ publish attachment/controller/projection authority in Runtime registries
+→ transition the connection to Attached
+```
+
+“Delivery successfully” at this commit boundary does **not** mean a client acknowledgement and does not introduce renderer backpressure. It means the Runtime-side mandatory response has been accepted by the bounded server send/queue path without a send/enqueue failure. Once accepted there, normal disconnect cleanup owns any later client loss.
+
+This order is intentional. Publishing the controller lease/attachment before an initial descriptor-send failure would create a larger rollback window in authoritative Runtime state. With the chosen order, any failure in projection creation, first-generation publication, descriptor preparation, or initial mandatory send drops only private resources; no attachment/controller lease/projection registry record has been committed. After the Runtime authority is published, disconnect cleanup is idempotent.
+
 ## Consequences
 
 This adds a small amount of projection management complexity in exchange for preserving persistent Runtime ownership without forcing the local display path through repeated high-level serialization. The mechanism is local-only; future remote/mobile transport can use bounded binary snapshot/delta streams derived from the same canonical state without sharing this memory layout.

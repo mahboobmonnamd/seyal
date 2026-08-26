@@ -2,15 +2,32 @@ import AppKit
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private static let buildConfigurationKey = "SeyalBuildConfiguration"
+
     private var window: NSWindow?
 
+    static func shouldUseShellPreview(
+        arguments: [String],
+        environment: [String: String],
+        buildConfiguration: String?
+    ) -> Bool {
+        guard buildConfiguration == "Debug" else {
+            return false
+        }
+
+        return arguments.contains("--ui-shell-preview")
+            || environment["SEYAL_UI_SHELL_PREVIEW"] == "1"
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
-        #if DEBUG
-        let useShellPreview = CommandLine.arguments.contains("--ui-shell-preview")
-            || ProcessInfo.processInfo.environment["SEYAL_UI_SHELL_PREVIEW"] == "1"
-        #else
-        let useShellPreview = false
-        #endif
+        let buildConfiguration = Bundle.main.object(
+            forInfoDictionaryKey: Self.buildConfigurationKey
+        ) as? String
+        let useShellPreview = Self.shouldUseShellPreview(
+            arguments: CommandLine.arguments,
+            environment: ProcessInfo.processInfo.environment,
+            buildConfiguration: buildConfiguration
+        )
 
         let contentRect = useShellPreview
             ? NSRect(x: 0, y: 0, width: 1280, height: 800)
@@ -23,7 +40,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             defer: false
         )
 
-        #if DEBUG
         if useShellPreview {
             window.title = "Seyal — UI Shell Preview"
             window.contentView = SeyalShellPreviewFactory.make(frame: contentRect)

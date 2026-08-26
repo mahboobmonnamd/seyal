@@ -603,18 +603,31 @@ impl Runtime {
                 (outcome, generation_before, generation_after)
             };
             match outcome {
-                ReadOutcome::Bytes(0) | ReadOutcome::WouldBlock | ReadOutcome::Eof => {
+                ReadOutcome::Eof => {
                     // A dead PTY master's `EVFILT_READ` is level-triggered
-                    // and permanently ready with EOF, so a `PrimaryExitPending`
-                    // entry would otherwise busy-spin `poll_once` on this
-                    // same EOF until its next `PRIMARY_EXIT_REAP_RETRY`
-                    // deadline. Retry the reap immediately instead: EOF has
-                    // already proven there are no more bytes to read this
-                    // turn, so there is nothing to lose by checking now
-                    // rather than waiting out the deadline.
+                    // and permanently ready with EOF the moment the child's
+                    // slave side closes - this is independent of, and more
+                    // reliable than, the EVFILT_PROC/NOTE_EXIT registration
+                    // this execution's reactor slot also holds. `NOTE_EXIT`
+                    // is edge-triggered on the kernel's exit transition; if
+                    // that knote is attached (register_process_exit succeeds
+                    // without ESRCH, so the child is not yet fully reaped)
+                    // after the kernel has already fired that one-shot
+                    // transition, the notification is missed permanently and
+                    // no `PrimaryExited` reactor event - and therefore no
+                    // `observe_primary_exit` call - will ever occur for this
+                    // registration. Lifecycle::Running has no deadline, so
+                    // without this, that execution would be stranded alive
+                    // forever with a full-core busy-spin on this same
+                    // permanently-ready EOF. Treat EOF while Running the same
+                    // as EOF while PrimaryExitPending: retry the reap
+                    // immediately, since EOF is unambiguous proof the slave
+                    // side is gone, unlike WouldBlock/Bytes(0) which a
+                    // perfectly healthy, still-running process produces
+                    // constantly and must not be treated as an exit signal.
                     if matches!(
                         self.entries.get(&id).map(|entry| entry.lifecycle),
-                        Some(Lifecycle::PrimaryExitPending { .. })
+                        Some(Lifecycle::Running | Lifecycle::PrimaryExitPending { .. })
                     ) {
                         let exit = {
                             let entry = self
@@ -625,8 +638,21 @@ impl Runtime {
                         };
                         if let Some(exit) = exit {
                             self.enter_drain(id, exit)?;
+                        } else if let Some(entry) = self.entries.get_mut(&id)
+                            && matches!(entry.lifecycle, Lifecycle::Running)
+                        {
+                            entry.lifecycle = Lifecycle::PrimaryExitPending {
+                                deadline: Instant::now() + PRIMARY_EXIT_REAP_RETRY,
+                            };
                         }
                     }
+                    drain_complete = matches!(
+                        self.entries.get(&id).map(|entry| entry.lifecycle),
+                        Some(Lifecycle::DrainingAfterPrimaryExit { .. })
+                    );
+                    break;
+                }
+                ReadOutcome::Bytes(0) | ReadOutcome::WouldBlock => {
                     drain_complete = matches!(
                         self.entries.get(&id).map(|entry| entry.lifecycle),
                         Some(Lifecycle::DrainingAfterPrimaryExit { .. })

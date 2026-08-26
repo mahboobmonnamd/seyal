@@ -11,6 +11,7 @@ final class PaneComposerShellView: NSView, NSTextViewDelegate {
     private let mode: Mode
     private let draft: String
     private let accessibilityID: String?
+    private let onFocus: (() -> Void)?
     private let onDraftChange: ((String) -> Void)?
     private weak var editor: NSTextView?
 
@@ -18,11 +19,13 @@ final class PaneComposerShellView: NSView, NSTextViewDelegate {
         mode: Mode,
         draft: String,
         accessibilityID: String? = nil,
+        onFocus: (() -> Void)? = nil,
         onDraftChange: ((String) -> Void)? = nil
     ) {
         self.mode = mode
         self.draft = draft
         self.accessibilityID = accessibilityID
+        self.onFocus = onFocus
         self.onDraftChange = onDraftChange
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
@@ -140,6 +143,10 @@ final class PaneComposerShellView: NSView, NSTextViewDelegate {
             row.centerYAnchor.constraint(equalTo: centerYAnchor),
             heightAnchor.constraint(equalToConstant: SeyalDesignTokens.Layout.composerMinHeight),
         ])
+    }
+
+    func textDidBeginEditing(_ notification: Notification) {
+        onFocus?()
     }
 
     func textDidChange(_ notification: Notification) {

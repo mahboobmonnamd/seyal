@@ -1,7 +1,7 @@
 import AppKit
 
 @MainActor
-final class PaneComposerShellView: NSView {
+final class PaneComposerShellView: NSView, NSTextViewDelegate {
     enum Mode {
         case available
         case busy(process: String)
@@ -10,10 +10,20 @@ final class PaneComposerShellView: NSView {
 
     private let mode: Mode
     private let draft: String
+    private let accessibilityID: String?
+    private let onDraftChange: ((String) -> Void)?
+    private weak var editor: NSTextView?
 
-    init(mode: Mode, draft: String) {
+    init(
+        mode: Mode,
+        draft: String,
+        accessibilityID: String? = nil,
+        onDraftChange: ((String) -> Void)? = nil
+    ) {
         self.mode = mode
         self.draft = draft
+        self.accessibilityID = accessibilityID
+        self.onDraftChange = onDraftChange
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         buildUI()
@@ -28,7 +38,6 @@ final class PaneComposerShellView: NSView {
         switch mode {
         case .hiddenForTUI:
             isHidden = true
-            return
         case .available:
             buildAvailableComposer()
         case let .busy(process):
@@ -47,63 +56,56 @@ final class PaneComposerShellView: NSView {
         let prompt = NSTextField(labelWithString: "›")
         prompt.font = NSFont.monospacedSystemFont(ofSize: 18, weight: .semibold)
         prompt.textColor = SeyalDesignTokens.Palette.focus
+        prompt.setContentHuggingPriority(.required, for: .horizontal)
 
-        let previewDraft = draft.replacingOccurrences(of: "\\n", with: "\n")
-        let text = previewDraft.isEmpty ? "Type a command, @ agent, / action…" : previewDraft
-        let draftField = NSTextField(wrappingLabelWithString: text)
-        draftField.font = SeyalDesignTokens.Typography.command
-        draftField.textColor = previewDraft.isEmpty
-            ? SeyalDesignTokens.Palette.textTertiary
-            : SeyalDesignTokens.Palette.textPrimary
-        draftField.maximumNumberOfLines = 4
-        draftField.lineBreakMode = .byWordWrapping
-        draftField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let editor = NSTextView(frame: .zero)
+        editor.isRichText = false
+        editor.importsGraphics = false
+        editor.drawsBackground = false
+        editor.font = SeyalDesignTokens.Typography.command
+        editor.textColor = SeyalDesignTokens.Palette.textPrimary
+        editor.insertionPointColor = SeyalDesignTokens.Palette.focus
+        editor.string = draft
+        editor.delegate = self
+        editor.isHorizontallyResizable = false
+        editor.isVerticallyResizable = true
+        editor.textContainerInset = NSSize(width: 0, height: 5)
+        editor.textContainer?.widthTracksTextView = true
+        editor.textContainer?.lineFragmentPadding = 0
+        if let accessibilityID {
+            editor.setAccessibilityIdentifier(accessibilityID)
+        }
+        editor.setAccessibilityLabel("Pane command composer")
+        self.editor = editor
 
-        let execute = NSTextField(labelWithString: "↵")
-        execute.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
-        execute.textColor = SeyalDesignTokens.Palette.textPrimary
-        execute.alignment = .center
-        execute.wantsLayer = true
-        execute.layer?.cornerRadius = 7
-        execute.layer?.backgroundColor = SeyalDesignTokens.Palette.focus.cgColor
-        execute.translatesAutoresizingMaskIntoConstraints = false
-        execute.widthAnchor.constraint(equalToConstant: 30).isActive = true
-        execute.heightAnchor.constraint(equalToConstant: 26).isActive = true
-        execute.toolTip = "Execute command"
+        let editorScroll = NSScrollView()
+        editorScroll.drawsBackground = false
+        editorScroll.borderType = .noBorder
+        editorScroll.hasHorizontalScroller = false
+        editorScroll.hasVerticalScroller = false
+        editorScroll.autohidesScrollers = true
+        editorScroll.documentView = editor
+        editorScroll.translatesAutoresizingMaskIntoConstraints = false
 
-        let inputRow = NSStackView(views: [prompt, draftField, execute])
-        inputRow.orientation = .horizontal
-        inputRow.alignment = .centerY
-        inputRow.spacing = 9
-        inputRow.translatesAutoresizingMaskIntoConstraints = false
+        let hint = NSTextField(labelWithString: "Shift+Return newline")
+        hint.font = SeyalDesignTokens.Typography.metadata
+        hint.textColor = SeyalDesignTokens.Palette.textTertiary
+        hint.alignment = .right
+        hint.setContentHuggingPriority(.required, for: .horizontal)
 
-        let history = NSTextField(labelWithString: "⌃R history")
-        history.font = SeyalDesignTokens.Typography.metadata
-        history.textColor = SeyalDesignTokens.Palette.textTertiary
-
-        let newline = NSTextField(labelWithString: "⇧↩ newline")
-        newline.font = SeyalDesignTokens.Typography.metadata
-        newline.textColor = SeyalDesignTokens.Palette.textTertiary
-
-        let helper = NSStackView(views: [history, newline])
-        helper.orientation = .horizontal
-        helper.alignment = .centerY
-        helper.spacing = 12
-
-        let stack = NSStackView(views: [inputRow, helper])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 7
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
+        let row = NSStackView(views: [prompt, editorScroll, hint])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 9
+        row.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(row)
 
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            stack.topAnchor.constraint(equalTo: topAnchor, constant: 10),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
-            inputRow.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
-            inputRow.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
+            row.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            row.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            row.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            row.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            editorScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 38),
             heightAnchor.constraint(greaterThanOrEqualToConstant: SeyalDesignTokens.Layout.composerMinHeight),
             heightAnchor.constraint(lessThanOrEqualToConstant: SeyalDesignTokens.Layout.composerMaxPreviewHeight),
         ])
@@ -138,5 +140,10 @@ final class PaneComposerShellView: NSView {
             row.centerYAnchor.constraint(equalTo: centerYAnchor),
             heightAnchor.constraint(equalToConstant: SeyalDesignTokens.Layout.composerMinHeight),
         ])
+    }
+
+    func textDidChange(_ notification: Notification) {
+        guard let editor else { return }
+        onDraftChange?(editor.string)
     }
 }

@@ -62,6 +62,7 @@ final class PaneComposerShellView: NSView, NSTextViewDelegate {
         prompt.setContentHuggingPriority(.required, for: .horizontal)
 
         let editor = NSTextView(frame: .zero)
+        editor.translatesAutoresizingMaskIntoConstraints = false
         editor.isRichText = false
         editor.importsGraphics = false
         editor.drawsBackground = false
@@ -81,22 +82,13 @@ final class PaneComposerShellView: NSView, NSTextViewDelegate {
         editor.setAccessibilityLabel("Pane command composer")
         self.editor = editor
 
-        let editorScroll = NSScrollView()
-        editorScroll.drawsBackground = false
-        editorScroll.borderType = .noBorder
-        editorScroll.hasHorizontalScroller = false
-        editorScroll.hasVerticalScroller = false
-        editorScroll.autohidesScrollers = true
-        editorScroll.documentView = editor
-        editorScroll.translatesAutoresizingMaskIntoConstraints = false
-
         let hint = NSTextField(labelWithString: "Shift+Return newline")
         hint.font = SeyalDesignTokens.Typography.metadata
         hint.textColor = SeyalDesignTokens.Palette.textTertiary
         hint.alignment = .right
         hint.setContentHuggingPriority(.required, for: .horizontal)
 
-        let row = NSStackView(views: [prompt, editorScroll, hint])
+        let row = NSStackView(views: [prompt, editor, hint])
         row.orientation = .horizontal
         row.alignment = .centerY
         row.spacing = 9
@@ -108,7 +100,7 @@ final class PaneComposerShellView: NSView, NSTextViewDelegate {
             row.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
             row.topAnchor.constraint(equalTo: topAnchor, constant: 8),
             row.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
-            editorScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 38),
+            editor.heightAnchor.constraint(greaterThanOrEqualToConstant: 38),
             heightAnchor.constraint(greaterThanOrEqualToConstant: SeyalDesignTokens.Layout.composerMinHeight),
             heightAnchor.constraint(lessThanOrEqualToConstant: SeyalDesignTokens.Layout.composerMaxPreviewHeight),
         ])

@@ -24,6 +24,17 @@ SOURCES="macos/Seyal/Sources"
 [[ -f "$SOURCES/TerminalShaders.metal" ]] || fail "missing permanent terminal Metal shaders"
 [[ -f "$SOURCES/SeyalBridge.h" ]] || fail "missing coarse Rust/native bridge header"
 
+for required in \
+  SeyalDesignTokens.swift \
+  SeyalShellModel.swift \
+  BlockView.swift \
+  PaneComposerShellView.swift \
+  TerminalSurfaceHostView.swift \
+  SeyalShellView.swift \
+  SeyalShellPreviewFactory.swift; do
+  [[ -f "$SOURCES/$required" ]] || fail "missing native UI shell source: $required"
+done
+
 if find macos/Seyal -type f \( -name '*.m' -o -name '*.mm' -o -name '*.cc' -o -name '*.cpp' \) -print -quit | grep -q .; then
   fail "native host must remain Swift-only unless a later ADR justifies another language"
 fi
@@ -42,6 +53,19 @@ grep -R -q 'DispatchSource.makeReadSource' "$SOURCES" || fail "Candidate-D clien
 if grep -R -E -q '(^|[^A-Za-z])(SwiftUI|NSTextView)([^A-Za-z]|$)' "$SOURCES"; then
   fail "temporary SwiftUI/NSTextView terminal surfaces are forbidden"
 fi
+
+if grep -q 'NSScrollView' "$SOURCES/BlockView.swift"; then
+  fail "BlockView must not own nested output scrolling; the Pane transcript is the single normal-scroll owner"
+fi
+
+grep -q 'private func makeTranscript() -> NSScrollView' "$SOURCES/SeyalShellView.swift" \
+  || fail "UI shell must keep Pane-owned transcript scrolling explicit"
+grep -q 'TerminalSurfaceHostView' "$PROJECT/project.pbxproj" \
+  || fail "permanent Metal terminal-surface host is missing from the native target"
+grep -q -- '--ui-shell-preview' "$SOURCES/AppDelegate.swift" \
+  || fail "UI shell preview must remain behind an explicit launch path"
+grep -q '#if DEBUG' "$SOURCES/AppDelegate.swift" \
+  || fail "UI shell preview must remain debug-only before Pass 6"
 
 bash scripts/build-macos.sh
 
@@ -99,3 +123,4 @@ trap - EXIT
 cleanup_runtime
 
 echo "[seyal macOS test] AppKit + Candidate-D + permanent Metal renderer acceptance passed."
+echo "[seyal macOS test] Swift + AppKit + Metal + UI shell scaffold acceptance passed."

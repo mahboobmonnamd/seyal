@@ -100,19 +100,18 @@ final class BlockView: NSView {
         ])
     }
 
+    /// Action labels remain a component seam only. The pre-Pass-6 shell preview
+    /// does not instantiate BlockView with fake command/output or pretend these
+    /// Runtime-dependent actions can execute before their real backing exists.
     private func makeActions() -> NSView {
         let actionViews = presentation.actions.map { action -> NSTextField in
             let field = NSTextField(labelWithString: action)
             field.font = SeyalDesignTokens.Typography.metadataEmphasized
             field.textColor = SeyalDesignTokens.Palette.textTertiary
-            field.toolTip = "Block action: \(action)"
             return field
         }
-        let more = NSTextField(labelWithString: "•••")
-        more.font = SeyalDesignTokens.Typography.metadataEmphasized
-        more.textColor = SeyalDesignTokens.Palette.textTertiary
 
-        let stack = NSStackView(views: actionViews + [more])
+        let stack = NSStackView(views: actionViews)
         stack.orientation = .horizontal
         stack.alignment = .centerY
         stack.spacing = 9
@@ -138,54 +137,3 @@ final class BlockView: NSView {
         }
     }
 }
-
-#if DEBUG
-@MainActor
-final class PreviewTerminalFixtureView: NSView {
-    init(lines: [String]) {
-        super.init(frame: .zero)
-        translatesAutoresizingMaskIntoConstraints = false
-
-        let lineViews = lines.map { line -> NSTextField in
-            let field = NSTextField(labelWithString: line.isEmpty ? " " : line)
-            field.font = SeyalDesignTokens.Typography.terminal
-            field.textColor = Self.color(for: line)
-            field.lineBreakMode = .byClipping
-            field.maximumNumberOfLines = 1
-            return field
-        }
-
-        let stack = NSStackView(views: lineViews)
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 3
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
-
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
-            stack.topAnchor.constraint(equalTo: topAnchor),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
-        ])
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("PreviewTerminalFixtureView is programmatic")
-    }
-
-    private static func color(for line: String) -> NSColor {
-        if line.contains("modified:") {
-            return SeyalDesignTokens.Palette.warning
-        }
-        if line.contains("Running") || line.contains("... ok") || line.contains("18 passed") {
-            return SeyalDesignTokens.Palette.success
-        }
-        if line.hasPrefix("NAME") || line.hasPrefix("Changes not staged") {
-            return SeyalDesignTokens.Palette.textSecondary
-        }
-        return SeyalDesignTokens.Palette.textPrimary
-    }
-}
-#endif

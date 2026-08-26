@@ -21,11 +21,18 @@ final class BlockView: NSView {
     private func buildUI() {
         wantsLayer = true
         layer?.cornerRadius = SeyalDesignTokens.Layout.blockCornerRadius
-        layer?.borderWidth = presentation.isSelected ? 1.5 : 1
+        layer?.borderWidth = presentation.isSelected ? 1.25 : 1
         layer?.borderColor = (presentation.isSelected
             ? SeyalDesignTokens.Palette.focus
             : SeyalDesignTokens.Palette.separator).cgColor
-        layer?.backgroundColor = SeyalDesignTokens.Palette.paneBackground.cgColor
+        layer?.backgroundColor = (presentation.isSelected
+            ? SeyalDesignTokens.Palette.blockSelectedBackground
+            : SeyalDesignTokens.Palette.blockBackground).cgColor
+
+        let stateMark = NSTextField(labelWithString: "●")
+        stateMark.font = NSFont.systemFont(ofSize: 9, weight: .bold)
+        stateMark.textColor = stateColor(for: presentation.state)
+        stateMark.toolTip = presentation.state.rawValue
 
         let commandField = NSTextField(labelWithString: presentation.command)
         commandField.font = SeyalDesignTokens.Typography.command
@@ -33,10 +40,15 @@ final class BlockView: NSView {
         commandField.lineBreakMode = .byTruncatingMiddle
         commandField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let stateField = metadataField(presentation.state.rawValue, color: stateColor(for: presentation.state))
-        let elapsedField = metadataField(presentation.elapsed, color: SeyalDesignTokens.Palette.textSecondary)
+        let commandStack = NSStackView(views: [stateMark, commandField])
+        commandStack.orientation = .horizontal
+        commandStack.alignment = .centerY
+        commandStack.spacing = 7
+        commandStack.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        var metadataViews: [NSView] = [stateField, elapsedField]
+        let actions = makeActions()
+        let elapsedField = metadataField(presentation.elapsed, color: SeyalDesignTokens.Palette.textSecondary)
+        var metadataViews: [NSView] = [elapsedField]
         if let timestamp = presentation.timestamp {
             metadataViews.append(metadataField(timestamp, color: SeyalDesignTokens.Palette.textTertiary))
         }
@@ -46,14 +58,23 @@ final class BlockView: NSView {
         metadataStack.alignment = .centerY
         metadataStack.spacing = 8
 
-        let header = NSStackView(views: [commandField, metadataStack])
+        let rightStack = NSStackView(views: [actions, metadataStack])
+        rightStack.orientation = .horizontal
+        rightStack.alignment = .centerY
+        rightStack.spacing = 12
+
+        let header = NSStackView(views: [commandStack, rightStack])
         header.orientation = .horizontal
         header.alignment = .centerY
-        header.spacing = SeyalDesignTokens.Layout.compactSpacing
+        header.distribution = .fill
+        header.spacing = SeyalDesignTokens.Layout.standardSpacing
         header.translatesAutoresizingMaskIntoConstraints = false
 
-        let divider = NSBox()
-        divider.boxType = .separator
+        let divider = NSView()
+        divider.translatesAutoresizingMaskIntoConstraints = false
+        divider.wantsLayer = true
+        divider.layer?.backgroundColor = SeyalDesignTokens.Palette.subtleSeparator.cgColor
+        divider.heightAnchor.constraint(equalToConstant: 1).isActive = true
 
         bodyView.translatesAutoresizingMaskIntoConstraints = false
 
@@ -61,12 +82,7 @@ final class BlockView: NSView {
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = SeyalDesignTokens.Layout.compactSpacing
-        stack.edgeInsets = NSEdgeInsets(
-            top: 10,
-            left: SeyalDesignTokens.Layout.standardSpacing,
-            bottom: 12,
-            right: SeyalDesignTokens.Layout.standardSpacing
-        )
+        stack.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 12, right: 12)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
 
@@ -82,6 +98,25 @@ final class BlockView: NSView {
             bodyView.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
             bodyView.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
         ])
+    }
+
+    private func makeActions() -> NSView {
+        let actionViews = presentation.actions.map { action -> NSTextField in
+            let field = NSTextField(labelWithString: action)
+            field.font = SeyalDesignTokens.Typography.metadataEmphasized
+            field.textColor = SeyalDesignTokens.Palette.textTertiary
+            field.toolTip = "Block action: \(action)"
+            return field
+        }
+        let more = NSTextField(labelWithString: "•••")
+        more.font = SeyalDesignTokens.Typography.metadataEmphasized
+        more.textColor = SeyalDesignTokens.Palette.textTertiary
+
+        let stack = NSStackView(views: actionViews + [more])
+        stack.orientation = .horizontal
+        stack.alignment = .centerY
+        stack.spacing = 9
+        return stack
     }
 
     private func metadataField(_ value: String, color: NSColor) -> NSTextField {
@@ -112,9 +147,9 @@ final class PreviewTerminalFixtureView: NSView {
         translatesAutoresizingMaskIntoConstraints = false
 
         let lineViews = lines.map { line -> NSTextField in
-            let field = NSTextField(labelWithString: line)
+            let field = NSTextField(labelWithString: line.isEmpty ? " " : line)
             field.font = SeyalDesignTokens.Typography.terminal
-            field.textColor = SeyalDesignTokens.Palette.textPrimary
+            field.textColor = Self.color(for: line)
             field.lineBreakMode = .byClipping
             field.maximumNumberOfLines = 1
             return field
@@ -138,6 +173,19 @@ final class PreviewTerminalFixtureView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("PreviewTerminalFixtureView is programmatic")
+    }
+
+    private static func color(for line: String) -> NSColor {
+        if line.contains("modified:") {
+            return SeyalDesignTokens.Palette.warning
+        }
+        if line.contains("Running") || line.contains("... ok") || line.contains("18 passed") {
+            return SeyalDesignTokens.Palette.success
+        }
+        if line.hasPrefix("NAME") || line.hasPrefix("Changes not staged") {
+            return SeyalDesignTokens.Palette.textSecondary
+        }
+        return SeyalDesignTokens.Palette.textPrimary
     }
 }
 #endif

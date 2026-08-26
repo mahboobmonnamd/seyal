@@ -1,6 +1,6 @@
 # SPEC-004 — M001 local attachment and display-state transport
 
-- **Status:** Accepted for M001 Pass 5 implementation; performance sign-off open — the decisive production-path benchmark now measures clean across the full required matrix on physical Apple Silicon (see ADR-001 "Measured evidence"), but that run was not an isolated/controlled benchmark session, and Issue #651's remaining acceptance items (controlled hardware confirmation, failure-injection audit, final independent review) are still open. Do not treat this line as sign-off.
+- **Status:** Accepted for M001 Pass 5 implementation; performance sign-off open — the decisive production-path benchmark completes the full required matrix without error on physical Apple Silicon, but repeated measurement on that same uncontrolled hardware showed 30-50x run-to-run latency variance and one reproduced timeout under host contention (see ADR-001 "Measured evidence"). No latency/throughput number from this session is trustworthy without an isolated benchmark session, and Issue #651's remaining acceptance items (controlled hardware confirmation, final independent review) are still open. Do not treat this line as sign-off.
 - **Date:** 2026-08-24
 - **Amended:** 2026-08-25, 2026-08-26
 - **Issue:** #105 (implementation), #651 (Pass 5.1 final acceptance)

@@ -1,6 +1,6 @@
 # ADR-001 — Local Display Projection for macOS M001
 
-**Status:** Accepted — Candidate D split transport implemented; production-path performance matrix measured on physical Apple Silicon (informal run, not yet a controlled/isolated benchmark session — see "Measured evidence" below). Pass-5 acceptance remains owned by Issue #651.
+**Status:** Accepted — Candidate D split transport implemented and functionally exercised end to end on physical Apple Silicon (all 22 production-path benchmark cases complete without error). Performance sign-off is explicitly not granted: repeated measurement on the same uncontrolled hardware showed 30–50x run-to-run latency variance and one reproduced timeout under host contention, so no specific number is trustworthy without an isolated session — see "Measured evidence" below. Pass-5 acceptance remains owned by Issue #651.
 
 **Date:** 2026-08-23
 
@@ -390,28 +390,21 @@ Benchmark output must identify commit, build mode, hardware, OS, run count and p
 
 `crates/seyal-runtime/benches/pass5_production_transport.rs` traverses the real selected path end to end: real child process → real PTY → Seyal VT → canonical `TerminalState`/damage → Candidate-D binary encode → production Unix-domain socket → real client `DisplayCache` decode/apply. It is not a synthetic encoder-only or comparator path.
 
-**Host/build**: `pass5_production_host macos_version=26.6.2 macos_build=25G83 model="Mac14,9" hardware="Apple M2 Pro" rust="rustc 1.98.0 (88d9e12ae 2026-08-18)" build_mode=release commit=be9f9b800bc82646ef2256fdf7fff03aec4d14cb`. This is physical Apple Silicon hardware, not a virtualized or shared CI runner. It is **not** an isolated/controlled benchmark session — it ran interactively alongside normal development-machine load, so treat the exact figures below as directional evidence that the mechanism works and scales sanely, not as a certified product performance number. A controlled, isolated run on the same or comparable hardware is still owed before Issue #651's "controlled performance evidence" acceptance item can be closed.
+**Host/build**: `pass5_production_host macos_version=26.6.2 macos_build=25G83 model="Mac14,9" hardware="Apple M2 Pro" rust="rustc 1.98.0 (88d9e12ae 2026-08-18)" build_mode=release`, commit range `be9f9b8`–`af8adfe`. This is physical Apple Silicon hardware, not a virtualized or shared CI runner.
 
-**Result**: all 22 defined cases (interactive fanout 1/2/4/8/16 at 80×24; sustained-high-output fanout 1/2/4/8/16 at 200×60; populations of 10/50/100; geometries of 120×40/200×60/512×256; and normal-command/token-stream/burst-scroll/tui-partial-redraw/tui-full-redraw/alternate-screen at 16-way fanout) completed and classified `MEASURED` — zero `PLATFORM_LIMITED`, zero timeouts, zero panics.
+**This is explicitly not the controlled/isolated benchmark session Issue #651 requires for performance sign-off, and the numbers below demonstrate exactly why that distinction matters rather than just disclosing it as a formality.** One full run of the 22-case matrix completed cleanly (all cases classified `MEASURED`, zero `PLATFORM_LIMITED`, zero timeouts, zero panics), demonstrating the mechanism itself works end to end on the real production path. But repeated re-measurement on the same hardware, minutes apart, showed:
 
-Sustained high-output (200×60, the case previously timing out — see below) across the same-execution fanout matrix:
+- p95/p99 sustained-fanout latency varying by roughly 30–50x between runs (single-digit milliseconds in one run, over 100ms in others at the same fanout/geometry);
+- the same 200×60 sustained-high-output case that this section originally reported as resolved **reproducing the original timeout outright** in a later run, at a measured host load average of ~69 (`vm.loadavg`) — a direct artifact of this machine running many hours of unrelated concurrent build/test/benchmark work in the same interactive session, not a change in the code between measurements.
 
-| fanout | samples | p50 (µs) | p95 (µs) | p99 (µs) |
-|---|---|---|---|---|
-| 1 | 223 | 800 | 1021 | 1517 |
-| 2 | 444 | 1117 | 1372 | 1518 |
-| 4 | 888 | 1564 | 2019 | 2209 |
-| 8 | 1776 | 2441 | 3204 | 3334 |
-| 16 | 3552 | 3000 | 4105 | 4283 |
+**Conclusion**: this is not evidence that Candidate-D's transport is slow, and it is not evidence that it is fast — the variance itself is the finding. This benchmark is sensitive enough to host contention that no specific latency number measured outside an isolated session should be cited as characteristic, in either direction. Two real, unrelated defects that were previously preventing this benchmark from ever completing at all (see below) are fixed and verified; whether the *architecture* meets Seyal's latency/CPU/RSS goals under the required workload is a question this session cannot answer, and Issue #651's controlled-hardware acceptance item stays open for exactly that reason.
 
-Latency scales sub-linearly with fanout and stays in the low single-digit milliseconds even at 16-way fanout under continuous high-volume output, consistent with the execution-scoped (not viewer-scoped) fanout invariant this ADR requires (§6). Source PTY throughput and aggregate/per-viewer UDS throughput are reported separately per generation as required by Workstream C, and snapshot-encode counts stayed low relative to delta-encode counts across the matrix, consistent with the bounded-recovery invariant (§5) rather than pathological full-snapshot churn under fanout.
+**What is actually fixed, independent of the performance question**: two unrelated defects that were previously preventing this benchmark from ever running to completion in CI:
 
-**What this closes**: the previously-reported "sustained 200×60 fanout-1 timeout" that blocked Issue #651's Workstream A did not reproduce once two unrelated defects were fixed that had been preventing the benchmark from ever running to completion in CI:
-
-1. `crates/seyal-runtime/src/runtime.rs::observe_primary_exit` could silently drop a one-shot kqueue exit notification racing `waitpid`, permanently stranding an execution — unrelated to Candidate-D transport, but it failed `make test` before `make bench` (where this matrix runs) ever executed.
+1. `crates/seyal-runtime/src/runtime.rs`: `EVFILT_PROC`/`NOTE_EXIT` exit notifications could be silently lost (not merely delayed) when the kqueue knote attached after the kernel's one-shot exit transition had already fired, permanently stranding the execution with no deadline to retry and a full-core busy-spin on the dead PTY's now-permanently-ready `EVFILT_READ`. Fixed in two passes (`964b977`, then `af8adfe` after an independent review reproduced the original failure signature at high frequency and proved the first pass only closed one of two distinct races) by detecting the exit via PTY EOF directly — a signal independent of, and more reliable than, the `EVFILT_PROC` registration. Verified via 35 consecutive `cargo test --workspace` runs under default parallelism with zero failures, after two independent rounds of review each found the previous attempt incomplete.
 2. Three of the 22 workload cases (`tui_partial_redraw`, `tui_full_redraw`, `alternate_screen`) used `\033` in a Rust string literal, which is not a valid Rust escape and silently embedded a NUL byte, causing those specific cases to fail to launch (misclassified as `PLATFORM_LIMITED`).
 
-Neither defect was a Candidate-D architecture or transport problem. With both fixed, the full matrix passes.
+Neither defect was a Candidate-D architecture or transport problem, and fixing them was necessary before any performance evidence about the transport itself could be collected at all — but fixing them does not, by itself, constitute that evidence.
 
 ## Reopen criterion
 

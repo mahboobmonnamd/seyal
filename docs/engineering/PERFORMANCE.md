@@ -210,7 +210,7 @@ No renderer acknowledgement is allowed in the canonical PTY/VT progress path.
 
 Synthetic `pass5_delta_transport` remains diagnostic evidence only because it does not traverse the real production Runtime path.
 
-The production `runtime_scalability` benchmark must exercise the exact selected Candidate-D Runtime path before its results can satisfy the final Pass-5 performance gate.
+`crates/seyal-runtime/benches/pass5_production_transport.rs` is the decisive Candidate-D benchmark: it is the only benchmark that traverses the full real selected path (real child → real PTY → Seyal VT → canonical damage → Candidate-D binary encode → production UDS → real client `DisplayCache`) across the required fanout/population/geometry/workload matrix. `runtime_scalability` remains pre-Pass-5 headless execution-scalability evidence and does not by itself satisfy the Pass-5 transport performance gate. See ADR-001's "Measured evidence" section for the current production-path results and the environment caveats that apply to them.
 
 Earlier single-sample or asymmetric results must not be promoted to final architecture claims. Host PTY ceilings must be reported as platform-limited evidence, not hidden or reinterpreted as a Seyal scalability limit.
 

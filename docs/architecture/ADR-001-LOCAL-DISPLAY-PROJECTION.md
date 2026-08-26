@@ -1,10 +1,10 @@
 # ADR-001 — Local Display Projection for macOS M001
 
-**Status:** Accepted — Candidate D split transport; Pass-5 implementation/performance validation open
+**Status:** Accepted — Candidate D split transport implemented; production-path performance matrix measured on physical Apple Silicon (informal run, not yet a controlled/isolated benchmark session — see "Measured evidence" below). Pass-5 acceptance remains owned by Issue #651.
 
 **Date:** 2026-08-23
 
-**Amended:** 2026-08-25
+**Amended:** 2026-08-25, 2026-08-26 (measured evidence added)
 
 **Related foundation rationale:** `R-002`, `R-003`, `R-021`, `R-022`, `R-023`, `R-024`, `R-027`
 
@@ -385,6 +385,33 @@ sustained high-output streaming
 including the 16-viewer case and a large representative geometry.
 
 Benchmark output must identify commit, build mode, hardware, OS, run count and percentile method. Single-sample or asymmetric comparator output is diagnostic only.
+
+## Measured evidence (M001 Pass 5.1)
+
+`crates/seyal-runtime/benches/pass5_production_transport.rs` traverses the real selected path end to end: real child process → real PTY → Seyal VT → canonical `TerminalState`/damage → Candidate-D binary encode → production Unix-domain socket → real client `DisplayCache` decode/apply. It is not a synthetic encoder-only or comparator path.
+
+**Host/build**: `pass5_production_host macos_version=26.6.2 macos_build=25G83 model="Mac14,9" hardware="Apple M2 Pro" rust="rustc 1.98.0 (88d9e12ae 2026-08-18)" build_mode=release commit=be9f9b800bc82646ef2256fdf7fff03aec4d14cb`. This is physical Apple Silicon hardware, not a virtualized or shared CI runner. It is **not** an isolated/controlled benchmark session — it ran interactively alongside normal development-machine load, so treat the exact figures below as directional evidence that the mechanism works and scales sanely, not as a certified product performance number. A controlled, isolated run on the same or comparable hardware is still owed before Issue #651's "controlled performance evidence" acceptance item can be closed.
+
+**Result**: all 22 defined cases (interactive fanout 1/2/4/8/16 at 80×24; sustained-high-output fanout 1/2/4/8/16 at 200×60; populations of 10/50/100; geometries of 120×40/200×60/512×256; and normal-command/token-stream/burst-scroll/tui-partial-redraw/tui-full-redraw/alternate-screen at 16-way fanout) completed and classified `MEASURED` — zero `PLATFORM_LIMITED`, zero timeouts, zero panics.
+
+Sustained high-output (200×60, the case previously timing out — see below) across the same-execution fanout matrix:
+
+| fanout | samples | p50 (µs) | p95 (µs) | p99 (µs) |
+|---|---|---|---|---|
+| 1 | 223 | 800 | 1021 | 1517 |
+| 2 | 444 | 1117 | 1372 | 1518 |
+| 4 | 888 | 1564 | 2019 | 2209 |
+| 8 | 1776 | 2441 | 3204 | 3334 |
+| 16 | 3552 | 3000 | 4105 | 4283 |
+
+Latency scales sub-linearly with fanout and stays in the low single-digit milliseconds even at 16-way fanout under continuous high-volume output, consistent with the execution-scoped (not viewer-scoped) fanout invariant this ADR requires (§6). Source PTY throughput and aggregate/per-viewer UDS throughput are reported separately per generation as required by Workstream C, and snapshot-encode counts stayed low relative to delta-encode counts across the matrix, consistent with the bounded-recovery invariant (§5) rather than pathological full-snapshot churn under fanout.
+
+**What this closes**: the previously-reported "sustained 200×60 fanout-1 timeout" that blocked Issue #651's Workstream A did not reproduce once two unrelated defects were fixed that had been preventing the benchmark from ever running to completion in CI:
+
+1. `crates/seyal-runtime/src/runtime.rs::observe_primary_exit` could silently drop a one-shot kqueue exit notification racing `waitpid`, permanently stranding an execution — unrelated to Candidate-D transport, but it failed `make test` before `make bench` (where this matrix runs) ever executed.
+2. Three of the 22 workload cases (`tui_partial_redraw`, `tui_full_redraw`, `alternate_screen`) used `\033` in a Rust string literal, which is not a valid Rust escape and silently embedded a NUL byte, causing those specific cases to fail to launch (misclassified as `PLATFORM_LIMITED`).
+
+Neither defect was a Candidate-D architecture or transport problem. With both fixed, the full matrix passes.
 
 ## Reopen criterion
 

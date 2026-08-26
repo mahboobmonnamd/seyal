@@ -30,9 +30,9 @@ future large immutable graphics/media
            (for example shm/IOSurface if justified)
 ```
 
-The branch still contains the earlier per-attachment shared-memory grid implementation and its tests/benchmarks. That code is **transitional comparator/reference code**, not the final production display architecture. PR #106 must remain draft until production attachment/display delivery is migrated to binary snapshot/delta + generation/resync and the required performance matrix passes.
+The migration is complete: PR #106 merged Candidate-D as the production attachment/display path, and production Runtime attachment/display delivery uses binary snapshot/delta + generation/resync exclusively. The earlier per-attachment shared-memory grid implementation remains in the tree only as isolated comparator/reference code, gated behind the non-default `benchmark-shared-projection` Cargo feature (`default = []`); it is not compiled into, and is not reachable from, a normal production build or `cargo test`/`cargo build`.
 
-Do not delete useful shared-projection benchmark evidence before the final comparison is complete, but do not leave the shared-grid path reachable from final production Runtime merely because future graphics may need shared memory. Future bulk graphics has its own transport seam.
+M001 Pass 5's remaining acceptance work is now tracked by Issue #651 (performance-matrix rigor on controlled hardware, failure-injection audit completeness, and final independent review) rather than by this migration, which is done. Do not delete useful shared-projection benchmark evidence before that work concludes, but do not reintroduce the shared-grid path into the production Runtime attachment path merely because future graphics may need shared memory — future bulk graphics has its own transport seam (see ADR-001 §7).
 
 ## Ownership
 

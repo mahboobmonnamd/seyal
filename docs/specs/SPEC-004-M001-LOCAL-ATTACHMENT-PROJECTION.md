@@ -1,9 +1,9 @@
 # SPEC-004 — M001 local attachment and display-state transport
 
-- **Status:** Accepted for M001 Pass 5 implementation; performance sign-off open
+- **Status:** Accepted for M001 Pass 5 implementation; performance sign-off open — the decisive production-path benchmark now measures clean across the full required matrix on physical Apple Silicon (see ADR-001 "Measured evidence"), but that run was not an isolated/controlled benchmark session, and Issue #651's remaining acceptance items (controlled hardware confirmation, failure-injection audit, final independent review) are still open. Do not treat this line as sign-off.
 - **Date:** 2026-08-24
-- **Amended:** 2026-08-25
-- **Issue:** #105
+- **Amended:** 2026-08-25, 2026-08-26
+- **Issue:** #105 (implementation), #651 (Pass 5.1 final acceptance)
 - **Architecture authority:** `ADR-001-LOCAL-DISPLAY-PROJECTION.md`
 - **Depends on:** SPEC-001, SPEC-002, SPEC-003
 

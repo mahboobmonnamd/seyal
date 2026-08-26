@@ -3,7 +3,7 @@
 **Status:** Frozen design-reference index  
 **Authority:** Companion to `M001-CORE-TERMINAL-REFERENCE-SCREEN.md`
 
-This index maps the current Core Terminal design into implementation-oriented specifications. Only the frozen Core Terminal reference image is committed by this PR; the additional generated state mockups are intentionally represented by specification only.
+This index maps the current Core Terminal design into implementation-oriented specifications. Only the frozen Core Terminal reference image is committed by the original design PR; additional generated state mockups are represented by specification where appropriate.
 
 ## Reference specifications
 
@@ -20,6 +20,7 @@ This index maps the current Core Terminal design into implementation-oriented sp
 | Block details | `M001-BLOCK-DETAILS-INSPECTOR.md` | Selected Block metadata, enrichments and actions |
 | Composer history | `M001-COMPOSER-HISTORY-FUZZY-SEARCH.md` | Multiline Pane composer and contextual fuzzy history retrieval |
 | Live tail | `M001-LIVE-TAIL-BEHAVIOR.md` | Long-running output with growing Block + Pane-level follow/scroll-away/return-to-live |
+| Pre-Pass-6 shell scaffold | `M001-UI-SHELL-SCAFFOLD.md` | Native shell decomposition boundary that preserves M001 pass ordering and terminal ownership |
 
 ## Cross-screen invariants
 
@@ -39,6 +40,7 @@ This index maps the current Core Terminal design into implementation-oriented sp
 14. Runtime/connection status is surfaced when meaningful, especially remote/detached/reconnecting/degraded states.
 15. Design is optimized for power users on a 15-inch display: dense, contextual, minimal permanent chrome.
 16. These documents freeze design/information architecture only and do not authorize Pass 6+ implementation ahead of M001 ordering.
+17. Before Pass 6, any native shell preview is fixture-only and must not become an alternate live terminal/runtime path.
 
 ## Old-reference precedence
 

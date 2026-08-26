@@ -59,7 +59,7 @@ enum SeyalDesignTokens {
 
         private static func rgb(_ red: CGFloat, _ green: CGFloat, _ blue: CGFloat) -> NSColor {
             NSColor(
-                sRGBRed: red / 255.0,
+                srgbRed: red / 255.0,
                 green: green / 255.0,
                 blue: blue / 255.0,
                 alpha: 1

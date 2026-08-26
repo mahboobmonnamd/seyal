@@ -4,6 +4,7 @@
 use std::{
     io::{Read, Write},
     os::unix::net::UnixStream,
+    sync::{Mutex, MutexGuard},
     time::{Duration, Instant},
 };
 
@@ -15,6 +16,17 @@ use seyal_runtime::{
     local_ipc::framing::{ClientHello, FrameHeader, HEADER_LEN, MessageType, encode_frame},
     test_fault::{self, FaultPoint},
 };
+
+// All tests in this integration-test binary share one process. FD-baseline
+// assertions are meaningful only when sibling tests cannot open/close
+// descriptors concurrently.
+static TEST_SERIAL: Mutex<()> = Mutex::new(());
+
+fn serialized() -> MutexGuard<'static, ()> {
+    TEST_SERIAL
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+}
 
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
@@ -71,6 +83,7 @@ fn shutdown(runtime: &mut Runtime) {
 
 #[test]
 fn pty_eof_from_live_children_stays_running_without_a_reap_poll_loop_and_remains_terminable() {
+    let _guard = serialized();
     let baseline_fds = fd_count();
     {
         let mut runtime = Runtime::new(config("pty-eof-live-child", false)).expect("Runtime");
@@ -143,6 +156,7 @@ fn pty_eof_from_live_children_stays_running_without_a_reap_poll_loop_and_remains
 
 #[test]
 fn pty_eof_live_child_is_finalized_when_the_primary_later_exits_naturally() {
+    let _guard = serialized();
     let baseline_fds = fd_count();
     {
         let mut runtime = Runtime::new(config("pty-eof-natural-exit", false)).expect("Runtime");
@@ -177,6 +191,7 @@ fn pty_eof_live_child_is_finalized_when_the_primary_later_exits_naturally() {
 #[cfg(feature = "test-fault-injection")]
 #[test]
 fn repeated_listener_resource_pressure_backs_off_without_starving_active_pty_work() {
+    let _guard = serialized();
     let baseline_fds = fd_count();
     {
         let mut runtime = Runtime::new(config("accept-pressure", true)).expect("Runtime");

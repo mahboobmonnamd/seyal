@@ -6,11 +6,11 @@ enum SeyalMain {
     @MainActor
     static func main() {
         if CommandLine.arguments.contains("--smoke-test") {
-            guard MetalSurfaceView.smokeTest() else {
+            guard MetalSurfaceView.smokeTest(), SeyalShellView.smokeTest() else {
                 print("Seyal native smoke test failed.")
                 exit(1)
             }
-            print("Seyal native Swift/AppKit/Metal smoke test passed.")
+            print("Seyal native Swift/AppKit/Metal + UI shell smoke test passed.")
             return
         }
 

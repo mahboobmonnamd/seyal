@@ -111,7 +111,7 @@ enum SeyalShellPreviewData {
         .init(
             id: "block-2",
             command: "make test",
-            state: .running,
+            state: .completed,
             elapsed: "12.4 s",
             timestamp: "07:43",
             isSelected: true

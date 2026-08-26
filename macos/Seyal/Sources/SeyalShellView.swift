@@ -18,7 +18,6 @@ final class SeyalShellView: NSView {
         self.blocks = blocks
         self.blockBodies = blockBodies
         super.init(frame: frameRect)
-        translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
         layer?.backgroundColor = SeyalDesignTokens.Palette.windowBackground.cgColor
         buildUI()
@@ -119,7 +118,7 @@ final class SeyalShellView: NSView {
         return container
     }
 
-    private func makeTabStrip() -> NSView {
+    private func makeTabStrip() -> NSScrollView {
         let scroll = NSScrollView()
         scroll.drawsBackground = false
         scroll.hasHorizontalScroller = false
@@ -127,39 +126,60 @@ final class SeyalShellView: NSView {
         scroll.horizontalScrollElasticity = .allowed
         scroll.verticalScrollElasticity = .none
 
-        let stack = NSStackView()
-        stack.orientation = .horizontal
-        stack.alignment = .centerY
-        stack.spacing = 4
-        stack.translatesAutoresizingMaskIntoConstraints = false
+        let tabStack = NSStackView()
+        tabStack.orientation = .horizontal
+        tabStack.alignment = .centerY
+        tabStack.spacing = 4
+        tabStack.translatesAutoresizingMaskIntoConstraints = false
 
-        for tab in snapshot.tabs {
-            let title = tab.attention ? "\(tab.title)  •" : tab.title
-            let button = NSButton(title: title, target: nil, action: nil)
-            button.bezelStyle = tab.id == snapshot.activeTabID ? .recessed : .inline
-            button.font = SeyalDesignTokens.Typography.chrome
-            button.isEnabled = false
-            button.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-            button.widthAnchor.constraint(greaterThanOrEqualToConstant: SeyalDesignTokens.Layout.tabMinWidth).isActive = true
-            button.widthAnchor.constraint(lessThanOrEqualToConstant: SeyalDesignTokens.Layout.tabMaxWidth).isActive = true
-            stack.addArrangedSubview(button)
+        snapshot.tabs.forEach { tab in
+            tabStack.addArrangedSubview(makeTabChip(tab))
         }
 
         let document = NSView()
         document.translatesAutoresizingMaskIntoConstraints = false
-        document.addSubview(stack)
+        document.addSubview(tabStack)
         scroll.documentView = document
 
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: document.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: document.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: document.topAnchor),
-            stack.bottomAnchor.constraint(equalTo: document.bottomAnchor),
+            tabStack.leadingAnchor.constraint(equalTo: document.leadingAnchor),
+            tabStack.trailingAnchor.constraint(equalTo: document.trailingAnchor),
+            tabStack.topAnchor.constraint(equalTo: document.topAnchor),
+            tabStack.bottomAnchor.constraint(equalTo: document.bottomAnchor),
             document.heightAnchor.constraint(equalTo: scroll.contentView.heightAnchor),
             document.widthAnchor.constraint(greaterThanOrEqualTo: scroll.contentView.widthAnchor),
         ])
 
         return scroll
+    }
+
+    private func makeTabChip(_ tab: SeyalShellSnapshot.Tab) -> NSView {
+        let field = NSTextField(labelWithString: tab.attention ? "\(tab.title)  •" : tab.title)
+        field.font = SeyalDesignTokens.Typography.chrome
+        field.textColor = tab.id == snapshot.activeTabID
+            ? SeyalDesignTokens.Palette.textPrimary
+            : SeyalDesignTokens.Palette.textSecondary
+        field.alignment = .center
+        field.lineBreakMode = .byTruncatingTail
+
+        let container = NSView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        container.wantsLayer = true
+        container.layer?.cornerRadius = 7
+        container.layer?.backgroundColor = tab.id == snapshot.activeTabID
+            ? SeyalDesignTokens.Palette.elevatedBackground.cgColor
+            : NSColor.clear.cgColor
+        field.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(field)
+
+        NSLayoutConstraint.activate([
+            field.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 10),
+            field.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -10),
+            field.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            container.widthAnchor.constraint(greaterThanOrEqualToConstant: SeyalDesignTokens.Layout.tabMinWidth),
+            container.widthAnchor.constraint(lessThanOrEqualToConstant: SeyalDesignTokens.Layout.tabMaxWidth),
+        ])
+        return container
     }
 
     private func makeLeftContextPanel() -> NSView {
@@ -243,7 +263,7 @@ final class SeyalShellView: NSView {
 
         let composer = PaneComposerShellView(
             mode: .available,
-            draft: "git diff --stat && \\\nmake test"
+            draft: "git diff --stat && \\nmake test"
         )
 
         let stack = NSStackView(views: [paneHeader, transcript, composer])
@@ -271,6 +291,8 @@ final class SeyalShellView: NSView {
         return pane
     }
 
+    /// The Pane owns normal Block/transcript scrolling. BlockView intentionally
+    /// contains no NSScrollView, preserving the frozen single-scroll-owner rule.
     private func makeTranscript() -> NSScrollView {
         let scroll = NSScrollView()
         scroll.drawsBackground = false
@@ -372,15 +394,13 @@ final class SeyalShellView: NSView {
             : SeyalDesignTokens.Palette.textSecondary
         primaryField.lineBreakMode = .byTruncatingTail
 
-        let views: [NSView]
+        var views: [NSView] = [primaryField]
         if let secondary {
             let secondaryField = NSTextField(labelWithString: secondary)
             secondaryField.font = SeyalDesignTokens.Typography.metadata
             secondaryField.textColor = SeyalDesignTokens.Palette.textTertiary
             secondaryField.lineBreakMode = .byTruncatingMiddle
-            views = [primaryField, secondaryField]
-        } else {
-            views = [primaryField]
+            views.append(secondaryField)
         }
 
         let row = NSStackView(views: views)
@@ -411,7 +431,7 @@ final class SeyalShellView: NSView {
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         appendSectionTitle("Attention", to: stack)
-        for item in snapshot.attentionItems {
+        snapshot.attentionItems.forEach { item in
             let title = NSTextField(labelWithString: item.title)
             title.font = SeyalDesignTokens.Typography.bodyEmphasized
             title.textColor = SeyalDesignTokens.Palette.textPrimary
@@ -431,7 +451,10 @@ final class SeyalShellView: NSView {
 
         let controller = NSViewController()
         controller.view = stack
-        controller.preferredContentSize = NSSize(width: 324, height: max(120, CGFloat(snapshot.attentionItems.count) * 66 + 44))
+        controller.preferredContentSize = NSSize(
+            width: 324,
+            height: max(CGFloat(120), CGFloat(snapshot.attentionItems.count) * 66 + 44)
+        )
 
         let popover = NSPopover()
         popover.behavior = .transient
@@ -442,13 +465,7 @@ final class SeyalShellView: NSView {
 
     static func smokeTest() -> Bool {
         #if DEBUG
-        let bodies = SeyalShellPreviewData.terminalLines.map { PreviewTerminalFixtureView(lines: $0) as NSView }
-        let shell = SeyalShellView(
-            frame: NSRect(x: 0, y: 0, width: 1280, height: 800),
-            snapshot: SeyalShellPreviewData.snapshot,
-            blocks: SeyalShellPreviewData.blocks,
-            blockBodies: bodies
-        )
+        let shell = SeyalShellPreviewFactory.make(frame: NSRect(x: 0, y: 0, width: 1280, height: 800))
         shell.layoutSubtreeIfNeeded()
         return shell.subviews.count == 1
         #else

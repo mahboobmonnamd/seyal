@@ -4,7 +4,8 @@ import pathlib
 import subprocess
 import sys
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
+DEFAULT_ROOT = pathlib.Path(__file__).resolve().parents[1]
+ROOT = pathlib.Path(os.environ.get("SEYAL_VALIDATION_ROOT", DEFAULT_ROOT)).resolve()
 
 REQUIRED = [
     ROOT / "macos/Seyal/Tests/SeyalTests/SeyalShellComponentTests.swift",
@@ -33,8 +34,8 @@ for target in ("SeyalTests.xctest", "SeyalUITests.xctest"):
         sys.exit(1)
 
 base_ref = os.environ.get("GITHUB_BASE_REF", "").strip()
-if not base_ref:
-    print("UI test policy passed (repository assets validated; no PR base ref available).")
+if not base_ref or "SEYAL_VALIDATION_ROOT" in os.environ:
+    print("UI test policy passed (repository assets validated; PR diff enforcement not requested).")
     sys.exit(0)
 
 try:

@@ -19,3 +19,4 @@ pub mod discovery;
 #[allow(unsafe_code)]
 pub mod fd_transfer;
 pub mod framing;
+pub mod recovery;

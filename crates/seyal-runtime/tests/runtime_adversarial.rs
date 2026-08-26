@@ -2,10 +2,14 @@
 #![allow(unsafe_code)]
 
 use std::{
-    io::{Read, Write},
-    os::unix::net::UnixStream,
     sync::{Mutex, MutexGuard},
     time::{Duration, Instant},
+};
+
+#[cfg(feature = "test-fault-injection")]
+use std::{
+    io::{Read, Write},
+    os::unix::net::UnixStream,
 };
 
 use seyal_exec::{CommandSpec, WindowSize};
@@ -67,7 +71,7 @@ fn fd_count() -> usize {
         .filter(|fd| {
             // SAFETY: F_GETFD only observes the integer descriptor and reports
             // EBADF for values that are not open in this process.
-            unsafe { libc::fcntl(*fd, libc::F_GETFD) } >= 0
+            (unsafe { libc::fcntl(*fd, libc::F_GETFD) }) >= 0
         })
         .count()
 }

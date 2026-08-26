@@ -73,6 +73,14 @@ fi
 
 grep -q 'private func makeTranscript(paneID: String) -> NSScrollView' "$SOURCES/SeyalShellView.swift" \
   || fail "UI shell must keep Pane-owned transcript scrolling explicit"
+grep -q 'NSSegmentedControl' "$SOURCES/SeyalShellView.swift" \
+  || fail "compact Workspaces/Tabs switcher is missing from the frozen left-panel model"
+grep -q 'pane.split.' "$SOURCES/SeyalShellView.swift" \
+  || fail "Pane-local split control is missing"
+grep -q 'pane.close.' "$SOURCES/SeyalShellView.swift" \
+  || fail "Pane-local close control is missing"
+grep -q 'inspector.trailingAnchor.constraint(equalTo: trailingAnchor)' "$SOURCES/SeyalShellView.swift" \
+  || fail "Inspector must remain pinned to the shell trailing edge"
 grep -q 'TerminalSurfaceHostView' "$PROJECT/project.pbxproj" \
   || fail "permanent Metal terminal-surface host is missing from the native target"
 grep -q -- '--ui-shell-preview' "$SOURCES/AppDelegate.swift" \

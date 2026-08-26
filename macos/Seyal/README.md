@@ -45,6 +45,6 @@ For explicit design/decomposition review, the Debug bundle supports a fixture-on
 target/macos-derived-data/Build/Products/Debug/Seyal.app/Contents/MacOS/Seyal --ui-shell-preview
 ```
 
-The preview data is deterministic and presentation-only. It is never Runtime, PTY, VT, grid, Block-history, or execution authority and is not compiled into Release behavior.
+The preview data is deterministic and presentation-only. It is never Runtime, PTY, VT, grid, Block-history, or execution authority. The app stamps its Xcode build configuration into the bundle and honors the preview flag only when that configuration is `Debug`; Release builds ignore the preview flag and environment opt-in.
 
 The CI smoke path runs the bundle executable with `--smoke-test`; it validates Metal availability and deterministic construction of the native UI shell without starting the AppKit event loop.

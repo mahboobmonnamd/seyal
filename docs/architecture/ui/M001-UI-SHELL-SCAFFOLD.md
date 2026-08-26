@@ -12,13 +12,12 @@ The scaffold may establish:
 - shared native design tokens;
 - the Core Terminal shell regions;
 - a data-driven Block presentation container;
-- one Pane-owned transcript scroll surface per preview Pane;
-- a Pane-scoped multiline composer editor that stores preview drafts only;
+- one Pane-owned transcript scroll surface;
+- a Pane-scoped composer presentation seam;
 - contextual left panel and inspector presentation seams;
 - attention-popover presentation seam;
 - a `TerminalSurfaceHostView` that contains the already-established permanent `MetalSurfaceView` boundary;
-- deterministic preview fixtures behind an explicit preview-only launch path;
-- ephemeral preview-only UI interaction state for Workspace/Tab/Pane selection, Pane focus, tab creation/close, split geometry, attention navigation, and Pane-local drafts.
+- deterministic preview fixtures behind an explicit preview-only launch path.
 
 ## Hard boundary
 
@@ -28,37 +27,14 @@ This scaffold must not implement or invent:
 - live Runtime attachment;
 - an alternate PTY, VT, grid, terminal model, or copied terminal authority;
 - per-cell Swift/Rust callbacks;
-- a temporary `NSTextView`/SwiftUI **terminal renderer**;
+- a temporary `NSTextView`/SwiftUI terminal renderer;
 - shell integration or command intelligence;
-- fake command execution or fake Block output;
-- fabricated process/PID/CPU/memory/resource telemetry;
 - agent approval mutations;
 - production notification state;
 - final input/keybinding behavior;
-- command submission to a shell before Runtime/native-input wiring exists;
 - multiple-pane Runtime semantics.
 
-`NSTextView` is permitted for the Pane-local multiline **composer editor** only. It must never become a terminal or Block rendering surface.
-
 The normal application path remains the existing minimal Metal surface until the M001 dependency frontier authorizes live UI integration.
-
-## Preview interaction contract
-
-The preview must not be a static picture made from labels. Controls that are visible in the preview must perform their UI-level behavior against isolated preview state when that behavior does not require Runtime authority.
-
-Required preview interactions:
-
-- selecting a top tab or left-panel tab changes the active Workspace-local Tab;
-- `+` creates and selects a new preview Tab;
-- close removes a preview Tab when another Tab remains;
-- split-right and split-down modify the preview Tab-owned Pane tree and focus the new Pane;
-- focusing another Pane updates the focused Pane and Inspector context;
-- each Pane owns an independent composer draft that survives Tab/Pane navigation;
-- Workspace selection swaps the Workspace-scoped tab inventory;
-- selecting an attention item navigates to its preview target and consumes that preview attention item;
-- unsupported Runtime/PTY actions are omitted or clearly unavailable rather than simulated.
-
-This interactive state is disposable presentation state. It must never be reused as production Runtime/TerminalExecution state or become authoritative for PTY geometry, process lifecycle, terminal cells, or execution results.
 
 ## Frozen visual contract
 
@@ -67,45 +43,73 @@ The shell preview must follow the frozen Core Terminal visual direction together
 At the canonical `1280x800` preview size:
 
 - the workspace-scoped tab strip spans the full content width beneath native window chrome;
-- a compact left context panel occupies approximately 236 points and shows Workspaces, current-Workspace Agents, and Tabs;
-- the active Tab/Panes own the dominant center width;
-- a contextual Inspector occupies approximately 292 points on the right;
-- each terminal Pane contains compact Pane chrome, one Pane-owned transcript surface, and its own minimal composer at the bottom;
-- the permanent Metal terminal host is visible in the Pane, but before Pass 6 no fabricated terminal output is drawn into it;
+- a compact left context panel occupies approximately 236 points;
+- the left panel uses a **Workspaces / Tabs** switcher instead of stacking both inventories permanently;
+- **Workspaces** shows all known Workspaces plus agent sessions for the active Workspace;
+- **Tabs** shows the active Workspace's tab inventory and new-tab action;
+- the focused terminal Pane owns the dominant center width;
+- a contextual Inspector occupies approximately 292 points on the right and is pinned to the content trailing edge with no unused strip beside it;
+- each Pane has compact, functional Pane-local split and close controls in its header;
+- the Pane contains its own minimal composer at the bottom;
 - the palette is low-contrast charcoal/navy with restrained purple focus and semantic status accents;
-- typography is dense;
-- decorative navigation, metrics, process data, Block output, or inspector modes from concept art are omitted until backed by accepted behavior/data.
+- typography is dense and terminal output remains monospaced;
+- decorative navigation, metrics, or inspector modes from concept art are omitted until backed by accepted behavior/data.
 
 Where visual concept art conflicts with the current Block sizing, busy-composer, TUI takeover, ownership, or functional-only rules, the current specifications win.
 
-The XCTest layout contract and XCUIAutomation suite are part of this visual contract. XCUI launches the actual `Seyal.app` preview, asserts the visible hierarchy, exercises navigation/split/attention controls, and records a rendered screenshot in the test result bundle for design review. A true pixel-golden comparison must not be claimed until the approved source reference image is deliberately added to the repository as a test asset.
+The XCTest layout contract and XCUIAutomation suite are part of this visual contract. XCUI launches the actual `Seyal.app` preview, asserts the visible hierarchy and left-center-right ordering, exercises the Workspaces/Tabs switcher and Pane-local lifecycle controls, and records a rendered screenshot in the test result bundle for design review. A true pixel-golden comparison must not be claimed until the approved source reference image is deliberately added to the repository as a test asset.
 
 ## Preview-only path
 
-The UI shell may be launched explicitly for design/decomposition review using a debug-only preview path. Preview state:
+The UI shell may be launched explicitly for design/decomposition review using a debug-only preview path. Preview fixtures:
 
-- is deterministic at launch;
-- may mutate locally in response to UI interactions;
-- is never Runtime authority;
-- must be clearly isolated from production state;
-- must not be reused as terminal output/state storage;
-- is discarded when the preview process exits.
+- are deterministic;
+- may model disposable Workspace/Tab/Pane/focus/draft interaction state;
+- are never Runtime authority;
+- must not fabricate PTY/process/terminal/resource telemetry;
+- must not be reused as terminal output/state storage.
 
-Test-only fixtures that would otherwise look like production state, such as an attention item, must be opt-in through the UI-test environment rather than shown in the normal developer preview.
+The normal preview therefore leaves the permanent Metal terminal host unattached rather than filling it with fake command output.
+
+## Workspace and Tab navigation
+
+The frozen compact navigation model is:
+
+```text
+left context
+├── Workspaces
+│   ├── Workspace inventory
+│   └── active-Workspace agent sessions
+└── Tabs
+    └── active-Workspace tab inventory
+```
+
+The same Tab identity is used by the top strip and the left Tabs view. Switching Workspace replaces the Workspace-scoped tab inventory rather than showing tabs from multiple Workspaces together.
+
+## Pane-local layout controls
+
+The top layout controls continue to target the focused Pane. Every Pane also exposes compact local controls so multipane layouts remain understandable without relying on implicit focus:
+
+- **Split** opens Split Right / Split Down for that Pane;
+- **Close Pane** removes that Pane when the Tab has more than one Pane;
+- the last Pane cannot be closed through the preview UI;
+- closing a Pane collapses its parent split and preserves surviving Pane draft/focus state.
+
+These controls manipulate preview layout metadata only. They do not create a PTY or claim Runtime resize/lifecycle authority.
 
 ## Scroll ownership
 
-Normal transcript mode has exactly one output scroll owner **per Pane**.
+Normal transcript mode has one output scroll owner per Pane.
 
 `BlockView` must not own an `NSScrollView` or another nested output-scroll surface. Blocks size intrinsically from their presented body. The Pane transcript may scroll and later virtualize off-screen content without changing this interaction model.
 
-The composer editor may use its own bounded editing scroll behavior. That is input editing, not terminal/output scrolling, and must remain Pane-local.
+The Pane-local multiline composer may use its own bounded editor scroll surface as allowed by the composer specification; that editor is not terminal output scrolling.
 
 ## Block ownership
 
 `BlockView` accepts a presentation model and a body view. It does not own terminal cells, VT state, PTY state, execution lifecycle, or a copied output transcript.
 
-The future renderer can provide a terminal-surface body without changing Block ownership. The default pre-Pass-6 shell preview does not fabricate completed/running Blocks merely to fill the screen.
+The future renderer can provide a terminal-surface body without changing Block ownership.
 
 ## TUI seam
 
@@ -113,7 +117,7 @@ The shell architecture must allow canonical TUI takeover to replace normal Block
 
 ## Functional-only rule
 
-Production UI must not show unsupported controls or fabricated metrics merely because they exist in a mockup. The preview follows the same rule: controls with meaningful local UI semantics may operate against isolated preview state; Runtime-dependent operations must not pretend to succeed.
+Production UI must not show unsupported controls or fabricated metrics merely because they exist in a mockup. Preview interaction controls are acceptable only where they manipulate real preview UI state and are covered by tests. Runtime-dependent controls remain hidden until the Runtime contract exists.
 
 ## Acceptance
 
@@ -123,15 +127,13 @@ The scaffold is acceptable only if:
 - the shell is native Swift/AppKit;
 - Metal remains the permanent terminal-surface direction;
 - no SwiftUI terminal implementation exists;
-- no `NSTextView` terminal implementation exists;
-- `NSTextView` usage is confined to the Pane composer editor;
+- `NSTextView` is used only for the Pane-local multiline composer and never as a terminal renderer;
 - `BlockView` contains no nested output scroll view;
-- each preview Pane owns one normal transcript scroll surface;
-- top/left tab selection, new-tab, close-tab, split-right, split-down, Workspace selection, Pane focus, and attention navigation are real preview interactions;
-- Pane composer drafts are independent preview state and are not presented as executed shell input;
-- no fabricated terminal output or Runtime telemetry appears in the normal preview;
+- one Pane transcript scroll surface owns normal output navigation per Pane;
 - deterministic shell construction participates in the native smoke test;
-- the canonical `1280x800` preview satisfies the frozen three-column layout contract;
-- XCUIAutomation launches the real preview and validates both hierarchy and interactive controls;
+- the canonical `1280x800` preview satisfies the frozen three-column layout contract with Inspector flush to the trailing edge;
+- the Workspaces/Tabs switcher follows the frozen compact navigation model;
+- each Pane's split and close controls mutate the intended Pane's preview layout state;
+- XCUIAutomation launches the real preview and validates those interactions;
 - a rendered screenshot is attached to the XCUI result for design review;
 - all existing repository tests/checks remain green.

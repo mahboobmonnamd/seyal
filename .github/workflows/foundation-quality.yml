@@ -77,6 +77,14 @@ jobs:
         run: make build
       - name: Unit, PTY, native smoke, XCTest and XCUIAutomation
         run: make test
+      - name: Preserve native UI rendered evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: seyal-macos-ui-xcresult
+          path: target/macos-ui-tests.xcresult
+          if-no-files-found: warn
+          retention-days: 7
       - name: Native PTY benchmark baseline
         env:
           # GitHub-hosted macOS runners may be headless and cannot deliver

@@ -41,9 +41,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         if useShellPreview {
+            // The frozen reference is a deliberate dark workspace independent of
+            // the developer's current macOS appearance. Production theme selection
+            // will replace this preview-only choice behind a real theme model.
+            window.appearance = NSAppearance(named: .darkAqua)
+            window.backgroundColor = SeyalDesignTokens.Palette.windowBackground
             window.title = "Seyal — UI Shell Preview"
             window.contentView = SeyalShellPreviewFactory.make(frame: contentRect)
-            window.minSize = NSSize(width: 980, height: 650)
+            window.minSize = NSSize(width: 1080, height: 680)
         } else {
             window.title = "Seyal"
             let surface = InteractiveMetalSurfaceView(frame: contentRect)

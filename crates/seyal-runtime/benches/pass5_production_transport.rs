@@ -487,15 +487,15 @@ fn workload_command(workload: Workload) -> CommandSpec {
         ]),
         Workload::TuiPartial => CommandSpec::new("/bin/sh").args([
             "-c",
-            "read _; printf '\033[2J'; i=0; while [ $i -lt 100 ]; do printf '\033[2;1HPART%04d' \"$i\"; printf '\033[10;1Hvalue%04d' \"$i\"; sleep 0.01; i=$((i+1)); done; printf '\033[1;1HDONE'; sleep 1",
+            "read _; printf '\x1b[2J'; i=0; while [ $i -lt 100 ]; do printf '\x1b[2;1HPART%04d' \"$i\"; printf '\x1b[10;1Hvalue%04d' \"$i\"; sleep 0.01; i=$((i+1)); done; printf '\x1b[1;1HDONE'; sleep 1",
         ]),
         Workload::Tui => CommandSpec::new("/bin/sh").args([
             "-c",
-            "read _; i=0; while [ $i -lt 100 ]; do printf '\033[HFRAME%04d\r\n' \"$i\"; j=0; while [ $j -lt 30 ]; do printf 'row%02d value%04d\r\n' \"$j\" \"$i\"; j=$((j+1)); done; sleep 0.01; i=$((i+1)); done; printf 'DONE\r\n'; sleep 1",
+            "read _; i=0; while [ $i -lt 100 ]; do printf '\x1b[HFRAME%04d\r\n' \"$i\"; j=0; while [ $j -lt 30 ]; do printf 'row%02d value%04d\r\n' \"$j\" \"$i\"; j=$((j+1)); done; sleep 0.01; i=$((i+1)); done; printf 'DONE\r\n'; sleep 1",
         ]),
         Workload::Alternate => CommandSpec::new("/bin/sh").args([
             "-c",
-            "read _; printf '\033[?1049h'; i=0; while [ $i -lt 100 ]; do printf '\033[HAFRAME%04d\r\n' \"$i\"; j=0; while [ $j -lt 30 ]; do printf 'alt%02d value%04d\r\n' \"$j\" \"$i\"; j=$((j+1)); done; sleep 0.01; i=$((i+1)); done; printf 'DONE\r\n'; sleep 1",
+            "read _; printf '\x1b[?1049h'; i=0; while [ $i -lt 100 ]; do printf '\x1b[HAFRAME%04d\r\n' \"$i\"; j=0; while [ $j -lt 30 ]; do printf 'alt%02d value%04d\r\n' \"$j\" \"$i\"; j=$((j+1)); done; sleep 0.01; i=$((i+1)); done; printf 'DONE\r\n'; sleep 1",
         ]),
     }
 }

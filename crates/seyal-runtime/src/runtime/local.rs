@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,
+    time::{Duration, Instant},
 };
 
 use seyal_exec::{ExecutionReactor, ReactorEventKind, RegistrationToken, WindowSize};
@@ -28,6 +29,8 @@ use crate::{
 use super::{ExecutionLifecycle, Runtime};
 
 const RESYNC_SNAPSHOT_BUDGET_PER_POLL: usize = 2;
+const ACCEPT_BACKOFF_INITIAL: Duration = Duration::from_millis(10);
+const ACCEPT_BACKOFF_MAX: Duration = Duration::from_millis(250);
 
 pub(super) struct ConnectionMeta {
     attachment: Option<AttachmentId>,
@@ -45,6 +48,8 @@ pub(super) struct LocalIpcState {
     pub(super) server: LocalIpcServer,
     pub(super) socket_path: PathBuf,
     pub(super) listener_reactor_token: RegistrationToken,
+    listener_backoff_deadline: Option<Instant>,
+    listener_backoff_delay: Duration,
     attachments: AttachmentRegistry,
     connections: HashMap<u64, ConnectionMeta>,
     reactor_connections: HashMap<RegistrationToken, u64>,
@@ -99,6 +104,8 @@ impl LocalIpcState {
             server,
             socket_path,
             listener_reactor_token,
+            listener_backoff_deadline: None,
+            listener_backoff_delay: ACCEPT_BACKOFF_INITIAL,
             attachments: AttachmentRegistry::new(),
             connections: HashMap::new(),
             reactor_connections: HashMap::new(),
@@ -116,6 +123,49 @@ impl Drop for LocalIpcState {
 }
 
 impl Runtime {
+    pub(super) fn local_ipc_deadline(&self) -> Option<Instant> {
+        self.local_ipc
+            .as_ref()
+            .and_then(|state| state.listener_backoff_deadline)
+    }
+
+    pub(super) fn service_local_deadline(&mut self, now: Instant) -> Result<(), RuntimeError> {
+        let token = self.local_ipc.as_ref().and_then(|state| {
+            state
+                .listener_backoff_deadline
+                .filter(|deadline| *deadline <= now)
+                .map(|_| state.listener_reactor_token)
+        });
+        let Some(token) = token else {
+            return Ok(());
+        };
+        self.reactor.set_readable(token, true)?;
+        if let Some(state) = self.local_ipc.as_mut() {
+            state.listener_backoff_deadline = None;
+        }
+        Ok(())
+    }
+
+    fn backoff_local_listener(&mut self) -> Result<(), RuntimeError> {
+        let (token, delay) = match self.local_ipc.as_ref() {
+            Some(state) => (state.listener_reactor_token, state.listener_backoff_delay),
+            None => return Ok(()),
+        };
+        self.reactor.set_readable(token, false)?;
+        if let Some(state) = self.local_ipc.as_mut() {
+            state.listener_backoff_deadline = Some(Instant::now() + delay);
+            state.listener_backoff_delay = delay.saturating_mul(2).min(ACCEPT_BACKOFF_MAX);
+        }
+        Ok(())
+    }
+
+    fn reset_local_listener_backoff(&mut self) {
+        if let Some(state) = self.local_ipc.as_mut() {
+            state.listener_backoff_deadline = None;
+            state.listener_backoff_delay = ACCEPT_BACKOFF_INITIAL;
+        }
+    }
+
     pub(super) fn service_local_reactor_event(
         &mut self,
         reactor_token: RegistrationToken,
@@ -161,8 +211,30 @@ impl Runtime {
             let Some(state) = self.local_ipc.as_mut() else {
                 return Ok(());
             };
-            state.server.accept_ready()?
+            #[cfg(feature = "test-fault-injection")]
+            if test_fault::take(FaultPoint::AcceptResourcePressure) {
+                Vec::new()
+            } else {
+                state.server.accept_ready()?
+            }
+            #[cfg(not(feature = "test-fault-injection"))]
+            {
+                state.server.accept_ready()?
+            }
         };
+
+        // A level-triggered listener event that yields no admission/rejection
+        // progress is a pressure/spurious-readiness condition. Disarm the
+        // listener and retry through Runtime's deadline scheduler instead of
+        // immediately returning to the same readable knote. This bounds CPU
+        // under repeated accept resource failures without adding a thread or
+        // polling loop and also protects capacity-pressure cases.
+        if events.is_empty() {
+            self.backoff_local_listener()?;
+            return Ok(());
+        }
+        self.reset_local_listener_backoff();
+
         for event in events {
             match event {
                 ServerEvent::Connected { token } => {

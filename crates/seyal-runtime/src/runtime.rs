@@ -696,8 +696,7 @@ impl Runtime {
                             && matches!(entry.lifecycle, Lifecycle::Running)
                             && entry.pty_eof_reap_probe.is_none()
                         {
-                            entry.pty_eof_reap_probe =
-                                Some(PtyEofReapProbe::new(Instant::now()));
+                            entry.pty_eof_reap_probe = Some(PtyEofReapProbe::new(Instant::now()));
                         }
                     }
                     drain_complete = matches!(
@@ -852,9 +851,8 @@ impl Runtime {
                 self.enter_drain(id, exit)?;
                 self.service_reads(id)?;
             } else if let Some(entry) = self.entries.get_mut(&id) {
-                entry.pty_eof_reap_probe = entry
-                    .pty_eof_reap_probe
-                    .and_then(|probe| probe.next(now));
+                entry.pty_eof_reap_probe =
+                    entry.pty_eof_reap_probe.and_then(|probe| probe.next(now));
             }
         }
 

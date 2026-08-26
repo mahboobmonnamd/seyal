@@ -85,6 +85,7 @@ struct Slot {
     /// Runtime-owned auxiliary descriptor such as the Pass-5 local IPC
     /// listener/client socket. The reactor never owns or closes either kind.
     pid: i32,
+    readable: bool,
     writable: bool,
 }
 
@@ -96,6 +97,7 @@ impl Slot {
             active: false,
             fd: -1,
             pid: -1,
+            readable: false,
             writable: false,
         }
     }
@@ -180,6 +182,29 @@ impl ExecutionReactor {
         Ok(token)
     }
 
+    /// Arms or disarms only the descriptor read filter for a live registration.
+    /// For terminal executions this deliberately leaves the independent
+    /// `EVFILT_PROC/NOTE_EXIT` watch armed, so a closed PTY can stop generating
+    /// level-triggered EOF readiness without losing primary-child exit truth.
+    pub fn set_readable(
+        &mut self,
+        token: RegistrationToken,
+        enabled: bool,
+    ) -> Result<(), ExecError> {
+        let index = self.live_index(token)?;
+        let slot = self.slots[index];
+        if slot.readable == enabled {
+            return Ok(());
+        }
+        if enabled {
+            crate::platform::register_read(&self.kqueue, slot.fd, token.0)?;
+        } else {
+            crate::platform::deregister_read(&self.kqueue, slot.fd)?;
+        }
+        self.slots[index].readable = enabled;
+        Ok(())
+    }
+
     pub fn set_writable(
         &mut self,
         token: RegistrationToken,
@@ -210,7 +235,8 @@ impl ExecutionReactor {
         {
             first_error = Some(error);
         }
-        if let Err(error) = crate::platform::deregister_read(&self.kqueue, slot.fd)
+        if slot.readable
+            && let Err(error) = crate::platform::deregister_read(&self.kqueue, slot.fd)
             && first_error.is_none()
         {
             first_error = Some(error);
@@ -298,6 +324,7 @@ impl ExecutionReactor {
             slot.active = true;
             slot.fd = fd;
             slot.pid = pid;
+            slot.readable = true;
             slot.writable = false;
             return RegistrationToken::new(index as u32, slot.generation);
         }
@@ -306,6 +333,7 @@ impl ExecutionReactor {
         slot.active = true;
         slot.fd = fd;
         slot.pid = pid;
+        slot.readable = true;
         self.slots.push(slot);
         RegistrationToken::new(index as u32, 1)
     }
@@ -332,6 +360,7 @@ impl ExecutionReactor {
         slot.active = false;
         slot.fd = -1;
         slot.pid = -1;
+        slot.readable = false;
         slot.writable = false;
         slot.generation = slot.generation.wrapping_add(1).max(1);
     }
@@ -362,6 +391,16 @@ impl ExecutionReactor {
     }
 
     pub fn register_auxiliary(&mut self, _fd: i32) -> Result<RegistrationToken, ExecError> {
+        Err(ExecError::UnsupportedPlatform(
+            "ExecutionReactor is implemented for macOS only in M001",
+        ))
+    }
+
+    pub fn set_readable(
+        &mut self,
+        _token: RegistrationToken,
+        _enabled: bool,
+    ) -> Result<(), ExecError> {
         Err(ExecError::UnsupportedPlatform(
             "ExecutionReactor is implemented for macOS only in M001",
         ))
@@ -455,6 +494,33 @@ mod tests {
             writer.write_all(b"x").unwrap();
             let token = reactor.register_auxiliary(reader.as_raw_fd()).unwrap();
             let mut events = [ReactorEvent::EMPTY; 8];
+            let count = reactor
+                .wait(&mut events, Some(Duration::from_secs(1)))
+                .unwrap();
+            assert!(events[..count].iter().any(|event| {
+                event.token == Some(token) && event.kind == ReactorEventKind::AuxiliaryReadable
+            }));
+            reactor.deregister(token).unwrap();
+        }
+
+        #[test]
+        fn read_interest_can_be_disarmed_without_deregistering_the_slot() {
+            use std::io::Write;
+            let mut reactor = ExecutionReactor::new().unwrap();
+            let (reader, mut writer) = UnixStream::pair().unwrap();
+            reader.set_nonblocking(true).unwrap();
+            let token = reactor.register_auxiliary(reader.as_raw_fd()).unwrap();
+            reactor.set_readable(token, false).unwrap();
+            writer.write_all(b"x").unwrap();
+            let mut events = [ReactorEvent::EMPTY; 8];
+            let count = reactor
+                .wait(&mut events, Some(Duration::from_millis(20)))
+                .unwrap();
+            assert!(!events[..count].iter().any(|event| {
+                event.token == Some(token) && event.kind == ReactorEventKind::AuxiliaryReadable
+            }));
+            assert!(reactor.is_current(token));
+            reactor.set_readable(token, true).unwrap();
             let count = reactor
                 .wait(&mut events, Some(Duration::from_secs(1)))
                 .unwrap();

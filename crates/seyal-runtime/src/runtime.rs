@@ -30,6 +30,12 @@ const EVENT_CAPACITY: usize = 128;
 const READ_BUFFER_SIZE: usize = 16 * 1024;
 const CONTROL_DISPATCH_QUANTUM: usize = 64;
 const ROLLBACK_REAP_TICK: Duration = Duration::from_millis(10);
+/// A `PrimaryExited` reactor event is kernel-confirmed (`NOTE_EXIT`) but
+/// `waitpid(WNOHANG)` can still momentarily report the child as running — the
+/// exit notification and reap-ability are not the same instant. This is the
+/// retry cadence for re-attempting the reap rather than discarding the
+/// one-shot notification and stranding the execution with no deadline.
+const PRIMARY_EXIT_REAP_RETRY: Duration = Duration::from_millis(10);
 
 #[cfg(feature = "benchmark-instrumentation")]
 #[derive(Clone, Copy, Debug, Default)]
@@ -98,6 +104,10 @@ pub enum ExecutionLifecycle {
     Running,
     TerminatingGraceful,
     TerminatingForced,
+    /// The kernel has confirmed the primary process exited (`NOTE_EXIT`),
+    /// but the reap (`waitpid`) has not yet completed. Always transient and
+    /// retried on a short deadline; never a terminal state.
+    PrimaryExitPending,
     DrainingAfterPrimaryExit,
     TerminationFailed,
 }
@@ -113,9 +123,20 @@ pub struct ExecutionSummary {
 #[derive(Clone, Copy, Debug)]
 enum Lifecycle {
     Running,
-    TerminatingGraceful { deadline: Instant },
-    TerminatingForced { deadline: Instant },
-    DrainingAfterPrimaryExit { deadline: Instant, exit: ChildExit },
+    TerminatingGraceful {
+        deadline: Instant,
+    },
+    TerminatingForced {
+        deadline: Instant,
+    },
+    /// See `ExecutionLifecycle::PrimaryExitPending`.
+    PrimaryExitPending {
+        deadline: Instant,
+    },
+    DrainingAfterPrimaryExit {
+        deadline: Instant,
+        exit: ChildExit,
+    },
     TerminationFailed,
 }
 
@@ -125,6 +146,7 @@ impl Lifecycle {
             Self::Running => ExecutionLifecycle::Running,
             Self::TerminatingGraceful { .. } => ExecutionLifecycle::TerminatingGraceful,
             Self::TerminatingForced { .. } => ExecutionLifecycle::TerminatingForced,
+            Self::PrimaryExitPending { .. } => ExecutionLifecycle::PrimaryExitPending,
             Self::DrainingAfterPrimaryExit { .. } => ExecutionLifecycle::DrainingAfterPrimaryExit,
             Self::TerminationFailed => ExecutionLifecycle::TerminationFailed,
         }
@@ -134,6 +156,7 @@ impl Lifecycle {
         match self {
             Self::TerminatingGraceful { deadline }
             | Self::TerminatingForced { deadline }
+            | Self::PrimaryExitPending { deadline }
             | Self::DrainingAfterPrimaryExit { deadline, .. } => Some(deadline),
             Self::Running | Self::TerminationFailed => None,
         }
@@ -581,6 +604,29 @@ impl Runtime {
             };
             match outcome {
                 ReadOutcome::Bytes(0) | ReadOutcome::WouldBlock | ReadOutcome::Eof => {
+                    // A dead PTY master's `EVFILT_READ` is level-triggered
+                    // and permanently ready with EOF, so a `PrimaryExitPending`
+                    // entry would otherwise busy-spin `poll_once` on this
+                    // same EOF until its next `PRIMARY_EXIT_REAP_RETRY`
+                    // deadline. Retry the reap immediately instead: EOF has
+                    // already proven there are no more bytes to read this
+                    // turn, so there is nothing to lose by checking now
+                    // rather than waiting out the deadline.
+                    if matches!(
+                        self.entries.get(&id).map(|entry| entry.lifecycle),
+                        Some(Lifecycle::PrimaryExitPending { .. })
+                    ) {
+                        let exit = {
+                            let entry = self
+                                .entries
+                                .get_mut(&id)
+                                .ok_or(RuntimeError::UnknownExecution)?;
+                            entry.execution.try_wait()?
+                        };
+                        if let Some(exit) = exit {
+                            self.enter_drain(id, exit)?;
+                        }
+                    }
                     drain_complete = matches!(
                         self.entries.get(&id).map(|entry| entry.lifecycle),
                         Some(Lifecycle::DrainingAfterPrimaryExit { .. })
@@ -661,6 +707,19 @@ impl Runtime {
         if let Some(exit) = exit {
             self.enter_drain(id, exit)?;
             self.service_reads(id)?;
+        } else if let Some(entry) = self.entries.get_mut(&id)
+            && matches!(entry.lifecycle, Lifecycle::Running)
+        {
+            // `PrimaryExited` is one-shot and will never repeat for this
+            // registration. `Lifecycle::Running` carries no deadline, so
+            // discarding this without scheduling a retry would strand the
+            // execution alive forever the moment `try_wait` and `NOTE_EXIT`
+            // are not perfectly simultaneous. Other lifecycle states already
+            // carry their own deadline and will retry the reap on their own
+            // schedule, so this transition only applies from `Running`.
+            entry.lifecycle = Lifecycle::PrimaryExitPending {
+                deadline: Instant::now() + PRIMARY_EXIT_REAP_RETRY,
+            };
         }
         Ok(())
     }
@@ -734,6 +793,23 @@ impl Runtime {
                         self.service_reads(id)?;
                     } else if let Some(entry) = self.entries.get_mut(&id) {
                         entry.lifecycle = Lifecycle::TerminationFailed;
+                    }
+                }
+                Some(Lifecycle::PrimaryExitPending { .. }) => {
+                    let exit = {
+                        let entry = self
+                            .entries
+                            .get_mut(&id)
+                            .ok_or(RuntimeError::UnknownExecution)?;
+                        entry.execution.try_wait()?
+                    };
+                    if let Some(exit) = exit {
+                        self.enter_drain(id, exit)?;
+                        self.service_reads(id)?;
+                    } else if let Some(entry) = self.entries.get_mut(&id) {
+                        entry.lifecycle = Lifecycle::PrimaryExitPending {
+                            deadline: now + PRIMARY_EXIT_REAP_RETRY,
+                        };
                     }
                 }
                 Some(Lifecycle::DrainingAfterPrimaryExit { exit, .. }) => {

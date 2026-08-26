@@ -33,17 +33,15 @@ final class BlockView: NSView {
         commandField.lineBreakMode = .byTruncatingMiddle
         commandField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let stateField = NSTextField(labelWithString: presentation.state.rawValue)
-        stateField.font = SeyalDesignTokens.Typography.metadata
-        stateField.textColor = stateColor(for: presentation.state)
-        stateField.alignment = .right
+        let stateField = metadataField(presentation.state.rawValue, color: stateColor(for: presentation.state))
+        let elapsedField = metadataField(presentation.elapsed, color: SeyalDesignTokens.Palette.textSecondary)
 
-        let elapsedField = NSTextField(labelWithString: presentation.elapsed)
-        elapsedField.font = SeyalDesignTokens.Typography.metadata
-        elapsedField.textColor = SeyalDesignTokens.Palette.textSecondary
-        elapsedField.alignment = .right
+        var metadataViews: [NSView] = [stateField, elapsedField]
+        if let timestamp = presentation.timestamp {
+            metadataViews.append(metadataField(timestamp, color: SeyalDesignTokens.Palette.textTertiary))
+        }
 
-        let metadataStack = NSStackView(views: [stateField, elapsedField])
+        let metadataStack = NSStackView(views: metadataViews)
         metadataStack.orientation = .horizontal
         metadataStack.alignment = .centerY
         metadataStack.spacing = 8
@@ -84,6 +82,14 @@ final class BlockView: NSView {
             bodyView.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
             bodyView.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
         ])
+    }
+
+    private func metadataField(_ value: String, color: NSColor) -> NSTextField {
+        let field = NSTextField(labelWithString: value)
+        field.font = SeyalDesignTokens.Typography.metadata
+        field.textColor = color
+        field.alignment = .right
+        return field
     }
 
     private func stateColor(for state: BlockPresentationState) -> NSColor {

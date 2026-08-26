@@ -9,17 +9,15 @@ final class SeyalShellComponentTests: XCTestCase {
         body.translatesAutoresizingMaskIntoConstraints = false
         body.heightAnchor.constraint(equalToConstant: 120).isActive = true
 
-        let block = BlockView(
-            presentation: .init(
-                id: "component-test",
-                command: "make test",
-                state: .completed,
-                elapsed: "12 ms",
-                timestamp: "09:00",
-                isSelected: true
-            ),
-            bodyView: body
+        let presentation = BlockPresentation(
+            id: "component-test",
+            command: "make test",
+            state: BlockPresentationState.completed,
+            elapsed: "12 ms",
+            timestamp: "09:00",
+            isSelected: true
         )
+        let block = BlockView(presentation: presentation, bodyView: body)
 
         XCTAssertTrue(descendants(of: NSScrollView.self, in: block).isEmpty)
         XCTAssertTrue(block.subviewsRecursively.contains { $0 === body })

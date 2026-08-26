@@ -142,14 +142,17 @@ fn pty_eof_from_live_children_stays_running_without_a_reap_poll_loop_and_remains
             "closed PTYs still cause periodic/busy Runtime wakeups"
         );
 
-        for id in &ids {
+        // Exercise both public lifecycle controls that the old
+        // PrimaryExitPending misclassification broke. Explicitly terminate
+        // half the live children, then let Runtime shutdown terminate the
+        // remainder (while remaining idempotent for the already-terminating
+        // half).
+        for id in ids.iter().take(4) {
             runtime
                 .request_termination(*id)
-                .expect("live child remains explicitly terminable");
+                .expect("PTY-closed live child remains explicitly terminable");
         }
-        runtime
-            .run_until_empty(Instant::now() + Duration::from_secs(3))
-            .expect("all PTY-closed live children are killed and reaped");
+        shutdown(&mut runtime);
     }
     assert_eq!(fd_count(), baseline_fds, "PTY EOF path leaked descriptors");
 }
@@ -197,8 +200,7 @@ fn repeated_listener_resource_pressure_backs_off_without_starving_active_pty_wor
         let mut runtime = Runtime::new(config("accept-pressure", true)).expect("Runtime");
         let execution_id = runtime
             .create_execution(
-                CommandSpec::new("/bin/sh")
-                    .args(["-c", "sleep 0.03; printf PTY_PROGRESS; sleep 30"]),
+                CommandSpec::new("/bin/sh").args(["-c", "printf PTY_PROGRESS; sleep 30"]),
                 size(),
             )
             .expect("active PTY execution");

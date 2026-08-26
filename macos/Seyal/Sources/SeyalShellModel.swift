@@ -86,6 +86,11 @@ final class SeyalShellPreviewState {
         case down
     }
 
+    enum LeftPanelMode: String, Sendable {
+        case workspaces
+        case tabs
+    }
+
     indirect enum PaneTree: Sendable {
         case pane(String)
         case split(axis: SplitAxis, first: PaneTree, second: PaneTree)
@@ -164,6 +169,7 @@ final class SeyalShellPreviewState {
     private(set) var activeWorkspaceID: String
     private(set) var attentionItems: [SeyalShellSnapshot.AttentionItem]
     private(set) var selectedAgentID: String?
+    private(set) var leftPanelMode: LeftPanelMode = .workspaces
 
     private var nextTabOrdinal = 5
     private var nextPaneOrdinal = 2
@@ -192,10 +198,17 @@ final class SeyalShellPreviewState {
         let seyalTabs = [
             terminalTab(id: "tab-terminal", title: "Core Terminal", paneID: "pane-1"),
             terminalTab(id: "tab-agent", title: "Agent Development", paneID: "pane-agent"),
-            terminalTab(id: "tab-logs", title: "Logs & Monitoring", paneID: "pane-logs"),
+            terminalTab(id: "tab-logs", title: "Logs & Monitoring", paneID: "pane-logs", attention: true),
             terminalTab(id: "tab-review", title: "PR Review", paneID: "pane-review"),
         ]
-
+        let paymentsTabs = [
+            terminalTab(id: "tab-payments-api", title: "API", paneID: "pane-payments-api"),
+            terminalTab(id: "tab-payments-worker", title: "Workers", paneID: "pane-payments-worker"),
+        ]
+        let infraTabs = [
+            terminalTab(id: "tab-infra-cluster", title: "Cluster", paneID: "pane-infra-cluster", attention: true),
+            terminalTab(id: "tab-infra-logs", title: "Logs", paneID: "pane-infra-logs"),
+        ]
         let labTabs = [
             terminalTab(id: "tab-lab-terminal", title: "Terminal", paneID: "pane-lab"),
         ]
@@ -206,7 +219,30 @@ final class SeyalShellPreviewState {
                 name: "Seyal OSS",
                 detail: "~/Projects/seyal",
                 tabs: seyalTabs,
-                activeTabID: "tab-terminal"
+                activeTabID: "tab-terminal",
+                agents: [
+                    .init(id: "agent-claude", name: "Claude Code", state: .running),
+                    .init(id: "agent-codex", name: "Codex", state: .attention),
+                    .init(id: "agent-opencode", name: "OpenCode", state: .idle),
+                ]
+            ),
+            Workspace(
+                id: "workspace-payments",
+                name: "Payments Platform",
+                detail: "~/Projects/payments",
+                tabs: paymentsTabs,
+                activeTabID: "tab-payments-api",
+                agents: [
+                    .init(id: "agent-payments", name: "Claude Code", state: .waiting),
+                ]
+            ),
+            Workspace(
+                id: "workspace-infra",
+                name: "Infra Operations",
+                detail: "~/Ops/infra",
+                attention: true,
+                tabs: infraTabs,
+                activeTabID: "tab-infra-cluster"
             ),
             Workspace(
                 id: "workspace-lab",
@@ -310,6 +346,11 @@ final class SeyalShellPreviewState {
         )
     }
 
+    func setLeftPanelMode(_ mode: LeftPanelMode) {
+        leftPanelMode = mode
+        selectedAgentID = nil
+    }
+
     func selectWorkspace(id: String) {
         guard workspaces.contains(where: { $0.id == id }) else { return }
         activeWorkspaceID = id
@@ -361,20 +402,45 @@ final class SeyalShellPreviewState {
 
     @discardableResult
     func splitFocusedPane(axis: SplitAxis) -> Pane {
+        splitPane(id: activeTab.focusedPaneID, axis: axis)
+    }
+
+    @discardableResult
+    func splitPane(id paneID: String, axis: SplitAxis) -> Pane {
         let tab = activeTab
-        let currentPaneID = tab.focusedPaneID
+        guard tab.panes[paneID] != nil else {
+            preconditionFailure("Cannot split a missing preview Pane")
+        }
+
         let pane = Pane(id: "pane-new-\(nextPaneOrdinal)", title: "Pane \(tab.paneCount + 1)")
         nextPaneOrdinal += 1
-
         tab.panes[pane.id] = pane
         tab.root = replacingPane(
-            currentPaneID,
+            paneID,
             in: tab.root,
-            with: .split(axis: axis, first: .pane(currentPaneID), second: .pane(pane.id))
+            with: .split(axis: axis, first: .pane(paneID), second: .pane(pane.id))
         )
         tab.focusedPaneID = pane.id
         selectedAgentID = nil
         return pane
+    }
+
+    func closePane(id paneID: String) {
+        let tab = activeTab
+        guard tab.panes.count > 1, tab.panes[paneID] != nil else { return }
+        guard let root = removingPane(paneID, from: tab.root) else {
+            preconditionFailure("Closing one Pane must not remove a multi-Pane tree")
+        }
+
+        tab.root = root
+        tab.panes.removeValue(forKey: paneID)
+        if tab.focusedPaneID == paneID || tab.panes[tab.focusedPaneID] == nil {
+            guard let replacement = firstPaneID(in: root) else {
+                preconditionFailure("Remaining Pane tree must contain a Pane")
+            }
+            tab.focusedPaneID = replacement
+        }
+        selectedAgentID = nil
     }
 
     func focusPane(id: String) {
@@ -418,6 +484,35 @@ final class SeyalShellPreviewState {
                 first: replacingPane(targetID, in: first, with: replacement),
                 second: replacingPane(targetID, in: second, with: replacement)
             )
+        }
+    }
+
+    private func removingPane(_ targetID: String, from node: PaneTree) -> PaneTree? {
+        switch node {
+        case let .pane(id):
+            return id == targetID ? nil : node
+        case let .split(axis, first, second):
+            let newFirst = removingPane(targetID, from: first)
+            let newSecond = removingPane(targetID, from: second)
+            switch (newFirst, newSecond) {
+            case let (first?, second?):
+                return .split(axis: axis, first: first, second: second)
+            case let (first?, nil):
+                return first
+            case let (nil, second?):
+                return second
+            case (nil, nil):
+                return nil
+            }
+        }
+    }
+
+    private func firstPaneID(in node: PaneTree) -> String? {
+        switch node {
+        case let .pane(id):
+            return id
+        case let .split(_, first, second):
+            return firstPaneID(in: first) ?? firstPaneID(in: second)
         }
     }
 }

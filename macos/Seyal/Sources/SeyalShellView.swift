@@ -15,6 +15,7 @@ final class SeyalShellView: NSView {
     private var attentionPopover: NSPopover?
     private var paneContainers: [String: NSView] = [:]
     private var composerViews: [String: PaneComposerShellView] = [:]
+    private var paneFocusLabels: [String: NSTextField] = [:]
 
     private weak var topChromeView: NSView?
     private weak var leftContextView: NSView?
@@ -42,6 +43,7 @@ final class SeyalShellView: NSView {
         attentionPopover = nil
         paneContainers.removeAll()
         composerViews.removeAll()
+        paneFocusLabels.removeAll()
         subviews.forEach { $0.removeFromSuperview() }
         buildUI()
         needsLayout = true
@@ -53,46 +55,35 @@ final class SeyalShellView: NSView {
         let leftContext = makeLeftContextPanel()
         let pane = makeActiveTabSurface()
         let inspector = makeInspector()
+
         topChromeView = topChrome
         leftContextView = leftContext
         paneView = pane
         inspectorView = inspector
 
-        let body = NSStackView(views: [leftContext, pane, inspector])
-        body.orientation = .horizontal
-        body.alignment = .top
-        body.spacing = 1
-        body.translatesAutoresizingMaskIntoConstraints = false
-        body.wantsLayer = true
-        body.layer?.backgroundColor = SeyalDesignTokens.Palette.separator.cgColor
-
-        let root = NSStackView(views: [topChrome, body])
-        root.orientation = .vertical
-        root.alignment = .leading
-        root.spacing = 1
-        root.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(root)
+        [topChrome, leftContext, pane, inspector].forEach(addSubview)
 
         NSLayoutConstraint.activate([
-            root.leadingAnchor.constraint(equalTo: leadingAnchor),
-            root.trailingAnchor.constraint(equalTo: trailingAnchor),
-            root.topAnchor.constraint(equalTo: topAnchor),
-            root.bottomAnchor.constraint(equalTo: bottomAnchor),
-
-            topChrome.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            topChrome.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            topChrome.leadingAnchor.constraint(equalTo: leadingAnchor),
+            topChrome.trailingAnchor.constraint(equalTo: trailingAnchor),
+            topChrome.topAnchor.constraint(equalTo: topAnchor),
             topChrome.heightAnchor.constraint(equalToConstant: SeyalDesignTokens.Layout.topChromeHeight),
 
-            body.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            body.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            body.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-
+            leftContext.leadingAnchor.constraint(equalTo: leadingAnchor),
+            leftContext.topAnchor.constraint(equalTo: topChrome.bottomAnchor, constant: 1),
+            leftContext.bottomAnchor.constraint(equalTo: bottomAnchor),
             leftContext.widthAnchor.constraint(equalToConstant: SeyalDesignTokens.Layout.leftContextWidth),
+
+            inspector.trailingAnchor.constraint(equalTo: trailingAnchor),
+            inspector.topAnchor.constraint(equalTo: topChrome.bottomAnchor, constant: 1),
+            inspector.bottomAnchor.constraint(equalTo: bottomAnchor),
             inspector.widthAnchor.constraint(equalToConstant: SeyalDesignTokens.Layout.inspectorWidth),
+
+            pane.leadingAnchor.constraint(equalTo: leftContext.trailingAnchor, constant: 1),
+            pane.trailingAnchor.constraint(equalTo: inspector.leadingAnchor, constant: -1),
+            pane.topAnchor.constraint(equalTo: topChrome.bottomAnchor, constant: 1),
+            pane.bottomAnchor.constraint(equalTo: bottomAnchor),
             pane.widthAnchor.constraint(greaterThanOrEqualToConstant: 520),
-            leftContext.heightAnchor.constraint(equalTo: body.heightAnchor),
-            pane.heightAnchor.constraint(equalTo: body.heightAnchor),
-            inspector.heightAnchor.constraint(equalTo: body.heightAnchor),
         ])
     }
 
@@ -119,14 +110,14 @@ final class SeyalShellView: NSView {
         let splitRight = makeToolbarButton(
             symbol: "rectangle.split.2x1",
             fallback: "⇥",
-            accessibilityLabel: "Split Right",
+            accessibilityLabel: "Split focused Pane right",
             accessibilityID: "split-right",
             action: #selector(splitRight(_:))
         )
         let splitDown = makeToolbarButton(
             symbol: "rectangle.split.1x2",
             fallback: "⇣",
-            accessibilityLabel: "Split Down",
+            accessibilityLabel: "Split focused Pane down",
             accessibilityID: "split-down",
             action: #selector(splitDown(_:))
         )
@@ -237,7 +228,6 @@ final class SeyalShellView: NSView {
             document.heightAnchor.constraint(equalTo: scroll.contentView.heightAnchor),
             document.widthAnchor.constraint(greaterThanOrEqualTo: scroll.contentView.widthAnchor),
         ])
-
         return scroll
     }
 
@@ -318,13 +308,50 @@ final class SeyalShellView: NSView {
         panel.wantsLayer = true
         panel.layer?.backgroundColor = SeyalDesignTokens.Palette.panelBackground.cgColor
 
-        let stack = NSStackView()
+        let modeControl = NSSegmentedControl(
+            labels: ["Workspaces", "Tabs"],
+            trackingMode: .selectOne,
+            target: self,
+            action: #selector(changeLeftPanelMode(_:))
+        )
+        modeControl.selectedSegment = state.leftPanelMode == .workspaces ? 0 : 1
+        modeControl.segmentStyle = .texturedRounded
+        modeControl.setAccessibilityIdentifier("left-mode")
+        modeControl.translatesAutoresizingMaskIntoConstraints = false
+
+        let content = NSStackView()
+        content.orientation = .vertical
+        content.alignment = .leading
+        content.spacing = 6
+        content.translatesAutoresizingMaskIntoConstraints = false
+
+        switch state.leftPanelMode {
+        case .workspaces:
+            appendWorkspaceContent(to: content)
+        case .tabs:
+            appendTabContent(to: content)
+        }
+
+        let stack = NSStackView(views: [modeControl, content])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 6
+        stack.spacing = 10
         stack.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
         stack.translatesAutoresizingMaskIntoConstraints = false
 
+        panel.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: panel.topAnchor),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: panel.bottomAnchor),
+            modeControl.widthAnchor.constraint(equalToConstant: SeyalDesignTokens.Layout.leftContextWidth - 24),
+            content.widthAnchor.constraint(equalToConstant: SeyalDesignTokens.Layout.leftContextWidth - 24),
+        ])
+        return panel
+    }
+
+    private func appendWorkspaceContent(to stack: NSStackView) {
         appendSectionTitle("Workspaces", to: stack)
         snapshot.workspaces.forEach { workspace in
             let count = workspace.tabCount == 1 ? "1 tab" : "\(workspace.tabCount) tabs"
@@ -344,16 +371,16 @@ final class SeyalShellView: NSView {
         }
 
         stack.addArrangedSubview(makeSpacer(height: 8))
-        appendSectionTitle("Agents", to: stack)
+        appendSectionTitle("Agents · \(state.activeWorkspace.name)", to: stack)
         if snapshot.agents.isEmpty {
-            stack.addArrangedSubview(makeEmptyStateRow("No agent sessions"))
+            stack.addArrangedSubview(makeEmptyStateRow("No active agent sessions"))
         } else {
             snapshot.agents.forEach { agent in
                 stack.addArrangedSubview(makeContextButton(
                     primary: agent.name,
                     secondary: nil,
                     trailing: agent.state.rawValue,
-                    emphasized: false,
+                    emphasized: state.selectedAgentID == agent.id,
                     attention: agent.state == .attention,
                     statusColor: agentColor(agent.state),
                     itemID: agent.id,
@@ -362,9 +389,16 @@ final class SeyalShellView: NSView {
                 ))
             }
         }
+    }
 
-        stack.addArrangedSubview(makeSpacer(height: 8))
+    private func appendTabContent(to stack: NSStackView) {
+        appendSectionTitle(state.activeWorkspace.name, to: stack)
+        if let path = state.activeWorkspace.detail {
+            stack.addArrangedSubview(makeEmptyStateRow(path))
+        }
+        stack.addArrangedSubview(makeSpacer(height: 4))
         appendSectionTitle("Tabs", to: stack)
+
         snapshot.tabs.forEach { tab in
             let paneDetail = tab.paneCount == 1 ? "1 pane" : "\(tab.paneCount) panes"
             stack.addArrangedSubview(makeContextButton(
@@ -380,13 +414,16 @@ final class SeyalShellView: NSView {
             ))
         }
 
-        panel.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: panel.topAnchor),
-        ])
-        return panel
+        let newTab = NSButton(title: "+ New Tab", target: self, action: #selector(createTab(_:)))
+        newTab.bezelStyle = .inline
+        newTab.isBordered = false
+        newTab.alignment = .left
+        newTab.font = SeyalDesignTokens.Typography.bodyEmphasized
+        newTab.contentTintColor = SeyalDesignTokens.Palette.focus
+        newTab.setAccessibilityIdentifier("left-new-tab")
+        newTab.translatesAutoresizingMaskIntoConstraints = false
+        newTab.widthAnchor.constraint(equalToConstant: SeyalDesignTokens.Layout.leftContextWidth - 24).isActive = true
+        stack.addArrangedSubview(newTab)
     }
 
     private func makeContextButton(
@@ -409,6 +446,14 @@ final class SeyalShellView: NSView {
             : NSColor.clear.cgColor
         container.widthAnchor.constraint(equalToConstant: SeyalDesignTokens.Layout.leftContextWidth - 24).isActive = true
 
+        let dot = NSTextField(labelWithString: "●")
+        dot.font = NSFont.systemFont(ofSize: 7, weight: .bold)
+        dot.textColor = statusColor ?? (attention
+            ? SeyalDesignTokens.Palette.warning
+            : SeyalDesignTokens.Palette.textTertiary)
+        dot.translatesAutoresizingMaskIntoConstraints = false
+        dot.setContentHuggingPriority(.required, for: .horizontal)
+
         let button = NSButton(title: primary, target: self, action: action)
         button.identifier = NSUserInterfaceItemIdentifier(itemID)
         button.setAccessibilityIdentifier(accessibilityID)
@@ -422,8 +467,6 @@ final class SeyalShellView: NSView {
         button.contentTintColor = emphasized
             ? SeyalDesignTokens.Palette.textPrimary
             : SeyalDesignTokens.Palette.textSecondary
-        button.image = NSImage(systemSymbolName: "circle.fill", accessibilityDescription: nil)
-        button.imagePosition = .imageLeading
         button.translatesAutoresizingMaskIntoConstraints = false
 
         let trailingField = NSTextField(labelWithString: trailing ?? "")
@@ -435,11 +478,14 @@ final class SeyalShellView: NSView {
         trailingField.translatesAutoresizingMaskIntoConstraints = false
         trailingField.setContentHuggingPriority(.required, for: .horizontal)
 
+        container.addSubview(dot)
         container.addSubview(button)
         container.addSubview(trailingField)
 
         var constraints = [
-            button.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 5),
+            dot.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 7),
+            dot.centerYAnchor.constraint(equalTo: button.centerYAnchor),
+            button.leadingAnchor.constraint(equalTo: dot.trailingAnchor, constant: 5),
             button.topAnchor.constraint(equalTo: container.topAnchor, constant: 3),
             trailingField.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -7),
             trailingField.centerYAnchor.constraint(equalTo: button.centerYAnchor),
@@ -454,7 +500,7 @@ final class SeyalShellView: NSView {
             secondaryField.translatesAutoresizingMaskIntoConstraints = false
             container.addSubview(secondaryField)
             constraints.append(contentsOf: [
-                secondaryField.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 27),
+                secondaryField.leadingAnchor.constraint(equalTo: button.leadingAnchor),
                 secondaryField.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -7),
                 secondaryField.topAnchor.constraint(equalTo: button.bottomAnchor, constant: -1),
                 secondaryField.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -5),
@@ -464,9 +510,6 @@ final class SeyalShellView: NSView {
         }
 
         NSLayoutConstraint.activate(constraints)
-        if let statusColor {
-            button.contentTintColor = emphasized ? SeyalDesignTokens.Palette.textPrimary : statusColor
-        }
         return container
     }
 
@@ -474,7 +517,9 @@ final class SeyalShellView: NSView {
         let field = NSTextField(labelWithString: text)
         field.font = SeyalDesignTokens.Typography.body
         field.textColor = SeyalDesignTokens.Palette.textTertiary
+        field.lineBreakMode = .byTruncatingMiddle
         field.translatesAutoresizingMaskIntoConstraints = false
+
         let container = NSView()
         container.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(field)
@@ -494,8 +539,7 @@ final class SeyalShellView: NSView {
         container.wantsLayer = true
         container.layer?.backgroundColor = SeyalDesignTokens.Palette.paneBackground.cgColor
 
-        let tab = state.activeTab
-        let tree = makePaneTree(tab.root)
+        let tree = makePaneTree(state.activeTab.root)
         tree.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(tree)
         NSLayoutConstraint.activate([
@@ -567,16 +611,48 @@ final class SeyalShellView: NSView {
         titleStack.orientation = .vertical
         titleStack.alignment = .leading
         titleStack.spacing = 1
+        titleStack.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+
+        let spacer = NSView()
+        spacer.translatesAutoresizingMaskIntoConstraints = false
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         let focusState = NSTextField(labelWithString: isFocused ? "Focused" : "")
         focusState.font = SeyalDesignTokens.Typography.metadata
         focusState.textColor = SeyalDesignTokens.Palette.focus
+        focusState.setContentHuggingPriority(.required, for: .horizontal)
+        paneFocusLabels[paneID] = focusState
 
-        let header = NSStackView(views: [titleStack, focusState])
+        let split = makePaneControlButton(
+            paneID: paneID,
+            symbol: "rectangle.split.2x1",
+            fallback: "Split",
+            accessibilityLabel: "Split \(paneState.title)",
+            accessibilityID: "pane.split.\(paneID)",
+            action: #selector(showPaneSplitMenu(_:))
+        )
+        let close = makePaneControlButton(
+            paneID: paneID,
+            symbol: "xmark",
+            fallback: "×",
+            accessibilityLabel: "Close \(paneState.title)",
+            accessibilityID: "pane.close.\(paneID)",
+            action: #selector(closePane(_:))
+        )
+        close.isHidden = state.activeTab.paneCount <= 1
+
+        let controls = NSStackView(views: [split, close])
+        controls.orientation = .horizontal
+        controls.alignment = .centerY
+        controls.spacing = 2
+        controls.setContentHuggingPriority(.required, for: .horizontal)
+
+        let header = NSStackView(views: [titleStack, spacer, focusState, controls])
         header.orientation = .horizontal
         header.alignment = .centerY
         header.spacing = 8
-        header.edgeInsets = NSEdgeInsets(top: 7, left: 10, bottom: 6, right: 10)
+        header.edgeInsets = NSEdgeInsets(top: 7, left: 10, bottom: 6, right: 8)
         header.translatesAutoresizingMaskIntoConstraints = false
 
         let transcript = makeTranscript(paneID: paneID)
@@ -622,6 +698,32 @@ final class SeyalShellView: NSView {
             composer.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
         ])
         return pane
+    }
+
+    private func makePaneControlButton(
+        paneID: String,
+        symbol: String,
+        fallback: String,
+        accessibilityLabel: String,
+        accessibilityID: String,
+        action: Selector
+    ) -> NSButton {
+        let button = NSButton(title: "", target: self, action: action)
+        button.identifier = NSUserInterfaceItemIdentifier(paneID)
+        button.bezelStyle = .inline
+        button.isBordered = false
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: accessibilityLabel)
+        if button.image == nil {
+            button.title = fallback
+        }
+        button.contentTintColor = SeyalDesignTokens.Palette.textTertiary
+        button.toolTip = accessibilityLabel
+        button.setAccessibilityLabel(accessibilityLabel)
+        button.setAccessibilityIdentifier(accessibilityID)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.widthAnchor.constraint(greaterThanOrEqualToConstant: 26).isActive = true
+        button.heightAnchor.constraint(equalToConstant: 26).isActive = true
+        return button
     }
 
     /// Each Pane owns one normal transcript scroll surface. The preview deliberately
@@ -720,6 +822,7 @@ final class SeyalShellView: NSView {
             stack.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
             stack.topAnchor.constraint(equalTo: panel.topAnchor),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: panel.bottomAnchor),
         ])
     }
 
@@ -754,8 +857,8 @@ final class SeyalShellView: NSView {
         stack.addArrangedSubview(field)
     }
 
-    private func agentColor(_ state: SeyalShellSnapshot.Agent.State) -> NSColor {
-        switch state {
+    private func agentColor(_ agentState: SeyalShellSnapshot.Agent.State) -> NSColor {
+        switch agentState {
         case .running:
             SeyalDesignTokens.Palette.success
         case .waiting:
@@ -782,11 +885,18 @@ final class SeyalShellView: NSView {
             pane.layer?.borderColor = (focused
                 ? SeyalDesignTokens.Palette.focus
                 : SeyalDesignTokens.Palette.separator).cgColor
+            paneFocusLabels[id]?.stringValue = focused ? "Focused" : ""
         }
         composerView = composerViews[paneID]
         if let inspectorView {
             populateInspector(inspectorView)
         }
+    }
+
+    @objc
+    private func changeLeftPanelMode(_ sender: NSSegmentedControl) {
+        state.setLeftPanelMode(sender.selectedSegment == 0 ? .workspaces : .tabs)
+        rebuildUI()
     }
 
     @objc
@@ -813,6 +923,7 @@ final class SeyalShellView: NSView {
     @objc
     private func createTab(_ sender: NSButton) {
         state.createTab()
+        state.setLeftPanelMode(.tabs)
         rebuildUI()
     }
 
@@ -839,6 +950,46 @@ final class SeyalShellView: NSView {
     private func focusPane(_ sender: NSButton) {
         guard let id = sender.identifier?.rawValue else { return }
         focusPaneWithoutRebuild(id)
+    }
+
+    @objc
+    private func showPaneSplitMenu(_ sender: NSButton) {
+        guard let paneID = sender.identifier?.rawValue else { return }
+        state.focusPane(id: paneID)
+
+        let menu = NSMenu(title: "Split Pane")
+        let splitRight = NSMenuItem(title: "Split Right", action: #selector(splitPaneRightFromMenu(_:)), keyEquivalent: "")
+        splitRight.target = self
+        splitRight.representedObject = paneID
+        menu.addItem(splitRight)
+
+        let splitDown = NSMenuItem(title: "Split Down", action: #selector(splitPaneDownFromMenu(_:)), keyEquivalent: "")
+        splitDown.target = self
+        splitDown.representedObject = paneID
+        menu.addItem(splitDown)
+
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.minY - 2), in: sender)
+    }
+
+    @objc
+    private func splitPaneRightFromMenu(_ sender: NSMenuItem) {
+        guard let paneID = sender.representedObject as? String else { return }
+        state.splitPane(id: paneID, axis: .right)
+        rebuildUI()
+    }
+
+    @objc
+    private func splitPaneDownFromMenu(_ sender: NSMenuItem) {
+        guard let paneID = sender.representedObject as? String else { return }
+        state.splitPane(id: paneID, axis: .down)
+        rebuildUI()
+    }
+
+    @objc
+    private func closePane(_ sender: NSButton) {
+        guard let paneID = sender.identifier?.rawValue else { return }
+        state.closePane(id: paneID)
+        rebuildUI()
     }
 
     @objc
@@ -933,10 +1084,12 @@ final class SeyalShellView: NSView {
         let shell = SeyalShellPreviewFactory.make(frame: NSRect(x: 0, y: 0, width: 1280, height: 800))
         shell.layoutSubtreeIfNeeded()
         guard let contract = shell.debugLayoutContract() else { return false }
-        return shell.subviews.count == 1
+        return shell.subviews.count == 4
             && abs(contract.topChrome.height - SeyalDesignTokens.Layout.topChromeHeight) < 1
             && abs(contract.leftContext.width - SeyalDesignTokens.Layout.leftContextWidth) < 1
             && abs(contract.inspector.width - SeyalDesignTokens.Layout.inspectorWidth) < 1
+            && abs(contract.inspector.maxX - shell.bounds.maxX) < 1
+            && abs(contract.pane.maxX - contract.inspector.minX + 1) < 1
             && contract.pane.width > 600
     }
 }

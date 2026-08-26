@@ -96,10 +96,8 @@ fn pty_eof_from_live_children_stays_running_without_a_reap_poll_loop_and_remains
             ids.push(
                 runtime
                     .create_execution(
-                        CommandSpec::new("/bin/sh").args([
-                            "-c",
-                            "exec 0<&-; exec 1>&-; exec 2>&-; sleep 30",
-                        ]),
+                        CommandSpec::new("/bin/sh")
+                            .args(["-c", "exec 0<&-; exec 1>&-; exec 2>&-; sleep 30"]),
                         size(),
                     )
                     .expect("live execution"),
@@ -120,7 +118,10 @@ fn pty_eof_from_live_children_stays_running_without_a_reap_poll_loop_and_remains
 
         for id in &ids {
             assert_eq!(
-                runtime.lookup(*id).expect("execution remains tracked").lifecycle,
+                runtime
+                    .lookup(*id)
+                    .expect("execution remains tracked")
+                    .lifecycle,
                 ExecutionLifecycle::Running,
                 "PTY EOF must not pretend that the primary child exited"
             );
@@ -182,17 +183,27 @@ fn pty_eof_live_child_is_finalized_when_the_primary_later_exits_naturally() {
                 .poll_once(Some(Duration::from_millis(50)))
                 .expect("Runtime poll");
         }
-        assert_eq!(runtime.lookup(id).unwrap().lifecycle, ExecutionLifecycle::Running);
+        assert_eq!(
+            runtime.lookup(id).unwrap().lifecycle,
+            ExecutionLifecycle::Running
+        );
 
         let exit_deadline = Instant::now() + Duration::from_secs(3);
         while runtime.lookup(id).is_some() {
-            assert!(Instant::now() < exit_deadline, "natural child exit was not observed");
+            assert!(
+                Instant::now() < exit_deadline,
+                "natural child exit was not observed"
+            );
             runtime
                 .poll_once(Some(Duration::from_millis(100)))
                 .expect("Runtime poll");
         }
     }
-    assert_eq!(fd_count(), baseline_fds, "natural PTY EOF path leaked descriptors");
+    assert_eq!(
+        fd_count(),
+        baseline_fds,
+        "natural PTY EOF path leaked descriptors"
+    );
 }
 
 #[cfg(feature = "test-fault-injection")]
@@ -229,7 +240,10 @@ fn repeated_listener_resource_pressure_backs_off_without_starving_active_pty_wor
         let mut pty_progress_while_pressured = false;
         let mut got_server_hello = false;
         while !got_server_hello {
-            assert!(Instant::now() < deadline, "listener did not recover after pressure");
+            assert!(
+                Instant::now() < deadline,
+                "listener did not recover after pressure"
+            );
             runtime
                 .poll_once(Some(Duration::from_millis(25)))
                 .expect("resource pressure is non-fatal");

@@ -16,7 +16,7 @@ final class SeyalShellComponentTests: XCTestCase {
             elapsed: "12 ms",
             timestamp: "09:00",
             isSelected: true,
-            actions: ["Copy", "Rerun", "Pin", "Expand"]
+            actions: ["Copy", "Pin"]
         )
         let block = BlockView(presentation: presentation, bodyView: body)
 
@@ -33,12 +33,16 @@ final class SeyalShellComponentTests: XCTestCase {
         XCTAssertFalse(available.isHidden)
         XCTAssertFalse(busy.isHidden)
         XCTAssertTrue(tui.isHidden)
-        XCTAssertTrue(descendants(of: NSScrollView.self, in: available).isEmpty)
-        XCTAssertTrue(descendants(of: NSScrollView.self, in: busy).isEmpty)
+        XCTAssertEqual(descendants(of: NSTextView.self, in: available).count, 1)
+        XCTAssertTrue(
+            descendants(of: NSScrollView.self, in: available)
+                .allSatisfy { !$0.hasVerticalScroller }
+        )
+        XCTAssertTrue(descendants(of: NSTextView.self, in: busy).isEmpty)
     }
 
     @MainActor
-    func testShellHasExactlyOneVerticalTranscriptScrollOwner() {
+    func testShellHasExactlyOneVerticalTranscriptScrollOwnerInitially() {
         let shell = SeyalShellPreviewFactory.make(
             frame: NSRect(x: 0, y: 0, width: 1280, height: 800)
         )
@@ -47,6 +51,58 @@ final class SeyalShellComponentTests: XCTestCase {
         let verticalOwners = descendants(of: NSScrollView.self, in: shell)
             .filter(\.hasVerticalScroller)
         XCTAssertEqual(verticalOwners.count, 1)
+    }
+
+    @MainActor
+    func testPreviewTabSelectionChangesCanonicalUISelection() {
+        let state = SeyalShellPreviewState.makeDefault()
+
+        state.selectTab(id: "tab-agent")
+
+        XCTAssertEqual(state.snapshot.activeTabID, "tab-agent")
+        XCTAssertEqual(
+            state.snapshot.inspectorRows.first(where: { $0.id == "tab-name" })?.value,
+            "Agent Development"
+        )
+    }
+
+    @MainActor
+    func testPreviewNewTabIsRealLocalNavigationState() {
+        let state = SeyalShellPreviewState.makeDefault()
+        let originalCount = state.snapshot.tabs.count
+
+        let tab = state.createTab()
+
+        XCTAssertEqual(state.snapshot.tabs.count, originalCount + 1)
+        XCTAssertEqual(state.snapshot.activeTabID, tab.id)
+        XCTAssertEqual(state.activeTab.paneCount, 1)
+    }
+
+    @MainActor
+    func testPreviewSplitCreatesIndependentPaneDraftState() {
+        let state = SeyalShellPreviewState.makeDefault()
+        let firstPaneID = state.activeTab.focusedPaneID
+        state.updateDraft("first draft", paneID: firstPaneID)
+
+        let secondPane = state.splitFocusedPane(axis: .right)
+        state.updateDraft("second draft", paneID: secondPane.id)
+
+        XCTAssertEqual(state.activeTab.paneCount, 2)
+        XCTAssertEqual(state.activeTab.layoutDescription, "Split right")
+        XCTAssertEqual(state.activeTab.panes[firstPaneID]?.draft, "first draft")
+        XCTAssertEqual(state.activeTab.panes[secondPane.id]?.draft, "second draft")
+        XCTAssertEqual(state.activeTab.focusedPaneID, secondPane.id)
+    }
+
+    @MainActor
+    func testPreviewInspectorDoesNotFabricateRuntimeTelemetry() {
+        let state = SeyalShellPreviewState.makeDefault()
+        let rows = state.snapshot.inspectorRows
+
+        XCTAssertFalse(rows.contains { $0.section == "Runtime" })
+        XCTAssertFalse(rows.contains { $0.label == "PID" })
+        XCTAssertFalse(rows.contains { $0.label == "CPU" })
+        XCTAssertFalse(rows.contains { $0.label == "Memory" })
     }
 
     @MainActor

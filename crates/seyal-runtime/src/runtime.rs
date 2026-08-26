@@ -36,6 +36,43 @@ const ROLLBACK_REAP_TICK: Duration = Duration::from_millis(10);
 /// retry cadence for re-attempting the reap rather than discarding the
 /// one-shot notification and stranding the execution with no deadline.
 const PRIMARY_EXIT_REAP_RETRY: Duration = Duration::from_millis(10);
+/// PTY EOF is terminal-I/O state, not process-exit truth. A short bounded
+/// exponential probe covers the narrow race where a process exits around
+/// NOTE_EXIT registration and the first `try_wait` has not become reapable
+/// yet. If the child is genuinely still alive, probing stops completely and
+/// the still-armed process-exit knote remains authoritative.
+const PTY_EOF_REAP_PROBE_INITIAL: Duration = Duration::from_millis(10);
+const PTY_EOF_REAP_PROBE_MAX: Duration = Duration::from_millis(320);
+const PTY_EOF_REAP_PROBE_LIMIT: u8 = 6;
+
+#[derive(Clone, Copy, Debug)]
+struct PtyEofReapProbe {
+    deadline: Instant,
+    delay: Duration,
+    remaining: u8,
+}
+
+impl PtyEofReapProbe {
+    fn new(now: Instant) -> Self {
+        Self {
+            deadline: now + PTY_EOF_REAP_PROBE_INITIAL,
+            delay: PTY_EOF_REAP_PROBE_INITIAL,
+            remaining: PTY_EOF_REAP_PROBE_LIMIT,
+        }
+    }
+
+    fn next(self, now: Instant) -> Option<Self> {
+        if self.remaining <= 1 {
+            return None;
+        }
+        let delay = self.delay.saturating_mul(2).min(PTY_EOF_REAP_PROBE_MAX);
+        Some(Self {
+            deadline: now + delay,
+            delay,
+            remaining: self.remaining - 1,
+        })
+    }
+}
 
 #[cfg(feature = "benchmark-instrumentation")]
 #[derive(Clone, Copy, Debug, Default)]
@@ -173,6 +210,7 @@ struct Entry {
     workspace_id: WorkspaceId,
     attachments: HashSet<AttachmentId>,
     lifecycle: Lifecycle,
+    pty_eof_reap_probe: Option<PtyEofReapProbe>,
     pending_input: VecDeque<AcceptedInput>,
     reserved_input: Arc<AtomicUsize>,
     ingress_active: Arc<AtomicBool>,
@@ -186,6 +224,20 @@ impl Entry {
             attachment_count: self.attachments.len(),
             lifecycle: self.lifecycle.public(),
         }
+    }
+
+    fn next_deadline(&self) -> Option<Instant> {
+        [
+            self.lifecycle.deadline(),
+            self.pty_eof_reap_probe.map(|probe| probe.deadline),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+    }
+
+    fn terminal_io_active(&self) -> bool {
+        self.lifecycle.accepts_input() && self.ingress_active.load(Ordering::Acquire)
     }
 }
 
@@ -202,7 +254,7 @@ pub struct Runtime {
     aggregate_reserved: Arc<AtomicUsize>,
     config: RuntimeConfig,
     events: [ReactorEvent; EVENT_CAPACITY],
-    read_buffer: [u8; READ_BUFFER_SIZE],
+    read_buffer: [0; READ_BUFFER_SIZE],
     shutting_down: bool,
     rollback_reap: Vec<TerminalExecution>,
     #[cfg(target_os = "macos")]
@@ -382,6 +434,7 @@ impl Runtime {
             workspace_id: self.default_workspace,
             attachments: HashSet::new(),
             lifecycle: Lifecycle::Running,
+            pty_eof_reap_probe: None,
             pending_input: VecDeque::new(),
             reserved_input,
             ingress_active,
@@ -398,7 +451,7 @@ impl Runtime {
             .entries
             .get(&id)
             .ok_or(RuntimeError::UnknownExecution)?;
-        if !entry.lifecycle.accepts_input() {
+        if !entry.terminal_io_active() {
             return Err(RuntimeError::ExecutionNotRunning);
         }
         Ok(InputIngress::new(
@@ -443,7 +496,7 @@ impl Runtime {
             .entries
             .get_mut(&id)
             .ok_or(RuntimeError::UnknownExecution)?;
-        if !matches!(entry.lifecycle, Lifecycle::Running) {
+        if !entry.terminal_io_active() {
             return Err(RuntimeError::ExecutionNotRunning);
         }
         entry.execution.resize(size)?;
@@ -459,6 +512,7 @@ impl Runtime {
         if !matches!(entry.lifecycle, Lifecycle::Running) {
             return Ok(());
         }
+        entry.pty_eof_reap_probe = None;
         entry.ingress_active.store(false, Ordering::Release);
         entry.pending_input.clear();
         self.reactor.set_writable(entry.token, false)?;
@@ -568,7 +622,7 @@ impl Runtime {
                 Ok(ControlMessage::Input(input)) => {
                     let id = input.execution_id;
                     if let Some(entry) = self.entries.get_mut(&id)
-                        && entry.lifecycle.accepts_input()
+                        && entry.terminal_io_active()
                     {
                         entry.pending_input.push_back(input);
                         self.service_writes(id)?;
@@ -582,6 +636,21 @@ impl Runtime {
             self.reactor.waker().wake()?;
         }
         Ok(handled)
+    }
+
+    fn mark_terminal_io_closed(&mut self, id: ExecutionId) -> Result<(), RuntimeError> {
+        let token = {
+            let entry = self
+                .entries
+                .get_mut(&id)
+                .ok_or(RuntimeError::UnknownExecution)?;
+            entry.ingress_active.store(false, Ordering::Release);
+            entry.pending_input.clear();
+            entry.token
+        };
+        self.reactor.set_writable(token, false)?;
+        self.reactor.set_readable(token, false)?;
+        Ok(())
     }
 
     fn service_reads(&mut self, id: ExecutionId) -> Result<(), RuntimeError> {
@@ -604,27 +673,12 @@ impl Runtime {
             };
             match outcome {
                 ReadOutcome::Eof => {
-                    // A dead PTY master's `EVFILT_READ` is level-triggered
-                    // and permanently ready with EOF the moment the child's
-                    // slave side closes - this is independent of, and more
-                    // reliable than, the EVFILT_PROC/NOTE_EXIT registration
-                    // this execution's reactor slot also holds. `NOTE_EXIT`
-                    // is edge-triggered on the kernel's exit transition; if
-                    // that knote is attached (register_process_exit succeeds
-                    // without ESRCH, so the child is not yet fully reaped)
-                    // after the kernel has already fired that one-shot
-                    // transition, the notification is missed permanently and
-                    // no `PrimaryExited` reactor event - and therefore no
-                    // `observe_primary_exit` call - will ever occur for this
-                    // registration. Lifecycle::Running has no deadline, so
-                    // without this, that execution would be stranded alive
-                    // forever with a full-core busy-spin on this same
-                    // permanently-ready EOF. Treat EOF while Running the same
-                    // as EOF while PrimaryExitPending: retry the reap
-                    // immediately, since EOF is unambiguous proof the slave
-                    // side is gone, unlike WouldBlock/Bytes(0) which a
-                    // perfectly healthy, still-running process produces
-                    // constantly and must not be treated as an exit signal.
+                    // PTY EOF proves only that terminal I/O is gone. A child
+                    // may deliberately close fd 0/1/2 and remain alive, so do
+                    // not mutate process lifecycle from this signal. Disarm
+                    // the level-triggered read filter while preserving the
+                    // independently registered process-exit watch.
+                    self.mark_terminal_io_closed(id)?;
                     if matches!(
                         self.entries.get(&id).map(|entry| entry.lifecycle),
                         Some(Lifecycle::Running | Lifecycle::PrimaryExitPending { .. })
@@ -640,10 +694,10 @@ impl Runtime {
                             self.enter_drain(id, exit)?;
                         } else if let Some(entry) = self.entries.get_mut(&id)
                             && matches!(entry.lifecycle, Lifecycle::Running)
+                            && entry.pty_eof_reap_probe.is_none()
                         {
-                            entry.lifecycle = Lifecycle::PrimaryExitPending {
-                                deadline: Instant::now() + PRIMARY_EXIT_REAP_RETRY,
-                            };
+                            entry.pty_eof_reap_probe =
+                                Some(PtyEofReapProbe::new(Instant::now()));
                         }
                     }
                     drain_complete = matches!(
@@ -691,7 +745,7 @@ impl Runtime {
                 .entries
                 .get_mut(&id)
                 .ok_or(RuntimeError::UnknownExecution)?;
-            if !entry.lifecycle.accepts_input() {
+            if !entry.terminal_io_active() {
                 entry.pending_input.clear();
                 token = entry.token;
                 pending = false;
@@ -728,6 +782,7 @@ impl Runtime {
                 .entries
                 .get_mut(&id)
                 .ok_or(RuntimeError::UnknownExecution)?;
+            entry.pty_eof_reap_probe = None;
             entry.execution.try_wait()?
         };
         if let Some(exit) = exit {
@@ -737,12 +792,9 @@ impl Runtime {
             && matches!(entry.lifecycle, Lifecycle::Running)
         {
             // `PrimaryExited` is one-shot and will never repeat for this
-            // registration. `Lifecycle::Running` carries no deadline, so
-            // discarding this without scheduling a retry would strand the
-            // execution alive forever the moment `try_wait` and `NOTE_EXIT`
-            // are not perfectly simultaneous. Other lifecycle states already
-            // carry their own deadline and will retry the reap on their own
-            // schedule, so this transition only applies from `Running`.
+            // registration. Unlike PTY EOF, this event is kernel-confirmed
+            // process-exit truth, so a short reap retry is a valid lifecycle
+            // transition rather than terminal-I/O state leakage.
             entry.lifecycle = Lifecycle::PrimaryExitPending {
                 deadline: Instant::now() + PRIMARY_EXIT_REAP_RETRY,
             };
@@ -755,6 +807,7 @@ impl Runtime {
             .entries
             .get_mut(&id)
             .ok_or(RuntimeError::UnknownExecution)?;
+        entry.pty_eof_reap_probe = None;
         entry.ingress_active.store(false, Ordering::Release);
         entry.pending_input.clear();
         self.reactor.set_writable(entry.token, false)?;
@@ -767,6 +820,44 @@ impl Runtime {
 
     fn process_deadlines(&mut self) -> Result<(), RuntimeError> {
         let now = Instant::now();
+
+        let probe_due = self
+            .entries
+            .iter()
+            .filter_map(|(&id, entry)| {
+                entry
+                    .pty_eof_reap_probe
+                    .filter(|probe| probe.deadline <= now)
+                    .map(|_| id)
+            })
+            .collect::<Vec<_>>();
+        for id in probe_due {
+            if !matches!(
+                self.entries.get(&id).map(|entry| entry.lifecycle),
+                Some(Lifecycle::Running)
+            ) {
+                if let Some(entry) = self.entries.get_mut(&id) {
+                    entry.pty_eof_reap_probe = None;
+                }
+                continue;
+            }
+            let exit = {
+                let entry = self
+                    .entries
+                    .get_mut(&id)
+                    .ok_or(RuntimeError::UnknownExecution)?;
+                entry.execution.try_wait()?
+            };
+            if let Some(exit) = exit {
+                self.enter_drain(id, exit)?;
+                self.service_reads(id)?;
+            } else if let Some(entry) = self.entries.get_mut(&id) {
+                entry.pty_eof_reap_probe = entry
+                    .pty_eof_reap_probe
+                    .and_then(|probe| probe.next(now));
+            }
+        }
+
         let due = self
             .entries
             .iter()
@@ -845,6 +936,9 @@ impl Runtime {
                 Some(Lifecycle::Running | Lifecycle::TerminationFailed) | None => {}
             }
         }
+
+        #[cfg(target_os = "macos")]
+        self.service_local_deadline(now)?;
         Ok(())
     }
 
@@ -869,14 +963,23 @@ impl Runtime {
 
     fn bound_wait_by_deadline(&self, requested: Option<Duration>) -> Option<Duration> {
         let now = Instant::now();
-        let lifecycle = self
+        let execution = self
             .entries
             .values()
-            .filter_map(|entry| entry.lifecycle.deadline())
+            .filter_map(Entry::next_deadline)
             .min()
             .map(|deadline| deadline.saturating_duration_since(now));
         let rollback = (!self.rollback_reap.is_empty()).then_some(ROLLBACK_REAP_TICK);
-        [requested, lifecycle, rollback].into_iter().flatten().min()
+        #[cfg(target_os = "macos")]
+        let local = self
+            .local_ipc_deadline()
+            .map(|deadline| deadline.saturating_duration_since(now));
+        #[cfg(not(target_os = "macos"))]
+        let local: Option<Duration> = None;
+        [requested, execution, rollback, local]
+            .into_iter()
+            .flatten()
+            .min()
     }
 
     fn kill_unpublished(&mut self, mut execution: TerminalExecution) {

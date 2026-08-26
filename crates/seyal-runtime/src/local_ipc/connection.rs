@@ -358,7 +358,9 @@ impl LocalIpcServer {
                     if self.connections.len() >= self.max_connections {
                         continue;
                     }
-                    stream.set_nonblocking(true)?;
+                    if stream.set_nonblocking(true).is_err() {
+                        continue;
+                    }
                     let token = self.next_token;
                     self.next_token = self.next_token.wrapping_add(1).max(1);
                     self.connections.insert(
@@ -378,7 +380,24 @@ impl LocalIpcServer {
                     events.push(ServerEvent::Connected { token });
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
-                Err(error) => return Err(error),
+                Err(_) => {
+                    // A hard accept(2) error (e.g. EMFILE/ENFILE under FD
+                    // exhaustion, or ECONNABORTED - which POSIX expects
+                    // callers to retry rather than treat as fatal) must not
+                    // discard connections already fully admitted into
+                    // `self.connections` earlier in this same loop: doing so
+                    // previously propagated the error out through `?`,
+                    // dropping the local `events` vec while those
+                    // connections remained live server-side, so the caller
+                    // never learned about them, never registered their fd
+                    // with the reactor, and never serviced or closed them -
+                    // an orphaned live socket occupying a permanent
+                    // connection-table slot. Stop accepting for this cycle
+                    // and return what was actually admitted instead; a
+                    // persistent listener-level condition will recur on the
+                    // next readiness event.
+                    break;
+                }
             }
         }
         Ok(events)

@@ -3,12 +3,16 @@
 use libfuzzer_sys::fuzz_target;
 
 #[cfg(target_os = "macos")]
+use std::collections::{HashSet, VecDeque};
+
+#[cfg(target_os = "macos")]
 use seyal_runtime::{
     AttachmentId, ExecutionId,
     local_ipc::{
         attachment::AttachmentRegistry,
         connection::ConnectionState,
         framing::{MessageType, Role},
+        recovery,
     },
 };
 
@@ -37,11 +41,32 @@ fn forged_attachment(seed: u8) -> AttachmentId {
 }
 
 #[cfg(target_os = "macos")]
+fn schedule_recovery_twice(
+    queue: &mut VecDeque<u64>,
+    pending: &mut HashSet<u64>,
+    token: u64,
+) {
+    let first = recovery::schedule_snapshot_recovery(queue, pending, token);
+    let second = recovery::schedule_snapshot_recovery(queue, pending, token);
+    assert!(!second, "repeated recovery request must coalesce");
+    assert!(pending.contains(&token));
+    if first {
+        assert_eq!(
+            queue.iter().filter(|&&queued| queued == token).count(),
+            1,
+            "a newly pending recovery must add exactly one queue entry"
+        );
+    }
+}
+
+#[cfg(target_os = "macos")]
 fn fuzz_state_machine(data: &[u8]) {
     let execution = ExecutionId::from_bytes(1u128.to_le_bytes());
     let mut registry = AttachmentRegistry::new();
     let mut clients = [ClientState::new(1), ClientState::new(2)];
     let mut next_token = 3u64;
+    let mut recovery_queue = VecDeque::new();
+    let mut recovery_pending = HashSet::new();
 
     for operation in data.chunks(4).take(128) {
         if operation.len() < 4 {
@@ -50,7 +75,7 @@ fn fuzz_state_machine(data: &[u8]) {
         let index = (operation[0] as usize) & 1;
         let client = &mut clients[index];
 
-        match operation[1] % 8 {
+        match operation[1] % 9 {
             // Hello -> Ready.
             0 => {
                 if client
@@ -76,7 +101,9 @@ fn fuzz_state_machine(data: &[u8]) {
                     }
                 }
             }
-            // Resync identity validation, including stale/cross-connection ids.
+            // Explicit Resync identity validation plus the exact production
+            // recovery-request coalescing seam. Repeated requests for one live
+            // connection must create one logical pending snapshot requirement.
             2 => {
                 if client.state.validate_incoming(MessageType::Resync).is_ok() {
                     let id = if operation[2] & 1 == 0 {
@@ -86,10 +113,21 @@ fn fuzz_state_machine(data: &[u8]) {
                     } else {
                         forged_attachment(operation[3])
                     };
-                    let _ = registry.execution_for_connection(client.token, id);
+                    if registry
+                        .execution_for_connection(client.token, id)
+                        .is_ok()
+                    {
+                        schedule_recovery_twice(
+                            &mut recovery_queue,
+                            &mut recovery_pending,
+                            client.token,
+                        );
+                    }
                 }
             }
-            // Detach/reattach boundary.
+            // Detach/reattach boundary. Runtime removes the logical recovery
+            // requirement while stale queue entries remain harmless and are
+            // skipped by the bounded service loop.
             3 => {
                 if client.state.validate_incoming(MessageType::Detach).is_ok() {
                     let id = if operation[2] & 1 == 0 {
@@ -101,6 +139,7 @@ fn fuzz_state_machine(data: &[u8]) {
                     };
                     if registry.detach_for_connection(client.token, id).is_ok() {
                         if client.attachment == Some(id) {
+                            recovery_pending.remove(&client.token);
                             client.attachment = None;
                             client.state = ConnectionState::Ready;
                         }
@@ -121,23 +160,47 @@ fn fuzz_state_machine(data: &[u8]) {
                     let _ = registry.authorize_mutation(client.token, id);
                 }
             }
-            // Disconnect/reconnect: release the old attachment and assign a new
-            // connection token so old identities cannot acquire authority.
+            // Disconnect/reconnect: release the old attachment and pending
+            // recovery requirement, then assign a new connection token so old
+            // identities cannot acquire authority.
             5 => {
                 if let Some(id) = client.attachment.take() {
                     let _ = registry.detach_for_connection(client.token, id);
                 }
+                recovery_pending.remove(&client.token);
                 client.token = next_token;
                 next_token = next_token.wrapping_add(1).max(3);
                 client.state = ConnectionState::AwaitHello;
             }
-            // Execution finalization invalidates every outstanding attachment.
+            // Execution finalization invalidates every outstanding attachment
+            // and every logical recovery requirement for those connections.
             6 => {
                 registry.remove_all_for_execution(execution);
                 for state in &mut clients {
+                    recovery_pending.remove(&state.token);
                     state.attachment = None;
                     if state.state == ConnectionState::Attached {
                         state.state = ConnectionState::Ready;
+                    }
+                }
+            }
+            // Generation-gap recovery uses the same production scheduling seam
+            // as explicit Resync. This operation represents the server-side
+            // NeedSnapshot decision already fuzzed for generation mismatch by
+            // display_state_machine; repeated gap signals must coalesce here.
+            7 => {
+                if client.state == ConnectionState::Attached && client.attachment.is_some() {
+                    if operation[2] & 1 == 0 {
+                        schedule_recovery_twice(
+                            &mut recovery_queue,
+                            &mut recovery_pending,
+                            client.token,
+                        );
+                    } else {
+                        // Model completion/materialization of the current
+                        // snapshot requirement. Runtime removes the set entry;
+                        // any queued stale token is intentionally tolerated.
+                        recovery_pending.remove(&client.token);
                     }
                 }
             }
@@ -156,15 +219,19 @@ fn fuzz_state_machine(data: &[u8]) {
         }
 
         // Authority invariants are queried from production state, not mirrored
-        // in the fuzz harness.
+        // in the fuzz harness. A logical recovery requirement can only remain
+        // for a currently attached connection.
         for state in &clients {
             if let Some(id) = state.attachment {
                 assert_eq!(
                     registry.execution_for_connection(state.token, id),
                     Ok(execution)
                 );
+            } else {
+                assert!(!recovery_pending.contains(&state.token));
             }
         }
+        assert!(recovery_pending.len() <= clients.len());
     }
 }
 

@@ -21,6 +21,7 @@ use crate::{
             ExecutionListEntry, Lifecycle as WireLifecycle, MessageType, Resize as WireResize,
             Role,
         },
+        recovery,
     },
 };
 
@@ -334,8 +335,11 @@ impl Runtime {
         let should_wake = if let Some(state) = self.local_ipc.as_mut() {
             if !state.connections.contains_key(&token) || !state.server.contains(token) {
                 false
-            } else if state.pending_resync_set.insert(token) {
-                state.pending_resync.push_back(token);
+            } else if recovery::schedule_snapshot_recovery(
+                &mut state.pending_resync,
+                &mut state.pending_resync_set,
+                token,
+            ) {
                 !state.server.has_snapshot_delivery(token)
             } else {
                 false

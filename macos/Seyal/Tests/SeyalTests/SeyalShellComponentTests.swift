@@ -54,6 +54,22 @@ final class SeyalShellComponentTests: XCTestCase {
     }
 
     @MainActor
+    func testPreviewWorkspaceInventoryMatchesFrozenWorkspaceModel() {
+        let state = SeyalShellPreviewState.makeDefault()
+
+        XCTAssertEqual(
+            state.snapshot.workspaces.map(\.name),
+            ["Seyal OSS", "Payments Platform", "Infra Operations", "Personal Lab"]
+        )
+        XCTAssertEqual(state.leftPanelMode, .workspaces)
+        XCTAssertEqual(state.snapshot.agents.map(\.name), ["Claude Code", "Codex", "OpenCode"])
+
+        state.setLeftPanelMode(.tabs)
+        XCTAssertEqual(state.leftPanelMode, .tabs)
+        XCTAssertEqual(state.snapshot.tabs.count, 4)
+    }
+
+    @MainActor
     func testPreviewTabSelectionChangesCanonicalUISelection() {
         let state = SeyalShellPreviewState.makeDefault()
 
@@ -79,12 +95,12 @@ final class SeyalShellComponentTests: XCTestCase {
     }
 
     @MainActor
-    func testPreviewSplitCreatesIndependentPaneDraftState() {
+    func testPreviewSplitAndCloseArePaneLocal() {
         let state = SeyalShellPreviewState.makeDefault()
         let firstPaneID = state.activeTab.focusedPaneID
         state.updateDraft("first draft", paneID: firstPaneID)
 
-        let secondPane = state.splitFocusedPane(axis: .right)
+        let secondPane = state.splitPane(id: firstPaneID, axis: .right)
         state.updateDraft("second draft", paneID: secondPane.id)
 
         XCTAssertEqual(state.activeTab.paneCount, 2)
@@ -92,6 +108,12 @@ final class SeyalShellComponentTests: XCTestCase {
         XCTAssertEqual(state.activeTab.panes[firstPaneID]?.draft, "first draft")
         XCTAssertEqual(state.activeTab.panes[secondPane.id]?.draft, "second draft")
         XCTAssertEqual(state.activeTab.focusedPaneID, secondPane.id)
+
+        state.closePane(id: secondPane.id)
+
+        XCTAssertEqual(state.activeTab.paneCount, 1)
+        XCTAssertEqual(state.activeTab.focusedPaneID, firstPaneID)
+        XCTAssertEqual(state.activeTab.panes[firstPaneID]?.draft, "first draft")
     }
 
     @MainActor
@@ -106,7 +128,7 @@ final class SeyalShellComponentTests: XCTestCase {
     }
 
     @MainActor
-    func testFrozenReferenceUsesDenseThreeColumnLayout() throws {
+    func testFrozenReferenceUsesDenseThreeColumnLayoutWithoutTrailingGap() throws {
         let shell = SeyalShellPreviewFactory.make(
             frame: NSRect(x: 0, y: 0, width: 1280, height: 800)
         )
@@ -129,6 +151,8 @@ final class SeyalShellComponentTests: XCTestCase {
             SeyalDesignTokens.Layout.inspectorWidth,
             accuracy: 1
         )
+        XCTAssertEqual(contract.inspector.maxX, shell.bounds.maxX, accuracy: 1)
+        XCTAssertEqual(contract.pane.maxX + 1, contract.inspector.minX, accuracy: 1)
         XCTAssertGreaterThan(contract.pane.width, 700)
         XCTAssertGreaterThan(contract.composer.width, 650)
         XCTAssertGreaterThanOrEqual(

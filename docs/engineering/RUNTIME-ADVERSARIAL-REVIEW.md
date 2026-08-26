@@ -115,3 +115,7 @@ Before marking the PR Ready again:
 6. only then restore final acceptance language in the PR/docs.
 
 Green CI is necessary, not sufficient: it proves the cases we represented.
+
+## 8. Exact-head evidence rule
+
+For a PR that changes any Runtime lifecycle/readiness behavior, final acceptance evidence must belong to the final PR head or GitHub's exact current-master merge result for that head. Evidence from an earlier code SHA may remain useful architecture/performance history, but it cannot substitute for validating the new lifecycle/resource-pressure code. Documentation-only commits after a validated code head may be reconciled explicitly; production-code commits require a fresh run.

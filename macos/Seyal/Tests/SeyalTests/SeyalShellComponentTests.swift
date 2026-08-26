@@ -56,6 +56,38 @@ final class SeyalShellComponentTests: XCTestCase {
     }
 
     @MainActor
+    func testShellPreviewRequiresDebugConfigurationAndExplicitOptIn() {
+        XCTAssertTrue(
+            AppDelegate.shouldUseShellPreview(
+                arguments: ["Seyal", "--ui-shell-preview"],
+                environment: [:],
+                buildConfiguration: "Debug"
+            )
+        )
+        XCTAssertTrue(
+            AppDelegate.shouldUseShellPreview(
+                arguments: ["Seyal"],
+                environment: ["SEYAL_UI_SHELL_PREVIEW": "1"],
+                buildConfiguration: "Debug"
+            )
+        )
+        XCTAssertFalse(
+            AppDelegate.shouldUseShellPreview(
+                arguments: ["Seyal", "--ui-shell-preview"],
+                environment: [:],
+                buildConfiguration: "Release"
+            )
+        )
+        XCTAssertFalse(
+            AppDelegate.shouldUseShellPreview(
+                arguments: ["Seyal"],
+                environment: [:],
+                buildConfiguration: "Debug"
+            )
+        )
+    }
+
+    @MainActor
     private func descendants<T: NSView>(of type: T.Type, in root: NSView) -> [T] {
         root.subviews.flatMap { child -> [T] in
             var matches = child is T ? [child as! T] : []

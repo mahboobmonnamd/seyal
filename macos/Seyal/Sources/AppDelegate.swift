@@ -41,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         if useShellPreview {
+            #if DEBUG
             // The frozen reference is a deliberate dark workspace independent of
             // the developer's current macOS appearance. Production theme selection
             // will replace this preview-only choice behind a real theme model.
@@ -49,6 +50,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.title = "Seyal — UI Shell Preview"
             window.contentView = SeyalShellPreviewFactory.make(frame: contentRect)
             window.minSize = NSSize(width: 1080, height: 680)
+            #else
+            // shouldUseShellPreview is false for non-Debug builds. Keep this branch
+            // self-contained so Release compilation never depends on preview types.
+            window.title = "Seyal"
+            window.contentView = MetalSurfaceView(frame: contentRect)
+            #endif
         } else {
             window.title = "Seyal"
             let surface = InteractiveMetalSurfaceView(frame: contentRect)

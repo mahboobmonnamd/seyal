@@ -66,8 +66,20 @@ enum SeyalDesignTokens {
     @MainActor
     static func configureRoundedPanel(
         _ view: NSView,
-        radius: CGFloat = Layout.paneCornerRadius,
-        background: NSColor = Palette.panelBackground
+        radius: CGFloat = Layout.paneCornerRadius
+    ) {
+        configureRoundedPanel(
+            view,
+            radius: radius,
+            background: Palette.panelBackground
+        )
+    }
+
+    @MainActor
+    static func configureRoundedPanel(
+        _ view: NSView,
+        radius: CGFloat,
+        background: NSColor
     ) {
         view.wantsLayer = true
         view.layer?.cornerRadius = radius

@@ -615,32 +615,32 @@ fn measure_streaming(
         }
         .encode(),
     );
-    // This deadline is a hang-detector safety timeout, not a performance
-    // assertion - actual latency/throughput are measured separately via the
-    // percentile samples below and are unaffected by this value. It must
-    // still be long enough that the *test workload's own* shell-script
-    // pacing (a fixed sleep between writes) can complete on the hardware
-    // running it, independent of how fast Runtime processes each write.
+    // These deadlines are hang-detector safety margins, not performance
+    // assertions. Latency/throughput are measured independently by the
+    // repeated source-to-client samples and result counters below.
     //
-    // Measured evidence (Issue #651 Workstream A): a real GitHub Actions
-    // macOS CI run (virtualized Apple M1) timed out at the prior 8s value
-    // having produced only 586161 of the required 901120 bytes (65%), an
-    // implied ~56ms per loop iteration against the script's nominal 10ms
-    // sleep - a 5.6x inflation. The same run's PTY reads averaged ~819
-    // bytes each, far below Runtime's 16KB read quantum, meaning Runtime
-    // was caught up and idle between writes rather than falling behind a
-    // backlog: the bottleneck is the child shell script's sleep precision
-    // under CI's virtualized/shared CPU scheduling, not Seyal's PTY/VT/
-    // damage/encode/UDS pipeline. A physical Apple Silicon run of the same
-    // workload completed in ~3.5s (~16ms/iteration). 20s gives >60% margin
-    // over the ~12.3s the CI-measured rate would need to finish all 220
-    // iterations, without masking an actual Runtime-side regression, which
-    // would show as large quantum-sized reads rather than small ones.
+    // Issue #651 evidence shows that sleep-paced shell workloads stretch
+    // substantially on GitHub's virtual Apple-Silicon runners even when
+    // Runtime is caught up. For sustained output, the old 8s detector fired
+    // after only 586161/901120 source bytes while PTY reads averaged ~819 B,
+    // far below Runtime's 16 KiB read quantum; the measured producer pacing
+    // implied ~12.3s to finish, so that workload keeps a 20s detector.
+    //
+    // The final merge-result CI found the same effect on the shorter paced
+    // workloads: TuiPartial and Tui completed in ~5.53s and ~5.55s, while
+    // Alternate reached 54500 bytes in 6.00s with 604 PTY reads (~90 B/read),
+    // nearly the expected ~55.6 KiB source volume. That is producer pacing,
+    // not a Runtime backlog. Give sleep-paced token/TUI workloads a 12s
+    // detector while preserving their workload, measurement boundaries and
+    // percentile calculations unchanged.
     let deadline = Instant::now()
-        + if workload == Workload::Sustained {
-            Duration::from_secs(20)
-        } else {
-            Duration::from_secs(6)
+        + match workload {
+            Workload::Sustained => Duration::from_secs(20),
+            Workload::Token | Workload::TuiPartial | Workload::Tui | Workload::Alternate => {
+                Duration::from_secs(12)
+            }
+            Workload::Command | Workload::Burst => Duration::from_secs(6),
+            Workload::Interactive => unreachable!("interactive uses measure_interactive"),
         };
     let mut runtime_poll_us = 0u128;
     let mut client_apply_us = 0u128;

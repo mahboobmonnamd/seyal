@@ -15,7 +15,8 @@ final class SeyalShellComponentTests: XCTestCase {
             state: BlockPresentationState.completed,
             elapsed: "12 ms",
             timestamp: "09:00",
-            isSelected: true
+            isSelected: true,
+            actions: ["Copy", "Rerun", "Pin", "Expand"]
         )
         let block = BlockView(presentation: presentation, bodyView: body)
 
@@ -26,7 +27,7 @@ final class SeyalShellComponentTests: XCTestCase {
     @MainActor
     func testComposerModesRespectPaneOwnershipRules() {
         let available = PaneComposerShellView(mode: .available, draft: "git status")
-        let busy = PaneComposerShellView(mode: .busy(process: "vim"), draft: "")
+        let busy = PaneComposerShellView(mode: .busy(process: "vite"), draft: "")
         let tui = PaneComposerShellView(mode: .hiddenForTUI, draft: "")
 
         XCTAssertFalse(available.isHidden)
@@ -46,6 +47,50 @@ final class SeyalShellComponentTests: XCTestCase {
         let verticalOwners = descendants(of: NSScrollView.self, in: shell)
             .filter(\.hasVerticalScroller)
         XCTAssertEqual(verticalOwners.count, 1)
+    }
+
+    @MainActor
+    func testFrozenReferenceUsesDenseThreeColumnLayout() throws {
+        let shell = SeyalShellPreviewFactory.make(
+            frame: NSRect(x: 0, y: 0, width: 1280, height: 800)
+        )
+        shell.layoutSubtreeIfNeeded()
+        let contract = try XCTUnwrap(shell.debugLayoutContract())
+
+        XCTAssertEqual(contract.topChrome.width, 1280, accuracy: 1)
+        XCTAssertEqual(
+            contract.topChrome.height,
+            SeyalDesignTokens.Layout.topChromeHeight,
+            accuracy: 1
+        )
+        XCTAssertEqual(
+            contract.leftContext.width,
+            SeyalDesignTokens.Layout.leftContextWidth,
+            accuracy: 1
+        )
+        XCTAssertEqual(
+            contract.inspector.width,
+            SeyalDesignTokens.Layout.inspectorWidth,
+            accuracy: 1
+        )
+        XCTAssertGreaterThan(contract.pane.width, 700)
+        XCTAssertGreaterThan(contract.composer.width, 650)
+        XCTAssertGreaterThanOrEqual(
+            contract.composer.height,
+            SeyalDesignTokens.Layout.composerMinHeight - 1
+        )
+    }
+
+    @MainActor
+    func testFrozenReferencePaletteIsDarkAndNotSystemAdaptive() {
+        let background = SeyalDesignTokens.Palette.windowBackground.usingColorSpace(.deviceRGB)
+        let components = background?.cgColor.components ?? []
+        XCTAssertGreaterThanOrEqual(components.count, 3)
+        if components.count >= 3 {
+            XCTAssertLessThan(components[0], 0.12)
+            XCTAssertLessThan(components[1], 0.12)
+            XCTAssertLessThan(components[2], 0.12)
+        }
     }
 
     @MainActor

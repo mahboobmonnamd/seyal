@@ -24,6 +24,7 @@ xcodebuild \
   -resultBundlePath "$RESULT_BUNDLE" \
   CODE_SIGNING_ALLOWED=NO \
   CODE_SIGNING_REQUIRED=NO \
+  SWIFT_ACTIVE_COMPILATION_CONDITIONS='DEBUG $(inherited)' \
   test
 
 echo "[seyal macOS UI test] XCTest component + XCUIAutomation E2E passed."

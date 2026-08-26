@@ -34,9 +34,8 @@ final class SeyalShellComponentTests: XCTestCase {
         XCTAssertFalse(available.isHidden)
         XCTAssertFalse(busy.isHidden)
         XCTAssertTrue(tui.isHidden)
-        XCTAssertFalse(descendants(of: NSScrollView.self, in: available).isEmpty)
-            ? XCTFail("Composer must not add a scroll owner")
-            : ()
+        XCTAssertTrue(descendants(of: NSScrollView.self, in: available).isEmpty)
+        XCTAssertTrue(descendants(of: NSScrollView.self, in: busy).isEmpty)
     }
 
     @MainActor

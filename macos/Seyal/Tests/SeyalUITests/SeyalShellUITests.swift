@@ -22,18 +22,23 @@ final class SeyalShellUITests: XCTestCase {
         XCTAssertGreaterThan(window.frame.width, 1200)
         XCTAssertGreaterThan(window.frame.height, 760)
 
+        XCTAssertTrue(app.segmentedControls["left-mode"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.staticTexts["WORKSPACES"].waitForExistence(timeout: 2))
-        XCTAssertTrue(app.staticTexts["AGENTS"].waitForExistence(timeout: 2))
-        XCTAssertTrue(app.staticTexts["TABS"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.staticTexts["AGENTS · SEYAL OSS"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["workspace.workspace-seyal"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["workspace.workspace-payments"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["workspace.workspace-infra"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["workspace.workspace-lab"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["agent.agent-claude"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["agent.agent-codex"].waitForExistence(timeout: 2))
+
         XCTAssertTrue(app.buttons["tab.tab-terminal"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.buttons["tab.tab-agent"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.buttons["tab.tab-logs"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.buttons["new-tab"].waitForExistence(timeout: 2))
-        XCTAssertTrue(app.buttons["split-right"].waitForExistence(timeout: 2))
-        XCTAssertTrue(app.buttons["split-down"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["pane.split.pane-1"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.staticTexts["Inspector"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.staticTexts["No TerminalExecution attached"].waitForExistence(timeout: 2))
-        XCTAssertTrue(app.staticTexts["No agent sessions"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.textViews["composer.pane-1"].waitForExistence(timeout: 2))
 
         XCTAssertFalse(app.staticTexts["git status"].exists)
@@ -45,6 +50,25 @@ final class SeyalShellUITests: XCTestCase {
         attachment.name = "M001 Core Terminal interactive preview"
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    func testWorkspaceTabsSwitcherUsesCompactFrozenLeftPanelModel() {
+        let mode = app.segmentedControls["left-mode"]
+        XCTAssertTrue(mode.waitForExistence(timeout: 5))
+
+        let tabsSegment = mode.buttons["Tabs"]
+        XCTAssertTrue(tabsSegment.exists)
+        tabsSegment.click()
+
+        XCTAssertTrue(app.staticTexts["TABS"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["left-tab.tab-terminal"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["left-tab.tab-agent"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["left-new-tab"].waitForExistence(timeout: 2))
+        XCTAssertFalse(app.staticTexts["AGENTS · SEYAL OSS"].exists)
+
+        mode.buttons["Workspaces"].click()
+        XCTAssertTrue(app.staticTexts["WORKSPACES"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.staticTexts["AGENTS · SEYAL OSS"].waitForExistence(timeout: 2))
     }
 
     func testTopTabActuallySwitchesActiveTabAndInspector() {
@@ -66,41 +90,52 @@ final class SeyalShellUITests: XCTestCase {
         newTab.click()
 
         XCTAssertTrue(app.buttons["tab.tab-new-5"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.staticTexts["TABS"].waitForExistence(timeout: 2))
         let inspectorTab = app.staticTexts["inspector.tab-name"]
         XCTAssertTrue(inspectorTab.waitForExistence(timeout: 2))
         XCTAssertEqual(inspectorTab.label, "Terminal 5")
     }
 
-    func testSplitRightCreatesSecondPaneAndUpdatesInspector() {
-        let split = app.buttons["split-right"]
-        XCTAssertTrue(split.waitForExistence(timeout: 5))
+    func testPaneLocalSplitMenuCreatesPaneAndCloseRemovesIt() {
+        let paneSplit = app.buttons["pane.split.pane-1"]
+        XCTAssertTrue(paneSplit.waitForExistence(timeout: 5))
 
-        split.click()
+        paneSplit.click()
+        let splitRight = app.menuItems["Split Right"]
+        XCTAssertTrue(splitRight.waitForExistence(timeout: 2))
+        splitRight.click()
 
         XCTAssertTrue(app.buttons["pane.focus.pane-1"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.buttons["pane.focus.pane-new-2"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["pane.split.pane-new-2"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["pane.close.pane-new-2"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.textViews["composer.pane-1"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.textViews["composer.pane-new-2"].waitForExistence(timeout: 2))
 
         let panes = app.staticTexts["inspector.tab-panes"]
-        let layout = app.staticTexts["inspector.tab-layout"]
         XCTAssertTrue(panes.waitForExistence(timeout: 2))
-        XCTAssertTrue(layout.waitForExistence(timeout: 2))
         XCTAssertEqual(panes.label, "2")
-        XCTAssertEqual(layout.label, "Split right")
+
+        app.buttons["pane.close.pane-new-2"].click()
+
+        XCTAssertFalse(app.buttons["pane.focus.pane-new-2"].waitForExistence(timeout: 1))
+        XCTAssertTrue(app.buttons["pane.focus.pane-1"].waitForExistence(timeout: 2))
+        XCTAssertFalse(app.buttons["pane.close.pane-1"].exists)
     }
 
-    func testWorkspaceSelectionChangesWorkspaceScopedTabs() {
-        let lab = app.buttons["workspace.workspace-lab"]
-        XCTAssertTrue(lab.waitForExistence(timeout: 5))
+    func testWorkspaceSelectionChangesWorkspaceScopedTabsAndAgents() {
+        let payments = app.buttons["workspace.workspace-payments"]
+        XCTAssertTrue(payments.waitForExistence(timeout: 5))
 
-        lab.click()
+        payments.click()
 
-        XCTAssertTrue(app.buttons["tab.tab-lab-terminal"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["tab.tab-payments-api"].waitForExistence(timeout: 2))
         XCTAssertFalse(app.buttons["tab.tab-agent"].exists)
+        XCTAssertTrue(app.staticTexts["AGENTS · PAYMENTS PLATFORM"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["agent.agent-payments"].waitForExistence(timeout: 2))
         let workspace = app.staticTexts["inspector.workspace-name"]
         XCTAssertTrue(workspace.waitForExistence(timeout: 2))
-        XCTAssertEqual(workspace.label, "Personal Lab")
+        XCTAssertEqual(workspace.label, "Payments Platform")
     }
 
     func testAttentionItemNavigatesInsteadOfBeingDecorative() {

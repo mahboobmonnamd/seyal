@@ -1,6 +1,6 @@
 # SPEC-004 — M001 local attachment and display-state transport
 
-- **Status:** Accepted for M001 Pass 5 implementation; performance sign-off open — the decisive production-path benchmark completes the full required matrix without error on physical Apple Silicon, but repeated measurement on that same uncontrolled hardware showed 30-50x run-to-run latency variance and one reproduced timeout under host contention (see ADR-001 "Measured evidence"). No latency/throughput number from this session is trustworthy without an isolated benchmark session, and Issue #651's remaining acceptance items (controlled hardware confirmation, final independent review) are still open. Do not treat this line as sign-off.
+- **Status:** Accepted for M001 Pass 5. Candidate-D production performance validation passed on controlled physical Apple Silicon at benchmark commit `c8c121380002c86a4e42b6737238289db10965af`; Issue #651 remains the closure authority for the complete Pass 5.1 acceptance set.
 - **Date:** 2026-08-24
 - **Amended:** 2026-08-25, 2026-08-26
 - **Issue:** #105 (implementation), #651 (Pass 5.1 final acceptance)
@@ -109,7 +109,9 @@ All integers are unsigned little-endian. Opaque IDs are 16 raw bytes. Every fram
 | 16 | 4 | payload_len | `<= 262144` |
 | 20 | 4 | reserved | zero |
 
-The complete header is validated before payload allocation. Receive buffering is bounded and reusable. Client→Runtime frames carry no `SCM_RIGHTS`; unexpected, extra, truncated or malformed ancillary descriptors are protocol-fatal and every recovered descriptor is closed.
+The complete header is validated before payload allocation. Receive buffering is bounded and reusable. Client→Runtime frames carry no `SCM_RIGHTS`; unexpected, extra or malformed ancillary descriptors are protocol-fatal and every descriptor visible to userspace is closed deterministically.
+
+On Darwin, production receive-side ancillary storage is sized to the process descriptor-table capacity rather than to the former small fixed scratch buffer. This prevents the known SCM_RIGHTS truncation hazard for every descriptor set the process can legally receive. Production must not deliberately shrink this buffer merely to manufacture `MSG_CTRUNC`; the parser still treats a reported `MSG_CTRUNC` or oversized/malformed ancillary header as fatal, clamps parsing to owned storage and closes every visible descriptor.
 
 ## 8. Message types
 
@@ -316,6 +318,7 @@ Pass 5 is not complete until all of the following agree with this specification:
 - slow-client queue supersession and generation-gap recovery tests;
 - resize/alternate-screen/final-PTY-byte ordering tests;
 - same-UID, symlink/path, malformed ancillary-data and descriptor-leak tests;
+- Darwin ancillary security evidence comprising both: a production-path wide-SCM_RIGHTS regression that exceeds the former fixed scratch capacity and proves fatal rejection/authority release/FD-baseline recovery without kernel truncation, and a bounded parser regression that explicitly exercises `MSG_CTRUNC`/oversized ancillary metadata and closes every descriptor visible to userspace;
 - real fuzz campaigns for binary framing/display decode and reconnect/resync state transitions, in addition to retained deterministic seeds;
 - production-equivalent benchmarks using real process → PTY → Seyal VT → canonical state/damage → Candidate-D encode → UDS → client cache.
 
@@ -325,6 +328,8 @@ Record p50/p95/p99 output-to-client-state latency, throughput, CPU, RSS, allocat
 
 ## 17. Acceptance gate
 
-Candidate D is the accepted architecture. Pass 5 may leave draft only when production code no longer uses per-attachment shared-memory text/grid projections, SPEC/ADR/code/tests agree, all required validation is green, production-equivalent Candidate-D evidence meets Seyal latency/resource goals, and independent architecture/security/performance review has no unresolved blocking finding.
+Candidate D is the accepted architecture. The controlled physical-M5-Pro benchmark at commit `c8c121380002c86a4e42b6737238289db10965af` satisfies the M001 Pass 5.1 performance architecture gate; the 50/100 execution population cases remain truthfully classified `PLATFORM_LIMITED` on that host rather than silently reduced.
+
+Pass 5 may leave draft only when production code no longer uses per-attachment shared-memory text/grid projections, SPEC/ADR/code/tests agree, all required validation is green, production-equivalent Candidate-D evidence meets Seyal latency/resource goals, and independent architecture/security/performance review has no unresolved blocking finding.
 
 Comparator/reference shared-projection code may remain only if isolated from production and clearly labelled non-production evidence. It must not be reachable as a hidden text-grid fallback.

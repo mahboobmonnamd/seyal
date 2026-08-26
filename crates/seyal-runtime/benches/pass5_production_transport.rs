@@ -245,7 +245,7 @@ fn worker() {
     let create_us = create_start.elapsed().as_micros();
     let Some(&execution_id) = ids.first() else {
         println!(
-            "pass5_production_result workload={} population_requested={} population_created=0 fanout_requested={} geometry={}x{} classification=PLATFORM_LIMITED platform_error={:?}",
+            "pass5_production_result workload={} population_requested={} population_created=0 population_attached=0 population_hidden=0 fanout_requested={} geometry={}x{} classification=PLATFORM_LIMITED platform_error={:?}",
             workload.name(),
             requested_population,
             requested_fanout,
@@ -277,6 +277,19 @@ fn worker() {
     for client in &mut clients {
         client.reset_measurement_counters();
     }
+
+    // Only `execution_id` (ids[0]) ever receives an attachment in this
+    // benchmark; population beyond that exists purely to measure Runtime
+    // capacity, matching Workstream D's required attached-vs-hidden split.
+    let population_attached = ids
+        .iter()
+        .filter(|&&id| {
+            runtime
+                .lookup(id)
+                .is_some_and(|summary| summary.attachment_count > 0)
+        })
+        .count();
+    let population_hidden = ids.len() - population_attached;
 
     // Preallocate benchmark bookkeeping before the measured allocation region.
     let mut latency_samples = Vec::with_capacity(32_768);
@@ -400,10 +413,12 @@ fn worker() {
     };
 
     println!(
-        "pass5_production_result workload={} population_requested={} population_created={} fanout_requested={} fanout_attached={} geometry={}x{} classification={} latency_boundary={} latency_sample_count={} latency_p50_us={} latency_p95_us={} latency_p99_us={} create_us={} attach_setup_us={} runtime_poll_phase_us={} client_decode_apply_phase_us={} elapsed_us={} source_pty_bytes={} source_pty_bytes_per_sec={} pty_read_calls={} source_timestamp_samples={} display_model_bytes={} display_model_bytes_per_sec={} snapshot_encodes={} delta_encodes={} aggregate_uds_bytes={} aggregate_uds_bytes_per_sec={} per_viewer_uds_bytes_per_sec={} client_read_syscalls={} server_send_syscalls={} server_sendmsg_syscalls={} runtime_recvmsg_syscalls={} display_batches_received={} snapshots_received={} deltas_received={} process_allocations={} process_reallocations={} process_bytes_allocated={} reconnect_full_snapshot_us={} rss_baseline_kib={} rss_populated_kib={} rss_final_kib={} incremental_rss_kib={} cpu_percent_sample={} threads_baseline={} threads_populated={} threads_final={} fd_baseline={} fd_populated={} fd_final={} teardown_us={} shutdown_ok={} aggregate_pending_input_final={} semantic_generation={} latest_damage_generation={} platform_error={:?}",
+        "pass5_production_result workload={} population_requested={} population_created={} population_attached={} population_hidden={} fanout_requested={} fanout_attached={} geometry={}x{} classification={} latency_boundary={} latency_sample_count={} latency_p50_us={} latency_p95_us={} latency_p99_us={} create_us={} attach_setup_us={} runtime_poll_phase_us={} client_decode_apply_phase_us={} elapsed_us={} source_pty_bytes={} source_pty_bytes_per_sec={} pty_read_calls={} source_timestamp_samples={} display_model_bytes={} display_model_bytes_per_sec={} snapshot_encodes={} delta_encodes={} aggregate_uds_bytes={} aggregate_uds_bytes_per_sec={} per_viewer_uds_bytes_per_sec={} client_read_syscalls={} server_send_syscalls={} server_sendmsg_syscalls={} runtime_recvmsg_syscalls={} display_batches_received={} snapshots_received={} deltas_received={} process_allocations={} process_reallocations={} process_bytes_allocated={} reconnect_full_snapshot_us={} rss_baseline_kib={} rss_populated_kib={} rss_final_kib={} incremental_rss_kib={} cpu_percent_sample={} threads_baseline={} threads_populated={} threads_final={} fd_baseline={} fd_populated={} fd_final={} teardown_us={} shutdown_ok={} aggregate_pending_input_final={} semantic_generation={} latest_damage_generation={} platform_error={:?}",
         workload.name(),
         requested_population,
         ids.len(),
+        population_attached,
+        population_hidden,
         requested_fanout,
         fanout,
         columns,

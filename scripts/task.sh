@@ -13,7 +13,9 @@ cargo_pinned() {
 }
 
 pass5_failure_matrix() {
-  cargo_pinned test -p seyal-runtime --locked --features test-fault-injection --test local_ipc_failure_injection
+  cargo_pinned test -p seyal-runtime --locked --features test-fault-injection \
+    --test local_ipc_failure_injection \
+    --test runtime_adversarial
 }
 
 case "$cmd" in

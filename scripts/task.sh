@@ -18,6 +18,14 @@ pass5_failure_matrix() {
     --test runtime_adversarial
 }
 
+native_ui_tests_if_available() {
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    bash scripts/test-macos-ui.sh
+  else
+    echo "[seyal test] native XCTest/XCUIAutomation skipped on non-macOS host."
+  fi
+}
+
 case "$cmd" in
   bootstrap)
     bash scripts/bootstrap-toolchain.sh
@@ -39,6 +47,10 @@ case "$cmd" in
     cargo_pinned test --workspace --locked
     pass5_failure_matrix
     bash scripts/test-macos-skeleton.sh
+    native_ui_tests_if_available
+    ;;
+  ui-test)
+    bash scripts/test-macos-ui.sh
     ;;
   check)
     bash scripts/check-toolchain.sh
@@ -51,6 +63,7 @@ case "$cmd" in
     python3 scripts/check-pass5-benchmark-coverage.py --self-test
     python3 scripts/check-pass7-benchmark-coverage.py --self-test
     python3 scripts/check-pass7-validation-matrix.py --self-test
+    python3 scripts/check-ui-test-policy.py
     bash scripts/test-tooling.sh
     python3 scripts/test-workspace.py
     python3 scripts/test-harnesses.py
@@ -122,7 +135,7 @@ case "$cmd" in
     fi
     ;;
   *)
-    echo "usage: $0 {bootstrap|bootstrap-agents|build|test|check|bench}" >&2
+    echo "usage: $0 {bootstrap|bootstrap-agents|build|test|ui-test|check|bench}" >&2
     exit 64
     ;;
 esac

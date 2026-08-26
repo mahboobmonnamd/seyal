@@ -254,7 +254,7 @@ pub struct Runtime {
     aggregate_reserved: Arc<AtomicUsize>,
     config: RuntimeConfig,
     events: [ReactorEvent; EVENT_CAPACITY],
-    read_buffer: [0; READ_BUFFER_SIZE],
+    read_buffer: [u8; READ_BUFFER_SIZE],
     shutting_down: bool,
     rollback_reap: Vec<TerminalExecution>,
     #[cfg(target_os = "macos")]

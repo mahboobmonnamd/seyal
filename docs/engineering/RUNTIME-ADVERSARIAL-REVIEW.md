@@ -42,6 +42,8 @@ Only kernel-confirmed process-exit observation may enter a state whose semantic 
 
 A bounded fallback reap probe may exist solely to cover a proven missed-notification race. It must have an explicit attempt/time bound and must stop; a live process may never cause a fixed-frequency reap loop forever.
 
+On Darwin, do not use `close(0); close(1); close(2)` by itself as a fixture for PTY EOF while the primary process remains alive. The session leader's controlling-terminal relationship is state distinct from those file descriptors and can keep the slave side alive. A platform regression must explicitly establish the intended kernel state (for example, relinquish the controlling terminal with `TIOCNOTTY`, then close the slave descriptors) rather than extending a timeout until an invalid fixture happens to pass. Where a production decision depends on a lower-level readiness property, pair the end-to-end fixture with a focused reactor/kernel regression for that property.
+
 ## 2. Termination invariant
 
 While Seyal still owns a live primary child/process group, there must always be a valid path for:

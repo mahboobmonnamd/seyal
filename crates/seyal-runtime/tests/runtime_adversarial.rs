@@ -3,6 +3,7 @@
 
 use std::{
     sync::{Mutex, MutexGuard},
+    thread,
     time::{Duration, Instant},
 };
 
@@ -20,6 +21,9 @@ use seyal_runtime::{
     local_ipc::framing::{ClientHello, FrameHeader, HEADER_LEN, MessageType, encode_frame},
     test_fault::{self, FaultPoint},
 };
+
+const PTY_EOF_HELPER_ENV: &str = "SEYAL_PTY_EOF_HELPER_MS";
+const PTY_EOF_HELPER_TEST: &str = "pty_eof_live_child_helper";
 
 // All tests in this integration-test binary share one process. FD-baseline
 // assertions are meaningful only when sibling tests cannot open/close
@@ -85,6 +89,51 @@ fn shutdown(runtime: &mut Runtime) {
     assert_eq!(runtime.aggregate_accepted_but_unwritten_bytes(), 0);
 }
 
+fn pty_eof_helper_command(live_for: Duration) -> CommandSpec {
+    CommandSpec::new(std::env::current_exe().expect("current adversarial test executable"))
+        .args(["--exact", PTY_EOF_HELPER_TEST, "--nocapture"])
+        .env(PTY_EOF_HELPER_ENV, live_for.as_millis().to_string())
+}
+
+// This test is also a subprocess fixture. Normal workspace execution returns
+// immediately; a parent adversarial test re-execs this test binary with the
+// environment variable set so the primary child can create a real Darwin
+// PTY-EOF/live-process state without relying on shell redirection semantics.
+#[test]
+fn pty_eof_live_child_helper() {
+    let Ok(raw_delay) = std::env::var(PTY_EOF_HELPER_ENV) else {
+        return;
+    };
+    let delay_ms = raw_delay
+        .parse::<u64>()
+        .expect("valid PTY EOF helper delay");
+
+    // A Seyal PTY child is a session leader with the slave as its controlling
+    // terminal. On Darwin, merely closing fd 0/1/2 does not reliably relinquish
+    // the controlling-terminal reference. TIOCNOTTY explicitly detaches it;
+    // after the slave descriptors are closed the master can report EOF while
+    // this same primary process intentionally remains alive.
+    //
+    // SAFETY: this code runs only in the dedicated subprocess fixture. stdin is
+    // the PTY slave established by TerminalExecution. Signal disposition and
+    // descriptor changes are confined to that subprocess, and _exit avoids the
+    // libtest harness trying to write results through the intentionally closed
+    // stdout/stderr descriptors.
+    unsafe {
+        libc::signal(libc::SIGHUP, libc::SIG_IGN);
+        if libc::ioctl(libc::STDIN_FILENO, libc::TIOCNOTTY as _, 0) < 0 {
+            libc::_exit(91);
+        }
+        libc::close(libc::STDIN_FILENO);
+        libc::close(libc::STDOUT_FILENO);
+        libc::close(libc::STDERR_FILENO);
+    }
+
+    thread::sleep(Duration::from_millis(delay_ms));
+    // SAFETY: this is the end of the dedicated fixture subprocess.
+    unsafe { libc::_exit(0) }
+}
+
 #[test]
 fn pty_eof_from_live_children_stays_running_without_a_reap_poll_loop_and_remains_terminable() {
     let _guard = serialized();
@@ -95,16 +144,12 @@ fn pty_eof_from_live_children_stays_running_without_a_reap_poll_loop_and_remains
         for _ in 0..8 {
             ids.push(
                 runtime
-                    .create_execution(
-                        CommandSpec::new("/bin/sh")
-                            .args(["-c", "exec 0<&-; exec 1>&-; exec 2>&-; sleep 30"]),
-                        size(),
-                    )
+                    .create_execution(pty_eof_helper_command(Duration::from_secs(30)), size())
                     .expect("live execution"),
             );
         }
 
-        let close_deadline = Instant::now() + Duration::from_secs(2);
+        let close_deadline = Instant::now() + Duration::from_secs(3);
         loop {
             let all_closed = ids.iter().all(|id| runtime.input_ingress(*id).is_err());
             if all_closed {
@@ -169,14 +214,10 @@ fn pty_eof_live_child_is_finalized_when_the_primary_later_exits_naturally() {
     {
         let mut runtime = Runtime::new(config("pty-eof-natural-exit", false)).expect("Runtime");
         let id = runtime
-            .create_execution(
-                CommandSpec::new("/bin/sh")
-                    .args(["-c", "exec 0<&-; exec 1>&-; exec 2>&-; sleep 1"]),
-                size(),
-            )
+            .create_execution(pty_eof_helper_command(Duration::from_secs(5)), size())
             .expect("execution");
 
-        let close_deadline = Instant::now() + Duration::from_secs(2);
+        let close_deadline = Instant::now() + Duration::from_secs(3);
         while runtime.input_ingress(id).is_ok() {
             assert!(Instant::now() < close_deadline, "PTY EOF was not observed");
             runtime
@@ -184,11 +225,14 @@ fn pty_eof_live_child_is_finalized_when_the_primary_later_exits_naturally() {
                 .expect("Runtime poll");
         }
         assert_eq!(
-            runtime.lookup(id).unwrap().lifecycle,
+            runtime
+                .lookup(id)
+                .expect("live child remains tracked after PTY EOF")
+                .lifecycle,
             ExecutionLifecycle::Running
         );
 
-        let exit_deadline = Instant::now() + Duration::from_secs(3);
+        let exit_deadline = Instant::now() + Duration::from_secs(7);
         while runtime.lookup(id).is_some() {
             assert!(
                 Instant::now() < exit_deadline,

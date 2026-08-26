@@ -448,7 +448,11 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     mod macos {
-        use std::{os::fd::AsRawFd, os::unix::net::UnixStream, time::Duration};
+        use std::{
+            os::fd::AsRawFd,
+            os::unix::net::UnixStream,
+            time::{Duration, Instant},
+        };
 
         use crate::{
             CommandSpec, ExecError, ExecutionReactor, ReactorEvent, ReactorEventKind,
@@ -528,6 +532,42 @@ mod tests {
                 event.token == Some(token) && event.kind == ReactorEventKind::AuxiliaryReadable
             }));
             reactor.deregister(token).unwrap();
+        }
+
+        #[test]
+        fn execution_read_interest_can_be_disarmed_without_losing_primary_exit_watch() {
+            let mut reactor = ExecutionReactor::new().unwrap();
+            let mut execution = TerminalExecution::spawn(
+                &CommandSpec::new("/bin/sleep").arg("1"),
+                WindowSize::new(80, 24, 0, 0).unwrap(),
+            )
+            .unwrap();
+            let token = reactor.register(&execution).unwrap();
+            reactor.set_readable(token, false).unwrap();
+
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let mut events = [ReactorEvent::EMPTY; 8];
+            let mut saw_exit = false;
+            while Instant::now() < deadline {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                let count = reactor
+                    .wait(&mut events, Some(remaining.min(Duration::from_millis(100))))
+                    .unwrap();
+                if events[..count].iter().any(|event| {
+                    event.token == Some(token) && event.kind == ReactorEventKind::PrimaryExited
+                }) {
+                    saw_exit = true;
+                    break;
+                }
+            }
+
+            assert!(
+                saw_exit,
+                "disarming PTY read interest must preserve the independent NOTE_EXIT watch"
+            );
+            assert!(reactor.is_current(token));
+            reactor.deregister(token).unwrap();
+            cleanup(&mut execution);
         }
 
         #[test]

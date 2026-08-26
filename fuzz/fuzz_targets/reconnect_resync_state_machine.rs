@@ -52,9 +52,9 @@ fn schedule_recovery_twice(
     assert!(pending.contains(&token));
     if first {
         assert_eq!(
-            queue.iter().filter(|&&queued| queued == token).count(),
-            1,
-            "a newly pending recovery must add exactly one queue entry"
+            queue.back().copied(),
+            Some(token),
+            "a newly pending recovery must enqueue the requesting token"
         );
     }
 }

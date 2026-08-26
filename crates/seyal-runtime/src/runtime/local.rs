@@ -5,6 +5,8 @@ use std::{
 
 use seyal_exec::{ExecutionReactor, ReactorEventKind, RegistrationToken, WindowSize};
 
+#[cfg(feature = "test-fault-injection")]
+use crate::test_fault::{self, FaultPoint};
 use crate::{
     AttachmentId, ExecutionId, RuntimeError,
     display::{self, EncodedDisplayBatch, MAX_DISPLAY_COLUMNS, MAX_DISPLAY_ROWS},
@@ -76,6 +78,14 @@ impl LocalIpcState {
         })?;
         let server =
             LocalIpcServer::bind(&socket_path, crate::local_ipc::connection::MAX_CONNECTIONS)?;
+        #[cfg(feature = "test-fault-injection")]
+        if test_fault::take(FaultPoint::ListenerReactorRegistration) {
+            drop(server);
+            let _ = std::fs::remove_file(&socket_path);
+            return Err(RuntimeError::Io(std::io::Error::other(
+                "injected listener reactor registration failure",
+            )));
+        }
         let listener_reactor_token = match reactor.register_auxiliary(server.listener_fd()) {
             Ok(token) => token,
             Err(error) => {
@@ -162,6 +172,13 @@ impl Runtime {
                     let Some(fd) = fd else {
                         continue;
                     };
+                    #[cfg(feature = "test-fault-injection")]
+                    if test_fault::take(FaultPoint::ConnectionReactorRegistration) {
+                        if let Some(state) = self.local_ipc.as_mut() {
+                            state.server.close(token);
+                        }
+                        continue;
+                    }
                     match self.reactor.register_auxiliary(fd) {
                         Ok(reactor_token) => {
                             if let Some(state) = self.local_ipc.as_mut() {

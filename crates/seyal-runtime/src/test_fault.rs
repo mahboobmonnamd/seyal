@@ -11,6 +11,10 @@ pub enum FaultPoint {
     // Candidate-D production attachment transaction.
     AttachAdmission,
     AttachFlush,
+    // Candidate-D production listener/connection setup (Pass 5.1 Workstream G).
+    AcceptReady,
+    ListenerReactorRegistration,
+    ConnectionReactorRegistration,
     // Legacy Candidate-B comparator/reference resource lifecycle.
     ShmOpenWriter,
     Truncate,

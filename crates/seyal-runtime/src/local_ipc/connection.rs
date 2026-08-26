@@ -340,6 +340,10 @@ impl LocalIpcServer {
     }
 
     pub fn accept_ready(&mut self) -> io::Result<Vec<ServerEvent>> {
+        #[cfg(feature = "test-fault-injection")]
+        if test_fault::take(FaultPoint::AcceptReady) {
+            return Err(io::Error::other("injected accept readiness failure"));
+        }
         let mut events = Vec::new();
         loop {
             match self.listener.accept() {

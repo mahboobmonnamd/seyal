@@ -38,6 +38,26 @@ This scaffold must not implement or invent:
 
 The normal application path remains the existing minimal Metal surface until the M001 dependency frontier authorizes live UI integration.
 
+## Frozen visual contract
+
+The shell preview must follow the frozen Core Terminal visual direction together with the current functional specifications. The visual target is a dense, dark developer workspace designed for a 15-inch display, not a generic AppKit form using adaptive system colors.
+
+At the canonical `1280x800` preview size:
+
+- the workspace-scoped tab strip spans the full content width beneath native window chrome;
+- a compact left context panel occupies approximately 236 points and shows Workspaces, current-Workspace Agents, and Tabs;
+- the focused terminal Pane owns the dominant center width;
+- a contextual Inspector occupies approximately 292 points on the right;
+- the Pane contains a compact context header, intrinsically sized Blocks inside one Pane-owned transcript scroll surface, and its own minimal composer at the bottom;
+- completed Blocks visibly read as command-plus-output units and expose the accepted Block actions in the preview fixture;
+- the palette is low-contrast charcoal/navy with restrained purple focus and semantic green/orange/red status accents;
+- typography is dense and terminal output remains monospaced;
+- decorative navigation, metrics, split controls, or inspector modes from concept art are omitted until backed by accepted behavior/data.
+
+Where visual concept art conflicts with the current Block sizing, busy-composer, TUI takeover, ownership, or functional-only rules, the current specifications win.
+
+The XCTest layout contract and XCUIAutomation suite are part of this visual contract. XCUI launches the actual `Seyal.app` preview, asserts the visible hierarchy and left-center-right ordering, and records a rendered screenshot in the test result bundle for design review. A true pixel-golden comparison must not be claimed until the approved source reference image is deliberately added to the repository as a test asset.
+
 ## Preview-only path
 
 The UI shell may be launched explicitly for design/decomposition review using a debug-only preview path. Preview fixtures:
@@ -82,4 +102,7 @@ The scaffold is acceptable only if:
 - `BlockView` contains no nested output scroll view;
 - one Pane transcript scroll surface owns normal Block navigation;
 - deterministic shell construction participates in the native smoke test;
+- the canonical `1280x800` preview satisfies the frozen three-column layout contract;
+- XCUIAutomation launches the real preview and validates the visible Core Terminal hierarchy;
+- a rendered screenshot is attached to the XCUI result for design review;
 - all existing repository tests/checks remain green.

@@ -1,6 +1,5 @@
 import AppKit
 
-@MainActor
 enum SeyalDesignTokens {
     enum Layout {
         static let topChromeHeight: CGFloat = 44
@@ -17,6 +16,7 @@ enum SeyalDesignTokens {
         static let tabMaxWidth: CGFloat = 180
     }
 
+    @MainActor
     enum Typography {
         static let chrome = NSFont.systemFont(ofSize: 12, weight: .medium)
         static let section = NSFont.systemFont(ofSize: 11, weight: .semibold)
@@ -27,6 +27,7 @@ enum SeyalDesignTokens {
         static let terminal = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
     }
 
+    @MainActor
     enum Palette {
         static let windowBackground = NSColor.windowBackgroundColor
         static let chromeBackground = NSColor.controlBackgroundColor
@@ -43,6 +44,7 @@ enum SeyalDesignTokens {
         static let failure = NSColor.systemRed
     }
 
+    @MainActor
     static func configureRoundedPanel(_ view: NSView, radius: CGFloat = Layout.paneCornerRadius) {
         view.wantsLayer = true
         view.layer?.cornerRadius = radius

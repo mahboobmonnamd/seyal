@@ -184,10 +184,11 @@ fn fuzz_state_machine(data: &[u8]) {
                     }
                 }
             }
-            // Generation-gap recovery uses the same production scheduling seam
-            // as explicit Resync. This operation represents the server-side
-            // NeedSnapshot decision already fuzzed for generation mismatch by
-            // display_state_machine; repeated gap signals must coalesce here.
+            // A generation gap reaches the same production recovery scheduling
+            // seam as explicit Resync after Runtime decides NeedSnapshot.
+            // `display_state_machine` independently fuzzes client-side generation
+            // mismatch rejection/atomicity; this operation fuzzes the server's
+            // shared logical recovery requirement and repeated-gap coalescing.
             7 => {
                 if client.state == ConnectionState::Attached && client.attachment.is_some() {
                     if operation[2] & 1 == 0 {

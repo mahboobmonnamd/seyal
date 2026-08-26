@@ -50,15 +50,28 @@ grep -R -q 'nextDrawable' "$SOURCES" || fail "production renderer must acquire C
 grep -R -q 'commandBuffer.present' "$SOURCES" || fail "production renderer must present Metal drawables"
 grep -R -q 'DispatchSource.makeReadSource' "$SOURCES" || fail "Candidate-D client must be readiness-driven, not polled"
 
-if grep -R -E -q '(^|[^A-Za-z])(SwiftUI|NSTextView)([^A-Za-z]|$)' "$SOURCES"; then
-  fail "temporary SwiftUI/NSTextView terminal surfaces are forbidden"
+if grep -R -E -q '(^|[^A-Za-z])SwiftUI([^A-Za-z]|$)' "$SOURCES"; then
+  fail "temporary SwiftUI terminal surfaces are forbidden"
 fi
+
+# NSTextView is correct for the Pane-local multiline composer editor. It must
+# never become a terminal/Block rendering surface.
+for forbidden_text_surface in \
+  "$SOURCES/MetalSurfaceView.swift" \
+  "$SOURCES/TerminalSurfaceHostView.swift" \
+  "$SOURCES/BlockView.swift"; do
+  if grep -E -q '(^|[^A-Za-z])NSTextView([^A-Za-z]|$)' "$forbidden_text_surface"; then
+    fail "NSTextView is forbidden in terminal/Block rendering surfaces: $forbidden_text_surface"
+  fi
+done
+grep -q 'NSTextView' "$SOURCES/PaneComposerShellView.swift" \
+  || fail "Pane composer preview must exercise a real multiline native editor"
 
 if grep -q 'NSScrollView' "$SOURCES/BlockView.swift"; then
   fail "BlockView must not own nested output scrolling; the Pane transcript is the single normal-scroll owner"
 fi
 
-grep -q 'private func makeTranscript() -> NSScrollView' "$SOURCES/SeyalShellView.swift" \
+grep -q 'private func makeTranscript(paneID: String) -> NSScrollView' "$SOURCES/SeyalShellView.swift" \
   || fail "UI shell must keep Pane-owned transcript scrolling explicit"
 grep -q 'TerminalSurfaceHostView' "$PROJECT/project.pbxproj" \
   || fail "permanent Metal terminal-surface host is missing from the native target"

@@ -39,7 +39,8 @@ final class PaneComposerShellView: NSView {
     private func buildAvailableComposer() {
         SeyalDesignTokens.configureRoundedPanel(self, radius: 9)
 
-        let draftField = NSTextField(wrappingLabelWithString: draft)
+        let previewDraft = draft.replacingOccurrences(of: "\\n", with: "\n")
+        let draftField = NSTextField(wrappingLabelWithString: previewDraft)
         draftField.font = SeyalDesignTokens.Typography.command
         draftField.textColor = SeyalDesignTokens.Palette.textPrimary
         draftField.maximumNumberOfLines = 4

@@ -1,5 +1,10 @@
 [workspace]
-members = ["crates/seyal-terminal", "crates/seyal-exec", "crates/seyal-runtime"]
+members = [
+    "crates/seyal-terminal",
+    "crates/seyal-exec",
+    "crates/seyal-runtime",
+    "crates/seyal-render",
+]
 resolver = "3"
 
 [workspace.package]

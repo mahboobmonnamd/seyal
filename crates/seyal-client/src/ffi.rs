@@ -1,8 +1,12 @@
-use std::{cell::RefCell, ptr};
+use std::{cell::RefCell, ptr, slice, str};
 
 use seyal_render::PreparedCell;
+use seyal_runtime::local_ipc::framing::TerminalKeyKind;
 
-use crate::{ClientError, LocalDisplayClient};
+use crate::{
+    ClientError, LocalDisplayClient,
+    local::{InputAdmissionFailure, ResizeFailure, derive_grid_geometry},
+};
 
 thread_local! {
     static CLIENT: RefCell<Option<LocalDisplayClient>> = const { RefCell::new(None) };
@@ -104,7 +108,7 @@ pub extern "C" fn seyal_bridge_poll() -> i32 {
     })
 }
 
-/// Returns 1 only while a bounded nonblocking control write is pending.
+/// Returns 1 only while bounded nonblocking client→Runtime bytes remain.
 #[unsafe(no_mangle)]
 pub extern "C" fn seyal_bridge_wants_write() -> i32 {
     CLIENT.with(|slot| {
@@ -116,8 +120,8 @@ pub extern "C" fn seyal_bridge_wants_write() -> i32 {
     })
 }
 
-/// Advance one pending control write after writable readiness. A partial write
-/// or `WouldBlock` remains queued and is not treated as a disconnect.
+/// Advance one pending write after writable readiness. A partial write or
+/// `WouldBlock` remains queued and is not treated as a disconnect.
 #[unsafe(no_mangle)]
 pub extern "C" fn seyal_bridge_flush_writable() -> i32 {
     CLIENT.with(|slot| {
@@ -130,6 +134,114 @@ pub extern "C" fn seyal_bridge_flush_writable() -> i32 {
         match client.flush_control_write() {
             Ok(()) => 0,
             Err(error) => error_code(error),
+        }
+    })
+}
+
+/// Atomically submit one already-committed UTF-8 native text action.
+///
+/// # Safety
+/// `bytes` must address `len` readable bytes for the duration of this call when
+/// `len != 0`. The bridge copies/adopts no bytes after the function returns.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn seyal_bridge_submit_utf8(bytes: *const u8, len: u32) -> i32 {
+    if len == 0 {
+        return 0;
+    }
+    if bytes.is_null() {
+        return -4;
+    }
+    let Ok(len) = usize::try_from(len) else {
+        return -11;
+    };
+    // SAFETY: the C/Swift caller contract above guarantees a readable range
+    // for this synchronous call. The resulting slice is never retained.
+    let bytes = unsafe { slice::from_raw_parts(bytes, len) };
+    let Ok(text) = str::from_utf8(bytes) else {
+        return -4;
+    };
+    with_client_mut(|client| client.submit_committed_text(text))
+}
+
+/// Submit one M001 logical terminal key. `kind` uses SPEC-006 key-kind values;
+/// only ControlAscii carries a nonzero `scalar`.
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_submit_key(kind: u16, scalar: u32) -> i32 {
+    let Some(kind) = terminal_key_kind(kind) else {
+        return -4;
+    };
+    with_client_mut(|client| client.submit_terminal_key(kind, scalar))
+}
+
+/// Validate logical viewport/cell metrics, derive a bounded rows/columns
+/// proposal, and reconcile it through correlated Pass-7 resize.
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_propose_geometry(
+    viewport_width: f64,
+    viewport_height: f64,
+    horizontal_insets: f64,
+    vertical_insets: f64,
+    cell_width: f64,
+    cell_height: f64,
+    meaningful_layout_epoch: u8,
+) -> i32 {
+    let Some(geometry) = derive_grid_geometry(
+        viewport_width,
+        viewport_height,
+        horizontal_insets,
+        vertical_insets,
+        cell_width,
+        cell_height,
+    ) else {
+        return -17;
+    };
+    with_client_mut(|client| {
+        client.set_desired_geometry_for_layout(geometry, meaningful_layout_epoch != 0)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_retry_resize() -> i32 {
+    with_client_mut(LocalDisplayClient::retry_resize)
+}
+
+/// Non-secret presentation reason only; never returns rejected input content.
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_input_failure() -> i32 {
+    CLIENT.with(|slot| {
+        let Ok(slot) = slot.try_borrow() else {
+            return -100;
+        };
+        let Some(client) = slot.as_ref() else {
+            return 0;
+        };
+        match client.input_failure() {
+            None => 0,
+            Some(InputAdmissionFailure::ClientBackpressure) => 1,
+            Some(InputAdmissionFailure::CommitTooLarge) => 2,
+            Some(InputAdmissionFailure::LostController) => 3,
+            Some(InputAdmissionFailure::Disconnected) => 4,
+        }
+    })
+}
+
+/// Non-secret resize failure reason only. Runtime result codes retain their
+/// SPEC-004 numeric value under the 100-series namespace.
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_resize_failure() -> i32 {
+    CLIENT.with(|slot| {
+        let Ok(slot) = slot.try_borrow() else {
+            return -100;
+        };
+        let Some(client) = slot.as_ref() else {
+            return 0;
+        };
+        match client.resize_failure() {
+            None => 0,
+            Some(ResizeFailure::ClientBackpressure) => 1,
+            Some(ResizeFailure::Apply(error)) => 100 + error as i32,
+            Some(ResizeFailure::Protocol) => 200,
+            Some(ResizeFailure::Disconnected) => 201,
         }
     })
 }
@@ -188,6 +300,38 @@ pub extern "C" fn seyal_bridge_disconnect() {
     });
 }
 
+fn terminal_key_kind(value: u16) -> Option<TerminalKeyKind> {
+    Some(match value {
+        1 => TerminalKeyKind::Enter,
+        2 => TerminalKeyKind::Tab,
+        3 => TerminalKeyKind::Backspace,
+        4 => TerminalKeyKind::Escape,
+        5 => TerminalKeyKind::ArrowUp,
+        6 => TerminalKeyKind::ArrowDown,
+        7 => TerminalKeyKind::ArrowRight,
+        8 => TerminalKeyKind::ArrowLeft,
+        9 => TerminalKeyKind::ControlAscii,
+        _ => return None,
+    })
+}
+
+fn with_client_mut(
+    operation: impl FnOnce(&mut LocalDisplayClient) -> Result<(), ClientError>,
+) -> i32 {
+    CLIENT.with(|slot| {
+        let Ok(mut slot) = slot.try_borrow_mut() else {
+            return -100;
+        };
+        let Some(client) = slot.as_mut() else {
+            return -1;
+        };
+        match operation(client) {
+            Ok(()) => 0,
+            Err(error) => error_code(error),
+        }
+    })
+}
+
 fn error_code(error: ClientError) -> i32 {
     match error {
         ClientError::RuntimeDiscovery => -2,
@@ -198,8 +342,14 @@ fn error_code(error: ClientError) -> i32 {
         ClientError::InvalidAttachment => -7,
         ClientError::Display => -8,
         ClientError::Prepare => -9,
-        ClientError::Server(code) => -1000 - i32::from(code),
         ClientError::Disconnected => -10,
         ClientError::Capacity => -11,
+        ClientError::UnsupportedInteractiveCapability => -12,
+        ClientError::ClientBackpressure => -13,
+        ClientError::CommitTooLarge => -14,
+        ClientError::LostController => -15,
+        ClientError::ResizeProtocolFailure => -16,
+        ClientError::InvalidGeometry => -17,
+        ClientError::Server(code) => -1000 - i32::from(code),
     }
 }

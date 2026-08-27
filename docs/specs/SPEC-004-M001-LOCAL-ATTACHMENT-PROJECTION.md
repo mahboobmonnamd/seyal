@@ -1,9 +1,9 @@
 # SPEC-004 — M001 local attachment and display-state transport
 
-- **Status:** Accepted for M001 Pass 5. Candidate-D production performance validation passed on controlled physical Apple Silicon at benchmark commit `c8c121380002c86a4e42b6737238289db10965af`; Issue #651 remains the closure authority for the complete Pass 5.1 acceptance set.
+- **Status:** Accepted for M001 Pass 5. Candidate-D production performance validation passed on controlled physical Apple Silicon at benchmark commit `c8c121380002c86a4e42b6737238289db10965af`; Issue #651 remains the closure authority for the complete Pass 5.1 acceptance set. The additive Pass 7 semantic-key extension below is **proposed** by #702 / SPEC-006 until that refinement is accepted.
 - **Date:** 2026-08-24
-- **Amended:** 2026-08-25, 2026-08-26
-- **Issue:** #105 (implementation), #651 (Pass 5.1 final acceptance)
+- **Amended:** 2026-08-25, 2026-08-26; Pass 7 extension proposed 2026-08-27
+- **Issue:** #105 (implementation), #651 (Pass 5.1 final acceptance), #702 (Pass 7 semantic-key extension)
 - **Architecture authority:** `ADR-001-LOCAL-DISPLAY-PROJECTION.md`
 - **Depends on:** SPEC-001, SPEC-002, SPEC-003
 
@@ -43,7 +43,9 @@ Large future image/rich-graphics objects are a separate bulk-object concern. M00
 
 The protocol supports runtime discovery, version negotiation, execution enumeration, observer/controller attach, detach, input, resize, explicit resync, initial/current-state snapshots, steady-state display deltas, lifecycle/error notification and graceful close.
 
-The following remain out of scope: Metal rendering, glyph shaping/atlases, AppKit IME/keyboard wiring, Blocks/history persistence, remote/network transport, public SDK/plugin protocol, agents/cloud/commercial features, Runtime-crash live-PTY restoration, Linux/Windows local IPC, Kitty/Sixel/iTerm image protocols, IOSurface/shared-memory bulk transport and M002 VT expansion.
+The Pass 7 additive extension defined by SPEC-006 adds capability-gated semantic terminal-key intent while keeping mode-sensitive escape encoding inside Runtime. It does not change Candidate-D display semantics.
+
+The following remain out of scope for Pass 5 itself: Metal rendering, glyph shaping/atlases, AppKit IME/keyboard wiring, Blocks/history persistence, remote/network transport, public SDK/plugin protocol, agents/cloud/commercial features, Runtime-crash live-PTY restoration, Linux/Windows local IPC, Kitty/Sixel/iTerm image protocols, IOSurface/shared-memory bulk transport and M002 VT expansion.
 
 ## 4. Endpoint and peer security
 
@@ -55,7 +57,7 @@ Same-UID authentication does not grant attachment or mutation authority. Attachm
 
 ## 5. Authority and hard limits
 
-Roles are `Observer` and `Controller`. An observer may receive display state, request resync and detach. A controller additionally owns input/resize authority. At most one controller lease exists per `ExecutionId`; controller requests never preempt an existing controller.
+Roles are `Observer` and `Controller`. An observer may receive display state, request resync and detach. A controller additionally owns input, semantic terminal-key and resize authority. At most one controller lease exists per `ExecutionId`; controller requests never preempt an existing controller.
 
 M001 hard maxima:
 
@@ -73,7 +75,7 @@ M001 hard maxima:
 | visible columns | 512 |
 | visible cells | 131,072 |
 
-SPEC-003 accepted-but-unwritten input budgets remain authoritative in addition to these limits.
+SPEC-003 accepted-but-unwritten input budgets remain authoritative in addition to these limits. SPEC-006 separately bounds Pass 7 client-side accepted-but-not-fully-written wire bytes.
 
 ## 6. Connection state machine
 
@@ -84,11 +86,11 @@ Accepted
   → Ready
        ├─ ListExecutions → Ready
        └─ Attach → Attached
-                      ├─ Input/Resize       controller only
+                      ├─ Input/TerminalKey/Resize   controller only
                       ├─ Resync
-                      ├─ DisplaySnapshot    Runtime → client
-                      ├─ DisplayDelta       Runtime → client
-                      ├─ Lifecycle          Runtime → client
+                      ├─ DisplaySnapshot            Runtime → client
+                      ├─ DisplayDelta               Runtime → client
+                      ├─ Lifecycle                  Runtime → client
                       └─ Detach → Ready
   → Closing
 ```
@@ -113,6 +115,8 @@ The complete header is validated before payload allocation. Receive buffering is
 
 On Darwin, production receive-side ancillary storage is sized to the process descriptor-table capacity rather than to the former small fixed scratch buffer. This prevents the known SCM_RIGHTS truncation hazard for every descriptor set the process can legally receive. Production must not deliberately shrink this buffer merely to manufacture `MSG_CTRUNC`; the parser still treats a reported `MSG_CTRUNC` or oversized/malformed ancillary header as fatal, clamps parsing to owned storage and closes every visible descriptor.
 
+The Pass 7 `TerminalKey` extension remains protocol framing version `1.0` and is capability-gated. A client must see `CAP_SEMANTIC_TERMINAL_KEY` in `ServerHello` before using message type 17; it must not probe an older Runtime by first sending an unknown message.
+
 ## 8. Message types
 
 | Type | Direction | Name |
@@ -133,11 +137,13 @@ On Darwin, production receive-side ancillary storage is sized to the process des
 | 14 | R→C | `Lifecycle` |
 | 15 | R→C | `Error` |
 | 16 | either | `Goodbye` |
+| 17 | C→R | `TerminalKey` — Pass 7 capability-gated extension |
 
 M001 server capability bits are:
 
 - bit 0: binary display snapshot/delta transport;
-- bit 1: observer role.
+- bit 1: observer role;
+- bit 2: semantic terminal-key input (`CAP_SEMANTIC_TERMINAL_KEY`) — proposed by Pass 7 / SPEC-006.
 
 There is no text-grid projection-FD capability in M001 Candidate D.
 
@@ -167,13 +173,24 @@ No descriptor accompanies `Attached`. A current-state `DisplaySnapshot` is queue
 
 `Detach`, `Detached` and `Resync` each carry one `u128 AttachmentId`.
 
-`Input` is `u128 AttachmentId`, `u32 byte_count`, then exactly `byte_count` bytes; `byte_count <= 65536`.
+`Input` is `u128 AttachmentId`, `u32 byte_count`, then exactly `byte_count` bytes; `byte_count <= 65536`. For Pass 7 native input, `Input` represents already-committed bytes such as UTF-8 committed text; clients must not use it to move mode-sensitive terminal-key encoding out of Runtime.
 
 `Resize` is `u128 AttachmentId`, `u16 rows`, `u16 columns`; geometry must be nonzero and within section 5 maxima.
 
+`TerminalKey` is exactly 24 bytes:
+
+```text
+u128 AttachmentId
+u16  key_kind
+u16  modifiers
+u32  scalar
+```
+
+Its accepted key kinds/modifier/scalar combinations and Runtime encoding semantics are normative in SPEC-006. `TerminalKey` is legal only for the current attached Controller after capability negotiation. Malformed key payloads return `MalformedPayload`; observer use returns `PermissionDenied`; stale/foreign attachment identity uses the existing stale/invalid identity behavior. Validation completes before any terminal mutation or input-budget reservation.
+
 `Lifecycle` is `u128 ExecutionId`, `u8 lifecycle`, seven reserved zero bytes.
 
-`Error` remains 16 bytes: `u16 error_code`, `u16 offending_message_type`, `u32 detail_code`, `u64 reserved`. It never includes terminal contents, input bytes, environment data, secrets or attacker-controlled text.
+`Error` remains 16 bytes: `u16 error_code`, `u16 offending_message_type`, `u32 detail_code`, `u64 reserved`. It never includes terminal contents, input bytes, semantic-key encoded bytes, environment data, secrets or attacker-controlled text.
 
 `Goodbye` has an empty payload.
 
@@ -265,6 +282,8 @@ If a new delta is contiguous with the last presentation generation targeted for 
 
 A partially written frame is completed or the connection is closed; bytes from two frames are never interleaved. A slow client may be disconnected under bounded resource policy. No case blocks PTY/VT progress.
 
+Pass 7 client→Runtime input/control backpressure and resize coalescing are defined separately by SPEC-006 and do not weaken the server-side bounds in this section.
+
 ## 12. Attach, reconnect and resync transactions
 
 First attach validates peer/state/role/`ExecutionId`/capacity, allocates `AttachmentId` privately, reads current canonical visible state without consuming shared canonical damage, encodes a bounded snapshot, admits both `Attached` and the snapshot into nonblocking bounded output, then publishes attachment/controller authority and transitions the connection to `Attached`.
@@ -276,6 +295,8 @@ Explicit `Resync`, reconnect and detected generation gaps use the same current-s
 ## 13. Resize and final-state ordering
 
 Controller authorization is checked before resize. The PTY/terminal resize transaction remains owned by `TerminalExecution`. A resize that changes dimensions causes canonical full damage and therefore a subsequent display update/snapshot with the new dimensions. There is no projection-memory replacement lifecycle.
+
+Pass 7 further fixes native resize proposal/coalescing ordering and requires the transaction to remain `validate/prepare → fallible PTY winsize → canonical TerminalState commit → damage/projection`; SPEC-006 is normative for that native-client behavior.
 
 After primary-child exit Runtime drains remaining PTY bytes into canonical `TerminalState`, publishes any resulting final display update to attached clients through the same bounded presentation path, then sends lifecycle finalization and releases attachment authority/resources. Delivery cannot extend process-lifecycle deadlines indefinitely.
 
@@ -326,10 +347,24 @@ Performance evidence must cover 1/2/4/8/16 viewers of the same execution, 1/10/5
 
 Record p50/p95/p99 output-to-client-state latency, throughput, CPU, RSS, allocations/reallocations, bytes written/copied, socket calls where instrumentable, queue/coalescing/resync behavior, FD counts and teardown cleanup. Evidence must be labelled `MEASURED`, `ESTIMATED` or `PLATFORM_LIMITED`.
 
+### 16.1 Pass 7 additive-extension validation
+
+Before the proposed message type 17/capability bit 2 extension is considered accepted for production, SPEC-006 additionally requires:
+
+- capability negotiation proving older/non-advertising Runtime peers are never sent `TerminalKey`;
+- exact 24-byte `TerminalKey` encode/decode fixtures;
+- malformed kind/modifier/scalar/truncation fuzz/regression coverage in the real local protocol decoder;
+- Observer/controller/stale-attachment authorization tests;
+- all-or-nothing Runtime key encoding/input-budget admission;
+- FIFO ordering with ordinary `Input` and `Resize` barriers;
+- privacy tests/review proving semantic input payloads are absent from logs.
+
 ## 17. Acceptance gate
 
 Candidate D is the accepted architecture. The controlled physical-M5-Pro benchmark at commit `c8c121380002c86a4e42b6737238289db10965af` satisfies the M001 Pass 5.1 performance architecture gate; the 50/100 execution population cases remain truthfully classified `PLATFORM_LIMITED` on that host rather than silently reduced.
 
 Pass 5 may leave draft only when production code no longer uses per-attachment shared-memory text/grid projections, SPEC/ADR/code/tests agree, all required validation is green, production-equivalent Candidate-D evidence meets Seyal latency/resource goals, and independent architecture/security/performance review has no unresolved blocking finding.
+
+The Pass 7 semantic-key extension becomes accepted only when the SPEC-006 refinement is explicitly approved and merged. Until then, types/capability values in the proposed extension are reserved by the refinement branch and are not production authority.
 
 Comparator/reference shared-projection code may remain only if isolated from production and clearly labelled non-production evidence. It must not be reachable as a hidden text-grid fallback.

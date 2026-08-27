@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import QuartzCore
 
 @MainActor
 enum RendererValidation {
@@ -70,8 +71,14 @@ enum RendererValidation {
             guard orientationPassed else { return false }
 
             cells = [
-                preparedCell(scalar: UInt32(ascii: "A"), foreground: terminalRGB(red: 240, green: 240, blue: 240)),
-                preparedCell(scalar: UInt32(ascii: "A"), foreground: terminalRGB(red: 255, green: 0, blue: 0)),
+                preparedCell(
+                    scalar: UInt32(ascii: "A"),
+                    foreground: terminalRGB(red: 240, green: 240, blue: 240)
+                ),
+                preparedCell(
+                    scalar: UInt32(ascii: "A"),
+                    foreground: terminalRGB(red: 255, green: 0, blue: 0)
+                ),
             ]
             let beforeGlyphs = renderer.glyphStats
             var oneRow = DamageMask()
@@ -96,12 +103,158 @@ enum RendererValidation {
             }
             guard glyphPassed, renderer.hasDedicatedSurfaceResources else { return false }
 
+            // Bold is a renderer/cache identity seam in M001. It must be able to
+            // resolve different raster pixels without making terminal color part
+            // of glyph identity.
+            let beforeBold = renderer.glyphStats
+            cells = [preparedCell(scalar: UInt32(ascii: "A"), flags: 1)]
+            guard try cells.withUnsafeBufferPointer({ buffer in
+                try renderer.update(
+                    frame: NativePreparedFrame(
+                        cells: buffer,
+                        generation: 3,
+                        rows: 1,
+                        columns: 1,
+                        damage: oneRow
+                    ),
+                    backingScale: 1,
+                    forceFullRebuild: true
+                ) == .updated
+            }) else {
+                return false
+            }
+            guard renderer.glyphStats.uploads > beforeBold.uploads else { return false }
+
+            // Blank backgrounds, underline geometry and cursor inversion all use
+            // the same cell rectangle and must render without relying on glyphs.
+            cells = [
+                preparedCell(
+                    foreground: terminalRGB(red: 255, green: 0, blue: 0),
+                    background: terminalRGB(red: 0, green: 0, blue: 255),
+                    flags: 2
+                ),
+                preparedCell(
+                    foreground: terminalRGB(red: 0, green: 255, blue: 0),
+                    background: terminalRGB(red: 255, green: 0, blue: 0)
+                ),
+            ]
+            let stylePassed = try cells.withUnsafeBufferPointer { buffer -> Bool in
+                let frame = NativePreparedFrame(
+                    cells: buffer,
+                    generation: 4,
+                    rows: 1,
+                    columns: 2,
+                    cursorRow: 0,
+                    cursorColumn: 1,
+                    cursorVisible: true,
+                    damage: oneRow
+                )
+                guard try renderer.update(
+                    frame: frame,
+                    backingScale: 1,
+                    forceFullRebuild: true
+                ) == .updated else {
+                    return false
+                }
+                let cellSize = renderer.cellPixelSize(backingScale: 1)
+                guard let texture = renderer.renderOffscreenAndWait(
+                    width: cellSize.width * 2,
+                    height: cellSize.height
+                ) else {
+                    return false
+                }
+                let underlineY = max(0, cellSize.height - 1)
+                return pixelMatches(
+                    texture,
+                    x: cellSize.width / 2,
+                    y: cellSize.height / 2,
+                    red: 0,
+                    green: 0,
+                    blue: 255
+                ) && pixelMatches(
+                    texture,
+                    x: cellSize.width / 2,
+                    y: underlineY,
+                    red: 255,
+                    green: 0,
+                    blue: 0
+                ) && pixelMatches(
+                    texture,
+                    x: cellSize.width + cellSize.width / 2,
+                    y: cellSize.height / 2,
+                    red: 0,
+                    green: 255,
+                    blue: 0
+                )
+            }
+            guard stylePassed else { return false }
+
+            let fullRebuildsBeforeScale = renderer.stats.fullRebuilds
+            let atlasResetsBeforeScale = renderer.glyphStats.resets
+            guard try cells.withUnsafeBufferPointer({ buffer in
+                try renderer.update(
+                    frame: NativePreparedFrame(
+                        cells: buffer,
+                        generation: 5,
+                        rows: 1,
+                        columns: 2,
+                        cursorRow: 0,
+                        cursorColumn: 1,
+                        cursorVisible: true,
+                        fullRebuild: false,
+                        damage: DamageMask()
+                    ),
+                    backingScale: 2
+                ) == .updated
+            }) else {
+                return false
+            }
+            guard renderer.stats.fullRebuilds > fullRebuildsBeforeScale,
+                  renderer.glyphStats.resets > atlasResetsBeforeScale
+            else {
+                return false
+            }
+
             let drawableMisses = renderer.stats.drawableMisses
             renderer.handleDrawableUnavailable()
             guard renderer.stats.drawableMisses == drawableMisses + 1 else { return false }
 
+            // Hide must release dedicated resources. Showing again requests the
+            // latest committed frame rather than replaying PTY bytes and forces a
+            // reconstructable full redraw.
             renderer.setVisible(false)
             guard !renderer.hasDedicatedSurfaceResources else { return false }
+            var currentFrameRequests = 0
+            renderer.onNeedsCurrentFrame = { currentFrameRequests += 1 }
+            renderer.setVisible(true)
+            guard currentFrameRequests == 1 else { return false }
+            let fullRebuildsBeforeShow = renderer.stats.fullRebuilds
+            guard try cells.withUnsafeBufferPointer({ buffer in
+                try renderer.update(
+                    frame: NativePreparedFrame(
+                        cells: buffer,
+                        generation: 6,
+                        rows: 1,
+                        columns: 2,
+                        cursorRow: 0,
+                        cursorColumn: 1,
+                        cursorVisible: true,
+                        fullRebuild: false,
+                        damage: DamageMask()
+                    ),
+                    backingScale: 1
+                ) == .updated
+            }) else {
+                return false
+            }
+            guard renderer.stats.fullRebuilds > fullRebuildsBeforeShow else { return false }
+            renderer.setVisible(false)
+            guard !renderer.hasDedicatedSurfaceResources else { return false }
+
+            // Offscreen tests above prove deterministic pixels. This separate
+            // proof exercises the production CAMetalLayer path itself:
+            // nextDrawable -> encode -> commandBuffer.present -> GPU completion.
+            guard try productionLayerPresentSelfTest(device: device) else { return false }
             return GlyphAtlas.budgetBytes == 16 * 1024 * 1024
         } catch {
             return false
@@ -135,10 +288,24 @@ enum RendererValidation {
                     guard let texture = renderer.renderOffscreenAndWait(
                         width: cellSize.width * frame.columns,
                         height: cellSize.height * frame.rows
-                    ) else {
+                    ), textureContainsBrightGlyphPixel(texture) else {
                         return false
                     }
-                    return textureContainsBrightGlyphPixel(texture)
+
+                    // The same real Candidate-D-prepared state must also be
+                    // accepted by the production CAMetalLayer presentation path.
+                    let layer = makePresentationLayer(
+                        device: device,
+                        width: cellSize.width * frame.columns,
+                        height: cellSize.height * frame.rows
+                    )
+                    let submittedBefore = renderer.stats.submittedFrames
+                    guard renderer.present(layer: layer),
+                          renderer.stats.submittedFrames == submittedBefore + 1
+                    else {
+                        return false
+                    }
+                    return waitForGPUCompletion(renderer, after: renderer.stats.completedFrames)
                 }
 
                 let poll = seyal_bridge_poll()
@@ -240,6 +407,67 @@ enum RendererValidation {
         } catch {
             return false
         }
+    }
+
+    private static func productionLayerPresentSelfTest(device: MTLDevice) throws -> Bool {
+        let renderer = try MetalTerminalRenderer(device: device)
+        var damage = DamageMask()
+        damage.mark(row: 0)
+        let cells = [preparedCell(background: terminalRGB(red: 12, green: 34, blue: 56))]
+        guard try cells.withUnsafeBufferPointer({ buffer in
+            try renderer.update(
+                frame: NativePreparedFrame(
+                    cells: buffer,
+                    generation: 1,
+                    rows: 1,
+                    columns: 1,
+                    damage: damage
+                ),
+                backingScale: 1,
+                forceFullRebuild: true
+            ) == .updated
+        }) else {
+            return false
+        }
+        let cellSize = renderer.cellPixelSize(backingScale: 1)
+        let layer = makePresentationLayer(
+            device: device,
+            width: cellSize.width,
+            height: cellSize.height
+        )
+        let completedBefore = renderer.stats.completedFrames
+        guard renderer.present(layer: layer), renderer.stats.submittedFrames == 1 else {
+            return false
+        }
+        return waitForGPUCompletion(renderer, after: completedBefore)
+    }
+
+    private static func makePresentationLayer(
+        device: MTLDevice,
+        width: Int,
+        height: Int
+    ) -> CAMetalLayer {
+        let layer = CAMetalLayer()
+        layer.device = device
+        layer.pixelFormat = .bgra8Unorm
+        layer.framebufferOnly = true
+        layer.maximumDrawableCount = 2
+        layer.presentsWithTransaction = false
+        layer.contentsScale = 1
+        layer.bounds = CGRect(x: 0, y: 0, width: width, height: height)
+        layer.drawableSize = CGSize(width: width, height: height)
+        return layer
+    }
+
+    private static func waitForGPUCompletion(
+        _ renderer: MetalTerminalRenderer,
+        after completedBefore: UInt64
+    ) -> Bool {
+        let deadline = Date().addingTimeInterval(2)
+        while renderer.stats.completedFrames == completedBefore && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        return renderer.stats.completedFrames > completedBefore
     }
 
     private static func frameContains(_ frame: NativePreparedFrame, text: String) -> Bool {

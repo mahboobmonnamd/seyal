@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import Metal
 @preconcurrency import QuartzCore
 
@@ -405,6 +406,26 @@ enum RendererValidation {
                 width: cellSize.width * columns,
                 height: cellSize.height * rows
             )
+            // CAMetalDisplayLink only produces frame opportunities for a layer
+            // participating in an AppKit window hierarchy. Keep this small
+            // benchmark window visible so the measurement exercises the same
+            // scheduler/layer contract as production.
+            let benchmarkWindow = NSWindow(
+                contentRect: NSRect(
+                    x: 0,
+                    y: 0,
+                    width: cellSize.width * columns,
+                    height: cellSize.height * rows
+                ),
+                styleMask: [.borderless],
+                backing: .buffered,
+                defer: false
+            )
+            let benchmarkHost = NSView(frame: benchmarkWindow.contentRect(forFrameRect: benchmarkWindow.frame))
+            benchmarkHost.wantsLayer = true
+            benchmarkHost.layer?.addSublayer(presentationLayer)
+            benchmarkWindow.contentView = benchmarkHost
+            benchmarkWindow.orderFrontRegardless()
             let displayLinkDriver = DisplayLinkBenchmarkDriver(
                 renderer: renderer,
                 layer: presentationLayer
@@ -469,6 +490,7 @@ enum RendererValidation {
             print("command_commit_to_gpu_completion_proxy p50_ns=\(commitToCompletion.p50) p95_ns=\(commitToCompletion.p95) p99_ns=\(commitToCompletion.p99) max_ns=\(commitToCompletion.max)")
             print("committed_generation_to_presented_frame_proxy p50_ns=\(presented.p50) p95_ns=\(presented.p95) p99_ns=\(presented.p99) max_ns=\(presented.max) note=one_shot_CAMetalDisplayLink_to_command_commit")
             print("renderer submitted_frames=\(renderer.stats.submittedFrames) display_link_samples=\(displayLinkDriver.samples.count) coalesced_frames=\(renderer.stats.coalescedFrames) rebuilt_rows=\(renderer.stats.rebuiltRows) rebuilt_cells=\(renderer.stats.rebuiltCells) instance_bytes=\(renderer.stats.instanceBytes) glyph_hits=\(glyph.hits) glyph_misses=\(glyph.misses) glyph_uploads=\(glyph.uploads) glyph_uploaded_bytes=\(glyph.uploadedBytes) atlas_budget_bytes=\(GlyphAtlas.budgetBytes) dedicated_gpu_bytes=\(renderer.estimatedDedicatedGPUBytes)")
+            benchmarkWindow.orderOut(nil)
             return true
         } catch {
             return false

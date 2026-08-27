@@ -75,6 +75,12 @@ grep -q 'private func makeTranscript(paneID: String) -> NSScrollView' "$SOURCES/
   || fail "UI shell must keep Pane-owned transcript scrolling explicit"
 grep -q 'NSSegmentedControl' "$SOURCES/SeyalShellView.swift" \
   || fail "compact Workspaces/Tabs switcher is missing from the frozen left-panel model"
+grep -q 'toggle-left-sidebar' "$SOURCES/SeyalShellView.swift" \
+  || fail "left context panel must have a functional hide/reopen control"
+grep -q 'toggle-inspector' "$SOURCES/SeyalShellView.swift" \
+  || fail "Inspector must have a functional hide/reopen control"
+grep -q 'inspector-mode.context' "$SOURCES/SeyalShellView.swift" \
+  || fail "frozen Inspector vertical mode rail is missing"
 grep -q 'pane.split.' "$SOURCES/SeyalShellView.swift" \
   || fail "Pane-local split control is missing"
 grep -q 'pane.close.' "$SOURCES/SeyalShellView.swift" \

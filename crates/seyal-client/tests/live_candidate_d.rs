@@ -71,16 +71,16 @@ fn prepared_text(client: &LocalDisplayClient) -> String {
         .collect()
 }
 
-fn wait_until(
-    client: &mut LocalDisplayClient,
-    predicate: impl Fn(&LocalDisplayClient) -> bool,
-) {
+fn wait_until(client: &mut LocalDisplayClient, predicate: impl Fn(&LocalDisplayClient) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
         if predicate(client) {
             return;
         }
-        assert!(Instant::now() < deadline, "live renderer condition timed out");
+        assert!(
+            Instant::now() < deadline,
+            "live renderer condition timed out"
+        );
         match client.poll_prepare() {
             Ok(_) => {}
             Err(error) => panic!("live Candidate-D client failed: {error:?}"),
@@ -92,8 +92,9 @@ fn wait_until(
 #[test]
 fn real_shell_candidate_d_commit_reaches_prepared_surface_without_gui_vt() {
     let (socket_path, execution_id, runtime) = start_runtime("printf 'SEYAL-LIVE'; sleep 1");
-    let mut client = LocalDisplayClient::connect_execution(&socket_path, execution_id, Role::Observer)
-        .expect("attach production client");
+    let mut client =
+        LocalDisplayClient::connect_execution(&socket_path, execution_id, Role::Observer)
+            .expect("attach production client");
 
     wait_until(&mut client, |client| {
         prepared_text(client).contains("SEYAL-LIVE")
@@ -113,8 +114,9 @@ fn real_shell_candidate_d_commit_reaches_prepared_surface_without_gui_vt() {
 fn live_alternate_screen_uses_same_candidate_d_and_preparation_path() {
     let (socket_path, execution_id, runtime) =
         start_runtime("printf '\033[?1049hALT-LIVE'; sleep 1");
-    let mut client = LocalDisplayClient::connect_execution(&socket_path, execution_id, Role::Observer)
-        .expect("attach production client");
+    let mut client =
+        LocalDisplayClient::connect_execution(&socket_path, execution_id, Role::Observer)
+            .expect("attach production client");
 
     wait_until(&mut client, |client| {
         client.cache().alternate_screen && prepared_text(client).contains("ALT-LIVE")

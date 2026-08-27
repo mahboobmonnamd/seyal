@@ -306,6 +306,38 @@ struct RetrySuppression {
     geometry: GridGeometry,
 }
 
+fn newest_pending_geometry(
+    unresolved: &VecDeque<ResizeRecord>,
+    applied_fence: Option<AppliedFence>,
+) -> Option<GridGeometry> {
+    let unresolved_latest = unresolved
+        .iter()
+        .max_by_key(|record| record.request_id)
+        .map(|record| (record.request_id, record.geometry));
+    let applied_latest = applied_fence.map(|fence| (fence.request_id, fence.geometry));
+    match (unresolved_latest, applied_latest) {
+        (Some(unresolved), Some(applied)) => Some(if unresolved.0 > applied.0 {
+            unresolved.1
+        } else {
+            applied.1
+        }),
+        (Some(unresolved), None) => Some(unresolved.1),
+        (None, Some(applied)) => Some(applied.1),
+        (None, None) => None,
+    }
+}
+
+fn resize_needs_mutation(
+    desired: GridGeometry,
+    committed: GridGeometry,
+    newest_pending: Option<GridGeometry>,
+) -> bool {
+    if newest_pending == Some(desired) {
+        return false;
+    }
+    !(newest_pending.is_none() && committed == desired)
+}
+
 pub struct LocalDisplayClient {
     stream: UnixStream,
     buffered: Vec<u8>,
@@ -927,24 +959,12 @@ impl LocalDisplayClient {
         {
             return Ok(());
         }
-        if self
-            .unresolved_resizes
-            .back()
-            .is_some_and(|record| record.geometry == desired)
-        {
-            return Ok(());
-        }
-        if self
-            .applied_awaiting_projection
-            .is_some_and(|fence| fence.geometry == desired)
-            && self.unresolved_resizes.is_empty()
-        {
-            return Ok(());
-        }
-        if self.unresolved_resizes.is_empty()
-            && self.applied_awaiting_projection.is_none()
-            && self.committed_geometry == desired
-        {
+
+        let newest_pending = newest_pending_geometry(
+            &self.unresolved_resizes,
+            self.applied_awaiting_projection,
+        );
+        if !resize_needs_mutation(desired, self.committed_geometry, newest_pending) {
             return Ok(());
         }
 
@@ -1205,6 +1225,10 @@ fn read_blocking_raw_frame(stream: &mut UnixStream) -> Result<Vec<u8>, ClientErr
 mod tests {
     use super::*;
 
+    fn geometry(rows: u16, columns: u16) -> GridGeometry {
+        GridGeometry { rows, columns }
+    }
+
     fn display_cell() -> DisplayCell {
         DisplayCell {
             scalar: 'x',
@@ -1295,6 +1319,34 @@ mod tests {
                 );
             }
         }
+
+        for invalid in [
+            [-1.0, 600.0, 20.0, 20.0, 10.0, 20.0],
+            [800.0, -1.0, 20.0, 20.0, 10.0, 20.0],
+            [800.0, 600.0, -1.0, 20.0, 10.0, 20.0],
+            [800.0, 600.0, 20.0, -1.0, 10.0, 20.0],
+            [800.0, 600.0, 20.0, 20.0, 0.0, 20.0],
+            [800.0, 600.0, 20.0, 20.0, -1.0, 20.0],
+            [800.0, 600.0, 20.0, 20.0, 10.0, 0.0],
+            [800.0, 600.0, 20.0, 20.0, 10.0, -1.0],
+        ] {
+            assert_eq!(
+                derive_grid_geometry(
+                    invalid[0], invalid[1], invalid[2], invalid[3], invalid[4], invalid[5]
+                ),
+                None
+            );
+        }
+
+        let smallest_positive = f64::from_bits(1);
+        assert_eq!(
+            derive_grid_geometry(1.0, 1.0, 0.0, 0.0, smallest_positive, 1.0),
+            None
+        );
+        assert_eq!(
+            derive_grid_geometry(1.0, 1.0, 0.0, 0.0, 1.0, smallest_positive),
+            None
+        );
         assert_eq!(
             derive_grid_geometry(0.1, 0.1, 0.0, 0.0, 10.0, 20.0),
             Some(GridGeometry {
@@ -1309,6 +1361,51 @@ mod tests {
                 columns: 512
             })
         );
+    }
+
+    #[test]
+    fn newest_pending_resize_is_highest_request_id_across_result_and_unresolved_state() {
+        let mut unresolved = VecDeque::from([ResizeRecord {
+            request_id: 1,
+            geometry: geometry(24, 80),
+            phase: ResizePhase::SentWaitingResult,
+        }]);
+        let fence = AppliedFence {
+            request_id: 2,
+            geometry: geometry(30, 100),
+            applied_generation: 9,
+        };
+        assert_eq!(
+            newest_pending_geometry(&unresolved, Some(fence)),
+            Some(geometry(30, 100))
+        );
+
+        unresolved.push_back(ResizeRecord {
+            request_id: 3,
+            geometry: geometry(24, 80),
+            phase: ResizePhase::QueuedNotStarted,
+        });
+        assert_eq!(
+            newest_pending_geometry(&unresolved, Some(fence)),
+            Some(geometry(24, 80))
+        );
+    }
+
+    #[test]
+    fn committed_geometry_does_not_suppress_restore_when_newer_pending_resize_differs() {
+        let committed = geometry(24, 80);
+        let desired = geometry(24, 80);
+        assert!(resize_needs_mutation(
+            desired,
+            committed,
+            Some(geometry(30, 100))
+        ));
+        assert!(!resize_needs_mutation(desired, committed, None));
+        assert!(!resize_needs_mutation(
+            desired,
+            geometry(30, 100),
+            Some(desired)
+        ));
     }
 
     #[test]

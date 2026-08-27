@@ -20,8 +20,8 @@ use crate::{
         framing::{
             self, Attach as WireAttach, Attached as WireAttached, ErrorCode, ExecutionList,
             ExecutionListEntry, Lifecycle as WireLifecycle, MessageType, Resize as WireResize,
-            ResizeRequest as WireResizeRequest, ResizeResult as WireResizeResult,
-            ResizeResultCode, Role, TerminalKey as WireTerminalKey, TerminalKeyKind,
+            ResizeRequest as WireResizeRequest, ResizeResult as WireResizeResult, ResizeResultCode,
+            Role, TerminalKey as WireTerminalKey, TerminalKeyKind,
         },
         recovery,
     },

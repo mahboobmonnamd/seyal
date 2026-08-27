@@ -11,10 +11,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use seyal_exec::{
-    ProjectionAttributes, ProjectionCell, ProjectionColor, TerminalProjectionSnapshot,
-    TerminalProjectionUpdate,
+    ProjectionCell, ProjectionColor, TerminalProjectionSnapshot, TerminalProjectionUpdate,
 };
-use seyal_protocol::framing::{self, HEADER_LEN, MAX_FRAME_PAYLOAD};
+#[cfg(test)]
+use seyal_exec::ProjectionAttributes;
+use seyal_protocol::framing::{self, MAX_FRAME_PAYLOAD};
+#[cfg(test)]
+use seyal_protocol::framing::HEADER_LEN;
 
 pub use seyal_protocol::display::{
     DISPLAY_CELL_LEN, DISPLAY_CHUNK_HEADER_LEN, DecodedDisplayChunk, DisplayAttributes,
@@ -403,6 +406,7 @@ mod tests {
         cache
             .apply_batch(&encode_snapshot(&initial).unwrap())
             .unwrap();
+
         let damage = ProjectionDamage {
             full: false,
             first_row: 10,

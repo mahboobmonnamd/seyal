@@ -8,9 +8,16 @@ import tomllib
 
 ROOT = Path(os.environ.get("SEYAL_VALIDATION_ROOT", Path(__file__).resolve().parents[1])).resolve()
 WORKSPACE_MANIFEST = ROOT / "Cargo.toml"
-TERMINAL_MANIFEST = ROOT / "crates" / "seyal-terminal" / "Cargo.toml"
-EXEC_MANIFEST = ROOT / "crates" / "seyal-exec" / "Cargo.toml"
-RUNTIME_MANIFEST = ROOT / "crates" / "seyal-runtime" / "Cargo.toml"
+
+EXPECTED_CRATES = {
+    "seyal-core": "crates/seyal-core",
+    "seyal-terminal": "crates/seyal-terminal",
+    "seyal-exec": "crates/seyal-exec",
+    "seyal-protocol": "crates/seyal-protocol",
+    "seyal-runtime": "crates/seyal-runtime",
+    "seyal-render": "crates/seyal-render",
+    "seyal-client": "crates/seyal-client",
+}
 
 
 def fail(message: str) -> None:
@@ -31,9 +38,9 @@ if not isinstance(members, list) or not members:
     fail("workspace must contain at least one explicit member")
 if len(members) != len(set(members)):
     fail("workspace members must be unique")
-for required in ("crates/seyal-terminal", "crates/seyal-exec", "crates/seyal-runtime"):
+for name, required in EXPECTED_CRATES.items():
     if required not in members:
-        fail(f"required production ownership boundary missing: {required}")
+        fail(f"required production ownership boundary missing: {required} ({name})")
 
 for member in members:
     member_manifest = ROOT / member / "Cargo.toml"
@@ -50,47 +57,57 @@ for key, expected in expected_defaults.items():
     if package_defaults.get(key) != expected:
         fail(f"workspace.package.{key} must be {expected!r}")
 
-if not TERMINAL_MANIFEST.is_file() or not EXEC_MANIFEST.is_file() or not RUNTIME_MANIFEST.is_file():
-    fail("terminal, exec and runtime manifests must all exist")
-terminal_data = tomllib.loads(TERMINAL_MANIFEST.read_text(encoding="utf-8"))
-exec_data = tomllib.loads(EXEC_MANIFEST.read_text(encoding="utf-8"))
-runtime_data = tomllib.loads(RUNTIME_MANIFEST.read_text(encoding="utf-8"))
-for data, expected_name in (
-    (terminal_data, "seyal-terminal"),
-    (exec_data, "seyal-exec"),
-    (runtime_data, "seyal-runtime"),
-):
+manifests: dict[str, dict] = {}
+for name, member in EXPECTED_CRATES.items():
+    path = ROOT / member / "Cargo.toml"
+    if not path.is_file():
+        fail(f"{name} manifest is missing")
+    data = tomllib.loads(path.read_text(encoding="utf-8"))
     package = data.get("package", {})
-    if package.get("name") != expected_name:
-        fail(f"package must be named {expected_name}")
+    if package.get("name") != name:
+        fail(f"package must be named {name}")
     if package.get("publish") is not False:
         fail("M001 crates must not be publishable packages")
+    manifests[name] = data
 
-exec_dependencies = exec_data.get("dependencies", {})
-if set(exec_dependencies) != {"seyal-terminal"}:
-    fail("seyal-exec must depend on exactly seyal-terminal among portable dependencies")
-if exec_dependencies["seyal-terminal"].get("path") != "../seyal-terminal":
-    fail("seyal-exec must consume seyal-terminal through the local workspace path")
+expected_portable_dependencies = {
+    "seyal-core": set(),
+    "seyal-terminal": set(),
+    "seyal-exec": {"seyal-terminal"},
+    "seyal-protocol": {"seyal-core"},
+    "seyal-runtime": {"seyal-core", "seyal-exec", "seyal-protocol"},
+    "seyal-render": set(),
+    "seyal-client": {"seyal-protocol", "seyal-render"},
+}
+for name, expected in expected_portable_dependencies.items():
+    dependencies = manifests[name].get("dependencies", {})
+    if set(dependencies) != expected:
+        fail(
+            f"{name} portable dependencies must be exactly "
+            f"{', '.join(sorted(expected)) if expected else 'none'}"
+        )
+    for dependency in expected:
+        expected_path = f"../{dependency}"
+        if dependencies[dependency].get("path") != expected_path:
+            fail(f"{name} must consume {dependency} through {expected_path}")
 
-runtime_dependencies = runtime_data.get("dependencies", {})
-if set(runtime_dependencies) != {"seyal-exec"}:
-    fail("seyal-runtime must depend on exactly seyal-exec among portable dependencies")
-if runtime_dependencies["seyal-exec"].get("path") != "../seyal-exec":
-    fail("seyal-runtime must consume seyal-exec through the local workspace path")
+client_dev_dependencies = manifests["seyal-client"].get("dev-dependencies", {})
+if set(client_dev_dependencies) != {"seyal-exec", "seyal-runtime"}:
+    fail("seyal-client integration tests may depend exactly on seyal-exec and seyal-runtime")
 
-for name, data in (("seyal-exec", exec_data), ("seyal-runtime", runtime_data)):
-    macos_dependencies = data.get("target", {}).get('cfg(target_os = "macos")', {}).get(
-        "dependencies", {}
-    )
+for name in ("seyal-exec", "seyal-protocol", "seyal-runtime"):
+    macos_dependencies = manifests[name].get("target", {}).get(
+        'cfg(target_os = "macos")', {}
+    ).get("dependencies", {})
     if set(macos_dependencies) != {"libc"}:
         fail(f"{name} macOS platform boundary may depend only on libc in M001")
     if macos_dependencies["libc"] != "=0.2.189":
         fail(f"{name} must exactly pin the reviewed libc 0.2.189 dependency")
 
-for crate in ("seyal-exec", "seyal-runtime"):
-    src = ROOT / "crates" / crate / "src"
+for name in EXPECTED_CRATES:
+    src = ROOT / "crates" / name / "src"
     if not src.is_dir():
-        fail(f"{crate} source directory is missing")
+        fail(f"{name} source directory is missing")
     for path in sorted(src.rglob("*.rs")):
         text = path.read_text(encoding="utf-8")
         if "RILL_" in text:
@@ -108,5 +125,9 @@ if "TerminalState::new" in runtime_src:
     fail("seyal-runtime must not construct a second authoritative TerminalState")
 if "tokio" in runtime_src.lower() or "mio::" in runtime_src:
     fail("Pass 4 Runtime must not introduce Tokio/Mio")
+
+client_manifest = manifests["seyal-client"]
+if "seyal-runtime" in client_manifest.get("dependencies", {}):
+    fail("seyal-client production code must never depend on seyal-runtime")
 
 print("[seyal workspace test] workspace ownership scaffold invariants passed.")

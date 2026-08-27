@@ -79,14 +79,22 @@ final class TerminalFontResolver {
         )
     }
 
-    func resolve(scalar: UInt32, bold requestedBold: Bool, backingScale: CGFloat) -> ResolvedGlyph? {
+    fileprivate func resolve(
+        scalar: UInt32,
+        bold requestedBold: Bool,
+        backingScale: CGFloat
+    ) -> ResolvedGlyph? {
         guard let unicodeScalar = UnicodeScalar(scalar) else {
             return resolveReplacement(bold: requestedBold, backingScale: backingScale)
         }
         let text = String(unicodeScalar)
         let base = requestedBold ? bold : regular
         let utf16Length = (text as NSString).length
-        let fallback = CTFontCreateForString(base, text as CFString, CFRange(location: 0, length: utf16Length))
+        let fallback = CTFontCreateForString(
+            base,
+            text as CFString,
+            CFRange(location: 0, length: utf16Length)
+        )
         let scale = max(backingScale, 1)
         let pixelFont = CTFontCreateCopyWithAttributes(
             fallback,
@@ -109,11 +117,18 @@ final class TerminalFontResolver {
         )
     }
 
-    private func resolveReplacement(bold requestedBold: Bool, backingScale: CGFloat) -> ResolvedGlyph? {
+    private func resolveReplacement(
+        bold requestedBold: Bool,
+        backingScale: CGFloat
+    ) -> ResolvedGlyph? {
         let replacement: UInt32 = 0xfffd
         let base = requestedBold ? bold : regular
         let text = "\u{fffd}"
-        let fallback = CTFontCreateForString(base, text as CFString, CFRange(location: 0, length: 1))
+        let fallback = CTFontCreateForString(
+            base,
+            text as CFString,
+            CFRange(location: 0, length: 1)
+        )
         let scale = max(backingScale, 1)
         let pixelFont = CTFontCreateCopyWithAttributes(
             fallback,

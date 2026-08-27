@@ -128,6 +128,58 @@ final class SeyalShellComponentTests: XCTestCase {
     }
 
     @MainActor
+    func testInspectorRailFiltersExistingContextOnly() {
+        let shell = SeyalShellPreviewFactory.make(
+            frame: NSRect(x: 0, y: 0, width: 1280, height: 800)
+        )
+
+        shell.debugSetInspectorMode(.tab)
+        let tabRows = shell.debugVisibleInspectorRows()
+        XCTAssertFalse(tabRows.isEmpty)
+        XCTAssertTrue(tabRows.allSatisfy { $0.section == "Tab" })
+        XCTAssertTrue(tabRows.contains { $0.id == "tab-name" })
+        XCTAssertFalse(tabRows.contains { $0.id == "workspace-name" })
+
+        shell.debugSetInspectorMode(.pane)
+        let paneRows = shell.debugVisibleInspectorRows()
+        XCTAssertFalse(paneRows.isEmpty)
+        XCTAssertTrue(paneRows.allSatisfy { $0.section == "Active Pane" })
+        XCTAssertFalse(paneRows.contains { $0.label == "PID" || $0.label == "CPU" || $0.label == "Memory" })
+    }
+
+    @MainActor
+    func testSidebarsCollapseAndCenterPaneReclaimsTheirWidth() throws {
+        let shell = SeyalShellPreviewFactory.make(
+            frame: NSRect(x: 0, y: 0, width: 1280, height: 800)
+        )
+        shell.layoutSubtreeIfNeeded()
+        let expanded = try XCTUnwrap(shell.debugLayoutContract())
+
+        shell.debugSetSidebarVisibility(left: false, inspector: false)
+        shell.layoutSubtreeIfNeeded()
+        let collapsed = try XCTUnwrap(shell.debugLayoutContract())
+
+        XCTAssertEqual(collapsed.leftContext.width, 0, accuracy: 1)
+        XCTAssertEqual(collapsed.inspector.width, 0, accuracy: 1)
+        XCTAssertEqual(collapsed.pane.minX, shell.bounds.minX, accuracy: 1)
+        XCTAssertEqual(collapsed.pane.maxX, shell.bounds.maxX, accuracy: 1)
+        XCTAssertGreaterThan(
+            collapsed.pane.width,
+            expanded.pane.width
+                + SeyalDesignTokens.Layout.leftContextWidth
+                + SeyalDesignTokens.Layout.inspectorWidth
+                - 4
+        )
+
+        shell.debugSetSidebarVisibility(left: true, inspector: true)
+        shell.layoutSubtreeIfNeeded()
+        let restored = try XCTUnwrap(shell.debugLayoutContract())
+        XCTAssertEqual(restored.leftContext.width, SeyalDesignTokens.Layout.leftContextWidth, accuracy: 1)
+        XCTAssertEqual(restored.inspector.width, SeyalDesignTokens.Layout.inspectorWidth, accuracy: 1)
+        XCTAssertEqual(restored.pane.width, expanded.pane.width, accuracy: 1)
+    }
+
+    @MainActor
     func testFrozenReferenceUsesDenseThreeColumnLayoutWithoutTrailingGap() throws {
         let shell = SeyalShellPreviewFactory.make(
             frame: NSRect(x: 0, y: 0, width: 1280, height: 800)

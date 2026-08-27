@@ -654,15 +654,18 @@ fn measure_streaming(
 
         let client_start = Instant::now();
         for client in clients.iter_mut() {
-            let before_generation = client.cache.generation;
-            client.drain_available().expect("client drain");
-            let after_generation = client.cache.generation;
-            if after_generation != before_generation
-                && let Some(source) =
-                    runtime.benchmark_source_timestamp(execution_id, after_generation)
-            {
-                samples.push(Instant::now().duration_since(source).as_micros());
-            }
+            client
+                .drain_available_with_batch_hook(|generation| {
+                    let source = runtime
+                        .benchmark_source_timestamp(execution_id, generation)
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "committed display generation {generation} has no benchmark source timestamp"
+                            )
+                        });
+                    samples.push(Instant::now().duration_since(source).as_micros());
+                })
+                .expect("client drain");
         }
         client_apply_us += client_start.elapsed().as_micros();
 
@@ -841,6 +844,13 @@ impl BenchClient {
     }
 
     fn drain_available(&mut self) -> std::io::Result<()> {
+        self.drain_available_with_batch_hook(|_| {})
+    }
+
+    fn drain_available_with_batch_hook<F>(&mut self, mut on_batch: F) -> std::io::Result<()>
+    where
+        F: FnMut(u64),
+    {
         let mut buffer = [0u8; 32 * 1024];
         loop {
             match self.stream.read(&mut buffer) {
@@ -893,6 +903,10 @@ impl BenchClient {
                     MessageType::DisplayDelta => self.deltas += 1,
                     _ => unreachable!(),
                 }
+                // One nonblocking socket drain may contain multiple complete
+                // presentation batches. Observe each committed cache generation
+                // here so percentile sampling cannot silently collapse them.
+                on_batch(self.cache.generation);
             }
         }
         Ok(())

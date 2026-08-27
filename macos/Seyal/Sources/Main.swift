@@ -15,7 +15,9 @@ enum SeyalMain {
         }
 
         if CommandLine.arguments.contains("--renderer-self-test") {
-            guard RendererValidation.deterministicSelfTest() else {
+            guard RendererValidation.deterministicSelfTest(),
+                  Pass6RegressionValidation.selfTest()
+            else {
                 print("Seyal deterministic Metal renderer self-test failed.")
                 exit(1)
             }

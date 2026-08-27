@@ -30,6 +30,7 @@ final class MetalSurfaceView: NSView {
     private var hasPreparedState = false
     private var presentationPending = false
     private var presentationRetryScheduled = false
+    private var presentationRetryTimer: Timer?
     private var presentationRetryGeneration: UInt64 = 0
     private var presentationRetryBudget = PresentationRetryBudget()
     private(set) var lastBridgeError: Int32?
@@ -234,6 +235,8 @@ final class MetalSurfaceView: NSView {
     }
 
     private func resetPresentationRetries() {
+        presentationRetryTimer?.invalidate()
+        presentationRetryTimer = nil
         presentationRetryGeneration &+= 1
         presentationRetryScheduled = false
         presentationRetryBudget.reset()
@@ -261,15 +264,14 @@ final class MetalSurfaceView: NSView {
 
         presentationRetryScheduled = true
         let generation = presentationRetryGeneration
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            Task { @MainActor [weak self] in
-                self?.runPresentationRetry(generation: generation)
-            }
+        presentationRetryTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            self?.runPresentationRetry(generation: generation)
         }
     }
 
     private func runPresentationRetry(generation: UInt64) {
         guard generation == presentationRetryGeneration else { return }
+        presentationRetryTimer = nil
         presentationRetryScheduled = false
         guard shouldRender, hasPreparedState, presentationPending else { return }
         presentPreparedState()

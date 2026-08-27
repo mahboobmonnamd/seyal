@@ -119,18 +119,21 @@ An unsupported native event is not guessed into terminal bytes. It remains unhan
 
 ## 5. Event-routing order
 
-The terminal surface must avoid duplicate delivery through `keyDown`, menu key equivalents and AppKit text interpretation.
+The terminal surface must avoid duplicate delivery through `keyDown`, menu key equivalents and AppKit text interpretation, while preserving IME control of composition keys.
 
 The behavioral order is:
 
 1. allow recognized application/menu commands to resolve as native application commands;
-2. recognize the supported non-text terminal keys and supported Control-key combinations from the native event;
-3. route remaining text-producing input through AppKit's text-input/IME machinery;
-4. submit only committed text callbacks as `Input`;
-5. preserve marked/preedit callbacks locally;
-6. never submit one physical/native event by more than one route.
+2. if marked/composition state is active, give the active AppKit text-input context first opportunity to consume the event; if consumed, stop terminal routing for that event;
+3. when no active composition consumed the event, recognize the supported non-text terminal keys and supported Control-key combinations from the native event;
+4. route remaining text-producing input through AppKit's text-input/IME machinery;
+5. submit only committed text callbacks as `Input`;
+6. preserve marked/preedit callbacks locally;
+7. never submit one physical/native event by more than one route.
 
-A production implementation may use `NSTextInputContext`, `interpretKeyEvents` or equivalent AppKit mechanisms, but it must satisfy this observable classification/order. In particular, it must not unconditionally send navigation/function keys through text interpretation if that causes those keys to leak as text/control characters.
+This ordering is required so Enter/Escape/arrows can commit, cancel or navigate an active IME candidate session instead of leaking to the PTY, while ordinary terminal navigation keys are not unconditionally consumed as AppKit editing selectors when no composition owns them.
+
+A production implementation may use `NSTextInputContext`, `interpretKeyEvents` or equivalent AppKit mechanisms, but it must satisfy this observable classification/order. It must not unconditionally text-interpret navigation/function keys if that causes terminal keys to leak, disappear or be delivered twice.
 
 ## 6. Exact M001 keyboard matrix
 
@@ -153,6 +156,8 @@ Pass 7 intentionally implements a small permanent semantic-key layer that can be
 | native key repeat for any supported semantic key | repeated semantic-key submissions | same ordering/encoding per occurrence |
 
 The arrow-key encoding lives in Runtime even though M001 does not yet implement/advertise application-cursor mode. M002 may add DECCKM/application-keypad semantics to the Runtime encoder without changing the native event boundary. Pass 7 must not invent fake canonical mode state merely to demonstrate a mode toggle.
+
+The current `seyal-m001` terminfo deliberately does not advertise cursor-key capabilities. Pass 7 tests that arrow intent crosses the Runtime encoder and reaches the PTY correctly; it does not use these arrows to claim ncurses/TUI key-discovery compatibility before the owning M002 capability work.
 
 ### 6.2 Control ASCII mapping
 
@@ -200,6 +205,8 @@ CAP_SEMANTIC_TERMINAL_KEY = 1 << 2
 ```
 
 A Pass 7 interactive client requires this capability before sending `TerminalKey`. An older Runtime that does not advertise it remains valid for Pass 5/6 display but is not Pass 7 interactive-capable.
+
+Existing Pass 5/6 clients tolerate unknown `ServerHello.server_capabilities` bits and require only `CAP_BINARY_DISPLAY`; therefore advertising bit 2 is backward compatible with the current 1.0 client. The Pass 7 implementation must retain a regression test proving this compatibility.
 
 The client must not probe support by sending an unknown message first.
 
@@ -298,18 +305,20 @@ The queue may store encoded frames or typed entries, but it must not serialize t
 
 AppKit computes a rows/columns **proposal** from the usable terminal viewport in logical points and the permanent renderer's cell metrics/insets.
 
-Conceptually:
+Cell width/height must be finite and greater than zero before calculation. When both usable dimensions are positive:
 
 ```text
 usableWidth  = max(0, viewportWidth  - horizontalInsets)
 usableHeight = max(0, viewportHeight - verticalInsets)
-columns = floor(usableWidth  / cellWidth)
-rows    = floor(usableHeight / cellHeight)
+columns = clamp(floor(usableWidth  / cellWidth),  1, 512)
+rows    = clamp(floor(usableHeight / cellHeight), 1, 256)
 ```
+
+If either usable dimension is non-positive or cell metrics are invalid, no new terminal geometry is proposed until valid layout exists. A tiny but positive viewport therefore converges to at least `1×1`, while an extremely large viewport is capped at the SPEC-004 M001 maxima rather than retaining stale geometry.
 
 The implementation must use one authoritative renderer/layout cell-metric source rather than independently re-measuring fonts in resize code.
 
-The proposal is submitted only when both dimensions are nonzero, within SPEC-004 maxima and differ from the last requested/committed relevant geometry.
+The proposal is submitted only when it differs from the last outstanding requested geometry and the latest committed projection geometry. Runtime still independently validates every proposal.
 
 ### 11.2 Backing scale
 
@@ -347,7 +356,9 @@ validate Controller + AttachmentId + geometry
 
 If PTY winsize fails, canonical rows/columns and damage generation remain unchanged. No success acknowledgement is required for terminal progress; the client observes accepted geometry through subsequent canonical display state. Semantic errors use the existing SPEC-004 `Error` path.
 
-Repeated identical geometry is a no-op and must not create unnecessary canonical damage.
+The client treats the latest submitted resize as **outstanding**, not canonically committed. It becomes committed only when authoritative display state reports that geometry. A Runtime `Error`, disconnect or new attachment invalidates the outstanding target so an otherwise identical native proposal can be retried when authority/conditions permit.
+
+Repeated identical geometry that is already committed or outstanding is a no-op and must not create unnecessary wire work or canonical damage.
 
 ## 13. Focus and AppKit text-input / IME seam
 
@@ -361,9 +372,9 @@ Required behavior:
 - `setMarkedText`/equivalent never submits PTY input;
 - only committed `insertText`/equivalent produces `Input` UTF-8 bytes;
 - `unmarkText`, cancellation, connection/controller loss and relevant focus loss clear composition without sending it;
-- IME-consumed key events do not also escape through the semantic-key route;
+- while composition is active, IME-consumed Enter/Escape/arrows/control keys do not also escape through the semantic-key route;
 - candidate-window geometry uses the current disposable cursor/render geometry as a presentation anchor and does not become canonical terminal state;
-- composition storage is bounded to the existing maximum `Input` payload; larger commits are rejected or chunked only through bounded existing input semantics without splitting UTF-8 code units incorrectly.
+- composition storage is bounded to the existing maximum `Input` payload; larger commits are rejected or chunked only through bounded existing input semantics without splitting a UTF-8 encoded scalar.
 
 M001 does not require rich inline preedit rendering inside terminal history. The permanent seam must permit that later without replacing the terminal surface or routing marked text through the PTY.
 
@@ -378,7 +389,7 @@ Pass 7 keeps the Metal terminal surface in the native accessibility tree with:
 
 M001 does not claim a complete screen-reader text-range/transcript implementation. Later accessibility text exposure must derive from authorized terminal/history presentation state; it must not create a second VT/grid authority.
 
-## 15. Latency instrumentation and privacy
+## 15. Latency instrumentation, budgets and privacy
 
 Pass 7 keeps latency measurement active at these boundaries:
 
@@ -393,7 +404,30 @@ Instrumentation records only monotonic duration, byte/count/geometry sizes, resu
 
 Production protocol messages do not gain tracing IDs solely for benchmarking. Cross-process end-to-end measurements use controlled benchmark/test harnesses; production hot paths retain local low-overhead boundary metrics.
 
-Acceptance evidence reports p50/p95/p99/max for the measured workload and environment. Pass 7 must show no material regression to Pass 6 display/output performance when the terminal is idle or receiving output.
+### 15.1 Pass 7 controlled-host performance gate
+
+Before production implementation begins, the implementation Issue records the exact controlled Apple-Silicon host/OS/build baseline from current `master` and freezes its benchmark command/repetition/percentile method. The first implementation must meet these M001 engineering targets on that controlled host; they are acceptance targets, not universal device SLAs:
+
+- sparse native event receipt → client admission: p99 **≤ 100 µs**;
+- client admission → complete socket write when the socket is writable and uncontended: p99 **≤ 250 µs**;
+- Runtime frame decode/admission → PTY write completion when PTY is writable and uncontended: p99 **≤ 250 µs**;
+- controlled sparse native event receipt → PTY write completion: p99 **≤ 750 µs**;
+- Runtime resize receipt → canonical commit at 120×40: p99 **≤ 1 ms**;
+- Runtime resize receipt → canonical commit at the practical M001 maximum: p99 **≤ 2 ms**.
+
+If measurement methodology cannot directly observe one cross-process composed boundary without perturbing the hot path, report the measurable component boundaries and a controlled harness-derived composition rather than adding per-event production tracing IDs.
+
+Pass 7 must also demonstrate:
+
+- **no persistent timer/poll loop** added for idle input/resize;
+- idle CPU remains within measurement noise of the Pass 6 baseline;
+- Pass 6 output/render p99 and active CPU show **no >10% regression** under the same controlled workload unless an independently reviewed measurement explains noise/host variance and the repeated-run median stays within 10%;
+- steady-state client/Runtime RSS attributable to the Pass 7 idle path grows by **≤ 2 MiB** total on the controlled single-surface workload;
+- accepted client input/control memory never exceeds the 262,144-byte wire-byte bound plus fixed queue/container overhead.
+
+A target miss blocks Pass 7 unless the performance specification/target is explicitly re-reviewed with measured evidence; it must not be waived merely because functional tests pass.
+
+Every new or renamed production hot-path function participating in input ingress, queue admission, Runtime dispatch/encoding, PTY write service or resize commit must be registered in `scripts/check-hot-path.py` as required by `docs/engineering/PERFORMANCE.md`.
 
 ## 16. Required tests and validation
 
@@ -409,12 +443,14 @@ Acceptance evidence reports p50/p95/p99/max for the measured workload and enviro
 - key-repeat ordering;
 - unsupported modifiers/keys do not alias to supported behavior;
 - IME mark/update/unmark/commit/cancel;
+- active-IME Enter/Escape/arrows are consumed by IME when appropriate and are not duplicated into terminal input;
 - focus/controller/connection loss during composition does not submit marked text;
 - no duplicate delivery through AppKit text interpretation.
 
 ### 16.2 Protocol/Runtime tests
 
 - `CAP_SEMANTIC_TERMINAL_KEY` negotiation;
+- a current Pass 5/6 client still accepts `ServerHello` with the new unknown-to-it capability bit set;
 - `TerminalKey` round-trip and exact 24-byte layout;
 - malformed key kind/modifiers/scalar/reserved behavior;
 - Observer rejection, Controller success, stale/foreign attachment rejection;
@@ -428,12 +464,16 @@ The `TerminalKey` decoder is included in the existing local binary-protocol fuzz
 
 ### 16.3 Resize tests
 
-- viewport/cell metric floor calculation and bounds;
-- unchanged rows/columns produces no request;
+- valid viewport/cell-metric floor-and-clamp calculation;
+- tiny positive viewport converges to 1×1;
+- huge viewport clamps to 512×256;
+- invalid/non-positive usable viewport does not propose invalid geometry;
+- unchanged committed/outstanding rows/columns produces no request;
 - backing-scale-only invalidation does not mutate terminal geometry;
 - rapid live-resize coalesces only adjacent unsent resize work;
 - input/resize/input ordering remains exact;
 - partially written resize is immutable;
+- rejected outstanding resize becomes retryable;
 - observer/invalid/stale geometry rejection;
 - injected PTY winsize failure leaves canonical dimensions/generation unchanged;
 - successful resize commits canonical geometry only after PTY success;
@@ -461,7 +501,7 @@ prove at minimum:
 - focus terminal and type a simple shell command;
 - Backspace edits before submission;
 - Control-C reaches the shell/application as the expected control byte;
-- arrows traverse the Runtime semantic-key encoder and reach PTY in M001 normal encoding;
+- arrows traverse the Runtime semantic-key encoder and reach PTY in M001 normal encoding without claiming ncurses capability;
 - resizing the window changes PTY/canonical/projection geometry consistently;
 - the accepted minimal alternate-screen fixture receives the same input/resize path;
 - output continues correctly while input is backpressured/stalled on a separate test client;
@@ -474,12 +514,12 @@ Benchmark at minimum:
 - sparse typing;
 - sustained synthetic key-repeat burst;
 - 1 KiB / 16 KiB / 64 KiB committed-text submissions where legal;
-- repeated live-resize from 80×24 through representative larger geometries;
+- repeated live-resize from 80×24 through representative larger geometries and M001 maximum;
 - input while sustained terminal output is active;
 - alternate-screen input/resize;
 - idle terminal before/after Pass 7 to detect new polling/CPU cost.
 
-Record CPU/RSS plus boundary latency distributions. No benchmark may depend on logging terminal/input contents.
+Record exact commit SHA, hardware/OS/build mode, run/repetition count, percentile method, baseline/result, p50/p95/p99/max, CPU/RSS, queue depth/high-water, allocations/reallocations where instrumentable, socket/write counts where instrumentable and the section 15.1 pass/fail decision. No benchmark may depend on logging terminal/input contents.
 
 ## 17. Failure behavior
 
@@ -489,7 +529,7 @@ Record CPU/RSS plus boundary latency distributions. No benchmark may depend on l
 - socket `WouldBlock`: retain accepted FIFO bytes and wait for writable readiness.
 - malformed server/client protocol: use SPEC-004 failure/cleanup semantics.
 - PTY closed/execution finalized: reject input/resize and release controller/client resources idempotently.
-- resize rejection: keep current rendered/canonical geometry until authoritative projection changes; do not locally pretend the terminal resized.
+- resize rejection: keep current rendered/canonical geometry until authoritative projection changes, invalidate the outstanding request and permit a later retry; do not locally pretend the terminal resized.
 - renderer failure: does not change input/resize/terminal authority; canonical terminal progress remains independent.
 
 ## 18. Security and privacy
@@ -537,10 +577,11 @@ Pass 7 implementation is complete only when all of these are true:
 - interactive surface holds explicit Controller authority or is visibly noninteractive;
 - input/control queue is bounded, FIFO and readiness-driven with no main-thread busy wait;
 - resize obeys propose → authorize/prepare → PTY winsize → canonical commit → damage/projection;
-- resize storms remain bounded without crossing input-order barriers;
+- resize storms remain bounded without crossing input-order barriers and tiny/large windows converge to valid clamped geometry;
 - focus/IME/accessibility seams exist on the Metal surface and marked text never leaks before commit;
 - deterministic/native/protocol/integration/failure/fuzz tests pass;
-- exact-head latency/CPU/RSS evidence is recorded and no material output/render regression is found;
+- exact-head latency/CPU/RSS evidence meets section 15.1 and no material Pass 6 output/render regression is found;
+- all new/renamed production hot-path functions are registered in the deterministic hot-path guardrail;
 - OSS remains independent of commercial code;
 - no Pass 8+ behavior is included as scope creep;
 - independent final review has no unresolved red/orange blocker.

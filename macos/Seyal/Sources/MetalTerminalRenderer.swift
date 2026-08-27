@@ -156,7 +156,6 @@ struct MetalRendererStats: Equatable {
     var submittedFrames: UInt64 = 0
     var completedFrames: UInt64 = 0
     var coalescedFrames: UInt64 = 0
-    var drawableMisses: UInt64 = 0
     var fullRebuilds: UInt64 = 0
     var rebuiltRows: UInt64 = 0
     var rebuiltCells: UInt64 = 0
@@ -419,8 +418,11 @@ final class MetalTerminalRenderer {
         return .updated
     }
 
+    /// Submit a frame to a drawable supplied by the platform frame scheduler.
+    /// Production presentation must not call `CAMetalLayer.nextDrawable()`
+    /// here because that API can wait while all drawables are in use.
     @discardableResult
-    func present(layer: CAMetalLayer) -> Bool {
+    func present(drawable: any CAMetalDrawable) -> Bool {
         guard visible,
               needsPresent,
               framesInFlight == 0,
@@ -428,10 +430,6 @@ final class MetalTerminalRenderer {
               instanceCount > 0,
               let atlasTexture = glyphAtlas.texture
         else {
-            return false
-        }
-        guard let drawable = layer.nextDrawable() else {
-            handleDrawableUnavailable()
             return false
         }
         guard let commandBuffer = makeCommandBuffer(
@@ -489,11 +487,6 @@ final class MetalTerminalRenderer {
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
         return commandBuffer.status == .completed ? texture : nil
-    }
-
-    func handleDrawableUnavailable() {
-        stats.drawableMisses &+= 1
-        needsPresent = true
     }
 
     /// Make the current prepared state non-presentable after a failed

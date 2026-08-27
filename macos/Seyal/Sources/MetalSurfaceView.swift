@@ -1,6 +1,6 @@
 import AppKit
 import Metal
-import QuartzCore
+@preconcurrency import QuartzCore
 
 struct PresentationRetryBudget: Equatable {
     private static let delays: [TimeInterval] = [1.0 / 60.0, 0.05, 0.20, 0.75]
@@ -21,18 +21,70 @@ struct PresentationRetryBudget: Equatable {
     }
 }
 
+struct PresentationOpportunityState: Equatable {
+    private(set) var pending = false
+    private(set) var armed = false
+
+    mutating func request() {
+        pending = true
+    }
+
+    mutating func armIfNeeded() -> Bool {
+        guard pending, !armed else { return false }
+        armed = true
+        return true
+    }
+
+    mutating func consumeOpportunity() -> Bool {
+        guard armed, pending else { return false }
+        armed = false
+        return true
+    }
+
+    mutating func markPresented() {
+        pending = false
+        armed = false
+    }
+
+    mutating func markFailed() {
+        pending = true
+        armed = false
+    }
+
+    mutating func cancel() {
+        pending = false
+        armed = false
+    }
+}
+
+/// Owns the run-loop registration independently of the view's actor-isolated
+/// lifetime. Releasing a surface therefore also invalidates its display link.
+final class MetalDisplayLinkLease {
+    let link: CAMetalDisplayLink
+
+    init(layer: CAMetalLayer) {
+        link = CAMetalDisplayLink(metalLayer: layer)
+    }
+
+    deinit {
+        link.delegate = nil
+        link.invalidate()
+    }
+}
+
 @MainActor
-final class MetalSurfaceView: NSView {
+final class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     private let metalDevice: any MTLDevice
     private let renderer: MetalTerminalRenderer
     private var bridge: RustDisplayBridge?
     private var forceNextFrame = false
     private var hasPreparedState = false
-    private var presentationPending = false
+    private var presentationState = PresentationOpportunityState()
     private var presentationRetryScheduled = false
     private var presentationRetryTimer: Timer?
     private var presentationRetryGeneration: UInt64 = 0
     private var presentationRetryBudget = PresentationRetryBudget()
+    private var metalDisplayLinkLease: MetalDisplayLinkLease?
     private var preparationRetryTimer: Timer?
     private var preparationRetryGeneration: UInt64 = 0
     private var preparationRetryScheduled = false
@@ -100,7 +152,7 @@ final class MetalSurfaceView: NSView {
         guard shouldRender, hasPreparedState else { return }
         renderer.requestPresent()
         beginPresentationAttemptSeries()
-        presentPreparedState()
+        armMetalDisplayLink()
     }
 
     override func viewDidChangeBackingProperties() {
@@ -133,6 +185,7 @@ final class MetalSurfaceView: NSView {
         if newWindow == nil {
             renderer.setVisible(false)
             invalidatePreparedPresentation()
+            invalidateMetalDisplayLink()
             bridge?.stop()
         }
         super.viewWillMove(toWindow: newWindow)
@@ -166,11 +219,15 @@ final class MetalSurfaceView: NSView {
     private func updateVisibility() {
         let renderable = shouldRender
         if renderable {
+            if let metalLayer = layer as? CAMetalLayer {
+                installMetalDisplayLink(on: metalLayer)
+            }
             forceNextFrame = true
             if bridge?.isConnected == false {
                 _ = bridge?.start()
             }
         } else {
+            invalidateMetalDisplayLink()
             invalidatePreparedPresentation()
         }
 
@@ -182,7 +239,7 @@ final class MetalSurfaceView: NSView {
             if hasPreparedState {
                 renderer.requestPresent()
                 beginPresentationAttemptSeries()
-                presentPreparedState()
+                armMetalDisplayLink()
             }
         }
     }
@@ -205,7 +262,7 @@ final class MetalSurfaceView: NSView {
                 resetPreparationRetries()
                 if shouldRender {
                     beginPresentationAttemptSeries()
-                    presentPreparedState()
+                    armMetalDisplayLink()
                 }
             }
         } catch {
@@ -260,30 +317,62 @@ final class MetalSurfaceView: NSView {
         preparationRetryBudget.reset()
     }
 
-    /// Try to present the already prepared current frame. A temporary drawable
-    /// miss or command-buffer construction failure does not require new terminal
-    /// output: the same prepared state receives a small bounded retry series.
-    /// The series is coalesced and finite, so persistent GPU/surface failure
-    /// cannot create a display-link-style busy loop.
-    private func presentPreparedState() {
+    private func installMetalDisplayLink(on metalLayer: CAMetalLayer) {
+        guard metalDisplayLinkLease == nil else { return }
+        let lease = MetalDisplayLinkLease(layer: metalLayer)
+        let link = lease.link
+        link.delegate = self
+        link.isPaused = true
+        link.add(to: .main, forMode: .common)
+        metalDisplayLinkLease = lease
+    }
+
+    private func invalidateMetalDisplayLink() {
+        metalDisplayLinkLease = nil
+    }
+
+    private func armMetalDisplayLink() {
         guard shouldRender,
               hasPreparedState,
-              presentationPending,
-              let metalLayer = layer as? CAMetalLayer
+              presentationState.pending,
+              renderer.hasPresentablePreparedState,
+              !renderer.hasFrameInFlight
+        else {
+            return
+        }
+        if presentationState.armIfNeeded() {
+            metalDisplayLinkLease?.link.isPaused = false
+        }
+    }
+
+    func metalDisplayLink(
+        _ link: CAMetalDisplayLink,
+        needsUpdate update: CAMetalDisplayLink.Update
+    ) {
+        // The callback may already be queued when the view is detached or the
+        // display link is replaced. Never let an old link present into a new
+        // surface lifecycle.
+        guard metalDisplayLinkLease?.link === link else { return }
+        link.isPaused = true
+
+        guard shouldRender,
+              hasPreparedState,
+              presentationState.consumeOpportunity()
         else {
             return
         }
 
-        if renderer.present(layer: metalLayer) {
-            presentationPending = false
+        if renderer.present(drawable: update.drawable) {
+            presentationState.markPresented()
             resetPresentationRetries()
         } else {
+            presentationState.markFailed()
             schedulePresentationRetry()
         }
     }
 
     private func beginPresentationAttemptSeries() {
-        presentationPending = true
+        presentationState.request()
         resetPresentationRetries()
     }
 
@@ -296,7 +385,7 @@ final class MetalSurfaceView: NSView {
     }
 
     private func cancelPresentationRetries() {
-        presentationPending = false
+        presentationState.cancel()
         resetPresentationRetries()
     }
 
@@ -309,7 +398,7 @@ final class MetalSurfaceView: NSView {
     private func schedulePresentationRetry() {
         guard shouldRender,
               hasPreparedState,
-              presentationPending,
+              presentationState.pending,
               !presentationRetryScheduled,
               let delay = presentationRetryBudget.claimNextDelay()
         else {
@@ -329,8 +418,8 @@ final class MetalSurfaceView: NSView {
         guard generation == presentationRetryGeneration else { return }
         presentationRetryTimer = nil
         presentationRetryScheduled = false
-        guard shouldRender, hasPreparedState, presentationPending else { return }
-        presentPreparedState()
+        guard shouldRender, hasPreparedState, presentationState.pending else { return }
+        armMetalDisplayLink()
     }
 
     private func updateDrawableSize() {
@@ -356,6 +445,7 @@ enum Pass6RegressionValidation {
     static func selfTest() -> Bool {
         supplementaryScalarResolutionSelfTest()
             && presentationRetryBudgetSelfTest()
+            && presentationOpportunityStateSelfTest()
             && preparationRetryBudgetSelfTest()
             && transientDrawableRecoverySelfTest()
             && RendererValidation.inFlightVisibilityRecoverySelfTest()
@@ -382,6 +472,27 @@ enum Pass6RegressionValidation {
         }
         budget.reset()
         return !budget.exhausted && budget.claimNextDelay() != nil
+    }
+
+    private static func presentationOpportunityStateSelfTest() -> Bool {
+        // Repeated invalidations coalesce into one outstanding display-link
+        // opportunity. A failed submission restores pending work without
+        // leaving the link armed twice; a successful submission clears it.
+        var state = PresentationOpportunityState()
+        var armCount = 0
+        for _ in 0..<1_000 {
+            state.request()
+            if state.armIfNeeded() {
+                armCount += 1
+            }
+        }
+        guard armCount == 1, state.pending, state.armed else { return false }
+        guard state.consumeOpportunity() else { return false }
+        state.markFailed()
+        guard state.pending, !state.armed else { return false }
+        guard state.armIfNeeded(), !state.armIfNeeded() else { return false }
+        state.markPresented()
+        return !state.pending && !state.armed
     }
 
     private static func preparationRetryBudgetSelfTest() -> Bool {
@@ -429,13 +540,8 @@ enum Pass6RegressionValidation {
                 return false
             }
 
-            // Simulate the production nextDrawable()==nil branch. No second
-            // update/current-frame publication follows: the already prepared
-            // static frame must remain presentable on a later opportunity.
-            let missesBefore = renderer.stats.drawableMisses
-            renderer.handleDrawableUnavailable()
-            guard renderer.stats.drawableMisses == missesBefore + 1 else { return false }
-
+            // Test-only acquisition exercises the same submission method used
+            // by the production display-link callback.
             let cellSize = renderer.cellPixelSize(backingScale: 1)
             let layer = CAMetalLayer()
             layer.device = device
@@ -448,7 +554,10 @@ enum Pass6RegressionValidation {
             layer.drawableSize = CGSize(width: cellSize.width, height: cellSize.height)
 
             let completedBefore = renderer.stats.completedFrames
-            guard renderer.present(layer: layer) else { return false }
+            guard RendererValidation.presentOnLayerForValidation(
+                renderer: renderer,
+                layer: layer
+            ) else { return false }
             let deadline = Date().addingTimeInterval(2)
             while renderer.stats.completedFrames == completedBefore && Date() < deadline {
                 RunLoop.current.run(until: Date().addingTimeInterval(0.01))

@@ -215,10 +215,6 @@ enum RendererValidation {
                 return false
             }
 
-            let drawableMisses = renderer.stats.drawableMisses
-            renderer.handleDrawableUnavailable()
-            guard renderer.stats.drawableMisses == drawableMisses + 1 else { return false }
-
             // Hide must release dedicated resources. Showing again requests the
             // latest committed frame rather than replaying PTY bytes and forces a
             // reconstructable full redraw.
@@ -306,7 +302,7 @@ enum RendererValidation {
                     )
                     let completedBefore = renderer.stats.completedFrames
                     let submittedBefore = renderer.stats.submittedFrames
-                    guard renderer.present(layer: layer),
+                    guard presentOnLayerForValidation(renderer: renderer, layer: layer),
                           renderer.stats.submittedFrames == submittedBefore + 1
                     else {
                         return false
@@ -543,7 +539,7 @@ enum RendererValidation {
             height: cellSize.height
         )
         let completedBefore = renderer.stats.completedFrames
-        guard renderer.present(layer: layer), renderer.stats.submittedFrames == 1 else {
+        guard presentOnLayerForValidation(renderer: renderer, layer: layer), renderer.stats.submittedFrames == 1 else {
             return false
         }
 
@@ -620,7 +616,7 @@ enum RendererValidation {
             var currentFrameRequests = 0
             renderer.onNeedsCurrentFrame = { currentFrameRequests += 1 }
             let completedBefore = renderer.stats.completedFrames
-            guard renderer.present(layer: layer), renderer.hasFrameInFlight else {
+            guard presentOnLayerForValidation(renderer: renderer, layer: layer), renderer.hasFrameInFlight else {
                 return false
             }
             renderer.setVisible(false)
@@ -722,6 +718,14 @@ enum RendererValidation {
             RunLoop.current.run(until: Date().addingTimeInterval(0.01))
         }
         return renderer.stats.completedFrames > completedBefore
+    }
+
+    static func presentOnLayerForValidation(
+        renderer: MetalTerminalRenderer,
+        layer: CAMetalLayer
+    ) -> Bool {
+        guard let drawable = layer.nextDrawable() else { return false }
+        return renderer.present(drawable: drawable)
     }
 
     private static func frameContains(_ frame: NativePreparedFrame, text: String) -> Bool {

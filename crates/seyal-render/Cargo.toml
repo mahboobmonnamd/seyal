@@ -1,0 +1,16 @@
+[package]
+name = "seyal-render"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+autobenches = false
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "pass6_preparation"
+harness = false

@@ -1,8 +1,8 @@
 # SPEC-005 — M001 permanent Metal renderer
 
-- **Status:** Proposed for M001 Pass 6
+- **Status:** Accepted for M001 Pass 6 via PR #657
 - **Date:** 2026-08-27
-- **Issue:** #656
+- **Issue:** #658
 - **Architecture authority:** accepted foundation architecture; `MILESTONE-001.md` section 11 and Pass 6
 - **Depends on:** SPEC-001, SPEC-004
 
@@ -259,7 +259,7 @@ committed DisplayCache state
 → rebuild only invalid prepared rows/runs
 → resolve/cache only missing glyph resources
 → combine cached + rebuilt prepared content for current visible state
-→ acquire drawable
+→ await a display-link frame opportunity with a supplied drawable
 → encode a correct current frame
 → commit command buffer
 → present drawable
@@ -276,6 +276,13 @@ Frame scheduling must be bounded:
 - renderer completion is never required for Runtime to accept more terminal output.
 
 The implementation may use platform frame/display scheduling primitives, but the scheduling mechanism must preserve these invariants and must be measured before being treated as a performance claim.
+
+On macOS, the permanent surface uses a paused, one-shot `CAMetalDisplayLink`
+to receive a platform-supplied drawable for each pending presentation. Production
+code must not synchronously call `CAMetalLayer.nextDrawable()` from the
+Runtime/client progress path or the main-actor presentation request. Drawable
+pool starvation therefore waits for a later legitimate frame opportunity; only
+command/resource submission failures use the finite presentation retry budget.
 
 ## 11. Cursor invalidation
 

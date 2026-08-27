@@ -1,0 +1,22 @@
+[package]
+name = "seyal-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[dependencies]
+seyal-protocol = { path = "../seyal-protocol" }
+seyal-render = { path = "../seyal-render" }
+
+[dev-dependencies]
+seyal-exec = { path = "../seyal-exec" }
+seyal-runtime = { path = "../seyal-runtime" }
+
+[lints.rust]
+unsafe_code = "deny"

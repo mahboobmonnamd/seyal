@@ -66,4 +66,9 @@ jobs:
       - name: Unit harness PTY integration and native launch smoke
         run: make test
       - name: Native PTY benchmark baseline
+        env:
+          # GitHub-hosted macOS runners may be headless and cannot deliver
+          # CAMetalDisplayLink callbacks. Interactive/local runs require the
+          # presentation proxy and remain the acceptance measurement.
+          SEYAL_REQUIRE_DISPLAY_LINK_BENCHMARK: "0"
         run: make bench

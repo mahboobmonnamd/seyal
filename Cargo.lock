@@ -9,6 +9,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
+name = "seyal-client"
+version = "0.0.0"
+dependencies = [
+ "seyal-exec",
+ "seyal-protocol",
+ "seyal-render",
+ "seyal-runtime",
+]
+
+[[package]]
+name = "seyal-core"
+version = "0.0.0"
+
+[[package]]
 name = "seyal-exec"
 version = "0.0.0"
 dependencies = [
@@ -17,11 +31,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "seyal-protocol"
+version = "0.0.0"
+dependencies = [
+ "libc",
+ "seyal-core",
+]
+
+[[package]]
+name = "seyal-render"
+version = "0.0.0"
+
+[[package]]
 name = "seyal-runtime"
 version = "0.0.0"
 dependencies = [
  "libc",
+ "seyal-core",
  "seyal-exec",
+ "seyal-protocol",
  "stats_alloc",
 ]
 

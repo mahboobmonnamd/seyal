@@ -142,10 +142,11 @@ private struct CompositionDocument: Equatable {
             return nil
         }
 
+        let boundedStart = min(proposedRange.location, length)
         let boundedEnd = min(proposedEnd, length)
         let bounded = NSRange(
-            location: min(proposedRange.location, length),
-            length: boundedEnd - min(proposedRange.location, length)
+            location: boundedStart,
+            length: boundedEnd - boundedStart
         )
         if bounded.length == 0 {
             return (NSAttributedString(string: ""), bounded)
@@ -201,11 +202,6 @@ private struct TerminalLayoutSample: Equatable {
     let verticalInsets: Double
     let cellWidth: Double
     let cellHeight: Double
-}
-
-private struct TerminalKeySubmission: Equatable {
-    let kind: TerminalKeyIntent
-    let scalar: UInt32
 }
 
 private enum TerminalNativeKeyClassifier {
@@ -283,11 +279,10 @@ private enum TerminalNativeKeyClassifier {
 }
 
 @MainActor
-final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
+final class InteractiveMetalSurfaceView: MetalSurfaceView, @MainActor NSTextInputClient {
     private var composition = CompositionDocument()
     private var lastLayoutSample: TerminalLayoutSample?
     private var nativeFailure: NativeInputFailure?
-    private var inputSystemConsumedCurrentEvent = false
     private let failureLayer = CATextLayer()
 
     override init(frame frameRect: NSRect) {
@@ -332,7 +327,6 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
             return
         }
 
-        inputSystemConsumedCurrentEvent = false
         if composition.hasMarkedText,
            inputContext?.handleEvent(event) == true
         {
@@ -397,6 +391,9 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
 
     override func terminalBridgeStatusDidChange() {
         super.terminalBridgeStatusDidChange()
+        if terminalBridgeIsConnected, nativeFailure == .disconnected {
+            nativeFailure = nil
+        }
         refreshFailurePresentation()
     }
 
@@ -465,9 +462,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
         guard let text = Self.plainString(from: string),
               composition.validatesReplacementRange(replacementRange)
         else {
-            composition.clear()
-            nativeFailure = .unsupportedReplacementRange
-            refreshFailurePresentation()
+            failComposition(.unsupportedReplacementRange)
             return
         }
 
@@ -493,11 +488,14 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
     }
 
     func characterIndex(for point: NSPoint) -> Int {
-        NSNotFound
+        _ = point
+        return NSNotFound
     }
 
-    func doCommand(by selector: Selector) {
-        inputSystemConsumedCurrentEvent = true
+    override func doCommand(by selector: Selector) {
+        // The event has reached the input-system command seam. Pass 7 never
+        // invokes arbitrary editing selectors against terminal/history state.
+        _ = selector
     }
 
     private func synchronizeTerminalGeometry() {
@@ -553,13 +551,20 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
     }
 
     private func failComposition(_ failure: NativeInputFailure) {
-        // discardMarkedText tells the input method to end conversion; clearing
-        // the local bounded document guarantees no preedit text can leak later.
-        inputContext?.discardMarkedText()
+        // Clear first so there is no hidden replay source. Tell the active input
+        // context to abandon conversion only after the current NSTextInputClient
+        // callback unwinds; this avoids re-entering the same composition method.
         composition.clear()
         nativeFailure = failure
         inputContext?.invalidateCharacterCoordinates()
+        scheduleDiscardMarkedText()
         refreshFailurePresentation()
+    }
+
+    private func scheduleDiscardMarkedText() {
+        DispatchQueue.main.async { [weak self] in
+            self?.inputContext?.discardMarkedText()
+        }
     }
 
     private func cancelComposition(discardInputContext: Bool) {
@@ -606,6 +611,11 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
     private func configureFailureLayer() {
         failureLayer.alignmentMode = .left
         failureLayer.fontSize = 12
+        failureLayer.foregroundColor = NSColor.labelColor.cgColor
+        failureLayer.backgroundColor = NSColor.windowBackgroundColor
+            .withAlphaComponent(0.92)
+            .cgColor
+        failureLayer.cornerRadius = 4
         failureLayer.contentsScale = NSScreen.main?.backingScaleFactor ?? 1
         failureLayer.isHidden = true
         layer?.addSublayer(failureLayer)

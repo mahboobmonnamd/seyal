@@ -1,14 +1,19 @@
 //! Deterministic, platform-neutral preparation for Seyal's permanent terminal renderer.
 //!
 //! This crate owns no PTY, VT parser, canonical terminal state, native font object,
-//! or GPU resource. It converts an already-committed disposable client display
-//! state into reusable row-oriented presentation data. Native renderers consume
-//! these prepared rows in coarse batches; no per-cell Rust/native callback is
-//! required.
+//! or GPU resource. It consumes only an already-committed disposable client display
+//! state and maintains a reusable contiguous prepared-cell cache. Native renderers
+//! consume that cache in one coarse transfer; there is no per-cell language callback.
 
 pub const MAX_RENDER_ROWS: u16 = 256;
 pub const MAX_RENDER_COLUMNS: u16 = 512;
 const DAMAGE_WORDS: usize = MAX_RENDER_ROWS as usize / u64::BITS as usize;
+
+pub const PREPARED_FLAG_BOLD: u16 = 1 << 0;
+pub const PREPARED_FLAG_UNDERLINE: u16 = 1 << 1;
+
+const COLOR_TAG_INDEXED: u32 = 0x0100_0000;
+const COLOR_TAG_RGB: u32 = 0x0200_0000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RenderColor {
@@ -43,25 +48,62 @@ impl Default for RenderCell {
     }
 }
 
+/// Read-only cell source used by the preparation engine.
+///
+/// Candidate-D adapters implement this trait over the already committed client
+/// cache. Conversion therefore occurs only for rows selected by damage; the
+/// renderer does not maintain a second full display cache merely to translate
+/// cell types.
+pub trait CellSource {
+    fn len(&self) -> usize;
+    fn cell(&self, index: usize) -> Option<RenderCell>;
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl CellSource for [RenderCell] {
+    fn len(&self) -> usize {
+        <[RenderCell]>::len(self)
+    }
+
+    fn cell(&self, index: usize) -> Option<RenderCell> {
+        self.get(index).copied()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(C)]
 pub struct CursorState {
     pub row: u16,
     pub column: u16,
     pub visible: bool,
+    pub reserved: [u8; 3],
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct CommittedDisplay<'a> {
+impl CursorState {
+    pub const fn new(row: u16, column: u16, visible: bool) -> Self {
+        Self {
+            row,
+            column,
+            visible,
+            reserved: [0; 3],
+        }
+    }
+}
+
+pub struct CommittedDisplay<'a, S: CellSource + ?Sized> {
     pub generation: u64,
     pub rows: u16,
     pub columns: u16,
     pub cursor: CursorState,
     pub alternate_screen: bool,
-    pub cells: &'a [RenderCell],
+    pub cells: &'a S,
 }
 
-impl CommittedDisplay<'_> {
-    fn validate(self) -> Result<(), PrepareError> {
+impl<S: CellSource + ?Sized> CommittedDisplay<'_, S> {
+    fn validate(&self) -> Result<(), PrepareError> {
         if self.rows == 0
             || self.columns == 0
             || self.rows > MAX_RENDER_ROWS
@@ -82,10 +124,11 @@ impl CommittedDisplay<'_> {
     }
 }
 
-/// Row-granular invalidation matching the current Candidate-D display contract,
-/// which transports complete damaged rows. The representation is fixed-size so
-/// coalescing does not allocate on the terminal presentation path.
+/// Row-granular invalidation matching Candidate-D's current complete-row delta
+/// contract. The representation is fixed-size so generation coalescing never
+/// allocates on the presentation path.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(C)]
 pub struct RowDamage {
     words: [u64; DAMAGE_WORDS],
 }
@@ -154,47 +197,28 @@ impl RowDamage {
             .sum()
     }
 
+    pub const fn words(self) -> [u64; DAMAGE_WORDS] {
+        self.words
+    }
+
     fn valid_for_rows(self, rows: u16) -> bool {
         (rows..MAX_RENDER_ROWS).all(|row| !self.contains(row))
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PreparedStyle {
-    pub bold: bool,
-    pub underline: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Stable internal native-facing cell representation.
+///
+/// This is not a public plugin ABI. The layout is deliberately fixed so one
+/// coarse pointer/length transfer can expose the prepared current surface to
+/// the Swift/Metal layer without one call per cell or per glyph.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(C)]
 pub struct PreparedCell {
-    pub column: u16,
-    pub scalar: char,
-    pub foreground: RenderColor,
-    pub background: RenderColor,
-    pub style: PreparedStyle,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PreparedRow {
-    row: u16,
-    cells: Vec<PreparedCell>,
-}
-
-impl PreparedRow {
-    fn with_capacity(row: u16, columns: u16) -> Self {
-        Self {
-            row,
-            cells: Vec::with_capacity(columns as usize),
-        }
-    }
-
-    pub fn row(&self) -> u16 {
-        self.row
-    }
-
-    pub fn cells(&self) -> &[PreparedCell] {
-        &self.cells
-    }
+    pub scalar: u32,
+    pub foreground: u32,
+    pub background: u32,
+    pub flags: u16,
+    pub reserved: u16,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -224,9 +248,10 @@ impl PreparationResult {
 
 /// Reusable prepared presentation state for one visible terminal surface.
 ///
-/// Rows keep their allocation across incremental generations. A fresh Metal
-/// drawable may re-issue every cached row, but only rows selected by damage or
-/// local cursor/geometry invalidation are rebuilt here.
+/// Geometry changes allocate one contiguous `rows × columns` cache. Ordinary
+/// damage rewrites only selected row ranges in place. A fresh Metal drawable may
+/// still re-issue the complete cache, but unchanged rows are not re-shaped,
+/// converted, allocated or rebuilt merely because a new drawable was acquired.
 #[derive(Debug, Default)]
 pub struct PreparedSurface {
     generation: Option<u64>,
@@ -234,7 +259,7 @@ pub struct PreparedSurface {
     columns: u16,
     cursor: CursorState,
     alternate_screen: bool,
-    prepared_rows: Vec<PreparedRow>,
+    prepared_cells: Vec<PreparedCell>,
 }
 
 impl PreparedSurface {
@@ -254,17 +279,27 @@ impl PreparedSurface {
         self.cursor
     }
 
-    pub fn prepared_rows(&self) -> &[PreparedRow] {
-        &self.prepared_rows
+    pub fn alternate_screen(&self) -> bool {
+        self.alternate_screen
     }
 
-    pub fn prepared_row(&self, row: u16) -> Option<&PreparedRow> {
-        self.prepared_rows.get(row as usize)
+    pub fn prepared_cells(&self) -> &[PreparedCell] {
+        &self.prepared_cells
     }
 
-    pub fn prepare(
+    pub fn prepared_row(&self, row: u16) -> Option<&[PreparedCell]> {
+        if row >= self.rows {
+            return None;
+        }
+        let columns = self.columns as usize;
+        let first = (row as usize).checked_mul(columns)?;
+        let last = first.checked_add(columns)?;
+        self.prepared_cells.get(first..last)
+    }
+
+    pub fn prepare<S: CellSource + ?Sized>(
         &mut self,
-        display: CommittedDisplay<'_>,
+        display: CommittedDisplay<'_, S>,
         mut damage: RowDamage,
         full_invalidation: bool,
     ) -> Result<PreparationResult, PrepareError> {
@@ -280,9 +315,8 @@ impl PreparedSurface {
         }
 
         let initialized = self.generation.is_some();
-        let geometry_changed = !initialized
-            || self.rows != display.rows
-            || self.columns != display.columns;
+        let geometry_changed =
+            !initialized || self.rows != display.rows || self.columns != display.columns;
         let screen_changed = initialized && self.alternate_screen != display.alternate_screen;
 
         if geometry_changed || screen_changed || full_invalidation {
@@ -297,17 +331,23 @@ impl PreparedSurface {
         }
 
         if geometry_changed {
-            self.rebuild_row_storage(display.rows, display.columns);
+            let cell_count = (display.rows as usize)
+                .checked_mul(display.columns as usize)
+                .ok_or(PrepareError::Overflow)?;
+            self.prepared_cells.clear();
+            self.prepared_cells
+                .resize(cell_count, PreparedCell::default());
         }
 
-        let full_rebuild = damage.count() == display.rows as usize;
+        let rebuilt_row_count = damage.count();
+        let full_rebuild = rebuilt_row_count == display.rows as usize;
         let mut rebuilt_cell_count = 0usize;
         for row in 0..display.rows {
             if !damage.contains(row) {
                 continue;
             }
             rebuilt_cell_count = rebuilt_cell_count
-                .checked_add(self.rebuild_row(display, row)?)
+                .checked_add(self.rebuild_row(&display, row)?)
                 .ok_or(PrepareError::Overflow)?;
         }
 
@@ -320,24 +360,15 @@ impl PreparedSurface {
         Ok(PreparationResult {
             generation: display.generation,
             rebuilt_rows: damage,
-            rebuilt_row_count: damage.count(),
+            rebuilt_row_count,
             rebuilt_cell_count,
             full_rebuild,
         })
     }
 
-    fn rebuild_row_storage(&mut self, rows: u16, columns: u16) {
-        self.prepared_rows.clear();
-        self.prepared_rows.reserve(rows as usize);
-        for row in 0..rows {
-            self.prepared_rows
-                .push(PreparedRow::with_capacity(row, columns));
-        }
-    }
-
-    fn rebuild_row(
+    fn rebuild_row<S: CellSource + ?Sized>(
         &mut self,
-        display: CommittedDisplay<'_>,
+        display: &CommittedDisplay<'_, S>,
         row: u16,
     ) -> Result<usize, PrepareError> {
         let columns = display.columns as usize;
@@ -345,37 +376,46 @@ impl PreparedSurface {
             .checked_mul(columns)
             .ok_or(PrepareError::Overflow)?;
         let last = first.checked_add(columns).ok_or(PrepareError::Overflow)?;
-        let source = display
-            .cells
-            .get(first..last)
-            .ok_or(PrepareError::InvalidCellCount)?;
-        let target = self
-            .prepared_rows
-            .get_mut(row as usize)
-            .ok_or(PrepareError::InvalidGeometry)?;
-
-        target.cells.clear();
-        if target.cells.capacity() < columns {
-            target.cells.reserve(columns - target.cells.capacity());
+        if last > self.prepared_cells.len() {
+            return Err(PrepareError::InvalidCellCount);
         }
-        for (column, cell) in source.iter().copied().enumerate() {
+
+        for offset in 0..columns {
+            let cell = display
+                .cells
+                .cell(first + offset)
+                .ok_or(PrepareError::InvalidCellCount)?;
             let (foreground, background) = if cell.attributes.inverse {
                 (cell.background, cell.foreground)
             } else {
                 (cell.foreground, cell.background)
             };
-            target.cells.push(PreparedCell {
-                column: column as u16,
-                scalar: cell.scalar,
-                foreground,
-                background,
-                style: PreparedStyle {
-                    bold: cell.attributes.bold,
-                    underline: cell.attributes.underline,
-                },
-            });
+            let mut flags = 0u16;
+            if cell.attributes.bold {
+                flags |= PREPARED_FLAG_BOLD;
+            }
+            if cell.attributes.underline {
+                flags |= PREPARED_FLAG_UNDERLINE;
+            }
+            self.prepared_cells[first + offset] = PreparedCell {
+                scalar: cell.scalar as u32,
+                foreground: pack_color(foreground),
+                background: pack_color(background),
+                flags,
+                reserved: 0,
+            };
         }
-        Ok(source.len())
+        Ok(columns)
+    }
+}
+
+pub const fn pack_color(color: RenderColor) -> u32 {
+    match color {
+        RenderColor::Default => 0,
+        RenderColor::Indexed(index) => COLOR_TAG_INDEXED | index as u32,
+        RenderColor::Rgb { r, g, b } => {
+            COLOR_TAG_RGB | ((r as u32) << 16) | ((g as u32) << 8) | b as u32
+        }
     }
 }
 
@@ -396,7 +436,7 @@ mod tests {
         columns: u16,
         cursor: CursorState,
         cells: &'a [RenderCell],
-    ) -> CommittedDisplay<'a> {
+    ) -> CommittedDisplay<'a, [RenderCell]> {
         CommittedDisplay {
             generation,
             rows,
@@ -408,8 +448,15 @@ mod tests {
     }
 
     #[test]
-    fn first_prepare_builds_every_visible_row() {
-        let cells = vec![cell('a'), cell('b'), cell('c'), cell('d'), cell('e'), cell('f')];
+    fn first_prepare_builds_every_visible_row_into_one_contiguous_cache() {
+        let cells = vec![
+            cell('a'),
+            cell('b'),
+            cell('c'),
+            cell('d'),
+            cell('e'),
+            cell('f'),
+        ];
         let mut surface = PreparedSurface::default();
         let result = surface
             .prepare(
@@ -422,10 +469,10 @@ mod tests {
         assert!(result.full_rebuild);
         assert_eq!(result.rebuilt_row_count, 2);
         assert_eq!(result.rebuilt_cell_count, 6);
-        assert_eq!(surface.prepared_rows().len(), 2);
-        assert_eq!(surface.prepared_row(0).unwrap().row(), 0);
-        assert_eq!(surface.prepared_row(0).unwrap().cells()[0].column, 0);
-        assert_eq!(surface.prepared_row(1).unwrap().cells()[2].scalar, 'f');
+        assert_eq!(surface.prepared_cells().len(), 6);
+        assert_eq!(surface.prepared_row(0).unwrap()[0].scalar, 'a' as u32);
+        assert_eq!(surface.prepared_row(1).unwrap()[2].scalar, 'f' as u32);
+        assert_eq!(surface.prepared_cells().as_ptr(), surface.prepared_row(0).unwrap().as_ptr());
     }
 
     #[test]
@@ -477,8 +524,37 @@ mod tests {
         assert_eq!(result.rebuilt_row_count, 1);
         assert!(result.rebuilt_rows.contains(1));
         assert!(!result.rebuilt_rows.contains(0));
-        assert_eq!(surface.prepared_row(0).unwrap().cells()[0].scalar, 'a');
-        assert_eq!(surface.prepared_row(1).unwrap().cells()[0].scalar, 'C');
+        assert_eq!(surface.prepared_row(0).unwrap()[0].scalar, 'a' as u32);
+        assert_eq!(surface.prepared_row(1).unwrap()[0].scalar, 'C' as u32);
+    }
+
+    #[test]
+    fn coalesced_damage_rebuilds_union_once_against_latest_state() {
+        let initial = vec![cell('a'), cell('b'), cell('c'), cell('d'), cell('e'), cell('f')];
+        let latest = vec![cell('A'), cell('B'), cell('C'), cell('D'), cell('E'), cell('F')];
+        let mut surface = PreparedSurface::default();
+        surface
+            .prepare(
+                display(1, 3, 2, CursorState::default(), &initial),
+                RowDamage::none(),
+                false,
+            )
+            .unwrap();
+
+        let mut damage = RowDamage::from_range(0, 1).unwrap();
+        damage.union(RowDamage::from_range(2, 1).unwrap());
+        let result = surface
+            .prepare(
+                display(3, 3, 2, CursorState::default(), &latest),
+                damage,
+                false,
+            )
+            .unwrap();
+
+        assert_eq!(result.rebuilt_row_count, 2);
+        assert_eq!(surface.prepared_row(0).unwrap()[0].scalar, 'A' as u32);
+        assert_eq!(surface.prepared_row(1).unwrap()[0].scalar, 'c' as u32);
+        assert_eq!(surface.prepared_row(2).unwrap()[0].scalar, 'E' as u32);
     }
 
     #[test]
@@ -487,17 +563,7 @@ mod tests {
         let mut surface = PreparedSurface::default();
         surface
             .prepare(
-                display(
-                    1,
-                    2,
-                    2,
-                    CursorState {
-                        row: 0,
-                        column: 0,
-                        visible: true,
-                    },
-                    &cells,
-                ),
+                display(1, 2, 2, CursorState::new(0, 0, true), &cells),
                 RowDamage::none(),
                 false,
             )
@@ -505,17 +571,7 @@ mod tests {
 
         let result = surface
             .prepare(
-                display(
-                    2,
-                    2,
-                    2,
-                    CursorState {
-                        row: 1,
-                        column: 1,
-                        visible: true,
-                    },
-                    &cells,
-                ),
+                display(2, 2, 2, CursorState::new(1, 1, true), &cells),
                 RowDamage::none(),
                 false,
             )
@@ -527,7 +583,7 @@ mod tests {
     }
 
     #[test]
-    fn inverse_is_resolved_without_changing_glyph_identity_inputs() {
+    fn inverse_is_resolved_without_baking_color_into_glyph_identity() {
         let cells = vec![RenderCell {
             scalar: 'Z',
             foreground: RenderColor::Indexed(1),
@@ -546,13 +602,15 @@ mod tests {
                 false,
             )
             .unwrap();
-        let prepared = surface.prepared_row(0).unwrap().cells()[0];
+        let prepared = surface.prepared_cells()[0];
 
-        assert_eq!(prepared.foreground, RenderColor::Rgb { r: 2, g: 3, b: 4 });
-        assert_eq!(prepared.background, RenderColor::Indexed(1));
-        assert_eq!(prepared.scalar, 'Z');
-        assert!(prepared.style.bold);
-        assert!(prepared.style.underline);
+        assert_eq!(prepared.foreground, pack_color(RenderColor::Rgb { r: 2, g: 3, b: 4 }));
+        assert_eq!(prepared.background, pack_color(RenderColor::Indexed(1)));
+        assert_eq!(prepared.scalar, 'Z' as u32);
+        assert_eq!(
+            prepared.flags,
+            PREPARED_FLAG_BOLD | PREPARED_FLAG_UNDERLINE
+        );
     }
 
     #[test]
@@ -579,6 +637,7 @@ mod tests {
         assert_eq!(result.rebuilt_row_count, 2);
         assert_eq!(surface.rows(), 2);
         assert_eq!(surface.columns(), 2);
+        assert_eq!(surface.prepared_cells().len(), 4);
     }
 
     #[test]
@@ -592,14 +651,21 @@ mod tests {
                 false,
             )
             .unwrap();
-        let mut alternate = display(2, 1, 2, CursorState::default(), &cells);
-        alternate.alternate_screen = true;
+        let alternate = CommittedDisplay {
+            generation: 2,
+            rows: 1,
+            columns: 2,
+            cursor: CursorState::default(),
+            alternate_screen: true,
+            cells: cells.as_slice(),
+        };
         let result = surface
             .prepare(alternate, RowDamage::none(), false)
             .unwrap();
 
         assert!(result.full_rebuild);
         assert_eq!(result.rebuilt_row_count, 1);
+        assert!(surface.alternate_screen());
     }
 
     #[test]
@@ -648,17 +714,7 @@ mod tests {
         );
         assert_eq!(
             surface.prepare(
-                display(
-                    1,
-                    1,
-                    1,
-                    CursorState {
-                        row: 1,
-                        column: 0,
-                        visible: true,
-                    },
-                    &cells,
-                ),
+                display(1, 1, 1, CursorState::new(1, 0, true), &cells),
                 RowDamage::none(),
                 false,
             ),
@@ -683,5 +739,20 @@ mod tests {
         assert!(damage.contains(2));
         assert!(damage.contains(3));
         assert!(damage.contains(5));
+        assert_eq!(damage.words().len(), DAMAGE_WORDS);
+    }
+
+    #[test]
+    fn packed_colors_keep_default_indexed_and_rgb_domains_distinct() {
+        assert_eq!(pack_color(RenderColor::Default), 0);
+        assert_eq!(pack_color(RenderColor::Indexed(7)), COLOR_TAG_INDEXED | 7);
+        assert_eq!(
+            pack_color(RenderColor::Rgb {
+                r: 0x12,
+                g: 0x34,
+                b: 0x56,
+            }),
+            COLOR_TAG_RGB | 0x0012_3456
+        );
     }
 }

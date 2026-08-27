@@ -48,6 +48,7 @@ case "$cmd" in
     python3 scripts/check-layering.py
     python3 scripts/check-hot-path.py
     python3 scripts/check-benchmark-contract.py
+    python3 scripts/check-pass5-benchmark-coverage.py --self-test
     bash scripts/test-tooling.sh
     python3 scripts/test-workspace.py
     python3 scripts/test-harnesses.py
@@ -72,7 +73,12 @@ case "$cmd" in
         export TMPDIR=/tmp
       fi
       cargo_pinned bench --workspace --locked
-      cargo_pinned bench -p seyal-runtime --bench pass5_production_transport --features benchmark-instrumentation --locked
+      pass5_log="$(mktemp -t seyal-pass5-benchmark.XXXXXX)"
+      trap 'rm -f "$pass5_log"' EXIT
+      cargo_pinned bench -p seyal-runtime --bench pass5_production_transport --features benchmark-instrumentation --locked 2>&1 | tee "$pass5_log"
+      python3 scripts/check-pass5-benchmark-coverage.py "$pass5_log"
+      rm -f "$pass5_log"
+      trap - EXIT
     else
       echo "[seyal task] bench: harness metadata recorder passed; no production benchmark target exists yet and no performance result is claimed."
     fi

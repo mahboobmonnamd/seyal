@@ -13,8 +13,8 @@ use seyal_runtime::{
     AttachmentId, ExecutionId,
     display::{
         DISPLAY_CELL_LEN, DISPLAY_CHUNK_HEADER_LEN, DecodedDisplayChunk, DisplayAttributes,
-        DisplayCache, DisplayCell, DisplayColor, DisplayError, DisplayKind, MAX_DISPLAY_BATCH_BYTES,
-        MAX_DISPLAY_CELLS, decode_chunk, empty_cache,
+        DisplayCache, DisplayCell, DisplayColor, DisplayError, DisplayKind,
+        MAX_DISPLAY_BATCH_BYTES, MAX_DISPLAY_CELLS, decode_chunk, empty_cache,
     },
     local_ipc::{
         discovery::{control_socket_path, darwin_user_runtime_dir, ensure_verified_runtime_dir},

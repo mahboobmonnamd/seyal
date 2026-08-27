@@ -12,7 +12,9 @@ The renderer is presentation-only. The authoritative execution path remains:
 TerminalExecution
   owns PTY + child lifecycle + canonical Seyal VT/TerminalState
         ↓
-Candidate-D snapshot/delta over local UDS
+Runtime Candidate-D producer
+        ↓ versioned snapshot/delta over local UDS
+seyal-protocol wire schema + validation
         ↓
 seyal-client committed DisplayCache
         ↓
@@ -27,11 +29,19 @@ There is no GUI VT parser, second authoritative grid, PTY replay path, NSTextVie
 
 ### Rust ownership
 
-`crates/seyal-client` owns the disposable local attachment/client state used by the native process. It validates and atomically commits complete Candidate-D batches before exposing them to renderer preparation. Incomplete multi-chunk batches never reach the renderer. Reads and Resync writes are nonblocking and readiness-driven after attachment; buffers, frames-per-poll, bytes-per-poll and pending display/control work are bounded.
+`crates/seyal-core` owns only stable identity/value types required across authority and protocol layers. It owns no PTY, VT, Runtime registry, protocol transport or renderer state.
+
+`crates/seyal-protocol` owns the versioned Candidate-D wire framing, display projection values/decoder, disposable `DisplayCache` commit rules and local runtime discovery/path validation. It is authority-neutral and depends only on `seyal-core` among Seyal crates. It does not own `TerminalExecution`, attachment authority, child lifecycle or terminal state.
+
+`crates/seyal-runtime` remains execution and attachment authority. Its display module is the producer adapter from authoritative `seyal-exec` projection snapshots/updates into `seyal-protocol` Candidate-D batches. Compatibility re-exports preserve the existing internal Runtime module paths without making Runtime the protocol owner.
+
+`crates/seyal-client` owns the disposable local attachment/client state used by the native process. Its production dependency graph is `seyal-client → seyal-protocol + seyal-render`; it does not depend on `seyal-runtime`. Runtime and `seyal-exec` are dev-dependencies only for live integration tests. The client validates and atomically commits complete Candidate-D batches before exposing them to renderer preparation. Incomplete multi-chunk batches never reach the renderer. Reads and Resync writes are nonblocking and readiness-driven after attachment; buffers, frames-per-poll, bytes-per-poll and pending display/control work are bounded.
 
 `crates/seyal-render` owns deterministic renderer-facing normalization. `PreparedSurface` keeps one contiguous prepared-cell cache, fixed-size row damage, generation/geometry/cursor/alternate-screen presentation bookkeeping and presentation-only style/color conversion. Ordinary row damage rewrites only affected prepared rows plus local cursor consequences. Geometry, alternate-screen, backing-resource loss or explicit full invalidation rebuild the visible prepared surface.
 
 The Rust/native boundary is one coarse `SeyalPreparedFrame` containing a pointer/length for the contiguous prepared cells plus generation, geometry, cursor, alternate-screen, full-rebuild and fixed damage words. The pointer remains Rust-owned and is consumed synchronously by Swift; native code never frees it and does not retain it across bridge mutation. There is no call per cell or glyph.
+
+`scripts/check-layering.py` enforces the physical dependency direction for every current Seyal crate and rejects newly added `seyal-*` crates until an explicit layering rule exists. Controlled negative fixtures prove that `seyal-client → seyal-runtime` and `seyal-protocol → seyal-runtime` production edges are rejected. Dev-dependencies are intentionally excluded so integration tests can compose the real Runtime without contaminating production architecture.
 
 ### Native macOS ownership
 
@@ -69,14 +79,17 @@ make bench
 
 The Rust deterministic suite covers first/full preparation, unchanged/no-op, sparse row damage, coalesced damage, cursor old/new invalidation, style/inverse/color mapping, geometry and alternate-screen transitions, stale generation, invalid geometry/cursor/cell counts and bounded damage representation.
 
-The native renderer self-test covers deterministic top-left pixels, blank backgrounds, underline, cursor, glyph cache reuse, bold glyph identity, backing-scale invalidation, drawable-unavailable state, hide/show reconstruction and dedicated-resource release. It separately exercises the production `CAMetalLayer` path rather than treating an offscreen texture as presentation proof.
+The protocol/client suites cover framing bounds, atomic snapshot/delta commits, generation mismatch, incomplete multi-chunk rejection, bounded client buffering and control writes, Runtime discovery/path validation, and the enforced production dependency boundary.
+
+The native renderer self-test covers deterministic top-left pixels, blank backgrounds, underline, cursor, glyph cache reuse, bold glyph identity, backing-scale invalidation, drawable-unavailable state, hide/show reconstruction, finite atlas pressure/reclamation, in-flight GPU resource safety and repeated surface lifecycle cleanup. It separately exercises the production `CAMetalLayer` path rather than treating an offscreen texture as presentation proof.
 
 The live macOS acceptance harness starts a real Seyal Runtime and real shell, then proves both ordinary output and the M001 alternate-screen fixture through:
 
 ```text
 shell → PTY → Seyal VT → canonical state/damage
-→ Candidate-D → committed client DisplayCache
-→ renderer preparation → Metal → CAMetalLayer presentation
+→ Runtime Candidate-D producer → seyal-protocol
+→ committed client DisplayCache → renderer preparation
+→ Metal → CAMetalLayer presentation
 ```
 
 No test injects terminal cells directly for the live proof.

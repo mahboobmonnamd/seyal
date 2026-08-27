@@ -5,6 +5,7 @@ enum SeyalDesignTokens {
         static let topChromeHeight: CGFloat = 48
         static let leftContextWidth: CGFloat = 236
         static let inspectorWidth: CGFloat = 292
+        static let inspectorRailWidth: CGFloat = 36
         static let paneCornerRadius: CGFloat = 12
         static let blockCornerRadius: CGFloat = 10
         static let compactSpacing: CGFloat = 6

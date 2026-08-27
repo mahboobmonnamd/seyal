@@ -299,13 +299,14 @@ enum RendererValidation {
                         width: cellSize.width * frame.columns,
                         height: cellSize.height * frame.rows
                     )
+                    let completedBefore = renderer.stats.completedFrames
                     let submittedBefore = renderer.stats.submittedFrames
                     guard renderer.present(layer: layer),
                           renderer.stats.submittedFrames == submittedBefore + 1
                     else {
                         return false
                     }
-                    return waitForGPUCompletion(renderer, after: renderer.stats.completedFrames)
+                    return waitForGPUCompletion(renderer, after: completedBefore)
                 }
 
                 let poll = seyal_bridge_poll()

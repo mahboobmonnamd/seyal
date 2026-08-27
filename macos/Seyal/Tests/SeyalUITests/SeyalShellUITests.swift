@@ -212,6 +212,62 @@ final class SeyalShellUITests: XCTestCase {
         XCTAssertTrue(window.exists)
     }
 
+    func testCommandWClosesFocusedPaneBeforeActiveTab() {
+        let paneSplit = app.buttons["pane.split.pane-1"]
+        XCTAssertTrue(paneSplit.waitForExistence(timeout: 5))
+        paneSplit.click()
+        let splitRight = app.menuItems["Split Right"]
+        XCTAssertTrue(splitRight.waitForExistence(timeout: 2))
+        splitRight.click()
+
+        XCTAssertTrue(app.buttons["pane.focus.pane-new-2"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["tab.tab-terminal"].exists)
+
+        app.typeKey("w", modifierFlags: [.command])
+        XCTAssertFalse(app.buttons["pane.focus.pane-new-2"].waitForExistence(timeout: 1))
+        XCTAssertTrue(app.buttons["pane.focus.pane-1"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["tab.tab-terminal"].exists)
+        XCTAssertEqual(app.staticTexts["inspector.tab-name"].label, "Core Terminal")
+
+        app.typeKey("w", modifierFlags: [.command])
+        XCTAssertFalse(app.buttons["tab.tab-terminal"].waitForExistence(timeout: 1))
+        XCTAssertTrue(app.buttons["tab.tab-agent"].waitForExistence(timeout: 2))
+        XCTAssertEqual(app.staticTexts["inspector.tab-name"].label, "Agent Development")
+    }
+
+    func testCommandWClosesWindowAfterLastTabAndPane() {
+        let window = app.windows["Seyal — UI Shell Preview"]
+        XCTAssertTrue(window.waitForExistence(timeout: 5))
+
+        let lab = app.buttons["workspace.workspace-lab"]
+        XCTAssertTrue(lab.waitForExistence(timeout: 2))
+        lab.click()
+        XCTAssertTrue(app.buttons["tab.tab-lab-terminal"].waitForExistence(timeout: 2))
+        XCTAssertFalse(app.buttons["pane.close.pane-lab"].exists)
+
+        app.typeKey("w", modifierFlags: [.command])
+        XCTAssertFalse(window.waitForExistence(timeout: 2))
+    }
+
+    func testForcedShortcutHintsAnnotateReachableControlsWithoutReplacingUI() {
+        app.terminate()
+        app.launchEnvironment["SEYAL_UI_TEST_FORCE_SHORTCUT_HINTS"] = "1"
+        app.launch()
+
+        let window = app.windows["Seyal — UI Shell Preview"]
+        XCTAssertTrue(window.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["shortcut-hint.tab.tab-terminal"].waitForExistence(timeout: 2))
+        XCTAssertEqual(app.staticTexts["shortcut-hint.tab.tab-terminal"].label, "⌘1")
+        XCTAssertTrue(app.staticTexts["shortcut-hint.workspace.workspace-seyal"].waitForExistence(timeout: 2))
+        XCTAssertEqual(app.staticTexts["shortcut-hint.workspace.workspace-seyal"].label, "⌃⌘1")
+        XCTAssertEqual(app.staticTexts["shortcut-hint.new-tab"].label, "⌘T")
+        XCTAssertEqual(app.staticTexts["shortcut-hint.left-sidebar"].label, "⌘0")
+        XCTAssertEqual(app.staticTexts["shortcut-hint.inspector"].label, "⌥⌘0")
+        XCTAssertEqual(app.staticTexts["shortcut-hint.close-focused-context"].label, "⌘W")
+        XCTAssertTrue(app.buttons["tab.tab-terminal"].exists)
+        XCTAssertTrue(app.textViews["composer.pane-1"].exists)
+    }
+
     func testAttentionItemNavigatesInsteadOfBeingDecorative() {
         let attentionButton = app.buttons["attention"]
         XCTAssertTrue(attentionButton.waitForExistence(timeout: 5))

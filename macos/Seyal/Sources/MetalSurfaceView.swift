@@ -124,6 +124,9 @@ final class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
         renderer.onNeedsCurrentFrame = { [weak self] in
             self?.bridge?.publishCurrentFrame()
         }
+        renderer.onPersistentDisplayFailure = { [weak self] error in
+            self?.lastRenderError = error
+        }
 
         let bridge = RustDisplayBridge(
             onFrame: { [weak self] frame in

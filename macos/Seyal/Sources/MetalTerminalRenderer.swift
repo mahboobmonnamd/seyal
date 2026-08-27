@@ -357,6 +357,18 @@ final class MetalTerminalRenderer {
             incomingDamage.markAll(rows: frame.rows)
         }
 
+        if persistentDisplayFailure != nil {
+            // Candidate-D/client state remains authoritative and continues to
+            // advance while the display is failed. Do not spend CPU reshaping or
+            // rebuilding every generation for a GPU lifecycle that is latched
+            // off; coalesce enough invalidation to rebuild from current state on
+            // the explicit lifecycle recovery.
+            deferredNeedsFullRebuild = true
+            deferredDamage.formUnion(incomingDamage)
+            stats.coalescedFrames &+= 1
+            return .deferred
+        }
+
         if !visible {
             deferredNeedsFullRebuild = true
             deferredDamage.formUnion(incomingDamage)

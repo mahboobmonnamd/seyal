@@ -314,6 +314,54 @@ fn alternate_screen_state_is_delivered_over_candidate_d() {
 }
 
 #[test]
+fn initial_attach_while_alternate_screen_is_active_snapshots_alternate_state() {
+    let mut harness = Harness::new();
+    let execution_id = harness.spawn(
+        CommandSpec::new("/bin/sh").args(["-c", "printf '\\033[?1049hALT_READY'; sleep 3"]),
+    );
+
+    let active_deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let alternate_ready = harness
+            .runtime
+            .execution(execution_id)
+            .map(|execution| execution.terminal())
+            .is_some_and(|terminal| {
+                terminal.modes().alternate_screen
+                    && terminal
+                        .row_text(0)
+                        .is_some_and(|row| row.contains("ALT_READY"))
+            });
+        if alternate_ready {
+            break;
+        }
+        assert!(
+            Instant::now() < active_deadline,
+            "canonical alternate screen did not become active before attach"
+        );
+        harness.pump();
+    }
+
+    let canonical_generation = harness
+        .runtime
+        .execution(execution_id)
+        .expect("execution remains live")
+        .terminal()
+        .damage_generation();
+    let mut client = harness.connect();
+    harness.hello(&mut client);
+    let (attached, cache) = harness.attach(&mut client, execution_id, Role::Observer);
+
+    assert!(cache.alternate_screen, "initial snapshot must select active alternate screen");
+    assert!(contains(&cache, "ALT_READY"));
+    assert_eq!(cache.generation, attached.current_generation);
+    assert!(
+        cache.generation >= canonical_generation,
+        "attach snapshot must not regress behind the canonical state observed before attach"
+    );
+}
+
+#[test]
 fn stalled_viewer_is_superseded_and_recovers_from_current_snapshot() {
     let mut harness = Harness::new();
     let execution_id = harness.spawn(CommandSpec::new("/bin/sh").args([

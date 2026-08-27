@@ -144,6 +144,19 @@ This run rebuilt 160 rows / 19,200 cells, used 230,400 instance bytes, recorded 
 
 The full `make bench` Candidate-D run also covered the required fanout/workload/geometry matrix. At 16 viewers and sustained 2-second high output at 200×60 it recorded p95/p99 client-cache latency of 3,237/3,627 µs, 16,544 KiB populated RSS, 22.6% sampled CPU, `3,568` latency samples, 678,423,552 aggregate UDS bytes, `shutdown_ok=true`, and final pending input `0`. The 50- and 100-execution cases were explicitly `PLATFORM_LIMITED` at 34 created executions because the host returned `Device not configured (os error 6)`; this is retained platform evidence, not a Seyal capacity claim.
 
+### Current-head four-boundary measurement
+
+The current executable head `a8b891683b3bae0fa7ddbdf3f9af4628ba12611e` was measured locally on an Apple M5 Pro running macOS 26.5.2 (25F84), arm64, Release build, 1x backing scale, 120×40 geometry and 120 repetitions. Percentiles use nearest-rank. The run built the current `Seyal.app`, used a visible AppKit window and recorded 120/120 one-shot `CAMetalDisplayLink` samples.
+
+| Boundary | p50 | p95 | p99 | max |
+| --- | ---: | ---: | ---: | ---: |
+| Committed generation → prepared rows | 1,625 ns | 182,083 ns | 866,084 ns | 1,106,834 ns |
+| Prepared batch → command-buffer commit | 49,791 ns | 76,959 ns | 202,167 ns | 794,500 ns |
+| Command commit → GPU completion proxy | 784,292 ns | 1,009,708 ns | 1,413,625 ns | 3,314,666 ns |
+| Committed generation → presented-frame proxy | 7,129,667 ns | 7,642,083 ns | 7,794,209 ns | 8,513,917 ns |
+
+The run submitted 120 frames and recorded 98 coalesced frames, rebuilt 121 rows / 14,520 cells, used 230,400 instance bytes, recorded 14,518 glyph-cache hits, 2 misses, 2 uploads and 306 uploaded bytes, with a 16 MiB atlas budget and 17,007,616 dedicated GPU bytes. `/usr/bin/time -lp` reported 1.59 s wall, 0.11 s user CPU, 0.16 s system CPU, 44,924,928-byte maximum RSS and 138,379,960-byte peak memory footprint. The GPU and presented-frame values are explicitly proxies; they do not claim physical display scanout latency.
+
 Against the closest same-host pre-fix renderer run `7084915d940d486623e1e10c72fb05cdd4772d3c`, repeated accepted measurements remained in the same range as the prior 26,500 ns / 386,958 ns medians. This does not establish an absolute product latency target. The exact post-correction measurements are recorded above and will also be attached to PR #659 for independent review.
 
 ## Deferred behavior

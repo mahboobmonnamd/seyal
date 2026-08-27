@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     io::{Read, Write},
     os::{fd::AsRawFd, unix::net::UnixStream},
     path::Path,
@@ -19,9 +20,11 @@ use seyal_runtime::{
     local_ipc::{
         discovery::{control_socket_path, darwin_user_runtime_dir, ensure_verified_runtime_dir},
         framing::{
-            Attach, Attached, CAP_BINARY_DISPLAY, ClientHello, ErrorMessage, ExecutionList,
-            FrameHeader, HEADER_LEN, Lifecycle, MAX_FRAME_PAYLOAD, MessageType, Resync, Role,
-            ServerHello, encode_frame,
+            Attach, Attached, CAP_BINARY_DISPLAY, CAP_CORRELATED_RESIZE,
+            CAP_SEMANTIC_TERMINAL_KEY, ClientHello, ErrorCode, ErrorMessage, ExecutionList,
+            FrameHeader, HEADER_LEN, InputRef, Lifecycle, MAX_FRAME_PAYLOAD, MAX_INPUT_BYTES,
+            MessageType, ResizeRequest, ResizeResult, ResizeResultCode, Resync, Role, ServerHello,
+            TerminalKey, TerminalKeyKind, TerminalKeyModifiers, encode_frame,
         },
     },
 };
@@ -31,6 +34,7 @@ const READ_CHUNK_BYTES: usize = 64 * 1024;
 const MAX_BUFFERED_BYTES: usize = (MAX_FRAME_PAYLOAD as usize + HEADER_LEN) * 2;
 const MAX_FRAMES_PER_POLL: usize = 64;
 const MAX_BYTES_PER_POLL: usize = 4 * 1024 * 1024;
+const MAX_OUTBOUND_WIRE_BYTES: usize = 262_144;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClientError {
@@ -38,6 +42,7 @@ pub enum ClientError {
     Io,
     Protocol,
     UnsupportedDisplayCapability,
+    UnsupportedInteractiveCapability,
     NoRunningExecution,
     InvalidAttachment,
     Display,
@@ -45,6 +50,84 @@ pub enum ClientError {
     Server(u16),
     Disconnected,
     Capacity,
+    ClientBackpressure,
+    CommitTooLarge,
+    LostController,
+    ResizeProtocolFailure,
+    InvalidGeometry,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InputAdmissionFailure {
+    ClientBackpressure,
+    CommitTooLarge,
+    LostController,
+    Disconnected,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResizeFailure {
+    Apply(ErrorCode),
+    Protocol,
+    Disconnected,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GridGeometry {
+    pub rows: u16,
+    pub columns: u16,
+}
+
+pub fn derive_grid_geometry(
+    viewport_width: f64,
+    viewport_height: f64,
+    horizontal_insets: f64,
+    vertical_insets: f64,
+    cell_width: f64,
+    cell_height: f64,
+) -> Option<GridGeometry> {
+    let operands = [
+        viewport_width,
+        viewport_height,
+        horizontal_insets,
+        vertical_insets,
+        cell_width,
+        cell_height,
+    ];
+    if operands.iter().any(|value| !value.is_finite())
+        || viewport_width < 0.0
+        || viewport_height < 0.0
+        || horizontal_insets < 0.0
+        || vertical_insets < 0.0
+        || cell_width <= 0.0
+        || cell_height <= 0.0
+    {
+        return None;
+    }
+
+    let usable_width = viewport_width - horizontal_insets;
+    let usable_height = viewport_height - vertical_insets;
+    if !usable_width.is_finite()
+        || !usable_height.is_finite()
+        || usable_width <= 0.0
+        || usable_height <= 0.0
+    {
+        return None;
+    }
+
+    let column_ratio = usable_width / cell_width;
+    let row_ratio = usable_height / cell_height;
+    if !column_ratio.is_finite()
+        || !row_ratio.is_finite()
+        || column_ratio <= 0.0
+        || row_ratio <= 0.0
+    {
+        return None;
+    }
+
+    let columns = column_ratio.floor().clamp(1.0, 512.0) as u16;
+    let rows = row_ratio.floor().clamp(1.0, 256.0) as u16;
+    Some(GridGeometry { rows, columns })
 }
 
 #[derive(Debug, Default)]
@@ -156,15 +239,28 @@ impl PendingDisplayBatch {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OutboundKind {
+    Input,
+    TerminalKey,
+    Resize { request_id: u64, geometry: GridGeometry },
+    Resync,
+}
+
 #[derive(Debug)]
 struct PendingControlWrite {
     bytes: Vec<u8>,
     offset: usize,
+    kind: OutboundKind,
 }
 
 impl PendingControlWrite {
-    fn new(bytes: Vec<u8>) -> Self {
-        Self { bytes, offset: 0 }
+    fn new(bytes: Vec<u8>, kind: OutboundKind) -> Self {
+        Self {
+            bytes,
+            offset: 0,
+            kind,
+        }
     }
 
     fn remaining(&self) -> &[u8] {
@@ -172,23 +268,60 @@ impl PendingControlWrite {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ResizePhase {
+    QueuedNotStarted,
+    Writing,
+    SentWaitingResult,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ResizeRecord {
+    request_id: u64,
+    geometry: GridGeometry,
+    phase: ResizePhase,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AppliedFence {
+    request_id: u64,
+    geometry: GridGeometry,
+    applied_generation: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RetrySuppression {
+    geometry: GridGeometry,
+    error: ErrorCode,
+}
+
 pub struct LocalDisplayClient {
     stream: UnixStream,
     buffered: Vec<u8>,
     read_offset: usize,
     pending_batch: PendingDisplayBatch,
-    pending_control: Option<PendingControlWrite>,
+    outbound: VecDeque<PendingControlWrite>,
+    outbound_wire_bytes: usize,
     attachment_id: AttachmentId,
+    role: Role,
     cache: DisplayCache,
     prepared: PreparedSurface,
     last_preparation: PreparationResult,
+    next_resize_request_id: u64,
+    desired_geometry: Option<GridGeometry>,
+    committed_geometry: GridGeometry,
+    unresolved_resizes: VecDeque<ResizeRecord>,
+    applied_awaiting_projection: Option<AppliedFence>,
+    retry_suppression: Option<RetrySuppression>,
+    input_failure: Option<InputAdmissionFailure>,
+    resize_failure: Option<ResizeFailure>,
 }
 
 impl LocalDisplayClient {
-    /// Connect to the verified per-user Runtime and attach as an observer to the
-    /// first running execution. This is the M001 single-surface resolution seam;
-    /// later workspace selection can call `connect_execution` with an explicit
-    /// stable `ExecutionId` without changing renderer ownership.
+    /// Connect to the verified per-user Runtime and attach as Controller to the
+    /// first running execution. Pass 7 makes the permanent native surface the
+    /// interactive production terminal; an existing controller is surfaced as
+    /// an explicit attach error rather than silently degrading to Observer.
     pub fn connect_first_running() -> Result<Self, ClientError> {
         let runtime_dir = darwin_user_runtime_dir().map_err(|_| ClientError::RuntimeDiscovery)?;
         ensure_verified_runtime_dir(&runtime_dir).map_err(|_| ClientError::RuntimeDiscovery)?;
@@ -196,7 +329,7 @@ impl LocalDisplayClient {
             control_socket_path(&runtime_dir).map_err(|_| ClientError::RuntimeDiscovery)?;
 
         let mut stream = connect_stream(&socket_path)?;
-        hello(&mut stream)?;
+        hello(&mut stream, true)?;
         send_control(&mut stream, MessageType::ListExecutions, &[])?;
         let (kind, payload) = read_blocking_frame(&mut stream)?;
         if kind != MessageType::ExecutionList {
@@ -210,7 +343,7 @@ impl LocalDisplayClient {
             .map(|entry| entry.execution_id)
             .ok_or(ClientError::NoRunningExecution)?;
 
-        Self::finish_attach(stream, execution_id, Role::Observer)
+        Self::finish_attach(stream, execution_id, Role::Controller)
     }
 
     pub fn connect_execution(
@@ -219,7 +352,7 @@ impl LocalDisplayClient {
         role: Role,
     ) -> Result<Self, ClientError> {
         let mut stream = connect_stream(socket_path)?;
-        hello(&mut stream)?;
+        hello(&mut stream, role == Role::Controller)?;
         Self::finish_attach(stream, execution_id, role)
     }
 
@@ -270,7 +403,7 @@ impl LocalDisplayClient {
         cache
             .apply_chunks(batch.chunks())
             .map_err(|_| ClientError::Display)?;
-        if cache.generation != attached.current_generation {
+        if cache.generation != attached.current_generation || cache.rows == 0 || cache.columns == 0 {
             return Err(ClientError::Protocol);
         }
 
@@ -289,11 +422,24 @@ impl LocalDisplayClient {
             buffered: Vec::with_capacity(READ_CHUNK_BYTES),
             read_offset: 0,
             pending_batch: batch,
-            pending_control: None,
+            outbound: VecDeque::new(),
+            outbound_wire_bytes: 0,
             attachment_id: attached.attachment_id,
+            role,
             cache,
             prepared,
             last_preparation: result,
+            next_resize_request_id: 1,
+            desired_geometry: None,
+            committed_geometry: GridGeometry {
+                rows: attached.current_generation.checked_sub(attached.current_generation).map_or(cache.rows, |_| cache.rows),
+                columns: cache.columns,
+            },
+            unresolved_resizes: VecDeque::new(),
+            applied_awaiting_projection: None,
+            retry_suppression: None,
+            input_failure: None,
+            resize_failure: None,
         })
     }
 
@@ -314,21 +460,167 @@ impl LocalDisplayClient {
     }
 
     pub fn wants_write(&self) -> bool {
-        self.pending_control.is_some()
+        !self.outbound.is_empty()
     }
 
-    /// Complete at most one nonblocking control write attempt. The AppKit bridge
-    /// calls this only after the socket becomes writable, so temporary pressure
-    /// cannot turn a generation-gap resync into a disconnect or a busy retry.
+    pub fn input_failure(&self) -> Option<InputAdmissionFailure> {
+        self.input_failure
+    }
+
+    pub fn resize_failure(&self) -> Option<ResizeFailure> {
+        self.resize_failure
+    }
+
+    pub fn outbound_wire_bytes(&self) -> usize {
+        self.outbound_wire_bytes
+    }
+
+    pub fn submit_committed_text(&mut self, text: &str) -> Result<(), ClientError> {
+        self.require_controller()?;
+        let bytes = text.as_bytes();
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        if bytes.len() > MAX_INPUT_BYTES as usize {
+            self.input_failure = Some(InputAdmissionFailure::CommitTooLarge);
+            return Err(ClientError::CommitTooLarge);
+        }
+        let payload = InputRef {
+            attachment_id: self.attachment_id,
+            bytes,
+        }
+        .encode();
+        let frame = encode_frame(MessageType::Input, &payload);
+        if let Err(error) = self.admit_frame(frame, OutboundKind::Input) {
+            self.input_failure = Some(InputAdmissionFailure::ClientBackpressure);
+            return Err(error);
+        }
+        self.input_failure = None;
+        self.flush_control_write()
+    }
+
+    pub fn submit_terminal_key(
+        &mut self,
+        kind: TerminalKeyKind,
+        scalar: u32,
+    ) -> Result<(), ClientError> {
+        self.require_controller()?;
+        let modifiers = if kind == TerminalKeyKind::ControlAscii {
+            TerminalKeyModifiers::CONTROL
+        } else {
+            TerminalKeyModifiers::NONE
+        };
+        let payload = TerminalKey {
+            attachment_id: self.attachment_id,
+            kind,
+            modifiers,
+            scalar,
+        }
+        .encode();
+        let frame = encode_frame(MessageType::TerminalKey, &payload);
+        if let Err(error) = self.admit_frame(frame, OutboundKind::TerminalKey) {
+            self.input_failure = Some(InputAdmissionFailure::ClientBackpressure);
+            return Err(error);
+        }
+        self.input_failure = None;
+        self.flush_control_write()
+    }
+
+    pub fn set_desired_geometry(&mut self, geometry: GridGeometry) -> Result<(), ClientError> {
+        if geometry.rows == 0 || geometry.columns == 0 || geometry.rows > 256 || geometry.columns > 512 {
+            return Err(ClientError::InvalidGeometry);
+        }
+        self.require_controller()?;
+        if self.desired_geometry != Some(geometry) {
+            self.desired_geometry = Some(geometry);
+            if self
+                .retry_suppression
+                .is_some_and(|suppressed| suppressed.geometry != geometry)
+            {
+                self.retry_suppression = None;
+                self.resize_failure = None;
+            }
+        }
+        self.reconcile_resize()?;
+        self.flush_control_write()
+    }
+
+    pub fn retry_resize(&mut self) -> Result<(), ClientError> {
+        self.retry_suppression = None;
+        self.resize_failure = None;
+        self.reconcile_resize()?;
+        self.flush_control_write()
+    }
+
+    fn require_controller(&mut self) -> Result<(), ClientError> {
+        if self.role != Role::Controller {
+            self.input_failure = Some(InputAdmissionFailure::LostController);
+            return Err(ClientError::LostController);
+        }
+        Ok(())
+    }
+
+    fn admit_frame(&mut self, bytes: Vec<u8>, kind: OutboundKind) -> Result<(), ClientError> {
+        let next = self
+            .outbound_wire_bytes
+            .checked_add(bytes.len())
+            .ok_or(ClientError::Capacity)?;
+        if next > MAX_OUTBOUND_WIRE_BYTES {
+            return Err(ClientError::ClientBackpressure);
+        }
+        self.outbound_wire_bytes = next;
+        self.outbound.push_back(PendingControlWrite::new(bytes, kind));
+        Ok(())
+    }
+
+    /// Complete at most one nonblocking write attempt. Accepted wire bytes are
+    /// decremented only as the socket actually accepts them; a partial frame is
+    /// immutable and remains at the front of the FIFO until complete.
     pub fn flush_control_write(&mut self) -> Result<(), ClientError> {
-        let stream = &mut self.stream;
-        flush_control_with(&mut self.pending_control, |bytes| stream.write(bytes))
+        let Some(front) = self.outbound.front_mut() else {
+            return Ok(());
+        };
+        let remaining_len = front.remaining().len();
+        if remaining_len == 0 {
+            return Err(ClientError::Protocol);
+        }
+        match self.stream.write(front.remaining()) {
+            Ok(0) => return Err(ClientError::Io),
+            Ok(count) if count <= remaining_len => {
+                if let OutboundKind::Resize { request_id, .. } = front.kind {
+                    self.set_resize_phase(
+                        request_id,
+                        if count == remaining_len {
+                            ResizePhase::SentWaitingResult
+                        } else {
+                            ResizePhase::Writing
+                        },
+                    )?;
+                }
+                front.offset = front
+                    .offset
+                    .checked_add(count)
+                    .ok_or(ClientError::Capacity)?;
+                self.outbound_wire_bytes = self.outbound_wire_bytes.saturating_sub(count);
+                if front.offset == front.bytes.len() {
+                    self.outbound.pop_front();
+                }
+                if self.input_failure == Some(InputAdmissionFailure::ClientBackpressure) {
+                    self.input_failure = None;
+                }
+                self.reconcile_resize()?;
+                Ok(())
+            }
+            Ok(_) => Err(ClientError::Io),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(()),
+            Err(_) => {
+                self.input_failure = Some(InputAdmissionFailure::Disconnected);
+                self.resize_failure = Some(ResizeFailure::Disconnected);
+                Err(ClientError::Io)
+            }
+        }
     }
 
-    /// Drain a bounded amount of already-ready socket work, atomically commit
-    /// complete Candidate-D batches, union their damage, then prepare only the
-    /// latest committed state once. Incomplete multi-chunk updates never escape
-    /// to the renderer.
     pub fn poll_prepare(&mut self) -> Result<Option<PreparationResult>, ClientError> {
         let mut committed_any = false;
         let mut damage = RowDamage::none();
@@ -354,17 +646,21 @@ impl LocalDisplayClient {
                             committed_any = true;
                         }
                     }
+                    MessageType::ResizeResult => {
+                        let payload = &frame[HEADER_LEN..frame_end];
+                        let result = ResizeResult::decode(payload).map_err(|_| {
+                            self.resize_failure = Some(ResizeFailure::Protocol);
+                            ClientError::ResizeProtocolFailure
+                        })?;
+                        self.accept_resize_result(result)?;
+                    }
                     MessageType::Error => {
-                        let payload = &frame[HEADER_LEN..frame_end - frame_start];
+                        let payload = &frame[HEADER_LEN..frame_end];
                         let error =
                             ErrorMessage::decode(payload).map_err(|_| ClientError::Protocol)?;
                         return Err(ClientError::Server(error.error_code));
                     }
-                    MessageType::Lifecycle => {
-                        // The final display update precedes lifecycle finalization.
-                        // Preserve the last committed pixels; later lifecycle UI is
-                        // outside Pass 6.
-                    }
+                    MessageType::Lifecycle => {}
                     _ => return Err(ClientError::Protocol),
                 }
                 self.read_offset = frame_end;
@@ -380,7 +676,11 @@ impl LocalDisplayClient {
 
             let mut chunk = [0u8; READ_CHUNK_BYTES];
             match self.stream.read(&mut chunk) {
-                Ok(0) => return Err(ClientError::Disconnected),
+                Ok(0) => {
+                    self.input_failure = Some(InputAdmissionFailure::Disconnected);
+                    self.resize_failure = Some(ResizeFailure::Disconnected);
+                    return Err(ClientError::Disconnected);
+                }
                 Ok(count) => {
                     let live_bytes = self.buffered.len().saturating_sub(self.read_offset);
                     if live_bytes
@@ -474,19 +774,221 @@ impl LocalDisplayClient {
             }
         }
         self.pending_batch.clear();
+        self.observe_projection()?;
         Ok(true)
     }
 
+    fn observe_projection(&mut self) -> Result<(), ClientError> {
+        let geometry = GridGeometry {
+            rows: self.cache.rows,
+            columns: self.cache.columns,
+        };
+        self.committed_geometry = geometry;
+        if let Some(fence) = self.applied_awaiting_projection {
+            if self.cache.generation >= fence.applied_generation {
+                if self.cache.generation == fence.applied_generation && geometry != fence.geometry {
+                    self.resize_failure = Some(ResizeFailure::Protocol);
+                    return Err(ClientError::ResizeProtocolFailure);
+                }
+                self.applied_awaiting_projection = None;
+            }
+        }
+        if self.desired_geometry == Some(geometry) && self.applied_awaiting_projection.is_none() {
+            self.resize_failure = None;
+        }
+        self.reconcile_resize()
+    }
+
+    fn accept_resize_result(&mut self, result: ResizeResult) -> Result<(), ClientError> {
+        if result.attachment_id != self.attachment_id {
+            self.resize_failure = Some(ResizeFailure::Protocol);
+            return Err(ClientError::ResizeProtocolFailure);
+        }
+        let Some(index) = self
+            .unresolved_resizes
+            .iter()
+            .position(|record| record.request_id == result.request_id)
+        else {
+            self.resize_failure = Some(ResizeFailure::Protocol);
+            return Err(ClientError::ResizeProtocolFailure);
+        };
+        let record = self
+            .unresolved_resizes
+            .remove(index)
+            .ok_or(ClientError::ResizeProtocolFailure)?;
+
+        match result.result_code {
+            ResizeResultCode::Applied => {
+                let replace_fence = self
+                    .applied_awaiting_projection
+                    .is_none_or(|fence| result.request_id > fence.request_id);
+                if replace_fence {
+                    self.applied_awaiting_projection = Some(AppliedFence {
+                        request_id: result.request_id,
+                        geometry: record.geometry,
+                        applied_generation: result.applied_generation,
+                    });
+                }
+                self.retry_suppression = None;
+                self.resize_failure = None;
+            }
+            ResizeResultCode::Error(error) => {
+                self.resize_failure = Some(ResizeFailure::Apply(error));
+                let newer_same_desired = self.unresolved_resizes.iter().any(|candidate| {
+                    candidate.request_id > record.request_id
+                        && Some(candidate.geometry) == self.desired_geometry
+                });
+                if !newer_same_desired && Some(record.geometry) == self.desired_geometry {
+                    self.retry_suppression = Some(RetrySuppression {
+                        geometry: record.geometry,
+                        error,
+                    });
+                }
+                if matches!(
+                    error,
+                    ErrorCode::InvalidState
+                        | ErrorCode::InvalidExecution
+                        | ErrorCode::InvalidAttachment
+                        | ErrorCode::StaleIdentity
+                        | ErrorCode::PermissionDenied
+                        | ErrorCode::ControllerBusy
+                        | ErrorCode::UnsupportedVersion
+                        | ErrorCode::UnknownMessage
+                        | ErrorCode::MalformedPayload
+                ) {
+                    self.role = Role::Observer;
+                    self.input_failure = Some(InputAdmissionFailure::LostController);
+                }
+            }
+        }
+        self.reconcile_resize()
+    }
+
+    fn set_resize_phase(&mut self, request_id: u64, phase: ResizePhase) -> Result<(), ClientError> {
+        let record = self
+            .unresolved_resizes
+            .iter_mut()
+            .find(|record| record.request_id == request_id)
+            .ok_or(ClientError::ResizeProtocolFailure)?;
+        record.phase = phase;
+        Ok(())
+    }
+
+    fn reconcile_resize(&mut self) -> Result<(), ClientError> {
+        let Some(desired) = self.desired_geometry else {
+            return Ok(());
+        };
+        if self.role != Role::Controller {
+            return Ok(());
+        }
+        if self
+            .retry_suppression
+            .is_some_and(|suppressed| suppressed.geometry == desired)
+        {
+            return Ok(());
+        }
+        if self
+            .unresolved_resizes
+            .back()
+            .is_some_and(|record| record.geometry == desired)
+        {
+            return Ok(());
+        }
+        if self
+            .applied_awaiting_projection
+            .is_some_and(|fence| fence.geometry == desired)
+            && self.unresolved_resizes.is_empty()
+        {
+            return Ok(());
+        }
+        if self.unresolved_resizes.is_empty()
+            && self.applied_awaiting_projection.is_none()
+            && self.committed_geometry == desired
+        {
+            return Ok(());
+        }
+
+        if let Some(last) = self.outbound.back_mut()
+            && last.offset == 0
+            && let OutboundKind::Resize {
+                request_id,
+                geometry,
+            } = &mut last.kind
+        {
+            let Some(record) = self
+                .unresolved_resizes
+                .iter_mut()
+                .find(|record| record.request_id == *request_id)
+            else {
+                return Err(ClientError::ResizeProtocolFailure);
+            };
+            if record.phase != ResizePhase::QueuedNotStarted {
+                return Err(ClientError::ResizeProtocolFailure);
+            }
+            let payload = ResizeRequest {
+                attachment_id: self.attachment_id,
+                request_id: *request_id,
+                rows: desired.rows,
+                columns: desired.columns,
+            }
+            .encode();
+            let replacement = encode_frame(MessageType::ResizeRequest, &payload);
+            if replacement.len() != last.bytes.len() {
+                return Err(ClientError::Protocol);
+            }
+            last.bytes = replacement;
+            *geometry = desired;
+            record.geometry = desired;
+            return Ok(());
+        }
+
+        let request_id = self.next_resize_request_id;
+        if request_id == 0 || request_id == u64::MAX {
+            self.resize_failure = Some(ResizeFailure::Protocol);
+            return Err(ClientError::ResizeProtocolFailure);
+        }
+        let payload = ResizeRequest {
+            attachment_id: self.attachment_id,
+            request_id,
+            rows: desired.rows,
+            columns: desired.columns,
+        }
+        .encode();
+        let frame = encode_frame(MessageType::ResizeRequest, &payload);
+        self.admit_frame(
+            frame,
+            OutboundKind::Resize {
+                request_id,
+                geometry: desired,
+            },
+        )?;
+        self.unresolved_resizes.push_back(ResizeRecord {
+            request_id,
+            geometry: desired,
+            phase: ResizePhase::QueuedNotStarted,
+        });
+        self.next_resize_request_id = request_id + 1;
+        Ok(())
+    }
+
     fn request_resync(&mut self) -> Result<(), ClientError> {
-        if self.pending_control.is_none() {
-            self.pending_control = Some(PendingControlWrite::new(encode_frame(
+        if self
+            .outbound
+            .iter()
+            .any(|pending| pending.kind == OutboundKind::Resync)
+        {
+            return Ok(());
+        }
+        self.admit_frame(
+            encode_frame(
                 MessageType::Resync,
                 &Resync {
                     attachment_id: self.attachment_id,
                 }
                 .encode(),
-            )));
-        }
+            ),
+            OutboundKind::Resync,
+        )?;
         self.flush_control_write()
     }
 
@@ -500,37 +1002,6 @@ impl LocalDisplayClient {
             self.buffered.drain(..self.read_offset);
         }
         self.read_offset = 0;
-    }
-}
-
-fn flush_control_with(
-    pending: &mut Option<PendingControlWrite>,
-    mut write_once: impl FnMut(&[u8]) -> std::io::Result<usize>,
-) -> Result<(), ClientError> {
-    let Some(control) = pending.as_mut() else {
-        return Ok(());
-    };
-    let remaining = control.remaining();
-    if remaining.is_empty() {
-        *pending = None;
-        return Ok(());
-    }
-
-    match write_once(remaining) {
-        Ok(0) => Err(ClientError::Io),
-        Ok(count) if count <= remaining.len() => {
-            control.offset = control
-                .offset
-                .checked_add(count)
-                .ok_or(ClientError::Capacity)?;
-            if control.offset == control.bytes.len() {
-                *pending = None;
-            }
-            Ok(())
-        }
-        Ok(_) => Err(ClientError::Io),
-        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(()),
-        Err(_) => Err(ClientError::Io),
     }
 }
 
@@ -605,10 +1076,7 @@ fn connect_stream(path: &Path) -> Result<UnixStream, ClientError> {
     Ok(stream)
 }
 
-fn hello(stream: &mut UnixStream) -> Result<(), ClientError> {
-    // SPEC-004 reserves ClientHello capability bits in M001. The client
-    // advertises zero and verifies the server's binary-display capability in
-    // ServerHello before proceeding.
+fn hello(stream: &mut UnixStream, interactive: bool) -> Result<ServerHello, ClientError> {
     send_control(
         stream,
         MessageType::ClientHello,
@@ -629,7 +1097,13 @@ fn hello(stream: &mut UnixStream) -> Result<(), ClientError> {
     if hello.server_capabilities & CAP_BINARY_DISPLAY == 0 {
         return Err(ClientError::UnsupportedDisplayCapability);
     }
-    Ok(())
+    if interactive
+        && (hello.server_capabilities & CAP_SEMANTIC_TERMINAL_KEY == 0
+            || hello.server_capabilities & CAP_CORRELATED_RESIZE == 0)
+    {
+        return Err(ClientError::UnsupportedInteractiveCapability);
+    }
+    Ok(hello)
 }
 
 fn send_control(
@@ -744,19 +1218,33 @@ mod tests {
     }
 
     #[test]
-    fn pending_control_write_survives_partial_write_and_would_block() {
-        let mut pending = Some(PendingControlWrite::new(vec![1, 2, 3, 4]));
-
-        flush_control_with(&mut pending, |_| Ok(2)).unwrap();
-        assert_eq!(pending.as_ref().unwrap().remaining(), &[3, 4]);
-
-        flush_control_with(&mut pending, |_| {
-            Err(std::io::Error::from(std::io::ErrorKind::WouldBlock))
-        })
-        .unwrap();
-        assert_eq!(pending.as_ref().unwrap().remaining(), &[3, 4]);
-
-        flush_control_with(&mut pending, |bytes| Ok(bytes.len())).unwrap();
-        assert!(pending.is_none());
+    fn finite_geometry_validation_rejects_each_nonfinite_operand_and_clamps() {
+        let base = [800.0, 600.0, 20.0, 20.0, 10.0, 20.0];
+        for index in 0..base.len() {
+            for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+                let mut values = base;
+                values[index] = invalid;
+                assert_eq!(
+                    derive_grid_geometry(
+                        values[0], values[1], values[2], values[3], values[4], values[5]
+                    ),
+                    None
+                );
+            }
+        }
+        assert_eq!(
+            derive_grid_geometry(0.1, 0.1, 0.0, 0.0, 10.0, 20.0),
+            Some(GridGeometry {
+                rows: 1,
+                columns: 1
+            })
+        );
+        assert_eq!(
+            derive_grid_geometry(1.0e12, 1.0e12, 0.0, 0.0, 1.0, 1.0),
+            Some(GridGeometry {
+                rows: 256,
+                columns: 512
+            })
+        );
     }
 }

@@ -46,7 +46,7 @@ The protocol supports runtime discovery, version negotiation, execution enumerat
 The Pass 7 additive extension defined by SPEC-006 adds:
 
 - capability-gated semantic terminal-key intent while keeping mode-sensitive escape encoding inside Runtime;
-- capability-gated correlated `ResizeRequest` / `ResizeResult` messages for the native production resize path.
+- capability-gated correlated `ResizeRequest` / `ResizeResult` messages for the native production resize path, including the canonical generation required to fence a successful resize until authoritative projection catches up.
 
 Legacy type-10 `Resize` remains for protocol compatibility but is not the Pass 7 native production path.
 
@@ -80,7 +80,7 @@ M001 hard maxima:
 | visible columns | 512 |
 | visible cells | 131,072 |
 
-SPEC-003 accepted-but-unwritten input budgets remain authoritative in addition to these limits. SPEC-006 separately bounds Pass 7 client-side accepted-but-not-fully-written wire bytes and unresolved ResizeRequest bookkeeping.
+SPEC-003 accepted-but-unwritten input budgets remain authoritative in addition to these limits. SPEC-006 separately bounds Pass 7 client-side accepted-but-not-fully-written wire bytes, unresolved `ResizeRequest` bookkeeping and the single applied-awaiting-projection fence.
 
 ## 6. Connection state machine
 
@@ -94,7 +94,7 @@ Accepted
                       ├─ Input/TerminalKey/Resize/ResizeRequest   controller only
                       ├─ Resync
                       ├─ ResizeResult               Runtime → client
-                      ├─ DisplaySnapshot             Runtime → client
+                      ├─ DisplaySnapshot            Runtime → client
                       ├─ DisplayDelta                Runtime → client
                       ├─ Lifecycle                   Runtime → client
                       └─ Detach → Ready
@@ -218,7 +218,7 @@ Rules:
 - geometry obeys the same nonzero/maxima rules as legacy Resize;
 - validation completes before PTY/canonical mutation.
 
-`ResizeResult` is exactly 32 bytes:
+`ResizeResult` is exactly 40 bytes:
 
 ```text
 u128 AttachmentId
@@ -226,6 +226,7 @@ u64  request_id
 u16  result_code
 u16  reserved0 = 0
 u32  detail_code
+u64  applied_generation
 ```
 
 `result_code` values:
@@ -250,11 +251,14 @@ u32  detail_code
 
 For every structurally valid `ResizeRequest` from which Runtime can trust the `AttachmentId` and nonzero request ID, Runtime queues exactly one matching `ResizeResult` after the request reaches a final semantic/operational outcome.
 
-- `Applied` is emitted only after PTY winsize succeeds and canonical `TerminalState` resize commit completes.
-- Failure codes are emitted with canonical geometry unchanged when the request transaction did not commit.
+- `Applied` is emitted only after PTY winsize succeeds, canonical `TerminalState` resize commit completes and the resulting canonical display generation is known.
+- On `Applied`, `applied_generation` is the canonical display generation at or after which authoritative `DisplaySnapshot`/`DisplayDelta` state contains that successful resize.
+- On failure, `applied_generation = 0` and canonical geometry remains unchanged when the transaction did not commit.
 - `detail_code = 0` in M001 unless a later accepted specification assigns a bounded non-secret reason.
 - `ResizeResult` is mandatory bounded control output and is never presentation-superseded.
 - terminal progress never waits for the client to read a result.
+
+The applied generation is necessary because mandatory control output is serviced before not-yet-started presentation output. A client must not treat an older same-geometry display frame as proof that a newer successful resize has been projected. SPEC-006 defines the bounded `appliedAwaitingProjection` fence and its retirement rules.
 
 If framing/payload corruption prevents trustworthy request-ID extraction, Runtime uses the existing `Error`/fatal protocol path; the client must not guess request correlation.
 
@@ -329,6 +333,8 @@ A snapshot replaces the complete disposable client RenderState and sets its gene
 
 A duplicate/obsolete update at or below the already committed generation may be ignored. A forward delta whose base does not equal the committed generation triggers `Resync`; the client never replays PTY bytes.
 
+Pass 7 may additionally compare this committed display generation with `ResizeResult.applied_generation` solely to retire the bounded applied-success fence. That comparison does not make the client the canonical generation authority; it consumes the authoritative generation already carried by Candidate-D display state.
+
 ### 10.4 Execution-scoped encoding and fanout
 
 For one canonical execution update the target path is:
@@ -352,7 +358,9 @@ If a new delta is contiguous with the last presentation generation targeted for 
 
 A partially written frame is completed or the connection is closed; bytes from two frames are never interleaved. A slow client may be disconnected under bounded resource policy. No case blocks PTY/VT progress.
 
-Pass 7 client→Runtime input/control backpressure, ResizeRequest coalescing, unresolved request bookkeeping and error-class retry gating are defined by SPEC-006 and do not weaken server-side bounds here.
+Because mandatory control output may overtake not-yet-started presentation work, a Pass 7 client must use the generation-bearing success fence from SPEC-006 rather than immediately re-enqueueing a target after `ResizeResult(Applied)`.
+
+Pass 7 client→Runtime input/control backpressure, `ResizeRequest` coalescing, unresolved request bookkeeping, success-to-projection fencing and error-class retry gating are defined by SPEC-006 and do not weaken server-side bounds here.
 
 ## 12. Attach, reconnect and resync transactions
 
@@ -362,7 +370,7 @@ Failure before authority publication leaves no attachment/controller record. Cli
 
 Explicit `Resync`, reconnect and detected generation gaps use the same current-state snapshot mechanism. No acknowledgement is required before terminal progress continues.
 
-Reconnect invalidates all old correlated resize request IDs; new request IDs are connection-local and never substitute for `AttachmentId` authority.
+Reconnect invalidates all old correlated resize request IDs and any old applied-generation fence; new request IDs are connection-local and never substitute for `AttachmentId` authority.
 
 ## 13. Resize and final-state ordering
 
@@ -375,12 +383,14 @@ validate request/frame/role/identity/geometry
 → prepare
 → fallible PTY winsize
 → if success, canonical TerminalState resize commit
-→ canonical full damage
-→ queue matching ResizeResult
-→ normal projection update
+→ canonical full damage / resulting display generation G
+→ queue matching ResizeResult(Applied, applied_generation=G)
+→ normal projection update at generation G or later superseding generation
 ```
 
-A failed request does not mutate canonical geometry and receives exactly one matching failure result when request identity is trustworthy. A success result is asynchronous bookkeeping only; Runtime never waits for the client to consume it and display projection remains the client's authority for observed canonical geometry.
+A failed request does not mutate canonical geometry and receives exactly one matching failure result with `applied_generation = 0` when request identity is trustworthy. A success result is asynchronous bookkeeping only; Runtime never waits for the client to consume it and display projection remains the client's authority for observed canonical geometry.
+
+The client must keep the successful target fenced after `Applied` until authoritative display state reaches the advertised generation or a later generation. This prevents result-before-projection ordering from producing duplicate same-target requests or starving the presentation update that would otherwise end the loop.
 
 Legacy type-10 Resize keeps its previous uncorrelated behavior for compatibility. SPEC-006 forbids the Pass 7 native production surface from using it as a substitute for correlated resize.
 
@@ -415,7 +425,7 @@ M001 defines:
 
 These numeric meanings are reused by `ResizeResult.result_code` values 1–14. `ResizeResult.result_code = 0` uniquely means `Applied`.
 
-Semantic errors do not mutate canonical state before validation succeeds. Fatal framing/version/ancillary failures close the connection after bounded cleanup. SPEC-006 classifies resize failures and forbids immediate automatic resend loops.
+Semantic errors do not mutate canonical state before validation succeeds. Fatal framing/version/ancillary failures close the connection after bounded cleanup. SPEC-006 classifies resize failures, forbids immediate automatic resend loops and treats result/projection generation inconsistency as protocol failure.
 
 ## 16. Validation requirements
 
@@ -441,17 +451,21 @@ Before the proposed Pass 7 extensions are accepted for production, SPEC-006 addi
 
 - capability negotiation proving older/non-advertising Runtime peers are never sent message types 17/18;
 - current Pass 5/6 client tolerates new capability bits 2 and 3;
-- exact 24-byte TerminalKey fixtures and malformed/fuzz coverage;
-- exact 32-byte ResizeRequest/ResizeResult fixtures and malformed/fuzz coverage;
+- exact 24-byte `TerminalKey` fixtures and malformed/fuzz coverage;
+- exact 32-byte `ResizeRequest` and exact 40-byte `ResizeResult` fixtures plus malformed/fuzz coverage;
 - request ID nonzero/unique/monotonic/reconnect-reset/wrap behavior;
 - duplicate request ID rejection;
-- exactly one ResizeResult for every trustworthy structurally valid request;
-- `Applied` only after PTY winsize and canonical commit;
+- exactly one `ResizeResult` for every trustworthy structurally valid request;
+- `Applied` only after PTY winsize/canonical commit and carries the resulting canonical applied generation;
+- failure results carry `applied_generation = 0`;
 - exact result correlation with older-result/newer-request regression;
+- `Applied` before corresponding projection creates a bounded success fence and sends zero duplicate same-target resize requests;
+- an older same-geometry projection below `applied_generation` cannot clear that fence;
+- projection at the applied generation must agree on geometry; later generation may supersede it;
 - uncorrelatable/unknown/duplicate result handling fails closed;
 - persistent injected PTY failure produces one result per permitted attempt and no automatic retry loop;
-- ResizeResult mandatory-control traffic remains bounded and never blocks terminal progress;
-- FIFO ordering with ordinary `Input`, `TerminalKey` and ResizeRequest barriers;
+- `ResizeResult` mandatory-control traffic remains bounded and never blocks terminal progress;
+- FIFO ordering with ordinary `Input`, `TerminalKey` and `ResizeRequest` barriers;
 - privacy tests proving semantic input and IME content are absent from logs.
 
 ## 17. Acceptance gate

@@ -79,8 +79,10 @@ grep -q 'toggle-left-sidebar' "$SOURCES/SeyalShellView.swift" \
   || fail "left context panel must have a functional hide/reopen control"
 grep -q 'toggle-inspector' "$SOURCES/SeyalShellView.swift" \
   || fail "Inspector must have a functional hide/reopen control"
-grep -q 'inspector-mode.context' "$SOURCES/SeyalShellView.swift" \
-  || fail "frozen Inspector vertical mode rail is missing"
+grep -Fq 'private func makeInspectorRail() -> NSView' "$SOURCES/SeyalShellView.swift" \
+  || fail "frozen Inspector vertical mode rail builder is missing"
+grep -Fq 'setAccessibilityIdentifier("inspector-mode.\(mode.rawValue)")' "$SOURCES/SeyalShellView.swift" \
+  || fail "Inspector rail modes must expose deterministic dynamic accessibility identifiers"
 grep -q 'pane.split.' "$SOURCES/SeyalShellView.swift" \
   || fail "Pane-local split control is missing"
 grep -q 'pane.close.' "$SOURCES/SeyalShellView.swift" \

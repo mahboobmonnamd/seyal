@@ -24,7 +24,10 @@ pub struct SeyalPreparedFrame {
     pub reserved0: u8,
     pub rebuilt_row_count: u16,
     pub reserved1: u16,
-    pub damage_words: [u64; 4],
+    pub damage_word0: u64,
+    pub damage_word1: u64,
+    pub damage_word2: u64,
+    pub damage_word3: u64,
 }
 
 impl SeyalPreparedFrame {
@@ -43,7 +46,10 @@ impl SeyalPreparedFrame {
             reserved0: 0,
             rebuilt_row_count: 0,
             reserved1: 0,
-            damage_words: [0; 4],
+            damage_word0: 0,
+            damage_word1: 0,
+            damage_word2: 0,
+            damage_word3: 0,
         }
     }
 }
@@ -120,6 +126,7 @@ pub extern "C" fn seyal_bridge_frame() -> SeyalPreparedFrame {
         };
         let result = client.last_preparation();
         let cursor = prepared.cursor();
+        let damage = result.rebuilt_rows.words();
         SeyalPreparedFrame {
             cells: cells.as_ptr(),
             cell_count,
@@ -134,7 +141,10 @@ pub extern "C" fn seyal_bridge_frame() -> SeyalPreparedFrame {
             reserved0: 0,
             rebuilt_row_count: u16::try_from(result.rebuilt_row_count).unwrap_or(u16::MAX),
             reserved1: 0,
-            damage_words: result.rebuilt_rows.words(),
+            damage_word0: damage[0],
+            damage_word1: damage[1],
+            damage_word2: damage[2],
+            damage_word3: damage[3],
         }
     })
 }

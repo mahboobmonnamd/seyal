@@ -38,6 +38,8 @@ typedef struct SeyalPreparedFrame {
 int32_t seyal_bridge_connect_first(void);
 int32_t seyal_bridge_socket_fd(void);
 int32_t seyal_bridge_poll(void);
+int32_t seyal_bridge_wants_write(void);
+int32_t seyal_bridge_flush_writable(void);
 SeyalPreparedFrame seyal_bridge_frame(void);
 void seyal_bridge_disconnect(void);
 

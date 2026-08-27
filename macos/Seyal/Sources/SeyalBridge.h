@@ -29,7 +29,10 @@ typedef struct SeyalPreparedFrame {
     uint8_t reserved0;
     uint16_t rebuilt_row_count;
     uint16_t reserved1;
-    uint64_t damage_words[4];
+    uint64_t damage_word0;
+    uint64_t damage_word1;
+    uint64_t damage_word2;
+    uint64_t damage_word3;
 } SeyalPreparedFrame;
 
 int32_t seyal_bridge_connect_first(void);

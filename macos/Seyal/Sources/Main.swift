@@ -17,12 +17,13 @@ enum SeyalMain {
         if CommandLine.arguments.contains("--renderer-self-test") {
             guard RendererValidation.deterministicSelfTest(),
                   Pass6RegressionValidation.selfTest(),
-                  MetalTerminalRenderer.gpuCompletionFailureRecoverySelfTest()
+                  MetalTerminalRenderer.gpuCompletionFailureRecoverySelfTest(),
+                  InteractiveMetalSurfaceView.pass7InputSelfTest()
             else {
-                print("Seyal deterministic Metal renderer self-test failed.")
+                print("Seyal deterministic Metal renderer/input self-test failed.")
                 exit(1)
             }
-            print("Seyal deterministic Metal renderer self-test passed.")
+            print("Seyal deterministic Metal renderer/input self-test passed.")
             return
         }
 

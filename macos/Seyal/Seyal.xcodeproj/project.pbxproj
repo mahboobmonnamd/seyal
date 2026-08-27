@@ -13,6 +13,13 @@
 		A10000000000000000000004 /* AppKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* AppKit.framework */; };
 		A10000000000000000000005 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* Metal.framework */; };
 		A10000000000000000000006 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007 /* QuartzCore.framework */; };
+		A10000000000000000000007 /* RustDisplayBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* RustDisplayBridge.swift */; };
+		A10000000000000000000008 /* GlyphAtlas.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000A /* GlyphAtlas.swift */; };
+		A10000000000000000000009 /* MetalTerminalRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000B /* MetalTerminalRenderer.swift */; };
+		A1000000000000000000000A /* RendererValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000C /* RendererValidation.swift */; };
+		A1000000000000000000000B /* TerminalShaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000D /* TerminalShaders.metal */; };
+		A1000000000000000000000C /* CoreText.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000F /* CoreText.framework */; };
+		A1000000000000000000000D /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000010 /* CoreGraphics.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -24,6 +31,14 @@
 		A20000000000000000000006 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		A20000000000000000000007 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		A20000000000000000000008 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A20000000000000000000009 /* RustDisplayBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustDisplayBridge.swift; sourceTree = "<group>"; };
+		A2000000000000000000000A /* GlyphAtlas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlyphAtlas.swift; sourceTree = "<group>"; };
+		A2000000000000000000000B /* MetalTerminalRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalTerminalRenderer.swift; sourceTree = "<group>"; };
+		A2000000000000000000000C /* RendererValidation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RendererValidation.swift; sourceTree = "<group>"; };
+		A2000000000000000000000D /* TerminalShaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = TerminalShaders.metal; sourceTree = "<group>"; };
+		A2000000000000000000000E /* SeyalBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SeyalBridge.h; sourceTree = "<group>"; };
+		A2000000000000000000000F /* CoreText.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreText.framework; path = System/Library/Frameworks/CoreText.framework; sourceTree = SDKROOT; };
+		A20000000000000000000010 /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -34,6 +49,8 @@
 				A10000000000000000000004 /* AppKit.framework in Frameworks */,
 				A10000000000000000000005 /* Metal.framework in Frameworks */,
 				A10000000000000000000006 /* QuartzCore.framework in Frameworks */,
+				A1000000000000000000000C /* CoreText.framework in Frameworks */,
+				A1000000000000000000000D /* CoreGraphics.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -56,6 +73,12 @@
 				A20000000000000000000001 /* Main.swift */,
 				A20000000000000000000002 /* AppDelegate.swift */,
 				A20000000000000000000003 /* MetalSurfaceView.swift */,
+				A20000000000000000000009 /* RustDisplayBridge.swift */,
+				A2000000000000000000000A /* GlyphAtlas.swift */,
+				A2000000000000000000000B /* MetalTerminalRenderer.swift */,
+				A2000000000000000000000C /* RendererValidation.swift */,
+				A2000000000000000000000D /* TerminalShaders.metal */,
+				A2000000000000000000000E /* SeyalBridge.h */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -66,6 +89,8 @@
 				A20000000000000000000005 /* AppKit.framework */,
 				A20000000000000000000006 /* Metal.framework */,
 				A20000000000000000000007 /* QuartzCore.framework */,
+				A2000000000000000000000F /* CoreText.framework */,
+				A20000000000000000000010 /* CoreGraphics.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -149,6 +174,11 @@
 				A10000000000000000000001 /* Main.swift in Sources */,
 				A10000000000000000000002 /* AppDelegate.swift in Sources */,
 				A10000000000000000000003 /* MetalSurfaceView.swift in Sources */,
+				A10000000000000000000007 /* RustDisplayBridge.swift in Sources */,
+				A10000000000000000000008 /* GlyphAtlas.swift in Sources */,
+				A10000000000000000000009 /* MetalTerminalRenderer.swift in Sources */,
+				A1000000000000000000000A /* RendererValidation.swift in Sources */,
+				A1000000000000000000000B /* TerminalShaders.metal in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -187,9 +217,18 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../../target/debug",
+				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lseyal_client",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = dev.seyal.Seyal;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = Sources/SeyalBridge.h;
 				SWIFT_VERSION = 6.0;
 			};
 			name = Debug;
@@ -206,9 +245,18 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../../target/release",
+				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lseyal_client",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = dev.seyal.Seyal;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = Sources/SeyalBridge.h;
 				SWIFT_VERSION = 6.0;
 			};
 			name = Release;

@@ -211,6 +211,9 @@ final class SeyalShellComponentTests: XCTestCase {
         let tabMenu = try XCTUnwrap(NSApp.mainMenu?.item(withTitle: "Tab")?.submenu)
         let tab2 = try XCTUnwrap(tabMenu.items.first { $0.tag == 1 && $0.keyEquivalent == "2" })
         XCTAssertEqual(normalizedModifiers(tab2), [.command])
+        let close = try XCTUnwrap(tabMenu.item(withTitle: "Close Focused Pane / Tab / Window"))
+        XCTAssertEqual(close.keyEquivalent, "w")
+        XCTAssertEqual(normalizedModifiers(close), [.command])
         let nextTab = try XCTUnwrap(tabMenu.item(withTitle: "Next Tab"))
         XCTAssertEqual(nextTab.keyEquivalent, "]")
         XCTAssertEqual(normalizedModifiers(nextTab), [.command, .shift])
@@ -231,6 +234,76 @@ final class SeyalShellComponentTests: XCTestCase {
             normalizedModifiers(try XCTUnwrap(viewMenu.item(withTitle: "Toggle Inspector"))),
             [.command, .option]
         )
+    }
+
+    @MainActor
+    func testCloseShortcutTargetCascadesPaneThenTabThenWindow() {
+        let state = SeyalShellPreviewState.makeDefault()
+        let originalTabID = state.activeTab.id
+        let secondPane = state.splitPane(id: state.activeTab.focusedPaneID, axis: .right)
+
+        XCTAssertEqual(
+            SeyalPreviewShortcutController.closeTarget(for: state),
+            .pane(secondPane.id)
+        )
+
+        state.closePane(id: secondPane.id)
+        XCTAssertEqual(
+            SeyalPreviewShortcutController.closeTarget(for: state),
+            .tab(originalTabID)
+        )
+
+        while state.activeWorkspace.tabs.count > 1 {
+            state.closeTab(id: state.activeTab.id)
+        }
+        XCTAssertEqual(SeyalPreviewShortcutController.closeTarget(for: state), .window)
+        XCTAssertEqual(state.activeTab.paneCount, 1)
+    }
+
+    func testCommandHoldHintPolicyRequiresIntentionalCommandOnlyHold() {
+        XCTAssertEqual(SeyalShortcutHintPolicy.intentionalHoldDelay, 0.30, accuracy: 0.0001)
+        XCTAssertTrue(SeyalShortcutHintPolicy.isCommandOnly([.command]))
+        XCTAssertTrue(SeyalShortcutHintPolicy.isCommandOnly([.command, .capsLock]))
+        XCTAssertFalse(SeyalShortcutHintPolicy.isCommandOnly([.command, .shift]))
+        XCTAssertFalse(SeyalShortcutHintPolicy.isCommandOnly([.command, .option]))
+        XCTAssertFalse(SeyalShortcutHintPolicy.isCommandOnly([.control]))
+        XCTAssertFalse(SeyalShortcutHintPolicy.isCommandOnly([]))
+    }
+
+    @MainActor
+    func testShortcutHintOverlayDoesNotChangeShellLayout() throws {
+        let shell = SeyalShellPreviewFactory.make(
+            frame: NSRect(x: 0, y: 0, width: 1280, height: 800)
+        )
+        shell.layoutSubtreeIfNeeded()
+        let before = try XCTUnwrap(shell.debugLayoutContract())
+
+        let overlay = SeyalShortcutHintOverlay(frame: .zero)
+        overlay.present([
+            .init(
+                targetAccessibilityID: "tab.tab-terminal",
+                text: "⌘1",
+                id: "tab.tab-terminal"
+            ),
+            .init(
+                targetAccessibilityID: "toggle-left-sidebar",
+                text: "⌘0",
+                id: "left-sidebar"
+            ),
+        ], in: shell)
+        shell.layoutSubtreeIfNeeded()
+        let after = try XCTUnwrap(shell.debugLayoutContract())
+
+        XCTAssertEqual(before.pane, after.pane)
+        XCTAssertEqual(before.leftContext, after.leftContext)
+        XCTAssertEqual(before.inspector, after.inspector)
+        XCTAssertFalse(overlay.isHidden)
+        XCTAssertTrue(shell.subviewsRecursively.contains {
+            $0.accessibilityIdentifier() == "shortcut-hint.tab.tab-terminal"
+        })
+
+        overlay.dismiss()
+        XCTAssertTrue(overlay.isHidden)
     }
 
     @MainActor

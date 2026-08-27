@@ -65,10 +65,9 @@ fn config(test: &str, local_ipc: bool) -> RuntimeConfig {
             // Keep the test leaf deliberately compact so a long per-user temp
             // directory cannot prevent this test from reaching the listener
             // resource-pressure behavior it is meant to exercise.
-            runtime_dir_override: Some(std::env::temp_dir().join(format!(
-                "s5ad-{:x}-{ipc_suffix:x}",
-                std::process::id()
-            ))),
+            runtime_dir_override: Some(
+                std::env::temp_dir().join(format!("s5ad-{:x}-{ipc_suffix:x}", std::process::id())),
+            ),
         }
     } else {
         LocalIpcMode::Disabled

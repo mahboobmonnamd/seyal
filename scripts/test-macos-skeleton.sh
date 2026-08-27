@@ -87,6 +87,13 @@ grep -q 'pane.close.' "$SOURCES/SeyalShellView.swift" \
   || fail "Pane-local close control is missing"
 grep -q 'inspector.trailingAnchor.constraint(equalTo: trailingAnchor)' "$SOURCES/SeyalShellView.swift" \
   || fail "Inspector must remain pinned to the shell trailing edge"
+grep -q 'NSMenuItem' "$SOURCES/SeyalShellPreviewFactory.swift" \
+  || fail "native shell navigation shortcuts must be discoverable AppKit menu commands"
+grep -q 'keyEquivalentModifierMask' "$SOURCES/SeyalShellPreviewFactory.swift" \
+  || fail "native shell navigation shortcuts must use AppKit key equivalents"
+if grep -q 'override func keyDown' "$SOURCES/SeyalShellPreviewFactory.swift"; then
+  fail "shell navigation shortcuts must not use raw keyDown interception"
+fi
 grep -q 'TerminalSurfaceHostView' "$PROJECT/project.pbxproj" \
   || fail "permanent Metal terminal-surface host is missing from the native target"
 grep -q -- '--ui-shell-preview' "$SOURCES/AppDelegate.swift" \

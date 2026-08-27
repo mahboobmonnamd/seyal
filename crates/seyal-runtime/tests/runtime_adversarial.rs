@@ -2,7 +2,10 @@
 #![allow(unsafe_code)]
 
 use std::{
-    sync::{Mutex, MutexGuard},
+    sync::{
+        Mutex, MutexGuard,
+        atomic::{AtomicU64, Ordering},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -29,6 +32,7 @@ const PTY_EOF_HELPER_TEST: &str = "pty_eof_live_child_helper";
 // assertions are meaningful only when sibling tests cannot open/close
 // descriptors concurrently.
 static TEST_SERIAL: Mutex<()> = Mutex::new(());
+static IPC_SCOPE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn serialized() -> MutexGuard<'static, ()> {
     TEST_SERIAL
@@ -55,9 +59,14 @@ fn config(test: &str, local_ipc: bool) -> RuntimeConfig {
         std::process::id()
     ));
     config.local_ipc = if local_ipc {
+        let ipc_suffix = IPC_SCOPE_COUNTER.fetch_add(1, Ordering::Relaxed);
         LocalIpcMode::Enabled {
+            // Darwin sockaddr_un.sun_path is only 104 bytes including NUL.
+            // Keep the test leaf deliberately compact so a long per-user temp
+            // directory cannot prevent this test from reaching the listener
+            // resource-pressure behavior it is meant to exercise.
             runtime_dir_override: Some(std::env::temp_dir().join(format!(
-                "seyal-adversarial-ipc-{}-{suffix:x}-{test}",
+                "s5ad-{:x}-{ipc_suffix:x}",
                 std::process::id()
             ))),
         }

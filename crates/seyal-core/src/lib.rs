@@ -30,6 +30,9 @@ pub struct AttachmentId(u128);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ProjectionId(u128);
 
+// Fresh authority identities intentionally have no `Default`: default
+// construction would hide a stateful identity-generation side effect.
+#[allow(clippy::new_without_default)]
 impl RuntimeId {
     /// Create a process-local Runtime identity. Runtime remains the owner of
     /// when identities are created; this value crate only provides generation.
@@ -44,6 +47,8 @@ impl WorkspaceId {
     }
 }
 
+// See the RuntimeId rationale above: a fresh identity is not a default value.
+#[allow(clippy::new_without_default)]
 impl ExecutionId {
     /// Create a process-local execution identity. Runtime remains the authority
     /// that decides lifecycle/admission for the resulting identity.
@@ -52,6 +57,8 @@ impl ExecutionId {
     }
 }
 
+// See the RuntimeId rationale above: a fresh identity is not a default value.
+#[allow(clippy::new_without_default)]
 impl AttachmentId {
     /// Create a process-local attachment identity. This does not grant any
     /// attachment authority by itself.

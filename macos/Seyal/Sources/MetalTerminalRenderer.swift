@@ -18,7 +18,7 @@ private struct TerminalInstance {
     var atlasSlice: UInt32
 }
 
-private struct DamageMask {
+struct DamageMask: Equatable {
     var word0: UInt64 = 0
     var word1: UInt64 = 0
     var word2: UInt64 = 0
@@ -84,8 +84,10 @@ struct NativePreparedFrame {
         let rows = Int(bridgeFrame.rows)
         let columns = Int(bridgeFrame.columns)
         let count = Int(bridgeFrame.cell_count)
-        guard rows > 0, columns > 0,
-              rows <= 256, columns <= 512,
+        guard rows > 0,
+              columns > 0,
+              rows <= 256,
+              columns <= 512,
               count == rows * columns,
               let pointer = bridgeFrame.cells
         else {
@@ -143,8 +145,6 @@ enum MetalTerminalRendererError: Error {
     case invalidFrame
     case invalidInstanceLayout
     case glyphAtlas(GlyphAtlasError)
-    case atlasCapacityWhileFrameInFlight
-    case commandEncoding
 }
 
 enum RendererUpdateResult: Equatable {
@@ -180,7 +180,6 @@ final class MetalTerminalRenderer {
     private var currentColumns = 0
     private var currentMetrics: TerminalFontMetrics?
     private var currentScale: CGFloat = 0
-    private var currentGeneration: UInt64 = 0
     private var currentAlternateScreen = false
     private var framesInFlight = 0
     private var deferredDamage = DamageMask()
@@ -215,13 +214,13 @@ final class MetalTerminalRenderer {
         else {
             throw MetalTerminalRendererError.unavailableShader
         }
-        let descriptor = MTLRenderPipelineDescriptor()
-        descriptor.label = "Seyal Terminal Pipeline"
-        descriptor.vertexFunction = vertex
-        descriptor.fragmentFunction = fragment
-        descriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
+        let pipelineDescriptor = MTLRenderPipelineDescriptor()
+        pipelineDescriptor.label = "Seyal Terminal Pipeline"
+        pipelineDescriptor.vertexFunction = vertex
+        pipelineDescriptor.fragmentFunction = fragment
+        pipelineDescriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
         do {
-            pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
+            pipeline = try device.makeRenderPipelineState(descriptor: pipelineDescriptor)
         } catch {
             throw MetalTerminalRendererError.unavailablePipeline
         }
@@ -250,6 +249,16 @@ final class MetalTerminalRenderer {
         Int(stats.instanceBytes) + glyphAtlas.estimatedResidentBytes
     }
 
+    func cellPixelSize(backingScale: CGFloat) -> (width: Int, height: Int) {
+        let metrics = glyphAtlas.metrics(backingScale: max(backingScale, 1))
+        return (metrics.cellWidth, metrics.cellHeight)
+    }
+
+    func requestPresent() {
+        guard visible, instanceBuffer != nil else { return }
+        needsPresent = true
+    }
+
     func setVisible(_ value: Bool) {
         guard visible != value else { return }
         visible = value
@@ -274,11 +283,15 @@ final class MetalTerminalRenderer {
         backingScale: CGFloat,
         forceFullRebuild: Bool = false
     ) throws -> RendererUpdateResult {
-        guard frame.rows > 0, frame.columns > 0,
-              frame.rows <= 256, frame.columns <= 512,
+        guard frame.rows > 0,
+              frame.columns > 0,
+              frame.rows <= 256,
+              frame.columns <= 512,
               frame.cells.count == frame.rows * frame.columns,
-              frame.cursorRow >= 0, frame.cursorRow < frame.rows,
-              frame.cursorColumn >= 0, frame.cursorColumn < frame.columns
+              frame.cursorRow >= 0,
+              frame.cursorRow < frame.rows,
+              frame.cursorColumn >= 0,
+              frame.cursorColumn < frame.columns
         else {
             throw MetalTerminalRendererError.invalidFrame
         }
@@ -291,16 +304,16 @@ final class MetalTerminalRenderer {
         if !visible {
             deferredNeedsFullRebuild = true
             deferredDamage.formUnion(incomingDamage)
-            currentGeneration = frame.generation
             stats.coalescedFrames &+= 1
             return .deferred
         }
 
         if framesInFlight >= Self.maximumFramesInFlight {
             deferredDamage.formUnion(incomingDamage)
-            deferredNeedsFullRebuild = deferredNeedsFullRebuild || frame.fullRebuild || forceFullRebuild
+            deferredNeedsFullRebuild = deferredNeedsFullRebuild
+                || frame.fullRebuild
+                || forceFullRebuild
             needsCurrentFrameWhenIdle = true
-            currentGeneration = frame.generation
             stats.coalescedFrames &+= 1
             return .deferred
         }
@@ -341,27 +354,27 @@ final class MetalTerminalRenderer {
                 backingScale: scale
             )
         } catch GlyphAtlasError.capacityExceeded {
-            guard framesInFlight == 0 else {
-                deferredNeedsFullRebuild = true
-                deferredDamage.formUnion(damage)
-                needsCurrentFrameWhenIdle = true
-                return .deferred
-            }
             glyphAtlas.resetWhenGPUIdle()
+            var allRows = DamageMask()
+            allRows.markAll(rows: frame.rows)
             do {
-                var allRows = DamageMask()
-                allRows.markAll(rows: frame.rows)
                 try rebuildRows(
                     frame: frame,
                     damage: allRows,
                     metrics: metrics,
                     backingScale: scale
                 )
-                fullRebuild = true
-                damage = allRows
             } catch let error as GlyphAtlasError {
                 throw MetalTerminalRendererError.glyphAtlas(error)
             }
+            fullRebuild = true
+            damage = allRows
+        } catch let error as GlyphAtlasError {
+            throw MetalTerminalRendererError.glyphAtlas(error)
+        }
+
+        do {
+            _ = try glyphAtlas.ensureTextureForRendering()
         } catch let error as GlyphAtlasError {
             throw MetalTerminalRendererError.glyphAtlas(error)
         }
@@ -370,7 +383,6 @@ final class MetalTerminalRenderer {
         currentColumns = frame.columns
         currentMetrics = metrics
         currentScale = scale
-        currentGeneration = frame.generation
         currentAlternateScreen = frame.alternateScreen
         deferredDamage = DamageMask()
         deferredNeedsFullRebuild = false
@@ -389,7 +401,9 @@ final class MetalTerminalRenderer {
 
     @discardableResult
     func present(layer: CAMetalLayer) -> Bool {
-        guard visible, needsPresent, framesInFlight == 0,
+        guard visible,
+              needsPresent,
+              framesInFlight == 0,
               let instanceBuffer,
               instanceCount > 0,
               let atlasTexture = glyphAtlas.texture
@@ -424,10 +438,11 @@ final class MetalTerminalRenderer {
         return true
     }
 
-    /// Deterministic offscreen path used only by native validation. Production
-    /// presentation never waits for GPU completion.
+    /// Deterministic offscreen validation only. Production presentation never
+    /// waits for GPU completion.
     func renderOffscreenAndWait(width: Int, height: Int) -> MTLTexture? {
-        guard width > 0, height > 0,
+        guard width > 0,
+              height > 0,
               let instanceBuffer,
               instanceCount > 0,
               let atlasTexture = glyphAtlas.texture
@@ -530,11 +545,11 @@ final class MetalTerminalRenderer {
                     uvRect: uvRect,
                     foreground: resolveTerminalColor(
                         cell.foreground,
-                        defaultRGBA: 0xffe9e1d8
+                        defaultRGBA: 0xffe9_e1d8
                     ),
                     background: resolveTerminalColor(
                         cell.background,
-                        defaultRGBA: 0xff100d0b
+                        defaultRGBA: 0xff10_0d0b
                     ),
                     flags: flags,
                     atlasSlice: atlasSlice
@@ -554,7 +569,12 @@ final class MetalTerminalRenderer {
         pass.colorAttachments[0].texture = target
         pass.colorAttachments[0].loadAction = .clear
         pass.colorAttachments[0].storeAction = .store
-        pass.colorAttachments[0].clearColor = MTLClearColor(red: 0.043, green: 0.051, blue: 0.063, alpha: 1)
+        pass.colorAttachments[0].clearColor = MTLClearColor(
+            red: 0.043,
+            green: 0.051,
+            blue: 0.063,
+            alpha: 1
+        )
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else {
             return nil
         }
@@ -624,10 +644,11 @@ private func resolveTerminalColor(_ packed: UInt32, defaultRGBA: UInt32) -> UInt
         return defaultRGBA
     }
     if tag == 0x0200_0000 {
-        let red = UInt8((packed >> 16) & 0xff)
-        let green = UInt8((packed >> 8) & 0xff)
-        let blue = UInt8(packed & 0xff)
-        return packRGBA(red: red, green: green, blue: blue)
+        return packRGBA(
+            red: UInt8((packed >> 16) & 0xff),
+            green: UInt8((packed >> 8) & 0xff),
+            blue: UInt8(packed & 0xff)
+        )
     }
     if tag == 0x0100_0000 {
         return indexedColor(UInt8(packed & 0xff))

@@ -180,6 +180,112 @@ final class SeyalShellComponentTests: XCTestCase {
     }
 
     @MainActor
+    func testNativeShortcutMenuUsesMacTerminalConventions() throws {
+        let oldMainMenu = NSApp.mainMenu
+        let oldWindowsMenu = NSApp.windowsMenu
+        defer {
+            NSApp.mainMenu = oldMainMenu
+            NSApp.windowsMenu = oldWindowsMenu
+        }
+
+        let state = SeyalShellPreviewState.makeDefault()
+        let shell = SeyalShellPreviewFactory.make(
+            frame: NSRect(x: 0, y: 0, width: 1280, height: 800),
+            state: state
+        )
+        let window = NSWindow(
+            contentRect: shell.frame,
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = shell
+
+        let shortcuts = SeyalPreviewShortcutController(window: window, state: state)
+        shortcuts.installMenus()
+
+        let workspaceMenu = try XCTUnwrap(NSApp.mainMenu?.item(withTitle: "Workspace")?.submenu)
+        let workspace2 = try XCTUnwrap(workspaceMenu.items.first { $0.tag == 1 && $0.keyEquivalent == "2" })
+        XCTAssertEqual(normalizedModifiers(workspace2), [.command, .control])
+
+        let tabMenu = try XCTUnwrap(NSApp.mainMenu?.item(withTitle: "Tab")?.submenu)
+        let tab2 = try XCTUnwrap(tabMenu.items.first { $0.tag == 1 && $0.keyEquivalent == "2" })
+        XCTAssertEqual(normalizedModifiers(tab2), [.command])
+        let nextTab = try XCTUnwrap(tabMenu.item(withTitle: "Next Tab"))
+        XCTAssertEqual(nextTab.keyEquivalent, "]")
+        XCTAssertEqual(normalizedModifiers(nextTab), [.command, .shift])
+
+        let windowMenu = try XCTUnwrap(NSApp.mainMenu?.item(withTitle: "Window")?.submenu)
+        let window2 = try XCTUnwrap(windowMenu.items.first { $0.tag == 1 && $0.keyEquivalent == "2" })
+        XCTAssertEqual(normalizedModifiers(window2), [.command, .option])
+        let nextWindow = try XCTUnwrap(windowMenu.item(withTitle: "Next Window"))
+        XCTAssertEqual(nextWindow.keyEquivalent, "`")
+        XCTAssertEqual(normalizedModifiers(nextWindow), [.command])
+
+        let viewMenu = try XCTUnwrap(NSApp.mainMenu?.item(withTitle: "View")?.submenu)
+        XCTAssertEqual(
+            normalizedModifiers(try XCTUnwrap(viewMenu.item(withTitle: "Toggle Navigation Sidebar"))),
+            [.command]
+        )
+        XCTAssertEqual(
+            normalizedModifiers(try XCTUnwrap(viewMenu.item(withTitle: "Toggle Inspector"))),
+            [.command, .option]
+        )
+    }
+
+    @MainActor
+    func testShortcutRoutingMutatesExistingShellStateWithoutReplacingView() throws {
+        let oldMainMenu = NSApp.mainMenu
+        let oldWindowsMenu = NSApp.windowsMenu
+        defer {
+            NSApp.mainMenu = oldMainMenu
+            NSApp.windowsMenu = oldWindowsMenu
+        }
+
+        let state = SeyalShellPreviewState.makeDefault()
+        let shell = SeyalShellPreviewFactory.make(
+            frame: NSRect(x: 0, y: 0, width: 1280, height: 800),
+            state: state
+        )
+        let window = NSWindow(
+            contentRect: shell.frame,
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = shell
+        let shortcuts = SeyalPreviewShortcutController(window: window, state: state)
+        shortcuts.installMenus()
+
+        shell.debugSetSidebarVisibility(left: false, inspector: true)
+        let tab2 = NSMenuItem()
+        tab2.tag = 1
+        shortcuts.selectTabByNumber(tab2)
+
+        XCTAssertTrue(window.contentView === shell)
+        XCTAssertEqual(state.snapshot.activeTabID, "tab-agent")
+        shell.layoutSubtreeIfNeeded()
+        XCTAssertEqual(try XCTUnwrap(shell.debugLayoutContract()).leftContext.width, 0, accuracy: 1)
+
+        let workspace2 = NSMenuItem()
+        workspace2.tag = 1
+        shortcuts.selectWorkspaceByNumber(workspace2)
+        XCTAssertEqual(state.snapshot.activeWorkspaceID, "workspace-payments")
+        XCTAssertEqual(state.snapshot.activeTabID, "tab-payments-api")
+
+        shortcuts.nextWorkspace(nil)
+        XCTAssertEqual(state.snapshot.activeWorkspaceID, "workspace-infra")
+        shortcuts.previousWorkspace(nil)
+        XCTAssertEqual(state.snapshot.activeWorkspaceID, "workspace-payments")
+    }
+
+    func testShortcutWrappedIndexCyclesBothDirections() {
+        XCTAssertEqual(SeyalPreviewShortcutController.wrappedIndex(current: 0, count: 4, offset: -1), 3)
+        XCTAssertEqual(SeyalPreviewShortcutController.wrappedIndex(current: 3, count: 4, offset: 1), 0)
+        XCTAssertEqual(SeyalPreviewShortcutController.wrappedIndex(current: 1, count: 4, offset: 1), 2)
+    }
+
+    @MainActor
     func testFrozenReferenceUsesDenseThreeColumnLayoutWithoutTrailingGap() throws {
         let shell = SeyalShellPreviewFactory.make(
             frame: NSRect(x: 0, y: 0, width: 1280, height: 800)
@@ -262,6 +368,11 @@ final class SeyalShellComponentTests: XCTestCase {
                 buildConfiguration: "Debug"
             )
         )
+    }
+
+    @MainActor
+    private func normalizedModifiers(_ item: NSMenuItem) -> NSEvent.ModifierFlags {
+        item.keyEquivalentModifierMask.intersection(.deviceIndependentFlagsMask)
     }
 
     @MainActor

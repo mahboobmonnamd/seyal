@@ -224,6 +224,7 @@ final class MetalTerminalRenderer {
     private(set) var stats = MetalRendererStats()
     private(set) var persistentDisplayFailure: MetalTerminalRendererError?
     var onNeedsCurrentFrame: (() -> Void)?
+    var onPersistentDisplayFailure: ((MetalTerminalRendererError) -> Void)?
 
     init(device: MTLDevice) throws {
         self.device = device
@@ -727,8 +728,10 @@ final class MetalTerminalRenderer {
                 // recovery state and reconstructs from committed Candidate-D.
                 needsCurrentFrameWhenIdle = false
                 needsPresent = false
-                persistentDisplayFailure = .gpuCommandCompletionFailuresExhausted
+                let failure = MetalTerminalRendererError.gpuCommandCompletionFailuresExhausted
+                persistentDisplayFailure = failure
                 stats.commandCompletionFailureExhaustions &+= 1
+                onPersistentDisplayFailure?(failure)
             }
         } else {
             gpuCompletionRetryState.recordSuccess()

@@ -6,21 +6,22 @@ use std::{
 };
 
 use seyal_render::{
-    CellSource, CommittedDisplay, CursorState, PreparationResult, PreparedSurface, RenderAttributes,
-    RenderCell, RenderColor, RowDamage,
+    CellSource, CommittedDisplay, CursorState, PreparationResult, PreparedSurface,
+    RenderAttributes, RenderCell, RenderColor, RowDamage,
 };
 use seyal_runtime::{
     AttachmentId, ExecutionId,
     display::{
-        DecodedDisplayChunk, DisplayAttributes, DisplayCache, DisplayCell, DisplayColor, DisplayError,
-        DisplayKind, decode_chunk, empty_cache,
+        DISPLAY_CELL_LEN, DISPLAY_CHUNK_HEADER_LEN, DecodedDisplayChunk, DisplayAttributes,
+        DisplayCache, DisplayCell, DisplayColor, DisplayError, DisplayKind, MAX_DISPLAY_BATCH_BYTES,
+        MAX_DISPLAY_CELLS, decode_chunk, empty_cache,
     },
     local_ipc::{
         discovery::{control_socket_path, darwin_user_runtime_dir, ensure_verified_runtime_dir},
         framing::{
-            Attach, Attached, ClientHello, ErrorMessage, ExecutionList, FrameHeader, HEADER_LEN,
-            Lifecycle, MAX_FRAME_PAYLOAD, MessageType, Resync, Role, ServerHello, encode_frame,
-            CAP_BINARY_DISPLAY,
+            Attach, Attached, CAP_BINARY_DISPLAY, ClientHello, ErrorMessage, ExecutionList,
+            FrameHeader, HEADER_LEN, Lifecycle, MAX_FRAME_PAYLOAD, MessageType, Resync, Role,
+            ServerHello, encode_frame,
         },
     },
 };
@@ -46,11 +47,137 @@ pub enum ClientError {
     Capacity,
 }
 
+#[derive(Debug, Default)]
+struct PendingDisplayBatch {
+    chunks: Vec<DecodedDisplayChunk>,
+    cells: usize,
+    rows: usize,
+    wire_bytes: usize,
+}
+
+impl PendingDisplayBatch {
+    fn push(&mut self, chunk: DecodedDisplayChunk) -> Result<bool, ClientError> {
+        let expected_count = usize::from(chunk.chunk_count);
+        if expected_count == 0 || expected_count > usize::from(chunk.rows) {
+            return Err(ClientError::Capacity);
+        }
+
+        if self.chunks.is_empty() {
+            if chunk.chunk_index != 0 {
+                return Err(ClientError::Protocol);
+            }
+            if chunk.kind == DisplayKind::Snapshot && chunk.first_row != 0 {
+                return Err(ClientError::Protocol);
+            }
+            self.chunks.reserve(expected_count);
+        } else {
+            let first = self.chunks.first().ok_or(ClientError::Protocol)?;
+            let previous = self.chunks.last().ok_or(ClientError::Protocol)?;
+            if chunk.kind != first.kind
+                || chunk.generation != first.generation
+                || chunk.base_generation != first.base_generation
+                || chunk.rows != first.rows
+                || chunk.columns != first.columns
+                || chunk.cursor_row != first.cursor_row
+                || chunk.cursor_col != first.cursor_col
+                || chunk.cursor_visible != first.cursor_visible
+                || chunk.alternate_screen != first.alternate_screen
+                || chunk.chunk_count != first.chunk_count
+                || usize::from(chunk.chunk_index) != self.chunks.len()
+            {
+                return Err(ClientError::Protocol);
+            }
+            let expected_first_row = previous
+                .first_row
+                .checked_add(previous.row_count)
+                .ok_or(ClientError::Capacity)?;
+            if chunk.first_row != expected_first_row {
+                return Err(ClientError::Protocol);
+            }
+        }
+
+        if self.chunks.len() >= expected_count {
+            return Err(ClientError::Protocol);
+        }
+
+        let next_rows = self
+            .rows
+            .checked_add(usize::from(chunk.row_count))
+            .ok_or(ClientError::Capacity)?;
+        if next_rows > usize::from(chunk.rows) {
+            return Err(ClientError::Capacity);
+        }
+
+        let geometry_cells = usize::from(chunk.rows)
+            .checked_mul(usize::from(chunk.columns))
+            .ok_or(ClientError::Capacity)?;
+        let next_cells = self
+            .cells
+            .checked_add(chunk.cells.len())
+            .ok_or(ClientError::Capacity)?;
+        if next_cells > geometry_cells || next_cells > MAX_DISPLAY_CELLS {
+            return Err(ClientError::Capacity);
+        }
+
+        let chunk_wire_bytes = HEADER_LEN
+            .checked_add(DISPLAY_CHUNK_HEADER_LEN)
+            .and_then(|value| {
+                chunk
+                    .cells
+                    .len()
+                    .checked_mul(DISPLAY_CELL_LEN)
+                    .and_then(|cell_bytes| value.checked_add(cell_bytes))
+            })
+            .ok_or(ClientError::Capacity)?;
+        let next_wire_bytes = self
+            .wire_bytes
+            .checked_add(chunk_wire_bytes)
+            .ok_or(ClientError::Capacity)?;
+        if next_wire_bytes > MAX_DISPLAY_BATCH_BYTES {
+            return Err(ClientError::Capacity);
+        }
+
+        self.rows = next_rows;
+        self.cells = next_cells;
+        self.wire_bytes = next_wire_bytes;
+        self.chunks.push(chunk);
+        Ok(self.chunks.len() == expected_count)
+    }
+
+    fn chunks(&self) -> &[DecodedDisplayChunk] {
+        &self.chunks
+    }
+
+    fn clear(&mut self) {
+        self.chunks.clear();
+        self.cells = 0;
+        self.rows = 0;
+        self.wire_bytes = 0;
+    }
+}
+
+#[derive(Debug)]
+struct PendingControlWrite {
+    bytes: Vec<u8>,
+    offset: usize,
+}
+
+impl PendingControlWrite {
+    fn new(bytes: Vec<u8>) -> Self {
+        Self { bytes, offset: 0 }
+    }
+
+    fn remaining(&self) -> &[u8] {
+        &self.bytes[self.offset..]
+    }
+}
+
 pub struct LocalDisplayClient {
     stream: UnixStream,
     buffered: Vec<u8>,
     read_offset: usize,
-    pending_chunks: Vec<DecodedDisplayChunk>,
+    pending_batch: PendingDisplayBatch,
+    pending_control: Option<PendingControlWrite>,
     attachment_id: AttachmentId,
     cache: DisplayCache,
     prepared: PreparedSurface,
@@ -128,17 +255,20 @@ impl LocalDisplayClient {
         if first.kind != DisplayKind::Snapshot || first.chunk_index != 0 {
             return Err(ClientError::Protocol);
         }
-        let chunk_count = first.chunk_count as usize;
-        let mut chunks = Vec::with_capacity(chunk_count);
-        chunks.push(first);
+        let chunk_count = first.chunk_count;
+        let mut batch = PendingDisplayBatch::default();
+        let mut complete = batch.push(first)?;
         for _ in 1..chunk_count {
             let frame = read_blocking_raw_frame(&mut stream)?;
-            chunks.push(decode_chunk(&frame).map_err(|_| ClientError::Display)?);
+            complete = batch.push(decode_chunk(&frame).map_err(|_| ClientError::Display)?)?;
+        }
+        if !complete {
+            return Err(ClientError::Protocol);
         }
 
         let mut cache = empty_cache();
         cache
-            .apply_chunks(&chunks)
+            .apply_chunks(batch.chunks())
             .map_err(|_| ClientError::Display)?;
         if cache.generation != attached.current_generation {
             return Err(ClientError::Protocol);
@@ -147,19 +277,19 @@ impl LocalDisplayClient {
         let mut prepared = PreparedSurface::default();
         let result = prepare_cache(&mut prepared, &cache, RowDamage::full(cache.rows), true)?;
 
-        stream
-            .set_read_timeout(None)
-            .map_err(|_| ClientError::Io)?;
+        stream.set_read_timeout(None).map_err(|_| ClientError::Io)?;
         stream
             .set_write_timeout(None)
             .map_err(|_| ClientError::Io)?;
         stream.set_nonblocking(true).map_err(|_| ClientError::Io)?;
 
+        batch.clear();
         Ok(Self {
             stream,
             buffered: Vec::with_capacity(READ_CHUNK_BYTES),
             read_offset: 0,
-            pending_chunks: Vec::new(),
+            pending_batch: batch,
+            pending_control: None,
             attachment_id: attached.attachment_id,
             cache,
             prepared,
@@ -181,6 +311,18 @@ impl LocalDisplayClient {
 
     pub fn last_preparation(&self) -> PreparationResult {
         self.last_preparation
+    }
+
+    pub fn wants_write(&self) -> bool {
+        self.pending_control.is_some()
+    }
+
+    /// Complete at most one nonblocking control write attempt. The AppKit bridge
+    /// calls this only after the socket becomes writable, so temporary pressure
+    /// cannot turn a generation-gap resync into a disconnect or a busy retry.
+    pub fn flush_control_write(&mut self) -> Result<(), ClientError> {
+        let stream = &mut self.stream;
+        flush_control_with(&mut self.pending_control, |bytes| stream.write(bytes))
     }
 
     /// Drain a bounded amount of already-ready socket work, atomically commit
@@ -263,12 +405,7 @@ impl LocalDisplayClient {
             return Ok(None);
         }
 
-        let result = prepare_cache(
-            &mut self.prepared,
-            &self.cache,
-            damage,
-            full_invalidation,
-        )?;
+        let result = prepare_cache(&mut self.prepared, &self.cache, damage, full_invalidation)?;
         self.last_preparation = result;
         Ok(Some(result))
     }
@@ -302,40 +439,33 @@ impl LocalDisplayClient {
         damage: &mut RowDamage,
         full_invalidation: &mut bool,
     ) -> Result<bool, ClientError> {
-        if self.pending_chunks.is_empty() {
-            if chunk.chunk_index != 0 {
-                return Err(ClientError::Protocol);
-            }
-        } else if chunk.chunk_index as usize != self.pending_chunks.len() {
-            return Err(ClientError::Protocol);
-        }
-        let expected_count = chunk.chunk_count as usize;
-        self.pending_chunks.push(chunk);
-        if self.pending_chunks.len() < expected_count {
+        if !self.pending_batch.push(chunk)? {
             return Ok(false);
         }
-        if self.pending_chunks.len() != expected_count {
-            return Err(ClientError::Protocol);
-        }
 
-        let chunks = std::mem::take(&mut self.pending_chunks);
-        let first = chunks.first().ok_or(ClientError::Protocol)?;
-        match self.cache.apply_chunks(&chunks) {
+        let first_kind = self
+            .pending_batch
+            .chunks()
+            .first()
+            .map(|first| first.kind)
+            .ok_or(ClientError::Protocol)?;
+        match self.cache.apply_chunks(self.pending_batch.chunks()) {
             Ok(()) => {}
             Err(DisplayError::GenerationMismatch | DisplayError::DimensionMismatch) => {
+                self.pending_batch.clear();
                 self.request_resync()?;
                 return Ok(false);
             }
             Err(_) => return Err(ClientError::Display),
         }
 
-        match first.kind {
+        match first_kind {
             DisplayKind::Snapshot => {
                 *damage = RowDamage::full(self.cache.rows);
                 *full_invalidation = true;
             }
             DisplayKind::Delta => {
-                for committed in &chunks {
+                for committed in self.pending_batch.chunks() {
                     damage.union(
                         RowDamage::from_range(committed.first_row, committed.row_count)
                             .map_err(|_| ClientError::Prepare)?,
@@ -343,23 +473,21 @@ impl LocalDisplayClient {
                 }
             }
         }
+        self.pending_batch.clear();
         Ok(true)
     }
 
     fn request_resync(&mut self) -> Result<(), ClientError> {
-        let frame = encode_frame(
-            MessageType::Resync,
-            &Resync {
-                attachment_id: self.attachment_id,
-            }
-            .encode(),
-        );
-        match self.stream.write(&frame) {
-            Ok(count) if count == frame.len() => Ok(()),
-            Ok(_) => Err(ClientError::Io),
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Err(ClientError::Io),
-            Err(_) => Err(ClientError::Io),
+        if self.pending_control.is_none() {
+            self.pending_control = Some(PendingControlWrite::new(encode_frame(
+                MessageType::Resync,
+                &Resync {
+                    attachment_id: self.attachment_id,
+                }
+                .encode(),
+            )));
         }
+        self.flush_control_write()
     }
 
     fn compact_buffer(&mut self) {
@@ -372,6 +500,37 @@ impl LocalDisplayClient {
             self.buffered.drain(..self.read_offset);
         }
         self.read_offset = 0;
+    }
+}
+
+fn flush_control_with(
+    pending: &mut Option<PendingControlWrite>,
+    mut write_once: impl FnMut(&[u8]) -> std::io::Result<usize>,
+) -> Result<(), ClientError> {
+    let Some(control) = pending.as_mut() else {
+        return Ok(());
+    };
+    let remaining = control.remaining();
+    if remaining.is_empty() {
+        *pending = None;
+        return Ok(());
+    }
+
+    match write_once(remaining) {
+        Ok(0) => Err(ClientError::Io),
+        Ok(count) if count <= remaining.len() => {
+            control.offset = control
+                .offset
+                .checked_add(count)
+                .ok_or(ClientError::Capacity)?;
+            if control.offset == control.bytes.len() {
+                *pending = None;
+            }
+            Ok(())
+        }
+        Ok(_) => Err(ClientError::Io),
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(()),
+        Err(_) => Err(ClientError::Io),
     }
 }
 
@@ -502,6 +661,40 @@ fn read_blocking_raw_frame(stream: &mut UnixStream) -> Result<Vec<u8>, ClientErr
 mod tests {
     use super::*;
 
+    fn display_cell() -> DisplayCell {
+        DisplayCell {
+            scalar: 'x',
+            foreground: DisplayColor::Default,
+            background: DisplayColor::Default,
+            attributes: DisplayAttributes::default(),
+        }
+    }
+
+    fn decoded_chunk(
+        chunk_index: u16,
+        chunk_count: u16,
+        first_row: u16,
+        row_count: u16,
+    ) -> DecodedDisplayChunk {
+        let columns = 1;
+        DecodedDisplayChunk {
+            kind: DisplayKind::Delta,
+            generation: 2,
+            base_generation: 1,
+            rows: 4,
+            columns,
+            cursor_row: 0,
+            cursor_col: 0,
+            cursor_visible: true,
+            alternate_screen: false,
+            first_row,
+            row_count,
+            chunk_index,
+            chunk_count,
+            cells: vec![display_cell(); usize::from(row_count) * usize::from(columns)],
+        }
+    }
+
     #[test]
     fn runtime_cell_adapter_preserves_scalar_style_and_color_without_copying_cache() {
         let cells = [DisplayCell {
@@ -521,5 +714,42 @@ mod tests {
         assert_eq!(converted.background, RenderColor::Rgb { r: 1, g: 2, b: 3 });
         assert!(converted.attributes.bold);
         assert!(converted.attributes.underline);
+    }
+
+    #[test]
+    fn pending_display_batch_rejects_impossible_chunk_count_before_allocation_growth() {
+        let mut batch = PendingDisplayBatch::default();
+        let mut chunk = decoded_chunk(0, 5, 0, 1);
+        chunk.rows = 4;
+
+        assert_eq!(batch.push(chunk), Err(ClientError::Capacity));
+        assert!(batch.chunks().is_empty());
+    }
+
+    #[test]
+    fn pending_display_batch_rejects_replayed_or_noncontiguous_rows() {
+        let mut batch = PendingDisplayBatch::default();
+        assert!(!batch.push(decoded_chunk(0, 2, 0, 1)).unwrap());
+
+        let replayed = decoded_chunk(1, 2, 0, 1);
+        assert_eq!(batch.push(replayed), Err(ClientError::Protocol));
+        assert_eq!(batch.chunks().len(), 1);
+    }
+
+    #[test]
+    fn pending_control_write_survives_partial_write_and_would_block() {
+        let mut pending = Some(PendingControlWrite::new(vec![1, 2, 3, 4]));
+
+        flush_control_with(&mut pending, |_| Ok(2)).unwrap();
+        assert_eq!(pending.as_ref().unwrap().remaining(), &[3, 4]);
+
+        flush_control_with(&mut pending, |_| {
+            Err(std::io::Error::from(std::io::ErrorKind::WouldBlock))
+        })
+        .unwrap();
+        assert_eq!(pending.as_ref().unwrap().remaining(), &[3, 4]);
+
+        flush_control_with(&mut pending, |bytes| Ok(bytes.len())).unwrap();
+        assert!(pending.is_none());
     }
 }

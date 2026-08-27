@@ -17,6 +17,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "seyal-render"
+version = "0.0.0"
+
+[[package]]
 name = "seyal-runtime"
 version = "0.0.0"
 dependencies = [

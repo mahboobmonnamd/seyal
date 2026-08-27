@@ -99,9 +99,11 @@ private final class RustBridgeTeardownCoordinator: @unchecked Sendable {
 final class RustDisplayBridge {
     typealias FrameHandler = (SeyalPreparedFrame) -> Void
     typealias ErrorHandler = (Int32) -> Void
+    typealias StatusHandler = () -> Void
 
     private let onFrame: FrameHandler
     private let onError: ErrorHandler
+    private let onStatusChanged: StatusHandler
     private var readSource: DispatchSourceRead?
     private var writeSource: DispatchSourceWrite?
     private var socketFileDescriptor: Int32 = -1
@@ -128,9 +130,14 @@ final class RustDisplayBridge {
             && disconnects == 1
     }
 
-    init(onFrame: @escaping FrameHandler, onError: @escaping ErrorHandler) {
+    init(
+        onFrame: @escaping FrameHandler,
+        onError: @escaping ErrorHandler,
+        onStatusChanged: @escaping StatusHandler = {}
+    ) {
         self.onFrame = onFrame
         self.onError = onError
+        self.onStatusChanged = onStatusChanged
         teardown.onDisconnected = { [weak self] in
             self?.teardownCompleted()
         }
@@ -148,6 +155,7 @@ final class RustDisplayBridge {
         let result = seyal_bridge_connect_first()
         guard result == 0 else {
             onError(result)
+            onStatusChanged()
             return false
         }
 
@@ -155,6 +163,7 @@ final class RustDisplayBridge {
         guard fileDescriptor >= 0 else {
             seyal_bridge_disconnect()
             onError(fileDescriptor)
+            onStatusChanged()
             return false
         }
 
@@ -173,6 +182,7 @@ final class RustDisplayBridge {
 
         publishCurrentFrame()
         synchronizeWriteReadinessSource()
+        onStatusChanged()
         return true
     }
 
@@ -182,6 +192,7 @@ final class RustDisplayBridge {
         guard !teardown.disconnectPending else { return }
 
         isConnected = false
+        socketFileDescriptor = -1
         teardown.requestDisconnect()
 
         if let readSource {
@@ -192,25 +203,117 @@ final class RustDisplayBridge {
             self.writeSource = nil
             writeSource.cancel()
         }
-
+        onStatusChanged()
     }
 
     private func teardownCompleted() {
+        onStatusChanged()
         guard reconnectRequested else { return }
         reconnectRequested = false
         _ = start()
     }
 
-    func publishCurrentFrame() {
-        guard isConnected else { return }
+    func currentFrame() -> SeyalPreparedFrame? {
+        guard isConnected else { return nil }
         let frame = seyal_bridge_frame()
-        guard frame.cells != nil, frame.cell_count > 0 else { return }
+        guard frame.cells != nil, frame.cell_count > 0 else { return nil }
+        return frame
+    }
+
+    func publishCurrentFrame() {
+        guard let frame = currentFrame() else { return }
         onFrame(frame)
+    }
+
+    @discardableResult
+    func submitCommittedText(_ text: String) -> Int32 {
+        guard isConnected else {
+            onStatusChanged()
+            return -10
+        }
+        let byteCount = text.utf8.count
+        guard byteCount <= Int(UInt32.max) else {
+            onStatusChanged()
+            return -14
+        }
+        let count = UInt32(byteCount)
+        let result = text.utf8.withContiguousStorageIfAvailable { buffer -> Int32 in
+            seyal_bridge_submit_utf8(buffer.baseAddress, count)
+        } ?? Array(text.utf8).withUnsafeBufferPointer { buffer in
+            seyal_bridge_submit_utf8(buffer.baseAddress, count)
+        }
+        return finishMutation(result)
+    }
+
+    @discardableResult
+    func submitKey(kind: UInt16, scalar: UInt32) -> Int32 {
+        guard isConnected else {
+            onStatusChanged()
+            return -10
+        }
+        return finishMutation(seyal_bridge_submit_key(kind, scalar))
+    }
+
+    @discardableResult
+    func proposeGeometry(
+        viewportWidth: Double,
+        viewportHeight: Double,
+        horizontalInsets: Double,
+        verticalInsets: Double,
+        cellWidth: Double,
+        cellHeight: Double,
+        meaningfulLayoutEpoch: Bool
+    ) -> Int32 {
+        guard isConnected else {
+            onStatusChanged()
+            return -10
+        }
+        return finishMutation(
+            seyal_bridge_propose_geometry(
+                viewportWidth,
+                viewportHeight,
+                horizontalInsets,
+                verticalInsets,
+                cellWidth,
+                cellHeight,
+                meaningfulLayoutEpoch ? 1 : 0
+            )
+        )
+    }
+
+    @discardableResult
+    func retryResize() -> Int32 {
+        guard isConnected else {
+            onStatusChanged()
+            return -10
+        }
+        return finishMutation(seyal_bridge_retry_resize())
+    }
+
+    func inputFailureCode() -> Int32 {
+        isConnected ? seyal_bridge_input_failure() : 4
+    }
+
+    func resizeFailureCode() -> Int32 {
+        isConnected ? seyal_bridge_resize_failure() : 201
+    }
+
+    private func finishMutation(_ result: Int32) -> Int32 {
+        synchronizeWriteReadinessSource()
+        onStatusChanged()
+        if result == -3 || result == -10 {
+            onError(result)
+            stop()
+        }
+        return result
     }
 
     private func drainReadyDisplayWork() {
         guard isConnected else { return }
-        defer { synchronizeWriteReadinessSource() }
+        defer {
+            synchronizeWriteReadinessSource()
+            onStatusChanged()
+        }
 
         // Rust bounds each poll by frame count and bytes. A small outer bound
         // prevents one high-volume terminal from monopolizing the AppKit queue;
@@ -284,5 +387,6 @@ final class RustDisplayBridge {
             return
         }
         synchronizeWriteReadinessSource()
+        onStatusChanged()
     }
 }

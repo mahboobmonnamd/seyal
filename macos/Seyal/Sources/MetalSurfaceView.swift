@@ -152,7 +152,10 @@ final class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     override func layout() {
         super.layout()
         updateDrawableSize()
-        guard shouldRender, hasPreparedState else { return }
+        guard shouldRender,
+              hasPreparedState,
+              renderer.persistentDisplayFailure == nil
+        else { return }
         renderer.requestPresent()
         beginPresentationAttemptSeries()
         armMetalDisplayLink()
@@ -236,8 +239,12 @@ final class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
 
         renderer.setVisible(renderable)
         if renderable {
-            // Showing reconstructs from the latest committed Candidate-D state.
-            // It never depends on stale drawable contents or PTY-byte replay.
+            // Showing is the explicit recovery boundary for an exhausted GPU
+            // completion failure series. Reconstruct from the latest committed
+            // Candidate-D state; never request PTY-byte replay.
+            if renderer.persistentDisplayFailure == nil {
+                lastRenderError = nil
+            }
             bridge?.publishCurrentFrame()
             if hasPreparedState {
                 renderer.requestPresent()
@@ -261,9 +268,14 @@ final class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
             if result == .updated {
                 forceNextFrame = false
                 hasPreparedState = true
-                lastRenderError = nil
+                // Candidate-D can continue advancing while an exhausted GPU
+                // display failure is latched. A successful CPU preparation must
+                // not erase that asynchronous display diagnostic.
+                if renderer.persistentDisplayFailure == nil {
+                    lastRenderError = nil
+                }
                 resetPreparationRetries()
-                if shouldRender {
+                if shouldRender, renderer.persistentDisplayFailure == nil {
                     beginPresentationAttemptSeries()
                     armMetalDisplayLink()
                 }

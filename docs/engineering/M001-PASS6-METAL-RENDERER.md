@@ -63,7 +63,19 @@ Backing-scale changes invalidate pixel-dependent glyph/resources and force curre
 
 A hidden, miniaturized, occluded, detached or hidden-by-ancestor `MetalSurfaceView` does not continuously present. Hiding releases the surface instance buffer and glyph-atlas resources immediately when no command buffer is in flight, or after the in-flight completion when necessary. Showing requests the current committed display state and performs a reconstructable full redraw; it never asks Runtime for PTY-byte replay.
 
-The display link is installed only while the surface is renderable and is paused between one-shot frame opportunities. This lets Core Animation provide a drawable without blocking the main actor on drawable-pool exhaustion. Temporary presentation/resource failure preserves one coalesced pending opportunity and uses the existing finite retry budget for command/resource recovery; drawable starvation itself waits for the next legitimate display-link opportunity. Renderer/resource failure does not mutate `TerminalExecution`, committed client terminal authority, attachment authority or child lifecycle.
+The display link is installed only while the surface is renderable and is paused between one-shot frame opportunities. This lets Core Animation provide a drawable without blocking the main actor on drawable-pool exhaustion. Drawable starvation waits for a later legitimate display-link opportunity.
+
+Renderer recovery deliberately distinguishes failures known before GPU completion from failures reported asynchronously by a submitted command buffer:
+
+- preparation and command/resource submission failures retain one coalesced presentation/reprepare request and use the existing finite delayed retry budget;
+- asynchronous command-buffer `.error` completions use a separate `GPUCompletionRetryState`, because successful submission is not proof of successful GPU execution;
+- after the initial failed command completion, at most four automatic GPU resubmissions are allowed; a fifth consecutive failed completion exhausts that visible-lifecycle recovery series;
+- exhaustion latches `gpuCommandCompletionFailuresExhausted`, stops automatic current-frame requests and command submissions, and is surfaced through `MetalSurfaceView.lastRenderError`;
+- Candidate-D and the committed client `DisplayCache` continue advancing independently while the GPU display failure is latched; renderer damage is coalesced rather than repeatedly reshaped/rebuilt for a surface that cannot present;
+- ordinary terminal output, layout and successful CPU preparation cannot reset or bypass the exhausted GPU state;
+- a real hide → show lifecycle transition is the explicit recovery boundary. It clears the GPU-completion failure series and reconstructs renderer resources from the latest committed Candidate-D state.
+
+No failure path mutates `TerminalExecution`, committed client terminal authority, attachment authority or child lifecycle. The failure state is renderer-local and disposable.
 
 ## Validation
 
@@ -82,6 +94,8 @@ The Rust deterministic suite covers first/full preparation, unchanged/no-op, spa
 The protocol/client suites cover framing bounds, atomic snapshot/delta commits, generation mismatch, incomplete multi-chunk rejection, bounded client buffering and control writes, Runtime discovery/path validation, and the enforced production dependency boundary.
 
 The native renderer self-test covers deterministic top-left pixels, blank backgrounds, underline, cursor, glyph cache reuse, bold glyph identity, backing-scale invalidation, coalesced frame-opportunity state, static-frame resubmission, hide/show reconstruction, finite atlas pressure/reclamation, in-flight GPU resource safety and repeated surface lifecycle cleanup. It separately exercises the production `CAMetalLayer` submission path rather than treating an offscreen texture as presentation proof.
+
+The same native self-test also exercises the exact asynchronous GPU-completion recovery state machine: initial submission failure → four permitted automatic retries → exhaustion on the fifth consecutive failed completion → no further retry claims under repeated failures → explicit lifecycle reset → finite recovery available again. This test is independent of terminal/client authority by construction, while production guards ensure an exhausted state blocks `requestPresent`, `present`, current-frame requests and repeated CPU renderer preparation until lifecycle recovery.
 
 The live macOS acceptance harness starts a real Seyal Runtime and real shell, then proves both ordinary output and the M001 alternate-screen fixture through:
 
@@ -102,9 +116,9 @@ No test injects terminal cells directly for the live proof.
 
 The native Release renderer benchmark measures `MetalTerminalRenderer.update` for sparse 120×40 damage and a Metal GPU-completion proxy using an offscreen target. The latter is explicitly a proxy and is not presented as display scanout latency. It records p50/p95/p99/max, device/OS/geometry/scale, rebuilt rows/cells, instance bytes, glyph hits/misses/uploads, atlas budget and dedicated GPU bytes. `/usr/bin/time -lp` supplies process resource evidence in the macOS CI job.
 
-### Final exact-head evidence
+### Same-host measured baseline before final asynchronous-failure hardening
 
-The final local acceptance run used implementation commit `db460728741022010af9c5152fa1bb9c661afda2` on `origin/master` `5594b8a37981a29819c2b87ec0cd5f9774f76d9c`, Apple M5 Pro / macOS 26.5.2 (25F84), arm64, Rust 1.98.0, Release build, 1x backing scale, nearest-rank percentiles. The closest pre-fix comparison is the immediately preceding PR head `7084915d940d486623e1e10c72fb05cdd4772d3c` on the same host and OS; these are repeated local measurements, not a cross-machine product threshold.
+The last fully recorded local acceptance baseline before the bounded asynchronous GPU-completion failure-state correction used implementation commit `db460728741022010af9c5152fa1bb9c661afda2` on `origin/master` `5594b8a37981a29819c2b87ec0cd5f9774f76d9c`, Apple M5 Pro / macOS 26.5.2 (25F84), arm64, Rust 1.98.0, Release build, 1x backing scale, nearest-rank percentiles. The asynchronous-failure correction is outside the successful steady-state renderer update/encode hot path; final exact-head measurements are recorded durably on PR #659 after validation rather than being inferred from this baseline.
 
 | Boundary / workload | p50 | p95 | p99 | max |
 | --- | ---: | ---: | ---: | ---: |
@@ -117,7 +131,7 @@ The native run rebuilt 160 rows / 19,200 cells, used 230,400 instance bytes, rec
 
 The full `make bench` Candidate-D run also covered the required fanout/workload/geometry matrix. At 16 viewers and sustained 2-second high output at 200×60 it recorded p95/p99 client-cache latency of 3,237/3,627 µs, 16,544 KiB populated RSS, 22.6% sampled CPU, `3,568` latency samples, 678,423,552 aggregate UDS bytes, `shutdown_ok=true`, and final pending input `0`. The 50- and 100-execution cases were explicitly `PLATFORM_LIMITED` at 34 created executions because the host returned `Device not configured (os error 6)`; this is retained platform evidence, not a Seyal capacity claim.
 
-Against the same-host pre-fix renderer run, repeated current runs remained in the same range as the prior 26,500 ns / 386,958 ns medians (current exact-head run: 32,125 ns / 482,292 ns). The scheduler change does not add work to `MetalTerminalRenderer.update`; the variation is within the observed run-to-run spread and is not treated as a material regression for this workload. This does not establish an absolute product latency target. The durable PR validation comment records the same measurements against the exact implementation commit.
+Against the closest same-host pre-fix renderer run `7084915d940d486623e1e10c72fb05cdd4772d3c`, repeated accepted measurements remained in the same range as the prior 26,500 ns / 386,958 ns medians. This does not establish an absolute product latency target. The final PR validation record is the authority for exact-head measurements after the asynchronous-failure hardening.
 
 ## Deferred behavior
 

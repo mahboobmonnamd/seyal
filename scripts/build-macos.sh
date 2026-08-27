@@ -37,8 +37,13 @@ channel="$(sed -nE 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"([^"]+)".*/\
 [[ -n "$channel" ]] || { echo "rust-toolchain.toml does not declare a Rust channel" >&2; exit 1; }
 
 rust_host_arch="$(rustup run "$channel" rustc -vV | sed -nE 's/^host: ([^-]+)-.*/\1/p')"
-[[ "$rust_host_arch" == "$MACOS_ARCH" ]] || {
-  echo "[seyal macOS build] Rust host architecture $rust_host_arch does not match requested Xcode architecture $MACOS_ARCH" >&2
+case "$rust_host_arch" in
+  aarch64) rust_xcode_arch=arm64 ;;
+  x86_64) rust_xcode_arch=x86_64 ;;
+  *) rust_xcode_arch="$rust_host_arch" ;;
+esac
+[[ "$rust_xcode_arch" == "$MACOS_ARCH" ]] || {
+  echo "[seyal macOS build] Rust host architecture $rust_host_arch ($rust_xcode_arch for Xcode) does not match requested Xcode architecture $MACOS_ARCH" >&2
   exit 1
 }
 

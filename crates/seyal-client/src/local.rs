@@ -20,11 +20,11 @@ use seyal_runtime::{
     local_ipc::{
         discovery::{control_socket_path, darwin_user_runtime_dir, ensure_verified_runtime_dir},
         framing::{
-            Attach, Attached, CAP_BINARY_DISPLAY, CAP_CORRELATED_RESIZE,
-            CAP_SEMANTIC_TERMINAL_KEY, ClientHello, ErrorCode, ErrorMessage, ExecutionList,
-            FrameHeader, HEADER_LEN, InputRef, Lifecycle, MAX_FRAME_PAYLOAD, MAX_INPUT_BYTES,
-            MessageType, ResizeRequest, ResizeResult, ResizeResultCode, Resync, Role, ServerHello,
-            TerminalKey, TerminalKeyKind, TerminalKeyModifiers, encode_frame,
+            Attach, Attached, CAP_BINARY_DISPLAY, CAP_CORRELATED_RESIZE, CAP_SEMANTIC_TERMINAL_KEY,
+            ClientHello, ErrorCode, ErrorMessage, ExecutionList, FrameHeader, HEADER_LEN, InputRef,
+            Lifecycle, MAX_FRAME_PAYLOAD, MAX_INPUT_BYTES, MessageType, ResizeRequest, ResizeResult,
+            ResizeResultCode, Resync, Role, ServerHello, TerminalKey, TerminalKeyKind,
+            TerminalKeyModifiers, encode_frame,
         },
     },
 };
@@ -35,6 +35,7 @@ const MAX_BUFFERED_BYTES: usize = (MAX_FRAME_PAYLOAD as usize + HEADER_LEN) * 2;
 const MAX_FRAMES_PER_POLL: usize = 64;
 const MAX_BYTES_PER_POLL: usize = 4 * 1024 * 1024;
 const MAX_OUTBOUND_WIRE_BYTES: usize = 262_144;
+const MAX_UNRESOLVED_RESIZES: usize = 1_024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClientError {
@@ -67,6 +68,7 @@ pub enum InputAdmissionFailure {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResizeFailure {
+    ClientBackpressure,
     Apply(ErrorCode),
     Protocol,
     Disconnected,
@@ -128,6 +130,13 @@ pub fn derive_grid_geometry(
     let columns = column_ratio.floor().clamp(1.0, 512.0) as u16;
     let rows = row_ratio.floor().clamp(1.0, 256.0) as u16;
     Some(GridGeometry { rows, columns })
+}
+
+fn valid_terminal_key_request(kind: TerminalKeyKind, scalar: u32) -> bool {
+    match kind {
+        TerminalKeyKind::ControlAscii => matches!(scalar, 0x20 | 0x3f | 0x40 | 0x41..=0x5f),
+        _ => scalar == 0,
+    }
 }
 
 #[derive(Debug, Default)]
@@ -243,7 +252,10 @@ impl PendingDisplayBatch {
 enum OutboundKind {
     Input,
     TerminalKey,
-    Resize { request_id: u64, geometry: GridGeometry },
+    Resize {
+        request_id: u64,
+        geometry: GridGeometry,
+    },
     Resync,
 }
 
@@ -292,7 +304,6 @@ struct AppliedFence {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct RetrySuppression {
     geometry: GridGeometry,
-    error: ErrorCode,
 }
 
 pub struct LocalDisplayClient {
@@ -313,6 +324,7 @@ pub struct LocalDisplayClient {
     unresolved_resizes: VecDeque<ResizeRecord>,
     applied_awaiting_projection: Option<AppliedFence>,
     retry_suppression: Option<RetrySuppression>,
+    resync_needed: bool,
     input_failure: Option<InputAdmissionFailure>,
     resize_failure: Option<ResizeFailure>,
 }
@@ -403,10 +415,15 @@ impl LocalDisplayClient {
         cache
             .apply_chunks(batch.chunks())
             .map_err(|_| ClientError::Display)?;
-        if cache.generation != attached.current_generation || cache.rows == 0 || cache.columns == 0 {
+        if cache.generation != attached.current_generation || cache.rows == 0 || cache.columns == 0
+        {
             return Err(ClientError::Protocol);
         }
 
+        let committed_geometry = GridGeometry {
+            rows: cache.rows,
+            columns: cache.columns,
+        };
         let mut prepared = PreparedSurface::default();
         let result = prepare_cache(&mut prepared, &cache, RowDamage::full(cache.rows), true)?;
 
@@ -431,13 +448,11 @@ impl LocalDisplayClient {
             last_preparation: result,
             next_resize_request_id: 1,
             desired_geometry: None,
-            committed_geometry: GridGeometry {
-                rows: attached.current_generation.checked_sub(attached.current_generation).map_or(cache.rows, |_| cache.rows),
-                columns: cache.columns,
-            },
+            committed_geometry,
             unresolved_resizes: VecDeque::new(),
             applied_awaiting_projection: None,
             retry_suppression: None,
+            resync_needed: false,
             input_failure: None,
             resize_failure: None,
         })
@@ -505,6 +520,9 @@ impl LocalDisplayClient {
         scalar: u32,
     ) -> Result<(), ClientError> {
         self.require_controller()?;
+        if !valid_terminal_key_request(kind, scalar) {
+            return Err(ClientError::Protocol);
+        }
         let modifiers = if kind == TerminalKeyKind::ControlAscii {
             TerminalKeyModifiers::CONTROL
         } else {
@@ -527,19 +545,32 @@ impl LocalDisplayClient {
     }
 
     pub fn set_desired_geometry(&mut self, geometry: GridGeometry) -> Result<(), ClientError> {
-        if geometry.rows == 0 || geometry.columns == 0 || geometry.rows > 256 || geometry.columns > 512 {
+        self.set_desired_geometry_for_layout(geometry, false)
+    }
+
+    pub fn set_desired_geometry_for_layout(
+        &mut self,
+        geometry: GridGeometry,
+        meaningful_layout_epoch: bool,
+    ) -> Result<(), ClientError> {
+        if geometry.rows == 0
+            || geometry.columns == 0
+            || geometry.rows > 256
+            || geometry.columns > 512
+        {
             return Err(ClientError::InvalidGeometry);
         }
         self.require_controller()?;
-        if self.desired_geometry != Some(geometry) {
-            self.desired_geometry = Some(geometry);
-            if self
-                .retry_suppression
-                .is_some_and(|suppressed| suppressed.geometry != geometry)
-            {
-                self.retry_suppression = None;
-                self.resize_failure = None;
-            }
+        let geometry_changed = self.desired_geometry != Some(geometry);
+        self.desired_geometry = Some(geometry);
+        if geometry_changed
+            || (meaningful_layout_epoch
+                && self
+                    .retry_suppression
+                    .is_some_and(|suppressed| suppressed.geometry == geometry))
+        {
+            self.retry_suppression = None;
+            self.resize_failure = None;
         }
         self.reconcile_resize()?;
         self.flush_control_write()
@@ -569,7 +600,8 @@ impl LocalDisplayClient {
             return Err(ClientError::ClientBackpressure);
         }
         self.outbound_wire_bytes = next;
-        self.outbound.push_back(PendingControlWrite::new(bytes, kind));
+        self.outbound
+            .push_back(PendingControlWrite::new(bytes, kind));
         Ok(())
     }
 
@@ -577,48 +609,57 @@ impl LocalDisplayClient {
     /// decremented only as the socket actually accepts them; a partial frame is
     /// immutable and remains at the front of the FIFO until complete.
     pub fn flush_control_write(&mut self) -> Result<(), ClientError> {
-        let Some(front) = self.outbound.front_mut() else {
-            return Ok(());
+        let (written, resize_phase, completed) = {
+            let Some(front) = self.outbound.front_mut() else {
+                return Ok(());
+            };
+            let remaining_len = front.remaining().len();
+            if remaining_len == 0 {
+                return Err(ClientError::Protocol);
+            }
+            match self.stream.write(front.remaining()) {
+                Ok(0) => return Err(ClientError::Io),
+                Ok(count) if count <= remaining_len => {
+                    front.offset = front
+                        .offset
+                        .checked_add(count)
+                        .ok_or(ClientError::Capacity)?;
+                    let phase = match front.kind {
+                        OutboundKind::Resize { request_id, .. } => Some((
+                            request_id,
+                            if count == remaining_len {
+                                ResizePhase::SentWaitingResult
+                            } else {
+                                ResizePhase::Writing
+                            },
+                        )),
+                        _ => None,
+                    };
+                    (count, phase, front.offset == front.bytes.len())
+                }
+                Ok(_) => return Err(ClientError::Io),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return Ok(()),
+                Err(_) => {
+                    self.input_failure = Some(InputAdmissionFailure::Disconnected);
+                    self.resize_failure = Some(ResizeFailure::Disconnected);
+                    return Err(ClientError::Io);
+                }
+            }
         };
-        let remaining_len = front.remaining().len();
-        if remaining_len == 0 {
-            return Err(ClientError::Protocol);
+
+        self.outbound_wire_bytes = self.outbound_wire_bytes.saturating_sub(written);
+        if let Some((request_id, phase)) = resize_phase {
+            self.set_resize_phase(request_id, phase)?;
         }
-        match self.stream.write(front.remaining()) {
-            Ok(0) => return Err(ClientError::Io),
-            Ok(count) if count <= remaining_len => {
-                if let OutboundKind::Resize { request_id, .. } = front.kind {
-                    self.set_resize_phase(
-                        request_id,
-                        if count == remaining_len {
-                            ResizePhase::SentWaitingResult
-                        } else {
-                            ResizePhase::Writing
-                        },
-                    )?;
-                }
-                front.offset = front
-                    .offset
-                    .checked_add(count)
-                    .ok_or(ClientError::Capacity)?;
-                self.outbound_wire_bytes = self.outbound_wire_bytes.saturating_sub(count);
-                if front.offset == front.bytes.len() {
-                    self.outbound.pop_front();
-                }
-                if self.input_failure == Some(InputAdmissionFailure::ClientBackpressure) {
-                    self.input_failure = None;
-                }
-                self.reconcile_resize()?;
-                Ok(())
-            }
-            Ok(_) => Err(ClientError::Io),
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(()),
-            Err(_) => {
-                self.input_failure = Some(InputAdmissionFailure::Disconnected);
-                self.resize_failure = Some(ResizeFailure::Disconnected);
-                Err(ClientError::Io)
-            }
+        if completed {
+            self.outbound.pop_front();
         }
+        if self.input_failure == Some(InputAdmissionFailure::ClientBackpressure) {
+            self.input_failure = None;
+        }
+        self.try_queue_resync()?;
+        self.reconcile_resize()?;
+        Ok(())
     }
 
     pub fn poll_prepare(&mut self) -> Result<Option<PreparationResult>, ClientError> {
@@ -784,14 +825,14 @@ impl LocalDisplayClient {
             columns: self.cache.columns,
         };
         self.committed_geometry = geometry;
-        if let Some(fence) = self.applied_awaiting_projection {
-            if self.cache.generation >= fence.applied_generation {
-                if self.cache.generation == fence.applied_generation && geometry != fence.geometry {
-                    self.resize_failure = Some(ResizeFailure::Protocol);
-                    return Err(ClientError::ResizeProtocolFailure);
-                }
-                self.applied_awaiting_projection = None;
+        if let Some(fence) = self.applied_awaiting_projection
+            && self.cache.generation >= fence.applied_generation
+        {
+            if self.cache.generation == fence.applied_generation && geometry != fence.geometry {
+                self.resize_failure = Some(ResizeFailure::Protocol);
+                return Err(ClientError::ResizeProtocolFailure);
             }
+            self.applied_awaiting_projection = None;
         }
         if self.desired_geometry == Some(geometry) && self.applied_awaiting_projection.is_none() {
             self.resize_failure = None;
@@ -841,7 +882,6 @@ impl LocalDisplayClient {
                 if !newer_same_desired && Some(record.geometry) == self.desired_geometry {
                     self.retry_suppression = Some(RetrySuppression {
                         geometry: record.geometry,
-                        error,
                     });
                 }
                 if matches!(
@@ -942,8 +982,13 @@ impl LocalDisplayClient {
             return Ok(());
         }
 
+        if self.unresolved_resizes.len() >= MAX_UNRESOLVED_RESIZES {
+            self.resize_failure = Some(ResizeFailure::ClientBackpressure);
+            return Err(ClientError::ClientBackpressure);
+        }
+
         let request_id = self.next_resize_request_id;
-        if request_id == 0 || request_id == u64::MAX {
+        if request_id == 0 {
             self.resize_failure = Some(ResizeFailure::Protocol);
             return Err(ClientError::ResizeProtocolFailure);
         }
@@ -955,41 +1000,59 @@ impl LocalDisplayClient {
         }
         .encode();
         let frame = encode_frame(MessageType::ResizeRequest, &payload);
-        self.admit_frame(
+        if let Err(error) = self.admit_frame(
             frame,
             OutboundKind::Resize {
                 request_id,
                 geometry: desired,
             },
-        )?;
+        ) {
+            if error == ClientError::ClientBackpressure {
+                self.resize_failure = Some(ResizeFailure::ClientBackpressure);
+            }
+            return Err(error);
+        }
         self.unresolved_resizes.push_back(ResizeRecord {
             request_id,
             geometry: desired,
             phase: ResizePhase::QueuedNotStarted,
         });
-        self.next_resize_request_id = request_id + 1;
+        self.next_resize_request_id = request_id.checked_add(1).unwrap_or(0);
+        if self.resize_failure == Some(ResizeFailure::ClientBackpressure) {
+            self.resize_failure = None;
+        }
         Ok(())
     }
 
     fn request_resync(&mut self) -> Result<(), ClientError> {
-        if self
-            .outbound
-            .iter()
-            .any(|pending| pending.kind == OutboundKind::Resync)
+        self.resync_needed = true;
+        self.try_queue_resync()
+    }
+
+    fn try_queue_resync(&mut self) -> Result<(), ClientError> {
+        if !self.resync_needed
+            || self
+                .outbound
+                .iter()
+                .any(|pending| pending.kind == OutboundKind::Resync)
         {
             return Ok(());
         }
-        self.admit_frame(
-            encode_frame(
-                MessageType::Resync,
-                &Resync {
-                    attachment_id: self.attachment_id,
-                }
-                .encode(),
-            ),
-            OutboundKind::Resync,
-        )?;
-        self.flush_control_write()
+        let frame = encode_frame(
+            MessageType::Resync,
+            &Resync {
+                attachment_id: self.attachment_id,
+            }
+            .encode(),
+        );
+        match self.admit_frame(frame, OutboundKind::Resync) {
+            Ok(()) => {
+                self.resync_needed = false;
+                self.flush_control_write()
+            }
+            Err(ClientError::ClientBackpressure) => Ok(()),
+            Err(error) => Err(error),
+        }
     }
 
     fn compact_buffer(&mut self) {
@@ -1246,5 +1309,19 @@ mod tests {
                 columns: 512
             })
         );
+    }
+
+    #[test]
+    fn invalid_terminal_key_requests_fail_before_wire_encoding() {
+        assert!(!valid_terminal_key_request(
+            TerminalKeyKind::ControlAscii,
+            'é' as u32
+        ));
+        assert!(!valid_terminal_key_request(TerminalKeyKind::ArrowUp, 1));
+        assert!(valid_terminal_key_request(
+            TerminalKeyKind::ControlAscii,
+            '?' as u32
+        ));
+        assert!(valid_terminal_key_request(TerminalKeyKind::ArrowUp, 0));
     }
 }

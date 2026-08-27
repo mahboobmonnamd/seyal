@@ -72,10 +72,7 @@ impl TerminalKeyModifiers {
 }
 
 fn valid_control_ascii_scalar(scalar: u32) -> bool {
-    matches!(
-        scalar,
-        0x20 | 0x3f | 0x40 | 0x41..=0x5f
-    )
+    matches!(scalar, 0x20 | 0x3f | 0x40 | 0x41..=0x5f)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,9 +100,7 @@ impl TerminalKey {
         exact_len(bytes, Self::WIRE_LEN)?;
         let value = Self {
             attachment_id: attachment_id_from(&bytes[..16]),
-            kind: TerminalKeyKind::from_u16(u16::from_le_bytes(
-                bytes[16..18].try_into().unwrap(),
-            ))?,
+            kind: TerminalKeyKind::from_u16(u16::from_le_bytes(bytes[16..18].try_into().unwrap()))?,
             modifiers: TerminalKeyModifiers::from_bits(u16::from_le_bytes(
                 bytes[18..20].try_into().unwrap(),
             ))?,

@@ -51,6 +51,8 @@ These capabilities were accepted/refined during Seyal architecture and product r
 | SY-022 | DevOps execution workspace | Accepted direction | Processes, agents, remotes, logs, results and typed operational actions compose around the same Runtime; Seyal does not become an IDE or a second terminal engine. |
 | SY-023 | Working-tree Changes inspector | Accepted direction | Root-bounded git status + capped read-only diff, coalesced only while visible; edit in external IDE/editor and keep git work off the terminal hot path. |
 | SY-024 | Agent evaluation, budgets and explainability | Accepted direction | Track attempts, tests/checks, elapsed time, provider token/cache/cost data, intervention and routing/status explanations without gating terminal progress. |
+| SY-025 | Context Privacy Scope | Accepted direction | User/policy-controlled exclusion at Workspace/Execution/Block/File/Artifact scope prevents excluded content from agent retrieval, summaries, semantic indexes or sync unless explicitly re-enabled within policy. |
+| SY-026 | Quick Agent Popover | Accepted direction | Compact non-modal contextual agent interaction may float over workspace chrome without resizing terminal/editor layout; it projects the same AgentRun and can expand into a full agent surface without duplicating authority. |
 
 ## Historical RILL feature catalog reconciliation
 
@@ -230,7 +232,7 @@ The original RILL competitive catalog contains **216** inventory rows. All 216 a
 | F-151 | Integrations install | Accepted direction | Install/configure official agent integrations/hooks explicitly. |
 | F-152 | Custom labels / metadata | Accepted direction | Human labels plus provider-reported metadata such as tokens/cost/status. |
 | F-153 | Worktrees for parallel tasks | Accepted direction | Parallel agent writers use dedicated worktrees; read-only work may share safe views. |
-| F-154 | Model picker / BYOK | Accepted direction | Provider/model selection and BYOK/local-provider use without requiring Seyal cloud. |
+| F-154 | Model picker / BYOK / local providers | Accepted direction | Provider/model selection supports BYOK cloud models, local/private endpoints and generic compatible endpoints without requiring Seyal cloud; routing remains off terminal hot paths. |
 | F-155 | Voice input | Deferred / decision required | Voice input is optional and outside terminal foundation. |
 | F-156 | Computer / browser use | Deferred / decision required | Browser/computer use may be capability-gated later; never terminal hot-path authority. |
 | F-157 | Cloud agents / hosted orchestration | Accepted direction | Optional hosted/background agent execution may be provided above OSS seams; local use needs no account. |
@@ -262,11 +264,11 @@ The original RILL competitive catalog contains **216** inventory rows. All 216 a
 
 | ID | Historical capability | Current Seyal disposition | Seyal mapping / constraint |
 |---|---|---|---|
-| F-190 | Embedded browser pane | Deferred / decision required | Embedded browser is a cold non-terminal surface candidate, not current core scope. |
-| F-191 | File explorer | Accepted direction | Read-only root-bounded workspace file tree/preview; external editor for editing. |
+| F-190 | Development preview pane | Accepted direction | Sandboxed local dev-server and selected artifact preview is a cold non-terminal surface; detection should prefer trusted process/port/runtime signals and never block terminal progress. |
+| F-191 | File explorer | Accepted direction | Root-bounded workspace file tree/search/navigation integrates with the focused editor and agent context; filesystem watching/index work stays asynchronous. |
 | F-192 | Markdown viewer | Accepted direction | Markdown/notebook viewing and executable runbook content as cold surfaces. |
 | F-193 | Diff viewer pane | Accepted direction | Read-only/capability-scoped diff review surface. |
-| F-194 | Built-in editor + LSP | Rejected | Do not author a built-in IDE/editor+LSP as Seyal's product core. |
+| F-194 | Built-in editor + LSP as one IDE subsystem | Superseded | Replaced by separate bounded editor (`F-240`) and optional/lazy LSP (`F-241`) capabilities; do not create an IDE-scale always-resident subsystem. |
 | F-195 | Git worktree UI | Accepted direction | Git worktree create/open/reveal/archive UX tied to WorkItem/Attempt. |
 | F-196 | iOS / mobile companion | Accepted direction | Mobile companion/remote control later over the same secure attach/resource model. |
 | F-197 | Simulator panes | Deferred / decision required | Simulator-as-pane is optional platform tooling, not core terminal scope. |
@@ -310,8 +312,8 @@ The original RILL competitive catalog contains **216** inventory rows. All 216 a
 
 | ID | Historical capability | Current Seyal disposition | Seyal mapping / constraint |
 |---|---|---|---|
-| F-240 | Native code editor | Deferred / decision required | A bounded first-class editor surface is under explicit R&D reconsideration in #209. This does not authorize full IDE/LSP/debugger parity. |
-| F-241 | Language servers (LSP) | Rejected | No core LSP client without a future separate embedded-editor decision. |
+| F-240 | Focused code editor | Accepted direction | Bounded first-class editor supports normal editing, selection/search, syntax highlighting, formatting, exact path/line navigation, AI autocomplete/diff workflows and optional Vim-style editing; it must remain additive and resource-bounded rather than becoming full IDE authority. |
+| F-241 | Optional/lazy language servers (LSP) | Accepted direction | Editor may use opt-in/lazy LSP diagnostics, navigation, completion and formatting; no always-resident IDE-scale language infrastructure and no dependency from terminal hot paths. |
 | F-242 | Find and replace | Accepted direction | Workspace/file search fits; destructive project-wide replace needs an explicit undo/effect model. |
 | F-243 | Code review panel | Accepted direction | Working-tree/PR diff and code-review inspector is a useful cold surface. |
 | F-244 | Interactive review comments | Accepted direction | Structured review comments may steer an agent/run without turning Seyal into an editor. |
@@ -326,12 +328,13 @@ The original RILL competitive catalog contains **216** inventory rows. All 216 a
 
 - Terminal fundamentals remain OSS and use the Seyal-owned PTY → VT/state → damage → Metal stack; no legacy libghostty production engine is revived.
 - Blocks, raw terminal and TUI are presentations of the same TerminalExecution and canonical TerminalState. No second PTY/grid is created for Blocks.
-- Seyal remains an execution/operations workspace. A bounded first-class editor surface may be reconsidered through #209, but full IDE, LSP and debugger/DAP ownership remain separate explicit decisions.
+- Seyal supports a bounded first-class editor, optional/lazy LSP, focused SCM/preview surfaces and agent interaction as additive capabilities; none may become terminal authority or require IDE-scale always-resident infrastructure. Debugger/DAP ownership remains a separate explicit decision.
 - GUI close/detach is distinct from terminating a process. Persistence metadata never claims to resurrect a dead PTY.
-- Agent and workflow features are additive. Terminal input/output/rendering never synchronously wait on agent, semantic, persistence, cloud, licensing, telemetry or collaboration work.
+- Agent and workflow features are additive. Terminal input/output/rendering never synchronously wait on agent, semantic, persistence, editor/LSP, SCM, preview, cloud, licensing, telemetry or collaboration work.
 - Raw terminal text is untrusted. It may support low-confidence detection/notifications but cannot become permission, approval, policy or audit authority.
 - Stable navigation is the default. Attention uses badges and the global Attention Stack rather than constantly reordering the user's workspace list.
 - Local use, local configuration and useful local agent/workflow capabilities do not require a Seyal account.
+- Explicit Context Privacy Scope is stronger than pattern-based secret redaction: excluded resources must stay out of agent retrieval and derived context unless policy/user action permits them.
 
 ## Legacy evidence status
 
@@ -352,6 +355,6 @@ Imported Issues/comments do not preserve Git commit objects, PR diffs/reviews, r
 1. Add/update this file when a product capability or rejection is accepted.
 2. Link/refine the owning R&D/ADR/spec in the same change when implementation behavior is being fixed.
 3. Never mark a feature Implemented from a legacy issue state or a design document.
-4. Competitive research must inspect both major capabilities and recurring 2–10 second workflow friction across shell ↔ terminal ↔ agent ↔ GUI ↔ teammate ↔ remote boundaries.
+4. Competitive analysis, positioning and broader product rationale belong in `seyal-commercial`; when a capability is accepted, record only its OSS product contract/disposition here.
 5. New features must state whether they alter terminal hot paths, trust boundaries, persistence semantics or OSS/commercial seams.
 6. Do not create a second competing product feature list; source-disposition/audit files may exist only as traceability ledgers pointing back here.

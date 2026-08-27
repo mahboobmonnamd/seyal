@@ -1,6 +1,6 @@
 # SPEC-004 — M001 local attachment and display-state transport
 
-- **Status:** Accepted for M001 Pass 5. Candidate-D production performance validation passed on controlled physical Apple Silicon at benchmark commit `c8c121380002c86a4e42b6737238289db10965af`; Issue #651 remains the closure authority for the complete Pass 5.1 acceptance set. The additive Pass 7 semantic-key and Resize-error-correlation amendments below are **proposed** by #702 / SPEC-006 until that refinement is accepted.
+- **Status:** Accepted for M001 Pass 5. Candidate-D production performance validation passed on controlled physical Apple Silicon at benchmark commit `c8c121380002c86a4e42b6737238289db10965af`; Issue #651 remains the closure authority for the complete Pass 5.1 acceptance set. The additive Pass 7 semantic-key and correlated-resize extensions below are **proposed** by #702 / SPEC-006 until that refinement is accepted.
 - **Date:** 2026-08-24
 - **Amended:** 2026-08-25, 2026-08-26; Pass 7 extensions proposed 2026-08-27
 - **Issue:** #105 (implementation), #651 (Pass 5.1 final acceptance), #702 (Pass 7 input/resize extension)
@@ -41,9 +41,14 @@ Large future image/rich-graphics objects are a separate bulk-object concern. M00
 
 ## 3. M001 scope
 
-The protocol supports runtime discovery, version negotiation, execution enumeration, observer/controller attach, detach, input, resize, explicit resync, initial/current-state snapshots, steady-state display deltas, lifecycle/error notification and graceful close.
+The protocol supports runtime discovery, version negotiation, execution enumeration, observer/controller attach, detach, input, legacy resize, explicit resync, initial/current-state snapshots, steady-state display deltas, lifecycle/error notification and graceful close.
 
-The Pass 7 additive extension defined by SPEC-006 adds capability-gated semantic terminal-key intent while keeping mode-sensitive escape encoding inside Runtime. It also assigns connection-local sequence meaning to existing Resize errors so a client can correlate a failure without changing framing version 1.0 or the Resize payload. It does not change Candidate-D display semantics.
+The Pass 7 additive extension defined by SPEC-006 adds:
+
+- capability-gated semantic terminal-key intent while keeping mode-sensitive escape encoding inside Runtime;
+- capability-gated correlated `ResizeRequest` / `ResizeResult` messages for the native production resize path.
+
+Legacy type-10 `Resize` remains for protocol compatibility but is not the Pass 7 native production path.
 
 The following remain out of scope for Pass 5 itself: Metal rendering, glyph shaping/atlases, AppKit IME/keyboard wiring, Blocks/history persistence, remote/network transport, public SDK/plugin protocol, agents/cloud/commercial features, Runtime-crash live-PTY restoration, Linux/Windows local IPC, Kitty/Sixel/iTerm image protocols, IOSurface/shared-memory bulk transport and M002 VT expansion.
 
@@ -75,7 +80,7 @@ M001 hard maxima:
 | visible columns | 512 |
 | visible cells | 131,072 |
 
-SPEC-003 accepted-but-unwritten input budgets remain authoritative in addition to these limits. SPEC-006 separately bounds Pass 7 client-side accepted-but-not-fully-written wire bytes.
+SPEC-003 accepted-but-unwritten input budgets remain authoritative in addition to these limits. SPEC-006 separately bounds Pass 7 client-side accepted-but-not-fully-written wire bytes and unresolved ResizeRequest bookkeeping.
 
 ## 6. Connection state machine
 
@@ -86,11 +91,12 @@ Accepted
   → Ready
        ├─ ListExecutions → Ready
        └─ Attach → Attached
-                      ├─ Input/TerminalKey/Resize   controller only
+                      ├─ Input/TerminalKey/Resize/ResizeRequest   controller only
                       ├─ Resync
-                      ├─ DisplaySnapshot            Runtime → client
-                      ├─ DisplayDelta               Runtime → client
-                      ├─ Lifecycle                  Runtime → client
+                      ├─ ResizeResult               Runtime → client
+                      ├─ DisplaySnapshot             Runtime → client
+                      ├─ DisplayDelta                Runtime → client
+                      ├─ Lifecycle                   Runtime → client
                       └─ Detach → Ready
   → Closing
 ```
@@ -115,9 +121,7 @@ The complete header is validated before payload allocation. Receive buffering is
 
 On Darwin, production receive-side ancillary storage is sized to the process descriptor-table capacity rather than to the former small fixed scratch buffer. This prevents the known SCM_RIGHTS truncation hazard for every descriptor set the process can legally receive. Production must not deliberately shrink this buffer merely to manufacture `MSG_CTRUNC`; the parser still treats a reported `MSG_CTRUNC` or oversized/malformed ancillary header as fatal, clamps parsing to owned storage and closes every visible descriptor.
 
-The Pass 7 `TerminalKey` extension remains protocol framing version `1.0` and is capability-gated. A client must see `CAP_SEMANTIC_TERMINAL_KEY` in `ServerHello` before using message type 17; it must not probe an older Runtime by first sending an unknown message.
-
-Pass 7 Resize failure correlation also leaves framing and type-10 Resize payload unchanged. It gives deterministic meaning to `Error.detail_code` for structurally valid Resize requests as specified in section 9. Existing clients that ignore `detail_code` remain valid.
+Pass 7 extensions retain framing version `1.0` and are capability-gated. A client must observe the required server capability before using each new message type; it must not probe an older Runtime by first sending an unknown message.
 
 ## 8. Message types
 
@@ -132,7 +136,7 @@ Pass 7 Resize failure correlation also leaves framing and type-10 Resize payload
 | 7 | C→R | `Detach` |
 | 8 | R→C | `Detached` |
 | 9 | C→R | `Input` |
-| 10 | C→R | `Resize` |
+| 10 | C→R | `Resize` — legacy/un-correlated compatibility path |
 | 11 | C→R | `Resync` |
 | 12 | R→C | `DisplaySnapshot` |
 | 13 | R→C | `DisplayDelta` |
@@ -140,12 +144,17 @@ Pass 7 Resize failure correlation also leaves framing and type-10 Resize payload
 | 15 | R→C | `Error` |
 | 16 | either | `Goodbye` |
 | 17 | C→R | `TerminalKey` — Pass 7 capability-gated extension |
+| 18 | C→R | `ResizeRequest` — Pass 7 correlated resize |
+| 19 | R→C | `ResizeResult` — Pass 7 correlated resize result |
 
 M001 server capability bits are:
 
 - bit 0: binary display snapshot/delta transport;
 - bit 1: observer role;
-- bit 2: semantic terminal-key input (`CAP_SEMANTIC_TERMINAL_KEY`) — proposed by Pass 7 / SPEC-006.
+- bit 2: semantic terminal-key input (`CAP_SEMANTIC_TERMINAL_KEY`) — proposed by Pass 7 / SPEC-006;
+- bit 3: correlated native resize (`CAP_CORRELATED_RESIZE`) — proposed by Pass 7 / SPEC-006.
+
+Existing Pass 5/6 clients must continue tolerating unknown server capability bits and requiring only the capabilities they understand.
 
 There is no text-grid projection-FD capability in M001 Candidate D.
 
@@ -177,20 +186,7 @@ No descriptor accompanies `Attached`. A current-state `DisplaySnapshot` is queue
 
 `Input` is `u128 AttachmentId`, `u32 byte_count`, then exactly `byte_count` bytes; `byte_count <= 65536`. For Pass 7 native input, `Input` represents already-committed bytes such as UTF-8 committed text; clients must not use it to move mode-sensitive terminal-key encoding out of Runtime.
 
-`Resize` remains `u128 AttachmentId`, `u16 rows`, `u16 columns`; geometry must be nonzero and within section 5 maxima.
-
-For Pass 7 error correlation, every connection has a Resize sequence counter independent of terminal/display generations:
-
-- client and Runtime begin at sequence `1` on a new connection;
-- client consumes a sequence only when a not-yet-started Resize frame becomes immutable and begins transmission;
-- Runtime consumes the corresponding sequence when a complete structurally valid type-10 Resize frame is received, before semantic validation;
-- sequence `0` is reserved;
-- sequence wrap is forbidden; reconnect/reattach is required before wrap could occur;
-- local coalescing of an unsent Resize consumes no sequence.
-
-For a semantic error attributable to that structurally valid Resize, `Error.offending_message_type` is `10` and `Error.detail_code` is exactly that connection-local Resize sequence. A framing/truncation/malformed case for which Runtime cannot establish trustworthy Resize correlation uses `detail_code = 0`; a Pass 7 client must fail closed rather than guess.
-
-Runtime emits/queues a semantic Resize error onto mandatory control output before continuing with later client mutations whose success could otherwise make the failure ambiguous. Mandatory errors are ordered, bounded and never presentation-superseded.
+Legacy `Resize` is `u128 AttachmentId`, `u16 rows`, `u16 columns`; geometry must be nonzero and within section 5 maxima. It remains supported for existing protocol compatibility but provides no per-request result identity. The Pass 7 native surface must use correlated `ResizeRequest` after capability negotiation.
 
 `TerminalKey` is exactly 24 bytes:
 
@@ -201,11 +197,70 @@ u16  modifiers
 u32  scalar
 ```
 
-Its accepted key kinds/modifier/scalar combinations and Runtime encoding semantics are normative in SPEC-006. `TerminalKey` is legal only for the current attached Controller after capability negotiation. Malformed key payloads return `MalformedPayload`; observer use returns `PermissionDenied`; stale/foreign attachment identity uses the existing stale/invalid identity behavior. Validation completes before any terminal mutation or input-budget reservation.
+Its accepted key kinds/modifier/scalar combinations and Runtime encoding semantics are normative in SPEC-006. `TerminalKey` is legal only for the current attached Controller after capability negotiation. Malformed key payloads return `MalformedPayload`; observer use returns `PermissionDenied`; stale/foreign attachment identity uses existing stale/invalid identity behavior. Validation completes before terminal mutation or input-budget reservation.
+
+`ResizeRequest` is exactly 32 bytes:
+
+```text
+u128 AttachmentId
+u64  request_id
+u16  rows
+u16  columns
+u32  reserved = 0
+```
+
+Rules:
+
+- legal only after `CAP_CORRELATED_RESIZE` negotiation and only for the current attached Controller;
+- `request_id != 0` and is unique/monotonically increasing within the live connection;
+- request-ID reuse or wrap on a live connection is malformed;
+- reconnect starts a fresh request-ID space because the connection and `AttachmentId` are new;
+- geometry obeys the same nonzero/maxima rules as legacy Resize;
+- validation completes before PTY/canonical mutation.
+
+`ResizeResult` is exactly 32 bytes:
+
+```text
+u128 AttachmentId
+u64  request_id
+u16  result_code
+u16  reserved0 = 0
+u32  detail_code
+```
+
+`result_code` values:
+
+```text
+0 Applied
+1 UnsupportedVersion
+2 UnknownMessage
+3 InvalidState
+4 InvalidExecution
+5 InvalidAttachment
+6 StaleIdentity
+7 PermissionDenied
+8 ControllerBusy
+9 CapacityExceeded
+10 Backpressure
+11 InvalidGeometry
+12 DisplayUnavailable
+13 MalformedPayload
+14 InternalFailure
+```
+
+For every structurally valid `ResizeRequest` from which Runtime can trust the `AttachmentId` and nonzero request ID, Runtime queues exactly one matching `ResizeResult` after the request reaches a final semantic/operational outcome.
+
+- `Applied` is emitted only after PTY winsize succeeds and canonical `TerminalState` resize commit completes.
+- Failure codes are emitted with canonical geometry unchanged when the request transaction did not commit.
+- `detail_code = 0` in M001 unless a later accepted specification assigns a bounded non-secret reason.
+- `ResizeResult` is mandatory bounded control output and is never presentation-superseded.
+- terminal progress never waits for the client to read a result.
+
+If framing/payload corruption prevents trustworthy request-ID extraction, Runtime uses the existing `Error`/fatal protocol path; the client must not guess request correlation.
 
 `Lifecycle` is `u128 ExecutionId`, `u8 lifecycle`, seven reserved zero bytes.
 
-`Error` remains 16 bytes: `u16 error_code`, `u16 offending_message_type`, `u32 detail_code`, `u64 reserved`. For type-10 Resize semantic errors, `detail_code` has the correlation meaning above. For other messages it retains the message-specific/zero semantics already defined by their implementation contract. It never includes terminal contents, input bytes, semantic-key encoded bytes, environment data, secrets or attacker-controlled text.
+`Error` remains 16 bytes: `u16 error_code`, `u16 offending_message_type`, `u32 detail_code`, `u64 reserved`. It never includes terminal contents, input bytes, semantic-key encoded bytes, environment data, secrets or attacker-controlled text.
 
 `Goodbye` has an empty payload.
 
@@ -254,7 +309,7 @@ For `DisplaySnapshot`, `base_generation` is zero and the assembled chunks cover 
 
 For `DisplayDelta`, `base_generation` is the generation of the client state to which the update applies. The encoded rows are exactly the canonical coalesced damage range for that generation. Full canonical damage may therefore produce a delta spanning all rows; it does not change terminal authority.
 
-A client applies a multi-chunk update atomically only after every chunk validates. Partial/malformed updates never partially mutate the committed client RenderState.
+A client applies a multi-chunk update atomically only after every chunk validates. Partial/malformed updates never partially mutate committed client RenderState.
 
 ### 10.3 Generation continuity
 
@@ -297,7 +352,7 @@ If a new delta is contiguous with the last presentation generation targeted for 
 
 A partially written frame is completed or the connection is closed; bytes from two frames are never interleaved. A slow client may be disconnected under bounded resource policy. No case blocks PTY/VT progress.
 
-Pass 7 client→Runtime input/control backpressure, resize coalescing, correlated Resize errors and error-class retry gating are defined by SPEC-006 and do not weaken the server-side bounds in this section.
+Pass 7 client→Runtime input/control backpressure, ResizeRequest coalescing, unresolved request bookkeeping and error-class retry gating are defined by SPEC-006 and do not weaken server-side bounds here.
 
 ## 12. Attach, reconnect and resync transactions
 
@@ -307,13 +362,27 @@ Failure before authority publication leaves no attachment/controller record. Cli
 
 Explicit `Resync`, reconnect and detected generation gaps use the same current-state snapshot mechanism. No acknowledgement is required before terminal progress continues.
 
-Reconnect starts a new connection-local Resize sequence at `1`; old sequence values have no meaning across connections and never substitute for `AttachmentId` authority.
+Reconnect invalidates all old correlated resize request IDs; new request IDs are connection-local and never substitute for `AttachmentId` authority.
 
 ## 13. Resize and final-state ordering
 
-Controller authorization is checked before resize. The PTY/terminal resize transaction remains owned by `TerminalExecution`. A resize that changes dimensions causes canonical full damage and therefore a subsequent display update/snapshot with the new dimensions. There is no projection-memory replacement lifecycle.
+Controller authorization is checked before resize. The PTY/terminal resize transaction remains owned by `TerminalExecution`.
 
-Pass 7 requires the transaction to remain `assign Resize sequence → validate/prepare → fallible PTY winsize → canonical TerminalState commit → damage/projection`. If semantic validation or PTY application fails after sequence assignment, Runtime emits the correlated Resize `Error` described in section 9. The error does not mutate canonical geometry and is not a request for the client to resend immediately; SPEC-006 owns client retry policy.
+For Pass 7 `ResizeRequest`, Runtime performs:
+
+```text
+validate request/frame/role/identity/geometry
+→ prepare
+→ fallible PTY winsize
+→ if success, canonical TerminalState resize commit
+→ canonical full damage
+→ queue matching ResizeResult
+→ normal projection update
+```
+
+A failed request does not mutate canonical geometry and receives exactly one matching failure result when request identity is trustworthy. A success result is asynchronous bookkeeping only; Runtime never waits for the client to consume it and display projection remains the client's authority for observed canonical geometry.
+
+Legacy type-10 Resize keeps its previous uncorrelated behavior for compatibility. SPEC-006 forbids the Pass 7 native production surface from using it as a substitute for correlated resize.
 
 After primary-child exit Runtime drains remaining PTY bytes into canonical `TerminalState`, publishes any resulting final display update to attached clients through the same bounded presentation path, then sends lifecycle finalization and releases attachment authority/resources. Delivery cannot extend process-lifecycle deadlines indefinitely.
 
@@ -344,7 +413,9 @@ M001 defines:
 14 InternalFailure
 ```
 
-Semantic errors do not mutate canonical state before validation succeeds. Fatal framing/version/ancillary failures close the connection after bounded cleanup. SPEC-006 classifies which Resize errors are authority/connection failures versus request/operational failures and explicitly forbids immediate automatic resend loops.
+These numeric meanings are reused by `ResizeResult.result_code` values 1–14. `ResizeResult.result_code = 0` uniquely means `Applied`.
+
+Semantic errors do not mutate canonical state before validation succeeds. Fatal framing/version/ancillary failures close the connection after bounded cleanup. SPEC-006 classifies resize failures and forbids immediate automatic resend loops.
 
 ## 16. Validation requirements
 
@@ -360,27 +431,28 @@ Pass 5 is not complete until all of the following agree with this specification:
 - real fuzz campaigns for binary framing/display decode and reconnect/resync state transitions, in addition to retained deterministic seeds;
 - production-equivalent benchmarks using real process → PTY → Seyal VT → canonical state/damage → Candidate-D encode → UDS → client cache.
 
-Performance evidence must cover 1/2/4/8/16 viewers of the same execution, 1/10/50/100 total executions where platform limits permit, 80x24, 120x40, 200x60 and the practical maximum geometry, primary and alternate screen, sparse typing, token streaming, normal command output, sustained high-volume logs for at least two seconds, burst output, scrolling and TUI/full-screen churn.
+Performance evidence must cover 1/2/4/8/16 viewers of same execution, 1/10/50/100 total executions where platform limits permit, 80x24, 120x40, 200x60 and practical maximum geometry, primary/alternate screen, sparse typing, token streaming, normal command output, sustained high-volume logs for at least two seconds, burst output, scrolling and TUI/full-screen churn.
 
 Record p50/p95/p99 output-to-client-state latency, throughput, CPU, RSS, allocations/reallocations, bytes written/copied, socket calls where instrumentable, queue/coalescing/resync behavior, FD counts and teardown cleanup. Evidence must be labelled `MEASURED`, `ESTIMATED` or `PLATFORM_LIMITED`.
 
 ### 16.1 Pass 7 additive-extension validation
 
-Before the proposed Pass 7 extensions are considered accepted for production, SPEC-006 additionally requires:
+Before the proposed Pass 7 extensions are accepted for production, SPEC-006 additionally requires:
 
-- capability negotiation proving older/non-advertising Runtime peers are never sent `TerminalKey`;
-- exact 24-byte `TerminalKey` encode/decode fixtures;
-- malformed kind/modifier/scalar/truncation fuzz/regression coverage in the real local protocol decoder;
-- Observer/controller/stale-attachment authorization tests;
-- all-or-nothing Runtime key encoding/input-budget admission;
-- FIFO ordering with ordinary `Input` and `Resize` barriers;
-- client/Runtime connection-local Resize sequence alignment, zero/wrap handling and reset on reconnect;
-- every structurally valid Resize semantic error echoes the exact request sequence in `Error.detail_code`;
-- an older Resize error cannot invalidate a newer outstanding request;
-- uncorrelatable/impossible Resize error metadata fails closed;
-- injected persistent PTY winsize failure produces one correlated error per permitted attempt and no automatic resend loop;
-- Runtime error ordering is mandatory/control-plane and cannot be presentation-superseded;
-- privacy tests/review proving semantic input payloads and IME composition contents are absent from logs.
+- capability negotiation proving older/non-advertising Runtime peers are never sent message types 17/18;
+- current Pass 5/6 client tolerates new capability bits 2 and 3;
+- exact 24-byte TerminalKey fixtures and malformed/fuzz coverage;
+- exact 32-byte ResizeRequest/ResizeResult fixtures and malformed/fuzz coverage;
+- request ID nonzero/unique/monotonic/reconnect-reset/wrap behavior;
+- duplicate request ID rejection;
+- exactly one ResizeResult for every trustworthy structurally valid request;
+- `Applied` only after PTY winsize and canonical commit;
+- exact result correlation with older-result/newer-request regression;
+- uncorrelatable/unknown/duplicate result handling fails closed;
+- persistent injected PTY failure produces one result per permitted attempt and no automatic retry loop;
+- ResizeResult mandatory-control traffic remains bounded and never blocks terminal progress;
+- FIFO ordering with ordinary `Input`, `TerminalKey` and ResizeRequest barriers;
+- privacy tests proving semantic input and IME content are absent from logs.
 
 ## 17. Acceptance gate
 
@@ -388,6 +460,6 @@ Candidate D is the accepted architecture. The controlled physical-M5-Pro benchma
 
 Pass 5 may leave draft only when production code no longer uses per-attachment shared-memory text/grid projections, SPEC/ADR/code/tests agree, all required validation is green, production-equivalent Candidate-D evidence meets Seyal latency/resource goals, and independent architecture/security/performance review has no unresolved blocking finding.
 
-The Pass 7 semantic-key and Resize-correlation amendments become accepted only when the SPEC-006 refinement is explicitly approved and merged. Until then, the proposed type/capability/error-correlation semantics are reserved by the refinement branch and are not production authority.
+The Pass 7 semantic-key and correlated-resize extensions become accepted only when the SPEC-006 refinement is explicitly approved and merged. Until then, proposed types/capabilities/result semantics are reserved by the refinement branch and are not production authority.
 
 Comparator/reference shared-projection code may remain only if isolated from production and clearly labelled non-production evidence. It must not be reachable as a hidden text-grid fallback.

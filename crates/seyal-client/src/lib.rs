@@ -15,7 +15,10 @@ extern crate seyal_protocol as seyal_runtime;
 mod local;
 
 #[cfg(target_os = "macos")]
-pub use local::{ClientError, LocalDisplayClient};
+pub use local::{
+    ClientError, GridGeometry, InputAdmissionFailure, LocalDisplayClient, ResizeFailure,
+    derive_grid_geometry,
+};
 
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]

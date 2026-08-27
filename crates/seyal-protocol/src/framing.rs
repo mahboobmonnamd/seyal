@@ -6,6 +6,11 @@
 
 use crate::{AttachmentId, ExecutionId};
 
+pub use crate::pass7::{
+    CAP_CORRELATED_RESIZE, CAP_SEMANTIC_TERMINAL_KEY, ResizeRequest, ResizeResult,
+    ResizeResultCode, TerminalKey, TerminalKeyKind, TerminalKeyModifiers,
+};
+
 pub const MAGIC: [u8; 8] = *b"SEYALIPC";
 pub const HEADER_LEN: usize = 24;
 pub const MAJOR: u16 = 1;
@@ -548,6 +553,9 @@ pub enum MessageType {
     Lifecycle = 14,
     Error = 15,
     Goodbye = 16,
+    TerminalKey = 17,
+    ResizeRequest = 18,
+    ResizeResult = 19,
 }
 impl MessageType {
     pub fn from_u16(value: u16) -> Option<Self> {
@@ -568,6 +576,9 @@ impl MessageType {
             14 => Self::Lifecycle,
             15 => Self::Error,
             16 => Self::Goodbye,
+            17 => Self::TerminalKey,
+            18 => Self::ResizeRequest,
+            19 => Self::ResizeResult,
             _ => return None,
         })
     }
@@ -591,6 +602,9 @@ pub enum Message<'a> {
     Lifecycle(LifecycleMessage),
     Error(ErrorMessage),
     Goodbye,
+    TerminalKey(TerminalKey),
+    ResizeRequest(ResizeRequest),
+    ResizeResult(ResizeResult),
 }
 
 pub fn decode_message<'a>(
@@ -629,6 +643,9 @@ pub fn decode_message<'a>(
             }
             Message::Goodbye
         }
+        MessageType::TerminalKey => Message::TerminalKey(TerminalKey::decode(payload)?),
+        MessageType::ResizeRequest => Message::ResizeRequest(ResizeRequest::decode(payload)?),
+        MessageType::ResizeResult => Message::ResizeResult(ResizeResult::decode(payload)?),
     })
 }
 

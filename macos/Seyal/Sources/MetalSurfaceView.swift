@@ -111,6 +111,31 @@ struct PresentationRecoveryState: Equatable {
     }
 }
 
+struct PreparationRecoveryState: Equatable {
+    private(set) var retryBudget = PresentationRetryBudget()
+    private(set) var exhausted = false
+
+    var canAttemptPreparation: Bool { !exhausted }
+
+    mutating func recordFailure() -> TimeInterval? {
+        guard !exhausted else { return nil }
+        guard let delay = retryBudget.claimNextDelay() else {
+            exhausted = true
+            return nil
+        }
+        return delay
+    }
+
+    mutating func recordSuccess() {
+        retryBudget.reset()
+        exhausted = false
+    }
+
+    mutating func resetForLifecycleRecovery() {
+        recordSuccess()
+    }
+}
+
 /// Owns the run-loop registration independently of the view's actor-isolated
 /// lifetime. Releasing a surface therefore also invalidates its display link.
 final class MetalDisplayLinkLease {
@@ -142,7 +167,7 @@ final class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     private var preparationRetryTimer: Timer?
     private var preparationRetryGeneration: UInt64 = 0
     private var preparationRetryScheduled = false
-    private var preparationRetryBudget = PresentationRetryBudget()
+    private var preparationState = PreparationRecoveryState()
     private(set) var lastBridgeError: Int32?
     private(set) var lastRenderError: Error?
 
@@ -316,7 +341,9 @@ final class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     }
 
     private func consumeBridgeFrame(_ bridgeFrame: SeyalPreparedFrame) {
-        guard !presentationState.exhausted else {
+        guard !presentationState.exhausted,
+              preparationState.canAttemptPreparation
+        else {
             forceNextFrame = true
             return
         }
@@ -340,7 +367,7 @@ final class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
                    !presentationState.exhausted {
                     lastRenderError = nil
                 }
-                resetPreparationRetries()
+                resetPreparationRecovery()
                 if shouldRender,
                    renderer.persistentDisplayFailure == nil,
                    !presentationState.exhausted {
@@ -360,15 +387,19 @@ final class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
             cancelPresentationOpportunity()
             renderer.invalidatePreparedState()
             forceNextFrame = true
-            schedulePreparationRetry()
+            guard let delay = preparationState.recordFailure() else {
+                lastRenderError = MetalTerminalRendererError.preparationFailuresExhausted
+                return
+            }
+            schedulePreparationRetry(after: delay)
         }
     }
 
-    private func schedulePreparationRetry() {
+    private func schedulePreparationRetry(after delay: TimeInterval) {
         guard shouldRender,
               !hasPreparedState,
               !preparationRetryScheduled,
-              let delay = preparationRetryBudget.claimNextDelay()
+              preparationState.canAttemptPreparation
         else {
             return
         }
@@ -397,7 +428,11 @@ final class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
         preparationRetryTimer = nil
         preparationRetryGeneration &+= 1
         preparationRetryScheduled = false
-        preparationRetryBudget.reset()
+    }
+
+    private func resetPreparationRecovery() {
+        resetPreparationRetries()
+        preparationState.resetForLifecycleRecovery()
     }
 
     private func installMetalDisplayLink(on metalLayer: CAMetalLayer) {
@@ -482,7 +517,7 @@ final class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     private func invalidatePreparedPresentation() {
         hasPreparedState = false
         cancelPresentationRetries()
-        resetPreparationRetries()
+        resetPreparationRecovery()
     }
 
     private func schedulePresentationRetry(after delay: TimeInterval) {
@@ -537,7 +572,7 @@ enum Pass6RegressionValidation {
             && presentationRetryBudgetSelfTest()
             && presentationOpportunityStateSelfTest()
             && persistentPresentationFailureSelfTest()
-            && preparationRetryBudgetSelfTest()
+            && persistentPreparationFailureIntegrationSelfTest()
             && transientDrawableRecoverySelfTest()
             && RendererValidation.inFlightVisibilityRecoverySelfTest()
             && RendererValidation.failedReplacementInvalidationSelfTest()
@@ -623,19 +658,43 @@ enum Pass6RegressionValidation {
         return !state.exhausted && !state.pending
     }
 
-    private static func preparationRetryBudgetSelfTest() -> Bool {
-        // Model repeated preparation failures without resetting the series.
-        // Four delayed attempts are allowed; a persistent failure must not
-        // schedule a fifth attempt or restart at the first delay.
-        var budget = PresentationRetryBudget()
-        var delayedAttempts = 0
-        for _ in 0..<8 {
-            guard budget.claimNextDelay() != nil else { break }
-            delayedAttempts += 1
+    private static func persistentPreparationFailureIntegrationSelfTest() -> Bool {
+        // Exercise the same consumeBridgeFrame boundary: one initial attempt,
+        // four delayed reprepare attempts, then a persistent latch. New
+        // Candidate-D frames must not reach renderer.update after exhaustion.
+        var state = PreparationRecoveryState()
+        var preparationAttempts = 0
+        func consumeCandidateDFrame() {
+            guard state.canAttemptPreparation else { return }
+            preparationAttempts += 1
         }
-        return delayedAttempts == 4
-            && budget.exhausted
-            && budget.claimNextDelay() == nil
+
+        for attempt in 0...PresentationRetryBudget.maximumAutomaticRetries {
+            consumeCandidateDFrame()
+            guard preparationAttempts == attempt + 1 else { return false }
+            _ = state.recordFailure()
+            if attempt < PresentationRetryBudget.maximumAutomaticRetries,
+               state.exhausted {
+                return false
+            }
+        }
+
+        guard preparationAttempts == 5,
+              state.exhausted,
+              state.retryBudget.exhausted
+        else {
+            return false
+        }
+
+        for _ in 0..<1_000 {
+            consumeCandidateDFrame()
+        }
+        guard preparationAttempts == 5 else { return false }
+        state.resetForLifecycleRecovery()
+        consumeCandidateDFrame()
+        guard state.canAttemptPreparation, preparationAttempts == 6 else { return false }
+        state.recordSuccess()
+        return !state.exhausted
     }
 
     private static func transientDrawableRecoverySelfTest() -> Bool {

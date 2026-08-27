@@ -80,8 +80,17 @@ case "$cmd" in
         python3 scripts/check-pass5-benchmark-coverage.py "$pass5_log"
         rm -f "$pass5_log"
         trap - EXIT
+
+        # Pass 5 ends at the committed client display cache. Measure the distinct
+        # Pass-6 native boundary separately in a Release app and label GPU
+        # completion as a presentation proxy rather than claiming display scanout.
+        SEYAL_MACOS_CONFIGURATION=Release bash scripts/build-macos.sh
+        renderer_binary="${ROOT}/target/macos-derived-data/Build/Products/Release/Seyal.app/Contents/MacOS/Seyal"
+        [[ -x "$renderer_binary" ]] || { echo "Pass-6 renderer benchmark binary missing" >&2; exit 1; }
+        /usr/bin/time -lp "$renderer_binary" --renderer-benchmark
       else
         echo "[seyal Pass-5 benchmark coverage] measured Candidate-D validation skipped: production benchmark is macOS-only; validator self-test is enforced by make check."
+        echo "[seyal Pass-6 renderer benchmark] native Metal measurement skipped: macOS-only."
       fi
     else
       echo "[seyal task] bench: harness metadata recorder passed; no production benchmark target exists yet and no performance result is claimed."

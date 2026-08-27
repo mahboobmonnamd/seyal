@@ -144,6 +144,7 @@ enum MetalTerminalRendererError: Error {
     case unavailableBuffer
     case invalidFrame
     case invalidInstanceLayout
+    case gpuCommandCompletionFailuresExhausted
     case glyphAtlas(GlyphAtlasError)
 }
 
@@ -152,9 +153,40 @@ enum RendererUpdateResult: Equatable {
     case deferred
 }
 
+struct GPUCompletionRetryState: Equatable {
+    static let maximumAutomaticRetries = 4
+
+    private(set) var retriesUsed = 0
+    private(set) var exhausted = false
+
+    mutating func recordSuccess() {
+        retriesUsed = 0
+        exhausted = false
+    }
+
+    /// Returns true only when another automatic GPU submission is permitted.
+    /// The initial submission is not counted here, so four retries means a
+    /// persistent failure series can produce at most five failed completions.
+    mutating func recordFailureAndClaimRetry() -> Bool {
+        guard !exhausted else { return false }
+        guard retriesUsed < Self.maximumAutomaticRetries else {
+            exhausted = true
+            return false
+        }
+        retriesUsed += 1
+        return true
+    }
+
+    mutating func resetForExplicitRecovery() {
+        recordSuccess()
+    }
+}
+
 struct MetalRendererStats: Equatable {
     var submittedFrames: UInt64 = 0
     var completedFrames: UInt64 = 0
+    var commandCompletionFailures: UInt64 = 0
+    var commandCompletionFailureExhaustions: UInt64 = 0
     var coalescedFrames: UInt64 = 0
     var fullRebuilds: UInt64 = 0
     var rebuiltRows: UInt64 = 0
@@ -187,8 +219,10 @@ final class MetalTerminalRenderer {
     private var visible = true
     private var needsPresent = false
     private var needsCurrentFrameWhenIdle = false
+    private var gpuCompletionRetryState = GPUCompletionRetryState()
 
     private(set) var stats = MetalRendererStats()
+    private(set) var persistentDisplayFailure: MetalTerminalRendererError?
     var onNeedsCurrentFrame: (() -> Void)?
 
     init(device: MTLDevice) throws {
@@ -241,7 +275,11 @@ final class MetalTerminalRenderer {
     }
 
     var hasPresentablePreparedState: Bool {
-        needsPresent && instanceBuffer != nil && instanceCount > 0 && glyphAtlas.texture != nil
+        persistentDisplayFailure == nil
+            && needsPresent
+            && instanceBuffer != nil
+            && instanceCount > 0
+            && glyphAtlas.texture != nil
     }
 
     var hasFrameInFlight: Bool {
@@ -262,7 +300,7 @@ final class MetalTerminalRenderer {
     }
 
     func requestPresent() {
-        guard visible, instanceBuffer != nil else { return }
+        guard visible, persistentDisplayFailure == nil, instanceBuffer != nil else { return }
         needsPresent = true
     }
 
@@ -270,6 +308,12 @@ final class MetalTerminalRenderer {
         guard visible != value else { return }
         visible = value
         if value {
+            // A hide/show transition is an explicit lifecycle recovery event.
+            // It is the only automatic way to clear an exhausted asynchronous
+            // GPU completion failure series; ordinary terminal output cannot.
+            gpuCompletionRetryState.resetForExplicitRecovery()
+            persistentDisplayFailure = nil
+
             // A surface can become visible again before the last hidden-frame
             // command buffer completes.  Showing it cancels the deferred
             // release; completion must rebuild/publish the current frame.
@@ -424,6 +468,7 @@ final class MetalTerminalRenderer {
     @discardableResult
     func present(drawable: any CAMetalDrawable) -> Bool {
         guard visible,
+              persistentDisplayFailure == nil,
               needsPresent,
               framesInFlight == 0,
               let instanceBuffer,
@@ -497,6 +542,48 @@ final class MetalTerminalRenderer {
         needsPresent = false
         deferredNeedsFullRebuild = true
         needsCurrentFrameWhenIdle = true
+    }
+
+    static func gpuCompletionFailureRecoverySelfTest() -> Bool {
+        // This is the exact state machine used by asynchronous production
+        // command-completion handling. It intentionally contains no terminal,
+        // client-cache or attachment authority, so exhausting it cannot mutate
+        // canonical state.
+        var recovery = GPUCompletionRetryState()
+        var automaticRetries = 0
+
+        // Initial failed submission + four automatic retries. The fifth failed
+        // completion exhausts the series and must not claim a fifth retry.
+        for _ in 0...GPUCompletionRetryState.maximumAutomaticRetries {
+            if recovery.recordFailureAndClaimRetry() {
+                automaticRetries += 1
+            }
+        }
+        guard automaticRetries == GPUCompletionRetryState.maximumAutomaticRetries,
+              recovery.exhausted,
+              !recovery.recordFailureAndClaimRetry()
+        else {
+            return false
+        }
+
+        // Ordinary repeated failure calls cannot restart an exhausted series.
+        for _ in 0..<1_000 where recovery.recordFailureAndClaimRetry() {
+            return false
+        }
+
+        // A lifecycle-driven explicit recovery can restart a finite series.
+        recovery.resetForExplicitRecovery()
+        guard !recovery.exhausted,
+              recovery.retriesUsed == 0,
+              recovery.recordFailureAndClaimRetry()
+        else {
+            return false
+        }
+
+        // A genuine successful GPU completion also clears the consecutive
+        // failure accounting.
+        recovery.recordSuccess()
+        return !recovery.exhausted && recovery.retriesUsed == 0
     }
 
     private func allocateInstanceBuffer(rows: Int, columns: Int) throws {
@@ -625,22 +712,52 @@ final class MetalTerminalRenderer {
     private func commandCompleted(failed: Bool) {
         framesInFlight = 0
         stats.completedFrames &+= 1
+
         if failed {
+            stats.commandCompletionFailures &+= 1
             deferredNeedsFullRebuild = true
-            needsCurrentFrameWhenIdle = true
+
+            if gpuCompletionRetryState.recordFailureAndClaimRetry() {
+                needsCurrentFrameWhenIdle = true
+            } else {
+                // A persistent asynchronous GPU failure is a terminal display
+                // condition for this visible lifecycle. Stop all automatic GPU
+                // resubmission while preserving disposable prepared/deferred
+                // state. Hiding then showing the surface explicitly resets the
+                // recovery state and reconstructs from committed Candidate-D.
+                needsCurrentFrameWhenIdle = false
+                needsPresent = false
+                persistentDisplayFailure = .gpuCommandCompletionFailuresExhausted
+                stats.commandCompletionFailureExhaustions &+= 1
+            }
+        } else {
+            gpuCompletionRetryState.recordSuccess()
+            persistentDisplayFailure = nil
         }
+
         if !visible {
             releaseWhenIdle = false
             releaseDedicatedResources()
             return
         }
         releaseWhenIdle = false
+
+        // Do not let deferred damage or new terminal output bypass an exhausted
+        // GPU completion series. The current Candidate-D/client authority keeps
+        // advancing independently; an explicit lifecycle recovery can rehydrate
+        // the renderer later.
+        guard persistentDisplayFailure == nil else { return }
+
         if !deferredDamage.isEmpty || deferredNeedsFullRebuild || needsCurrentFrameWhenIdle {
             requestCurrentFrameIfNeeded()
         }
     }
 
     private func requestCurrentFrameIfNeeded() {
+        guard persistentDisplayFailure == nil else {
+            needsCurrentFrameWhenIdle = false
+            return
+        }
         guard framesInFlight == 0 else {
             needsCurrentFrameWhenIdle = true
             return

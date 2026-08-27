@@ -2,6 +2,12 @@
 
 Seyal is an open-source, commercial, enterprise-grade, agent-native terminal workspace for software development and operations.
 
+## Contributing
+
+Seyal OSS welcomes focused, evidence-backed contributions. Start with [CONTRIBUTING.md](CONTRIBUTING.md), choose the appropriate [issue form](.github/ISSUE_TEMPLATE/config.yml), and use the pull-request template. Please read the [Code of Conduct](CODE_OF_CONDUCT.md) and [Security Policy](SECURITY.md) before participating.
+
+The public repository owns the generic terminal foundation. Commercial Pro, Teams, Enterprise, hosted-service, billing, identity, and private-deployment capabilities belong in the separate commercial composition repository and must not become dependencies here.
+
 The foundation architecture is accepted and **Milestone 001 is ready for implementation**. Production work must follow the accepted milestone sequence and its pass/acceptance gates.
 
 ## Start here

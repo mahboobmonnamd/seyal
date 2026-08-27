@@ -4,6 +4,7 @@ members = [
     "crates/seyal-exec",
     "crates/seyal-runtime",
     "crates/seyal-render",
+    "crates/seyal-client",
 ]
 resolver = "3"
 

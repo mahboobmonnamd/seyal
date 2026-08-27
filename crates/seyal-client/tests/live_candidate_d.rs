@@ -113,7 +113,7 @@ fn real_shell_candidate_d_commit_reaches_prepared_surface_without_gui_vt() {
 #[test]
 fn live_alternate_screen_uses_same_candidate_d_and_preparation_path() {
     let (socket_path, execution_id, runtime) =
-        start_runtime("printf '\033[?1049hALT-LIVE'; sleep 1");
+        start_runtime(r"printf '\033[?1049hALT-LIVE'; sleep 1");
     let mut client =
         LocalDisplayClient::connect_execution(&socket_path, execution_id, Role::Observer)
             .expect("attach production client");

@@ -49,15 +49,19 @@ At the canonical `1280x800` preview size:
 - **Tabs** shows the active Workspace's tab inventory and new-tab action;
 - the focused terminal Pane owns the dominant center width;
 - a contextual Inspector occupies approximately 292 points on the right and is pinned to the content trailing edge with no unused strip beside it;
+- the Inspector retains the frozen design's slim vertical tool rail on its far-right edge;
+- the Inspector rail is functional rather than decorative: current preview modes filter existing context into **Context**, **Workspace**, **Tab**, and **Pane** views only;
+- both the left context panel and right Inspector can be hidden and reopened; when either is hidden the center Pane reclaims that width rather than preserving an empty gutter;
+- persistent top-chrome toggles reopen a hidden side panel, while each visible side panel also exposes its own collapse control;
 - each Pane has compact, functional Pane-local split and close controls in its header;
 - the Pane contains its own minimal composer at the bottom;
 - the palette is low-contrast charcoal/navy with restrained purple focus and semantic status accents;
 - typography is dense and terminal output remains monospaced;
-- decorative navigation, metrics, or inspector modes from concept art are omitted until backed by accepted behavior/data.
+- unsupported process/resource/history inspector modes from concept art remain omitted until backed by accepted behavior/data.
 
 Where visual concept art conflicts with the current Block sizing, busy-composer, TUI takeover, ownership, or functional-only rules, the current specifications win.
 
-The XCTest layout contract and XCUIAutomation suite are part of this visual contract. XCUI launches the actual `Seyal.app` preview, asserts the visible hierarchy and left-center-right ordering, exercises the Workspaces/Tabs switcher and Pane-local lifecycle controls, and records a rendered screenshot in the test result bundle for design review. A true pixel-golden comparison must not be claimed until the approved source reference image is deliberately added to the repository as a test asset.
+The XCTest layout contract and XCUIAutomation suite are part of this visual contract. XCUI launches the actual `Seyal.app` preview, asserts the visible hierarchy and left-center-right ordering, exercises the Workspaces/Tabs switcher, Inspector rail, side-panel hide/reopen behavior, and Pane-local lifecycle controls, and records a rendered screenshot in the test result bundle for design review. A true pixel-golden comparison must not be claimed until the approved source reference image is deliberately added to the repository as a test asset.
 
 ## Preview-only path
 
@@ -85,6 +89,23 @@ left context
 ```
 
 The same Tab identity is used by the top strip and the left Tabs view. Switching Workspace replaces the Workspace-scoped tab inventory rather than showing tabs from multiple Workspaces together.
+
+The left context panel is presentation chrome, not execution authority. Hiding it must not change Workspace, Tab, Pane, draft, focus, or execution identity. Reopening it restores the same navigation state.
+
+## Inspector navigation
+
+The frozen Inspector includes a narrow vertical mode rail on the far-right edge. The rail switches the detail surface immediately to its left.
+
+For the pre-Pass-6 preview, only modes backed by existing deterministic UI context are allowed:
+
+- **Context** — all currently available Inspector context;
+- **Workspace** — Workspace rows only;
+- **Tab** — active Tab rows only;
+- **Pane** — focused Pane rows only.
+
+No process, resource, metrics, history, or other Runtime-dependent Inspector item may appear merely to match concept-art icons. Those modes are introduced only after accepted data ownership and behavior exist.
+
+Hiding the Inspector hides the detail surface and its mode rail together. Its top-chrome toggle remains available to reopen it, and the selected Inspector mode is retained across hide/reopen operations.
 
 ## Pane-local layout controls
 
@@ -133,6 +154,8 @@ The scaffold is acceptable only if:
 - deterministic shell construction participates in the native smoke test;
 - the canonical `1280x800` preview satisfies the frozen three-column layout contract with Inspector flush to the trailing edge;
 - the Workspaces/Tabs switcher follows the frozen compact navigation model;
+- the Inspector exposes the frozen right-edge navigation rail using only functional modes backed by current preview context;
+- left context and Inspector hide/reopen controls are functional and the center Pane reclaims hidden side-panel width;
 - each Pane's split and close controls mutate the intended Pane's preview layout state;
 - XCUIAutomation launches the real preview and validates those interactions;
 - a rendered screenshot is attached to the XCUI result for design review;

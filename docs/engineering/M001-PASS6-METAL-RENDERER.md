@@ -102,6 +102,23 @@ No test injects terminal cells directly for the live proof.
 
 The native Release renderer benchmark measures `MetalTerminalRenderer.update` for sparse 120×40 damage and a Metal GPU-completion proxy using an offscreen target. The latter is explicitly a proxy and is not presented as display scanout latency. It records p50/p95/p99/max, device/OS/geometry/scale, rebuilt rows/cells, instance bytes, glyph hits/misses/uploads, atlas budget and dedicated GPU bytes. `/usr/bin/time -lp` supplies process resource evidence in the macOS CI job.
 
+### Final exact-head evidence
+
+The final local acceptance run used commit `67a67d3279f8920278fe2f851ba8a492bbf20444` on `origin/master` `5594b8a37981a29819c2b87ec0cd5f9774f76d9c`, Apple M5 Pro / macOS 26.5.2 (25F84), arm64, Rust 1.98.0, Release build, 1x backing scale, nearest-rank percentiles. The closest pre-fix comparison is the immediately preceding PR head `7084915d940d486623e1e10c72fb05cdd4772d3c` on the same host and OS; these are repeated local measurements, not a cross-machine product threshold.
+
+| Boundary / workload | p50 | p95 | p99 | max |
+| --- | ---: | ---: | ---: | ---: |
+| Rust dirty row + cursor preparation | 334 ns | 458 ns | 500 ns | 20,083 ns |
+| Rust full 120×40 preparation | 4,750 ns | 4,917 ns | 5,917 ns | 6,250 ns |
+| Native Metal preparation | 23,834 ns | 28,916 ns | 39,541 ns | 102,166 ns |
+| GPU completion proxy* | 359,625 ns | 2,390,291 ns | 3,217,542 ns | 4,771,333 ns |
+
+The native run rebuilt 160 rows / 19,200 cells, used 230,400 instance bytes, recorded 19,198 glyph-cache hits, 2 misses, 2 uploads and 306 uploaded bytes, with a 16 MiB atlas budget and 17,007,616 dedicated GPU bytes. `/usr/bin/time -lp` reported 0.11 s wall, 0.01 s user CPU, 0.02 s system CPU, 27,607,040-byte maximum RSS, and 112,984,712-byte peak footprint. The GPU value is an offscreen completion proxy including target allocation; it is not physical display scanout latency.
+
+The full `make bench` Candidate-D run also covered the required fanout/workload/geometry matrix. At 16 viewers and sustained 2-second high output at 200×60 it recorded p95/p99 client-cache latency of 2,913/3,168 µs, 15,712 KiB populated RSS, 22% sampled CPU, `3,552` latency samples, 675,350,528 aggregate UDS bytes, `shutdown_ok=true`, and final pending input `0`. The 50- and 100-execution cases were explicitly `PLATFORM_LIMITED` at 34 created executions because the host returned `Device not configured (os error 6)`; this is retained platform evidence, not a Seyal capacity claim.
+
+Against the same-host pre-fix renderer run, preparation and GPU-proxy medians did not regress (prior 26,500 ns / 386,958 ns; final 23,834 ns / 359,625 ns). The run supports a no-material-regression judgment for this workload; it does not establish an absolute product latency target.
+
 Final numerical evidence belongs on the exact-head PR validation record because changing this document after measurement would create a different commit and invalidate an exact-head claim.
 
 ## Deferred behavior

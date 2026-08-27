@@ -472,7 +472,10 @@ mod tests {
         assert_eq!(surface.prepared_cells().len(), 6);
         assert_eq!(surface.prepared_row(0).unwrap()[0].scalar, 'a' as u32);
         assert_eq!(surface.prepared_row(1).unwrap()[2].scalar, 'f' as u32);
-        assert_eq!(surface.prepared_cells().as_ptr(), surface.prepared_row(0).unwrap().as_ptr());
+        assert_eq!(
+            surface.prepared_cells().as_ptr(),
+            surface.prepared_row(0).unwrap().as_ptr()
+        );
     }
 
     #[test]
@@ -530,8 +533,22 @@ mod tests {
 
     #[test]
     fn coalesced_damage_rebuilds_union_once_against_latest_state() {
-        let initial = vec![cell('a'), cell('b'), cell('c'), cell('d'), cell('e'), cell('f')];
-        let latest = vec![cell('A'), cell('B'), cell('C'), cell('D'), cell('E'), cell('F')];
+        let initial = vec![
+            cell('a'),
+            cell('b'),
+            cell('c'),
+            cell('d'),
+            cell('e'),
+            cell('f'),
+        ];
+        let latest = vec![
+            cell('A'),
+            cell('B'),
+            cell('C'),
+            cell('D'),
+            cell('E'),
+            cell('F'),
+        ];
         let mut surface = PreparedSurface::default();
         surface
             .prepare(
@@ -604,13 +621,13 @@ mod tests {
             .unwrap();
         let prepared = surface.prepared_cells()[0];
 
-        assert_eq!(prepared.foreground, pack_color(RenderColor::Rgb { r: 2, g: 3, b: 4 }));
+        assert_eq!(
+            prepared.foreground,
+            pack_color(RenderColor::Rgb { r: 2, g: 3, b: 4 })
+        );
         assert_eq!(prepared.background, pack_color(RenderColor::Indexed(1)));
         assert_eq!(prepared.scalar, 'Z' as u32);
-        assert_eq!(
-            prepared.flags,
-            PREPARED_FLAG_BOLD | PREPARED_FLAG_UNDERLINE
-        );
+        assert_eq!(prepared.flags, PREPARED_FLAG_BOLD | PREPARED_FLAG_UNDERLINE);
     }
 
     #[test]

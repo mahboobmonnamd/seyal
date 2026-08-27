@@ -251,10 +251,15 @@ enum RendererValidation {
             renderer.setVisible(false)
             guard !renderer.hasDedicatedSurfaceResources else { return false }
 
-            // Offscreen tests above prove deterministic pixels. This separate
-            // proof exercises the production CAMetalLayer path itself:
-            // nextDrawable -> encode -> commandBuffer.present -> GPU completion.
-            guard try productionLayerPresentSelfTest(device: device) else { return false }
+            // Offscreen tests above prove deterministic pixels. These separate
+            // proofs cover finite atlas pressure/reclamation, repeated surface
+            // lifecycle cleanup, and the production CAMetalLayer path itself.
+            guard atlasPressureSelfTest(device: device),
+                  try repeatedLifecycleSelfTest(device: device),
+                  try productionLayerPresentSelfTest(device: device)
+            else {
+                return false
+            }
             return GlyphAtlas.budgetBytes == 16 * 1024 * 1024
         } catch {
             return false
@@ -410,11 +415,112 @@ enum RendererValidation {
         }
     }
 
+    private static func atlasPressureSelfTest(device: MTLDevice) -> Bool {
+        let atlas = GlyphAtlas(device: device)
+        let pressureScale: CGFloat = 48
+        let pressureMetrics = atlas.metrics(backingScale: pressureScale)
+        var reachedCapacity = false
+
+        // At this controlled scale the finite 2048x2048x4 atlas can hold fewer
+        // than the printable ASCII glyph set, so pressure is deterministic and
+        // does not require thousands of platform-font rasterizations.
+        for scalar in UInt32(0x21)...UInt32(0x7e) {
+            do {
+                _ = try atlas.lookup(
+                    scalar: scalar,
+                    bold: false,
+                    backingScale: pressureScale,
+                    cellMetrics: pressureMetrics
+                )
+            } catch GlyphAtlasError.capacityExceeded {
+                reachedCapacity = true
+                break
+            } catch {
+                return false
+            }
+        }
+        guard reachedCapacity,
+              atlas.estimatedResidentBytes == GlyphAtlas.budgetBytes,
+              atlas.entryCount > 0
+        else {
+            return false
+        }
+
+        let resetsBefore = atlas.stats.resets
+        atlas.resetWhenGPUIdle()
+        guard atlas.stats.resets == resetsBefore + 1,
+              atlas.entryCount == 0,
+              atlas.estimatedResidentBytes == 0
+        else {
+            return false
+        }
+
+        do {
+            let normalMetrics = atlas.metrics(backingScale: 1)
+            _ = try atlas.lookup(
+                scalar: UInt32(ascii: "A"),
+                bold: false,
+                backingScale: 1,
+                cellMetrics: normalMetrics
+            )
+            return atlas.entryCount == 1
+                && atlas.estimatedResidentBytes == GlyphAtlas.budgetBytes
+        } catch {
+            return false
+        }
+    }
+
+    private static func repeatedLifecycleSelfTest(device: MTLDevice) throws -> Bool {
+        var damage = DamageMask()
+        damage.mark(row: 0)
+        let cells = [preparedCell(scalar: UInt32(ascii: "A"))]
+
+        for generation in 1...8 {
+            weak var releasedRenderer: MetalTerminalRenderer?
+            do {
+                let renderer = try MetalTerminalRenderer(device: device)
+                releasedRenderer = renderer
+                renderer.setVisible(false)
+                guard !renderer.hasDedicatedSurfaceResources,
+                      renderer.estimatedDedicatedGPUBytes == 0
+                else {
+                    return false
+                }
+
+                renderer.setVisible(true)
+                guard try cells.withUnsafeBufferPointer({ buffer in
+                    try renderer.update(
+                        frame: NativePreparedFrame(
+                            cells: buffer,
+                            generation: UInt64(generation),
+                            rows: 1,
+                            columns: 1,
+                            damage: damage
+                        ),
+                        backingScale: 1,
+                        forceFullRebuild: true
+                    ) == .updated
+                }), renderer.hasDedicatedSurfaceResources else {
+                    return false
+                }
+
+                renderer.setVisible(false)
+                guard !renderer.hasDedicatedSurfaceResources,
+                      renderer.estimatedDedicatedGPUBytes == 0
+                else {
+                    return false
+                }
+            }
+            guard releasedRenderer == nil else { return false }
+        }
+        return true
+    }
+
     private static func productionLayerPresentSelfTest(device: MTLDevice) throws -> Bool {
         let renderer = try MetalTerminalRenderer(device: device)
         var damage = DamageMask()
         damage.mark(row: 0)
-        let cells = [preparedCell(background: terminalRGB(red: 12, green: 34, blue: 56))]
+        let cells = [preparedCell(scalar: UInt32(ascii: "A"))]
         guard try cells.withUnsafeBufferPointer({ buffer in
             try renderer.update(
                 frame: NativePreparedFrame(
@@ -440,7 +546,48 @@ enum RendererValidation {
         guard renderer.present(layer: layer), renderer.stats.submittedFrames == 1 else {
             return false
         }
-        return waitForGPUCompletion(renderer, after: completedBefore)
+
+        // While the submitted command buffer can still reference the existing
+        // atlas/instance resources, a scale-invalidating update must coalesce
+        // rather than reset/reclaim them. MainActor serialization makes this
+        // check deterministic: the completion task cannot run until we pump the
+        // run loop below.
+        let resetsWhileInFlight = renderer.glyphStats.resets
+        let deferred = try cells.withUnsafeBufferPointer { buffer in
+            try renderer.update(
+                frame: NativePreparedFrame(
+                    cells: buffer,
+                    generation: 2,
+                    rows: 1,
+                    columns: 1,
+                    fullRebuild: true,
+                    damage: damage
+                ),
+                backingScale: 2
+            )
+        }
+        guard deferred == .deferred,
+              renderer.glyphStats.resets == resetsWhileInFlight,
+              waitForGPUCompletion(renderer, after: completedBefore)
+        else {
+            return false
+        }
+
+        let resetsAfterCompletion = renderer.glyphStats.resets
+        let updated = try cells.withUnsafeBufferPointer { buffer in
+            try renderer.update(
+                frame: NativePreparedFrame(
+                    cells: buffer,
+                    generation: 3,
+                    rows: 1,
+                    columns: 1,
+                    fullRebuild: true,
+                    damage: damage
+                ),
+                backingScale: 2
+            )
+        }
+        return updated == .updated && renderer.glyphStats.resets > resetsAfterCompletion
     }
 
     private static func makePresentationLayer(

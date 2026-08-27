@@ -5,6 +5,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let buildConfigurationKey = "SeyalBuildConfiguration"
 
     private var window: NSWindow?
+    #if DEBUG
+    private var previewShortcutController: SeyalPreviewShortcutController?
+    #endif
 
     static func shouldUseShellPreview(
         arguments: [String],
@@ -48,8 +51,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.appearance = NSAppearance(named: .darkAqua)
             window.backgroundColor = SeyalDesignTokens.Palette.windowBackground
             window.title = "Seyal — UI Shell Preview"
-            window.contentView = SeyalShellPreviewFactory.make(frame: contentRect)
+
+            let previewState = SeyalShellPreviewState.makeDefault(
+                includeTestAttention: ProcessInfo.processInfo.environment["SEYAL_UI_TEST_FIXTURES"] == "1"
+            )
+            window.contentView = SeyalShellPreviewFactory.make(
+                frame: contentRect,
+                state: previewState
+            )
             window.minSize = NSSize(width: 1080, height: 680)
+
+            let shortcuts = SeyalPreviewShortcutController(window: window, state: previewState)
+            shortcuts.installMenus()
+            previewShortcutController = shortcuts
             #else
             // shouldUseShellPreview is false for non-Debug builds. Keep this branch
             // self-contained so Release compilation never depends on preview types.

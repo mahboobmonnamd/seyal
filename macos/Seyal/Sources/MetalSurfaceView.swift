@@ -265,7 +265,9 @@ final class MetalSurfaceView: NSView {
         presentationRetryScheduled = true
         let generation = presentationRetryGeneration
         presentationRetryTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
-            self?.runPresentationRetry(generation: generation)
+            Task { @MainActor [weak self] in
+                self?.runPresentationRetry(generation: generation)
+            }
         }
     }
 

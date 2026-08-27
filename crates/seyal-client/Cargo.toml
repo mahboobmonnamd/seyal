@@ -14,5 +14,8 @@ crate-type = ["rlib", "staticlib"]
 seyal-render = { path = "../seyal-render" }
 seyal-runtime = { path = "../seyal-runtime" }
 
+[dev-dependencies]
+seyal-exec = { path = "../seyal-exec" }
+
 [lints.rust]
 unsafe_code = "deny"

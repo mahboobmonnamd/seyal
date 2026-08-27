@@ -1,9 +1,9 @@
 use seyal_protocol::{
     AttachmentId,
     framing::{
-        CAP_CORRELATED_RESIZE, CAP_SEMANTIC_TERMINAL_KEY, ErrorCode, FramingError, Message,
-        MessageType, ResizeRequest, ResizeResult, ResizeResultCode, TerminalKey, TerminalKeyKind,
-        TerminalKeyModifiers, decode_message, FrameHeader,
+        CAP_CORRELATED_RESIZE, CAP_SEMANTIC_TERMINAL_KEY, ErrorCode, FrameHeader, FramingError,
+        Message, MessageType, ResizeRequest, ResizeResult, ResizeResultCode, TerminalKey,
+        TerminalKeyKind, TerminalKeyModifiers, decode_message,
     },
 };
 
@@ -33,11 +33,17 @@ fn terminal_key_wire_layout_is_exact_and_round_trips() {
     assert_eq!(&encoded[0..16], &attachment_id().to_bytes());
     assert_eq!(u16::from_le_bytes(encoded[16..18].try_into().unwrap()), 9);
     assert_eq!(u16::from_le_bytes(encoded[18..20].try_into().unwrap()), 1);
-    assert_eq!(u32::from_le_bytes(encoded[20..24].try_into().unwrap()), b'?' as u32);
+    assert_eq!(
+        u32::from_le_bytes(encoded[20..24].try_into().unwrap()),
+        b'?' as u32
+    );
     assert_eq!(TerminalKey::decode(&encoded).unwrap(), key);
 
     let header = FrameHeader::new(MessageType::TerminalKey as u16, encoded.len() as u32);
-    assert_eq!(decode_message(&header, &encoded).unwrap(), Message::TerminalKey(key));
+    assert_eq!(
+        decode_message(&header, &encoded).unwrap(),
+        Message::TerminalKey(key)
+    );
 }
 
 #[test]
@@ -50,7 +56,10 @@ fn terminal_key_rejects_invalid_m001_combinations() {
     }
     .encode();
     arrow[18..20].copy_from_slice(&1u16.to_le_bytes());
-    assert_eq!(TerminalKey::decode(&arrow), Err(FramingError::MalformedPayload));
+    assert_eq!(
+        TerminalKey::decode(&arrow),
+        Err(FramingError::MalformedPayload)
+    );
 
     let mut control = TerminalKey {
         attachment_id: attachment_id(),
@@ -60,11 +69,17 @@ fn terminal_key_rejects_invalid_m001_combinations() {
     }
     .encode();
     control[20..24].copy_from_slice(&('é' as u32).to_le_bytes());
-    assert_eq!(TerminalKey::decode(&control), Err(FramingError::MalformedPayload));
+    assert_eq!(
+        TerminalKey::decode(&control),
+        Err(FramingError::MalformedPayload)
+    );
 
     let mut unknown = control;
     unknown[16..18].copy_from_slice(&99u16.to_le_bytes());
-    assert_eq!(TerminalKey::decode(&unknown), Err(FramingError::MalformedPayload));
+    assert_eq!(
+        TerminalKey::decode(&unknown),
+        Err(FramingError::MalformedPayload)
+    );
 }
 
 #[test]
@@ -86,11 +101,17 @@ fn resize_request_wire_layout_is_exact_and_validates_identity_and_geometry() {
 
     let mut zero_id = encoded.clone();
     zero_id[16..24].copy_from_slice(&0u64.to_le_bytes());
-    assert_eq!(ResizeRequest::decode(&zero_id), Err(FramingError::MalformedPayload));
+    assert_eq!(
+        ResizeRequest::decode(&zero_id),
+        Err(FramingError::MalformedPayload)
+    );
 
     let mut reserved = encoded.clone();
     reserved[28..32].copy_from_slice(&1u32.to_le_bytes());
-    assert_eq!(ResizeRequest::decode(&reserved), Err(FramingError::MalformedPayload));
+    assert_eq!(
+        ResizeRequest::decode(&reserved),
+        Err(FramingError::MalformedPayload)
+    );
 }
 
 #[test]
@@ -154,5 +175,8 @@ fn resize_result_rejects_ambiguous_success_and_failure_shapes() {
     let mut unknown_code = failed_with_generation;
     unknown_code[24..26].copy_from_slice(&99u16.to_le_bytes());
     unknown_code[32..40].copy_from_slice(&0u64.to_le_bytes());
-    assert_eq!(ResizeResult::decode(&unknown_code), Err(FramingError::MalformedPayload));
+    assert_eq!(
+        ResizeResult::decode(&unknown_code),
+        Err(FramingError::MalformedPayload)
+    );
 }

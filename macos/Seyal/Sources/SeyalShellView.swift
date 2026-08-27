@@ -3,6 +3,31 @@ import AppKit
 #if DEBUG
 @MainActor
 final class SeyalShellView: NSView {
+    enum InspectorMode: String, CaseIterable {
+        case context
+        case workspace
+        case tab
+        case pane
+
+        var title: String {
+            switch self {
+            case .context: "Context"
+            case .workspace: "Workspace"
+            case .tab: "Tab"
+            case .pane: "Pane"
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .context: "info.circle"
+            case .workspace: "folder"
+            case .tab: "rectangle.on.rectangle"
+            case .pane: "rectangle.split.2x1"
+            }
+        }
+    }
+
     struct LayoutContract {
         let topChrome: NSRect
         let leftContext: NSRect
@@ -16,6 +41,9 @@ final class SeyalShellView: NSView {
     private var paneContainers: [String: NSView] = [:]
     private var composerViews: [String: PaneComposerShellView] = [:]
     private var paneFocusLabels: [String: NSTextField] = [:]
+    private var isLeftContextVisible = true
+    private var isInspectorVisible = true
+    private var inspectorMode: InspectorMode = .context
 
     private weak var topChromeView: NSView?
     private weak var leftContextView: NSView?
@@ -56,12 +84,20 @@ final class SeyalShellView: NSView {
         let pane = makeActiveTabSurface()
         let inspector = makeInspector()
 
+        leftContext.isHidden = !isLeftContextVisible
+        inspector.isHidden = !isInspectorVisible
+
         topChromeView = topChrome
         leftContextView = leftContext
         paneView = pane
         inspectorView = inspector
 
         [topChrome, leftContext, pane, inspector].forEach(addSubview)
+
+        let leftWidth = isLeftContextVisible ? SeyalDesignTokens.Layout.leftContextWidth : 0
+        let inspectorWidth = isInspectorVisible ? SeyalDesignTokens.Layout.inspectorWidth : 0
+        let leftSeparator: CGFloat = isLeftContextVisible ? 1 : 0
+        let rightSeparator: CGFloat = isInspectorVisible ? 1 : 0
 
         NSLayoutConstraint.activate([
             topChrome.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -72,15 +108,15 @@ final class SeyalShellView: NSView {
             leftContext.leadingAnchor.constraint(equalTo: leadingAnchor),
             leftContext.topAnchor.constraint(equalTo: topChrome.bottomAnchor, constant: 1),
             leftContext.bottomAnchor.constraint(equalTo: bottomAnchor),
-            leftContext.widthAnchor.constraint(equalToConstant: SeyalDesignTokens.Layout.leftContextWidth),
+            leftContext.widthAnchor.constraint(equalToConstant: leftWidth),
 
             inspector.trailingAnchor.constraint(equalTo: trailingAnchor),
             inspector.topAnchor.constraint(equalTo: topChrome.bottomAnchor, constant: 1),
             inspector.bottomAnchor.constraint(equalTo: bottomAnchor),
-            inspector.widthAnchor.constraint(equalToConstant: SeyalDesignTokens.Layout.inspectorWidth),
+            inspector.widthAnchor.constraint(equalToConstant: inspectorWidth),
 
-            pane.leadingAnchor.constraint(equalTo: leftContext.trailingAnchor, constant: 1),
-            pane.trailingAnchor.constraint(equalTo: inspector.leadingAnchor, constant: -1),
+            pane.leadingAnchor.constraint(equalTo: leftContext.trailingAnchor, constant: leftSeparator),
+            pane.trailingAnchor.constraint(equalTo: inspector.leadingAnchor, constant: -rightSeparator),
             pane.topAnchor.constraint(equalTo: topChrome.bottomAnchor, constant: 1),
             pane.bottomAnchor.constraint(equalTo: bottomAnchor),
             pane.widthAnchor.constraint(greaterThanOrEqualToConstant: 520),
@@ -92,6 +128,14 @@ final class SeyalShellView: NSView {
         container.translatesAutoresizingMaskIntoConstraints = false
         container.wantsLayer = true
         container.layer?.backgroundColor = SeyalDesignTokens.Palette.chromeBackground.cgColor
+
+        let leftSidebarToggle = makeToolbarButton(
+            symbol: "sidebar.left",
+            fallback: "☰",
+            accessibilityLabel: isLeftContextVisible ? "Hide left sidebar" : "Show left sidebar",
+            accessibilityID: "toggle-left-sidebar",
+            action: #selector(toggleLeftSidebar(_:))
+        )
 
         let workspaceField = NSTextField(labelWithString: state.activeWorkspace.name)
         workspaceField.font = SeyalDesignTokens.Typography.chromeEmphasized
@@ -121,6 +165,13 @@ final class SeyalShellView: NSView {
             accessibilityID: "split-down",
             action: #selector(splitDown(_:))
         )
+        let inspectorToggle = makeToolbarButton(
+            symbol: "sidebar.right",
+            fallback: "▥",
+            accessibilityLabel: isInspectorVisible ? "Hide Inspector" : "Show Inspector",
+            accessibilityID: "toggle-inspector",
+            action: #selector(toggleInspector(_:))
+        )
         let attentionButton = makeToolbarButton(
             symbol: snapshot.attentionItems.isEmpty ? "bell" : "bell.badge",
             fallback: "!",
@@ -133,19 +184,23 @@ final class SeyalShellView: NSView {
             attentionButton.imagePosition = .imageLeading
         }
 
-        let controls = NSStackView(views: [splitRight, splitDown, attentionButton])
+        let controls = NSStackView(views: [splitRight, splitDown, inspectorToggle, attentionButton])
         controls.orientation = .horizontal
         controls.alignment = .centerY
         controls.spacing = 4
         controls.translatesAutoresizingMaskIntoConstraints = false
 
+        container.addSubview(leftSidebarToggle)
         container.addSubview(workspaceField)
         container.addSubview(slash)
         container.addSubview(tabs)
         container.addSubview(controls)
 
         NSLayoutConstraint.activate([
-            workspaceField.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
+            leftSidebarToggle.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 8),
+            leftSidebarToggle.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+
+            workspaceField.leadingAnchor.constraint(equalTo: leftSidebarToggle.trailingAnchor, constant: 6),
             workspaceField.centerYAnchor.constraint(equalTo: container.centerYAnchor),
             workspaceField.widthAnchor.constraint(lessThanOrEqualToConstant: 150),
 
@@ -319,6 +374,21 @@ final class SeyalShellView: NSView {
         modeControl.setAccessibilityIdentifier("left-mode")
         modeControl.translatesAutoresizingMaskIntoConstraints = false
 
+        let collapse = makeToolbarButton(
+            symbol: "chevron.left",
+            fallback: "‹",
+            accessibilityLabel: "Hide left sidebar",
+            accessibilityID: "left-sidebar-collapse",
+            action: #selector(toggleLeftSidebar(_:))
+        )
+        collapse.contentTintColor = SeyalDesignTokens.Palette.textTertiary
+
+        let header = NSStackView(views: [modeControl, collapse])
+        header.orientation = .horizontal
+        header.alignment = .centerY
+        header.spacing = 4
+        header.translatesAutoresizingMaskIntoConstraints = false
+
         let content = NSStackView()
         content.orientation = .vertical
         content.alignment = .leading
@@ -332,7 +402,7 @@ final class SeyalShellView: NSView {
             appendTabContent(to: content)
         }
 
-        let stack = NSStackView(views: [modeControl, content])
+        let stack = NSStackView(views: [header, content])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
@@ -345,7 +415,8 @@ final class SeyalShellView: NSView {
             stack.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
             stack.topAnchor.constraint(equalTo: panel.topAnchor),
             stack.bottomAnchor.constraint(lessThanOrEqualTo: panel.bottomAnchor),
-            modeControl.widthAnchor.constraint(equalToConstant: SeyalDesignTokens.Layout.leftContextWidth - 24),
+            header.widthAnchor.constraint(equalToConstant: SeyalDesignTokens.Layout.leftContextWidth - 24),
+            modeControl.widthAnchor.constraint(equalToConstant: SeyalDesignTokens.Layout.leftContextWidth - 56),
             content.widthAnchor.constraint(equalToConstant: SeyalDesignTokens.Layout.leftContextWidth - 24),
         ])
         return panel
@@ -783,8 +854,85 @@ final class SeyalShellView: NSView {
         panel.translatesAutoresizingMaskIntoConstraints = false
         panel.wantsLayer = true
         panel.layer?.backgroundColor = SeyalDesignTokens.Palette.panelBackground.cgColor
-        populateInspector(panel)
+
+        let detail = NSView()
+        detail.translatesAutoresizingMaskIntoConstraints = false
+        detail.wantsLayer = true
+        detail.layer?.backgroundColor = SeyalDesignTokens.Palette.panelBackground.cgColor
+        populateInspector(detail)
+
+        let rail = makeInspectorRail()
+        panel.addSubview(detail)
+        panel.addSubview(rail)
+
+        NSLayoutConstraint.activate([
+            detail.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
+            detail.topAnchor.constraint(equalTo: panel.topAnchor),
+            detail.bottomAnchor.constraint(equalTo: panel.bottomAnchor),
+            detail.trailingAnchor.constraint(equalTo: rail.leadingAnchor),
+
+            rail.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
+            rail.topAnchor.constraint(equalTo: panel.topAnchor),
+            rail.bottomAnchor.constraint(equalTo: panel.bottomAnchor),
+            rail.widthAnchor.constraint(equalToConstant: SeyalDesignTokens.Layout.inspectorRailWidth),
+        ])
         return panel
+    }
+
+    private func makeInspectorRail() -> NSView {
+        let rail = NSView()
+        rail.translatesAutoresizingMaskIntoConstraints = false
+        rail.wantsLayer = true
+        rail.layer?.backgroundColor = SeyalDesignTokens.Palette.chromeBackground.cgColor
+
+        let separator = NSView()
+        separator.translatesAutoresizingMaskIntoConstraints = false
+        separator.wantsLayer = true
+        separator.layer?.backgroundColor = SeyalDesignTokens.Palette.separator.cgColor
+        rail.addSubview(separator)
+
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.spacing = 4
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        InspectorMode.allCases.forEach { mode in
+            let button = NSButton(title: "", target: self, action: #selector(selectInspectorMode(_:)))
+            button.identifier = NSUserInterfaceItemIdentifier(mode.rawValue)
+            button.setAccessibilityIdentifier("inspector-mode.\(mode.rawValue)")
+            button.setAccessibilityLabel("Inspector \(mode.title)")
+            button.toolTip = mode.title
+            button.bezelStyle = .inline
+            button.isBordered = false
+            button.image = NSImage(systemSymbolName: mode.symbol, accessibilityDescription: mode.title)
+            if button.image == nil {
+                button.title = String(mode.title.prefix(1))
+            }
+            button.contentTintColor = mode == inspectorMode
+                ? SeyalDesignTokens.Palette.focus
+                : SeyalDesignTokens.Palette.textTertiary
+            button.translatesAutoresizingMaskIntoConstraints = false
+            button.wantsLayer = true
+            button.layer?.cornerRadius = 6
+            button.layer?.backgroundColor = mode == inspectorMode
+                ? SeyalDesignTokens.Palette.focusSoft.cgColor
+                : NSColor.clear.cgColor
+            button.widthAnchor.constraint(equalToConstant: 28).isActive = true
+            button.heightAnchor.constraint(equalToConstant: 28).isActive = true
+            stack.addArrangedSubview(button)
+        }
+
+        rail.addSubview(stack)
+        NSLayoutConstraint.activate([
+            separator.leadingAnchor.constraint(equalTo: rail.leadingAnchor),
+            separator.topAnchor.constraint(equalTo: rail.topAnchor),
+            separator.bottomAnchor.constraint(equalTo: rail.bottomAnchor),
+            separator.widthAnchor.constraint(equalToConstant: 1),
+            stack.topAnchor.constraint(equalTo: rail.topAnchor, constant: 10),
+            stack.centerXAnchor.constraint(equalTo: rail.centerXAnchor, constant: 0.5),
+        ])
+        return rail
     }
 
     private func populateInspector(_ panel: NSView) {
@@ -794,19 +942,41 @@ final class SeyalShellView: NSView {
         title.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
         title.textColor = SeyalDesignTokens.Palette.textPrimary
 
-        let mode = NSTextField(labelWithString: "CONTEXT")
+        let spacer = NSView()
+        spacer.translatesAutoresizingMaskIntoConstraints = false
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let collapse = makeToolbarButton(
+            symbol: "chevron.right",
+            fallback: "›",
+            accessibilityLabel: "Hide Inspector",
+            accessibilityID: "inspector-collapse",
+            action: #selector(toggleInspector(_:))
+        )
+        collapse.contentTintColor = SeyalDesignTokens.Palette.textTertiary
+
+        let titleRow = NSStackView(views: [title, spacer, collapse])
+        titleRow.orientation = .horizontal
+        titleRow.alignment = .centerY
+        titleRow.spacing = 4
+        titleRow.translatesAutoresizingMaskIntoConstraints = false
+
+        let mode = NSTextField(labelWithString: inspectorMode.title.uppercased())
         mode.font = SeyalDesignTokens.Typography.section
         mode.textColor = SeyalDesignTokens.Palette.focus
+        mode.setAccessibilityIdentifier("inspector-mode-label")
 
-        let stack = NSStackView(views: [title, mode])
+        let stack = NSStackView(views: [titleRow, mode])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
         stack.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
         stack.translatesAutoresizingMaskIntoConstraints = false
 
+        let rows = visibleInspectorRows()
         var currentSection: String?
-        for row in snapshot.inspectorRows {
+        for row in rows {
             if currentSection != row.section {
                 if currentSection != nil {
                     stack.addArrangedSubview(makeSpacer(height: 5))
@@ -817,13 +987,40 @@ final class SeyalShellView: NSView {
             stack.addArrangedSubview(makeInspectorRow(row))
         }
 
+        if rows.isEmpty {
+            let empty = NSTextField(wrappingLabelWithString: "No \(inspectorMode.title.lowercased()) context for the current selection")
+            empty.font = SeyalDesignTokens.Typography.body
+            empty.textColor = SeyalDesignTokens.Palette.textTertiary
+            empty.maximumNumberOfLines = 3
+            empty.setAccessibilityIdentifier("inspector-empty")
+            stack.addArrangedSubview(empty)
+        }
+
         panel.addSubview(stack)
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
             stack.topAnchor.constraint(equalTo: panel.topAnchor),
             stack.bottomAnchor.constraint(lessThanOrEqualTo: panel.bottomAnchor),
+            titleRow.widthAnchor.constraint(equalToConstant: inspectorDetailWidth - 24),
         ])
+    }
+
+    private var inspectorDetailWidth: CGFloat {
+        SeyalDesignTokens.Layout.inspectorWidth - SeyalDesignTokens.Layout.inspectorRailWidth
+    }
+
+    private func visibleInspectorRows() -> [SeyalShellSnapshot.InspectorRow] {
+        switch inspectorMode {
+        case .context:
+            snapshot.inspectorRows
+        case .workspace:
+            snapshot.inspectorRows.filter { $0.section == "Workspace" }
+        case .tab:
+            snapshot.inspectorRows.filter { $0.section == "Tab" }
+        case .pane:
+            snapshot.inspectorRows.filter { $0.section == "Active Pane" }
+        }
     }
 
     private func makeInspectorRow(_ row: SeyalShellSnapshot.InspectorRow) -> NSView {
@@ -846,7 +1043,7 @@ final class SeyalShellView: NSView {
         rowStack.distribution = .fill
         rowStack.spacing = 8
         rowStack.translatesAutoresizingMaskIntoConstraints = false
-        rowStack.widthAnchor.constraint(equalToConstant: SeyalDesignTokens.Layout.inspectorWidth - 24).isActive = true
+        rowStack.widthAnchor.constraint(equalToConstant: inspectorDetailWidth - 24).isActive = true
         return rowStack
     }
 
@@ -888,14 +1085,36 @@ final class SeyalShellView: NSView {
             paneFocusLabels[id]?.stringValue = focused ? "Focused" : ""
         }
         composerView = composerViews[paneID]
-        if let inspectorView {
-            populateInspector(inspectorView)
+        if let inspectorView, isInspectorVisible {
+            inspectorView.subviews.first.map(populateInspector)
         }
     }
 
     @objc
     private func changeLeftPanelMode(_ sender: NSSegmentedControl) {
         state.setLeftPanelMode(sender.selectedSegment == 0 ? .workspaces : .tabs)
+        rebuildUI()
+    }
+
+    @objc
+    private func toggleLeftSidebar(_ sender: NSButton) {
+        isLeftContextVisible.toggle()
+        rebuildUI()
+    }
+
+    @objc
+    private func toggleInspector(_ sender: NSButton) {
+        isInspectorVisible.toggle()
+        rebuildUI()
+    }
+
+    @objc
+    private func selectInspectorMode(_ sender: NSButton) {
+        guard let rawValue = sender.identifier?.rawValue,
+              let mode = InspectorMode(rawValue: rawValue) else {
+            return
+        }
+        inspectorMode = mode
         rebuildUI()
     }
 
@@ -1074,6 +1293,21 @@ final class SeyalShellView: NSView {
             inspector: inspectorView.convert(inspectorView.bounds, to: self),
             composer: composerView.convert(composerView.bounds, to: self)
         )
+    }
+
+    func debugSetSidebarVisibility(left: Bool, inspector: Bool) {
+        isLeftContextVisible = left
+        isInspectorVisible = inspector
+        rebuildUI()
+    }
+
+    func debugSetInspectorMode(_ mode: InspectorMode) {
+        inspectorMode = mode
+        rebuildUI()
+    }
+
+    func debugVisibleInspectorRows() -> [SeyalShellSnapshot.InspectorRow] {
+        visibleInspectorRows()
     }
 
     func debugSnapshot() -> SeyalShellSnapshot {

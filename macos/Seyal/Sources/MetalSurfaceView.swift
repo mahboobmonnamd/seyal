@@ -4,6 +4,7 @@ import Metal
 
 struct PresentationRetryBudget: Equatable {
     private static let delays: [TimeInterval] = [1.0 / 60.0, 0.05, 0.20, 0.75]
+    static let maximumAutomaticRetries = 4
     private var nextAttempt = 0
 
     mutating func reset() {
@@ -57,6 +58,59 @@ struct PresentationOpportunityState: Equatable {
     }
 }
 
+struct PresentationRecoveryState: Equatable {
+    private(set) var opportunity = PresentationOpportunityState()
+    private(set) var retryBudget = PresentationRetryBudget()
+    private(set) var exhausted = false
+
+    var pending: Bool { opportunity.pending }
+    var armed: Bool { opportunity.armed }
+
+    mutating func request() {
+        guard !exhausted else { return }
+        opportunity.request()
+    }
+
+    mutating func armIfNeeded() -> Bool {
+        guard !exhausted else { return false }
+        return opportunity.armIfNeeded()
+    }
+
+    mutating func consumeOpportunity() -> Bool {
+        opportunity.consumeOpportunity()
+    }
+
+    mutating func recordSubmissionFailure() -> TimeInterval? {
+        opportunity.markFailed()
+        guard let delay = retryBudget.claimNextDelay() else {
+            exhausted = true
+            opportunity.cancel()
+            return nil
+        }
+        return delay
+    }
+
+    mutating func recordSubmissionSuccess() {
+        opportunity.markPresented()
+        retryBudget.reset()
+        exhausted = false
+    }
+
+    mutating func cancel() {
+        opportunity.cancel()
+        retryBudget.reset()
+        exhausted = false
+    }
+
+    mutating func cancelPending() {
+        opportunity.cancel()
+    }
+
+    mutating func resetForLifecycleRecovery() {
+        cancel()
+    }
+}
+
 /// Owns the run-loop registration independently of the view's actor-isolated
 /// lifetime. Releasing a surface therefore also invalidates its display link.
 final class MetalDisplayLinkLease {
@@ -79,11 +133,11 @@ final class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     private var bridge: RustDisplayBridge?
     private var forceNextFrame = false
     private var hasPreparedState = false
-    private var presentationState = PresentationOpportunityState()
+    private var presentationState = PresentationRecoveryState()
     private var presentationRetryScheduled = false
     private var presentationRetryTimer: Timer?
     private var presentationRetryGeneration: UInt64 = 0
-    private var presentationRetryBudget = PresentationRetryBudget()
+    private var renderable = false
     private var metalDisplayLinkLease: MetalDisplayLinkLease?
     private var preparationRetryTimer: Timer?
     private var preparationRetryGeneration: UInt64 = 0
@@ -154,7 +208,8 @@ final class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
         updateDrawableSize()
         guard shouldRender,
               hasPreparedState,
-              renderer.persistentDisplayFailure == nil
+              renderer.persistentDisplayFailure == nil,
+              !presentationState.exhausted
         else { return }
         renderer.requestPresent()
         beginPresentationAttemptSeries()
@@ -224,6 +279,8 @@ final class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
 
     private func updateVisibility() {
         let renderable = shouldRender
+        let becameRenderable = renderable && !self.renderable
+        self.renderable = renderable
         if renderable {
             if let metalLayer = layer as? CAMetalLayer {
                 installMetalDisplayLink(on: metalLayer)
@@ -242,11 +299,15 @@ final class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
             // Showing is the explicit recovery boundary for an exhausted GPU
             // completion failure series. Reconstruct from the latest committed
             // Candidate-D state; never request PTY-byte replay.
-            if renderer.persistentDisplayFailure == nil {
+            if becameRenderable {
+                presentationState.resetForLifecycleRecovery()
+                lastRenderError = nil
+            } else if renderer.persistentDisplayFailure == nil,
+                      !presentationState.exhausted {
                 lastRenderError = nil
             }
             bridge?.publishCurrentFrame()
-            if hasPreparedState {
+            if hasPreparedState, !presentationState.exhausted {
                 renderer.requestPresent()
                 beginPresentationAttemptSeries()
                 armMetalDisplayLink()
@@ -255,6 +316,10 @@ final class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     }
 
     private func consumeBridgeFrame(_ bridgeFrame: SeyalPreparedFrame) {
+        guard !presentationState.exhausted else {
+            forceNextFrame = true
+            return
+        }
         guard let frame = NativePreparedFrame(bridgeFrame: bridgeFrame) else {
             return
         }
@@ -271,11 +336,14 @@ final class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
                 // Candidate-D can continue advancing while an exhausted GPU
                 // display failure is latched. A successful CPU preparation must
                 // not erase that asynchronous display diagnostic.
-                if renderer.persistentDisplayFailure == nil {
+                if renderer.persistentDisplayFailure == nil,
+                   !presentationState.exhausted {
                     lastRenderError = nil
                 }
                 resetPreparationRetries()
-                if shouldRender, renderer.persistentDisplayFailure == nil {
+                if shouldRender,
+                   renderer.persistentDisplayFailure == nil,
+                   !presentationState.exhausted {
                     beginPresentationAttemptSeries()
                     armMetalDisplayLink()
                 }
@@ -289,7 +357,7 @@ final class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
             // Keep the preparation recovery series alive across failures. The
             // lifecycle invalidation path resets it; resetting here would make
             // a persistent resource failure retry forever at the first delay.
-            cancelPresentationRetries()
+            cancelPresentationOpportunity()
             renderer.invalidatePreparedState()
             forceNextFrame = true
             schedulePreparationRetry()
@@ -350,6 +418,7 @@ final class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
         guard shouldRender,
               hasPreparedState,
               presentationState.pending,
+              !presentationState.exhausted,
               renderer.hasPresentablePreparedState,
               !renderer.hasFrameInFlight
         else {
@@ -378,30 +447,36 @@ final class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
         }
 
         if renderer.present(drawable: update.drawable) {
-            presentationState.markPresented()
-            resetPresentationRetries()
+            presentationState.recordSubmissionSuccess()
+            cancelPresentationRetryTimer()
         } else {
-            presentationState.markFailed()
-            schedulePresentationRetry()
+            guard let delay = presentationState.recordSubmissionFailure() else {
+                lastRenderError = MetalTerminalRendererError.presentationSubmissionFailuresExhausted
+                return
+            }
+            schedulePresentationRetry(after: delay)
         }
     }
 
     private func beginPresentationAttemptSeries() {
         presentationState.request()
-        resetPresentationRetries()
     }
 
-    private func resetPresentationRetries() {
+    private func cancelPresentationRetryTimer() {
         presentationRetryTimer?.invalidate()
         presentationRetryTimer = nil
         presentationRetryGeneration &+= 1
         presentationRetryScheduled = false
-        presentationRetryBudget.reset()
     }
 
     private func cancelPresentationRetries() {
+        cancelPresentationRetryTimer()
         presentationState.cancel()
-        resetPresentationRetries()
+    }
+
+    private func cancelPresentationOpportunity() {
+        cancelPresentationRetryTimer()
+        presentationState.cancelPending()
     }
 
     private func invalidatePreparedPresentation() {
@@ -410,12 +485,12 @@ final class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
         resetPreparationRetries()
     }
 
-    private func schedulePresentationRetry() {
+    private func schedulePresentationRetry(after delay: TimeInterval) {
         guard shouldRender,
               hasPreparedState,
               presentationState.pending,
               !presentationRetryScheduled,
-              let delay = presentationRetryBudget.claimNextDelay()
+              !presentationState.exhausted
         else {
             return
         }
@@ -461,6 +536,7 @@ enum Pass6RegressionValidation {
         supplementaryScalarResolutionSelfTest()
             && presentationRetryBudgetSelfTest()
             && presentationOpportunityStateSelfTest()
+            && persistentPresentationFailureSelfTest()
             && preparationRetryBudgetSelfTest()
             && transientDrawableRecoverySelfTest()
             && RendererValidation.inFlightVisibilityRecoverySelfTest()
@@ -508,6 +584,43 @@ enum Pass6RegressionValidation {
         guard state.armIfNeeded(), !state.armIfNeeded() else { return false }
         state.markPresented()
         return !state.pending && !state.armed
+    }
+
+    private static func persistentPresentationFailureSelfTest() -> Bool {
+        var state = PresentationRecoveryState()
+        var attempts = 0
+
+        // A new frame or layout invalidation is represented by request(). It
+        // must coalesce without replenishing the finite failure budget.
+        for _ in 0...PresentationRetryBudget.maximumAutomaticRetries {
+            for _ in 0..<1_000 {
+                state.request()
+            }
+            guard state.armIfNeeded(), state.consumeOpportunity() else {
+                return false
+            }
+            attempts += 1
+            _ = state.recordSubmissionFailure()
+        }
+
+        guard attempts == 5,
+              state.exhausted,
+              state.retryBudget.exhausted,
+              !state.armIfNeeded()
+        else {
+            return false
+        }
+
+        for _ in 0..<1_000 {
+            state.request()
+            guard !state.armIfNeeded() else { return false }
+        }
+
+        state.resetForLifecycleRecovery()
+        state.request()
+        guard !state.exhausted, state.armIfNeeded() else { return false }
+        state.recordSubmissionSuccess()
+        return !state.exhausted && !state.pending
     }
 
     private static func preparationRetryBudgetSelfTest() -> Bool {

@@ -145,6 +145,7 @@ enum MetalTerminalRendererError: Error {
     case invalidFrame
     case invalidInstanceLayout
     case gpuCommandCompletionFailuresExhausted
+    case presentationSubmissionFailuresExhausted
     case glyphAtlas(GlyphAtlasError)
 }
 

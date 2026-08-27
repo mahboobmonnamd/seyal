@@ -1,43 +1,97 @@
 import Foundation
 
-// All production calls occur on the AppKit/main queue; the unchecked
-// Sendable conformance is required only because Swift 6 deinit is
-// nonisolated while it hands ownership to the cancellation handlers.
+// Cancellation handlers may outlive RustDisplayBridge and deinit is
+// nonisolated in Swift 6. The coordinator serializes its accounting and
+// schedules the thread-local Rust disconnect on the main queue.
 private final class RustBridgeTeardownCoordinator: @unchecked Sendable {
     private let disconnect: () -> Void
-    private(set) var activeSourceCount = 0
-    private(set) var disconnectPending = false
+    private let lock = NSLock()
+    private var activeSourceCountStorage = 0
+    private var disconnectPendingStorage = false
+    private var disconnectScheduled = false
     var onDisconnected: (() -> Void)?
+
+    var activeSourceCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return activeSourceCountStorage
+    }
+
+    var disconnectPending: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return disconnectPendingStorage
+    }
 
     init(disconnect: @escaping () -> Void = { seyal_bridge_disconnect() }) {
         self.disconnect = disconnect
     }
 
     func sourceCreated() {
-        activeSourceCount += 1
+        lock.lock()
+        defer { lock.unlock() }
+        activeSourceCountStorage += 1
     }
 
     func sourceCancelled() {
-        guard activeSourceCount > 0 else { return }
-        activeSourceCount -= 1
-        if disconnectPending, activeSourceCount == 0 {
-            finishDisconnect()
+        lock.lock()
+        guard activeSourceCountStorage > 0 else {
+            lock.unlock()
+            return
         }
+        activeSourceCountStorage -= 1
+        let shouldSchedule = disconnectPendingStorage && activeSourceCountStorage == 0
+        lock.unlock()
+        if shouldSchedule { scheduleDisconnectOnMain() }
     }
 
     func requestDisconnect() {
-        guard !disconnectPending else { return }
-        disconnectPending = true
-        if activeSourceCount == 0 {
-            finishDisconnect()
+        lock.lock()
+        guard !disconnectPendingStorage else {
+            lock.unlock()
+            return
+        }
+        disconnectPendingStorage = true
+        let shouldSchedule = activeSourceCountStorage == 0
+        lock.unlock()
+        if shouldSchedule { scheduleDisconnectOnMain() }
+    }
+
+    private func scheduleDisconnectOnMain() {
+        lock.lock()
+        guard disconnectPendingStorage, activeSourceCountStorage == 0, !disconnectScheduled else {
+            lock.unlock()
+            return
+        }
+        disconnectScheduled = true
+        lock.unlock()
+
+        if Thread.isMainThread {
+            finishDisconnectOnMain()
+            return
+        }
+
+        DispatchQueue.main.async { [self] in
+            finishDisconnectOnMain()
         }
     }
 
-    private func finishDisconnect() {
-        guard disconnectPending else { return }
-        disconnectPending = false
+    private func finishDisconnectOnMain() {
+        lock.lock()
+        guard disconnectPendingStorage, activeSourceCountStorage == 0 else {
+            disconnectScheduled = false
+            lock.unlock()
+            return
+        }
+        disconnectPendingStorage = false
+        disconnectScheduled = false
+        let callback = onDisconnected
+        lock.unlock()
+
+        // CLIENT is thread-local, so this must remain on the AppKit/main queue.
+        dispatchPrecondition(condition: .onQueue(.main))
         disconnect()
-        onDisconnected?()
+        callback?()
     }
 }
 
@@ -62,8 +116,13 @@ final class RustDisplayBridge {
         }
         coordinator.sourceCreated()
         coordinator.requestDisconnect()
+        coordinator.requestDisconnect()
         guard coordinator.disconnectPending, disconnects == 0 else { return false }
         coordinator.sourceCancelled()
+        let deadline = Date().addingTimeInterval(1)
+        while disconnects == 0 && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
         return !coordinator.disconnectPending
             && coordinator.activeSourceCount == 0
             && disconnects == 1

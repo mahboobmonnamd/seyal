@@ -63,7 +63,7 @@ final class TerminalFontResolver {
     func metrics(backingScale: CGFloat) -> TerminalFontMetrics {
         let scale = max(backingScale, 1)
         let pixelFont = CTFontCreateCopyWithAttributes(regular, pointSize * scale, nil, nil)
-        var glyph = glyphForBMPScalar(77, font: pixelFont) ?? 0
+        var glyph = glyphForScalar(77, font: pixelFont) ?? 0
         var advance = CGSize.zero
         _ = CTFontGetAdvancesForGlyphs(pixelFont, .horizontal, &glyph, &advance, 1)
         let width = max(1, Int(ceil(advance.width)))
@@ -84,9 +84,37 @@ final class TerminalFontResolver {
         bold requestedBold: Bool,
         backingScale: CGFloat
     ) -> ResolvedGlyph? {
-        guard let unicodeScalar = UnicodeScalar(scalar) else {
-            return resolveReplacement(bold: requestedBold, backingScale: backingScale)
+        if let resolved = resolveDirect(
+            scalar: scalar,
+            bold: requestedBold,
+            backingScale: backingScale
+        ) {
+            return resolved
         }
+        return resolveReplacement(bold: requestedBold, backingScale: backingScale)
+    }
+
+    /// Validation seam for M001 scalar correctness. This proves that a valid
+    /// scalar can be resolved directly rather than through U+FFFD while keeping
+    /// grapheme/emoji width semantics deferred to their owning milestone.
+    func canResolveScalarDirectly(
+        _ scalar: UInt32,
+        bold requestedBold: Bool = false,
+        backingScale: CGFloat = 1
+    ) -> Bool {
+        resolveDirect(
+            scalar: scalar,
+            bold: requestedBold,
+            backingScale: backingScale
+        ) != nil
+    }
+
+    private func resolveDirect(
+        scalar: UInt32,
+        bold requestedBold: Bool,
+        backingScale: CGFloat
+    ) -> ResolvedGlyph? {
+        guard let unicodeScalar = UnicodeScalar(scalar) else { return nil }
         let text = String(unicodeScalar)
         let base = requestedBold ? bold : regular
         let utf16Length = (text as NSString).length
@@ -103,13 +131,9 @@ final class TerminalFontResolver {
             nil
         )
 
-        guard scalar <= 0xffff,
-              let glyph = glyphForBMPScalar(scalar, font: pixelFont),
-              glyph != 0
-        else {
-            return resolveReplacement(bold: requestedBold, backingScale: backingScale)
+        guard let glyph = glyphForScalar(scalar, font: pixelFont), glyph != 0 else {
+            return nil
         }
-
         return ResolvedGlyph(
             font: pixelFont,
             glyph: glyph,
@@ -136,7 +160,7 @@ final class TerminalFontResolver {
             nil,
             nil
         )
-        guard let glyph = glyphForBMPScalar(replacement, font: pixelFont), glyph != 0 else {
+        guard let glyph = glyphForScalar(replacement, font: pixelFont), glyph != 0 else {
             return nil
         }
         return ResolvedGlyph(
@@ -146,12 +170,23 @@ final class TerminalFontResolver {
         )
     }
 
-    private func glyphForBMPScalar(_ scalar: UInt32, font: CTFont) -> CGGlyph? {
-        guard scalar <= 0xffff else { return nil }
-        var character = UniChar(scalar)
+    /// Resolve one Unicode scalar through CoreText shaping rather than treating
+    /// UTF-16 code units as independent terminal characters. Supplementary-plane
+    /// scalars therefore pass to CoreText as a surrogate pair and may resolve to
+    /// one glyph while Seyal still places that scalar in one M001 terminal cell.
+    private func glyphForScalar(_ scalar: UInt32, font: CTFont) -> CGGlyph? {
+        guard let unicodeScalar = UnicodeScalar(scalar) else { return nil }
+        let text = String(unicodeScalar)
+        let attributed = NSAttributedString(
+            string: text,
+            attributes: [NSAttributedString.Key(kCTFontAttributeName as String): font]
+        )
+        let line = CTLineCreateWithAttributedString(attributed as CFAttributedString)
+        let runs = CTLineGetGlyphRuns(line) as! [CTRun]
+        guard runs.count == 1, CTRunGetGlyphCount(runs[0]) == 1 else { return nil }
         var glyph: CGGlyph = 0
-        guard CTFontGetGlyphsForCharacters(font, &character, &glyph, 1) else { return nil }
-        return glyph
+        CTRunGetGlyphs(runs[0], CFRange(location: 0, length: 1), &glyph)
+        return glyph == 0 ? nil : glyph
     }
 }
 

@@ -316,9 +316,8 @@ fn alternate_screen_state_is_delivered_over_candidate_d() {
 #[test]
 fn initial_attach_while_alternate_screen_is_active_snapshots_alternate_state() {
     let mut harness = Harness::new();
-    let execution_id = harness.spawn(
-        CommandSpec::new("/bin/sh").args(["-c", "printf '\\033[?1049hALT_READY'; sleep 3"]),
-    );
+    let execution_id = harness
+        .spawn(CommandSpec::new("/bin/sh").args(["-c", "printf '\\033[?1049hALT_READY'; sleep 3"]));
 
     let active_deadline = Instant::now() + Duration::from_secs(2);
     loop {
@@ -352,7 +351,10 @@ fn initial_attach_while_alternate_screen_is_active_snapshots_alternate_state() {
     harness.hello(&mut client);
     let (attached, cache) = harness.attach(&mut client, execution_id, Role::Observer);
 
-    assert!(cache.alternate_screen, "initial snapshot must select active alternate screen");
+    assert!(
+        cache.alternate_screen,
+        "initial snapshot must select active alternate screen"
+    );
     assert!(contains(&cache, "ALT_READY"));
     assert_eq!(cache.generation, attached.current_generation);
     assert!(

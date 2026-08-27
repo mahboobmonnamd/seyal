@@ -41,8 +41,8 @@ fn main() {
     for iteration in 0..REPS {
         let row = (iteration % ROWS as usize) as u16;
         let cell_index = row as usize * COLUMNS as usize;
-        cells[cell_index].scalar = char::from_u32(b'a' as u32 + (iteration % 26) as u32)
-            .expect("ASCII scalar");
+        cells[cell_index].scalar =
+            char::from_u32(b'a' as u32 + (iteration % 26) as u32).expect("ASCII scalar");
         let started = Instant::now();
         let result = surface
             .prepare(

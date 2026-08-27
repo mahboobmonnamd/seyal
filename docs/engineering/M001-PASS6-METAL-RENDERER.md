@@ -67,7 +67,8 @@ The display link is installed only while the surface is renderable and is paused
 
 Renderer recovery deliberately distinguishes failures known before GPU completion from failures reported asynchronously by a submitted command buffer:
 
-- preparation and command/resource submission failures retain one coalesced presentation/reprepare request and use the existing finite delayed retry budget;
+- preparation and command/resource submission failures retain one coalesced presentation/reprepare request and use the existing finite delayed retry budget; incoming frames and layout requests cannot reset that budget;
+- after the initial presentation attempt and four delayed retries, persistent pre-completion failures latch `presentationSubmissionFailuresExhausted`, stop new presentation/preparation work, and surface a diagnosable renderer-local error; a successful submission or a real hide → show lifecycle transition is required to recover;
 - asynchronous command-buffer `.error` completions use a separate `GPUCompletionRetryState`, because successful submission is not proof of successful GPU execution;
 - after the initial failed command completion, at most four automatic GPU resubmissions are allowed; a fifth consecutive failed completion exhausts that visible-lifecycle recovery series;
 - exhaustion latches `gpuCommandCompletionFailuresExhausted`, stops automatic current-frame requests and command submissions, and is surfaced through `MetalSurfaceView.lastRenderError`;
@@ -95,7 +96,7 @@ The protocol/client suites cover framing bounds, atomic snapshot/delta commits, 
 
 The native renderer self-test covers deterministic top-left pixels, blank backgrounds, underline, cursor, glyph cache reuse, bold glyph identity, backing-scale invalidation, coalesced frame-opportunity state, static-frame resubmission, hide/show reconstruction, finite atlas pressure/reclamation, in-flight GPU resource safety and repeated surface lifecycle cleanup. It separately exercises the production `CAMetalLayer` submission path rather than treating an offscreen texture as presentation proof.
 
-The same native self-test also exercises the exact asynchronous GPU-completion recovery state machine: initial submission failure → four permitted automatic retries → exhaustion on the fifth consecutive failed completion → no further retry claims under repeated failures → explicit lifecycle reset → finite recovery available again. This test is independent of terminal/client authority by construction, while production guards ensure an exhausted state blocks `requestPresent`, `present`, current-frame requests and repeated CPU renderer preparation until lifecycle recovery.
+The same native self-test also exercises the exact asynchronous GPU-completion recovery state machine: initial submission failure → four permitted automatic retries → exhaustion on the fifth consecutive failed completion → no further retry claims under repeated failures → explicit lifecycle reset → finite recovery available again. It also floods presentation requests between persistent pre-completion failures to prove that ordinary output cannot replenish the finite retry budget. These tests are independent of terminal/client authority by construction, while production guards ensure an exhausted state blocks `requestPresent`, `present`, current-frame requests and repeated CPU renderer preparation until lifecycle recovery.
 
 The live macOS acceptance harness starts a real Seyal Runtime and real shell, then proves both ordinary output and the M001 alternate-screen fixture through:
 
@@ -129,9 +130,20 @@ The last fully recorded local acceptance baseline before the bounded asynchronou
 
 The native run rebuilt 160 rows / 19,200 cells, used 230,400 instance bytes, recorded 19,198 glyph-cache hits, 2 misses, 2 uploads and 306 uploaded bytes, with a 16 MiB atlas budget and 17,007,616 dedicated GPU bytes. `/usr/bin/time -lp` reported 0.66 s wall, 0.02 s user CPU, 0.04 s system CPU, 27,574,272-byte maximum RSS, and 112,919,176-byte peak footprint. The GPU value is an offscreen completion proxy including target allocation; it is not physical display scanout latency.
 
+### Exact committed correction measurement
+
+The bounded pre-completion failure correction was measured from implementation commit `49bb58354b8a8ff74509fa3efe65a6c2b7563415` on Apple M5 Pro / macOS 26.5.2 (25F84), arm64, Release build, 1x backing scale, nearest-rank percentiles, 120 repetitions, 120×40 geometry. The correction is renderer-state bookkeeping outside the successful steady-state update/encode path.
+
+| Boundary / workload | p50 | p95 | p99 | max |
+| --- | ---: | ---: | ---: | ---: |
+| Native Metal preparation | 23,292 ns | 43,000 ns | 56,083 ns | 72,208 ns |
+| GPU completion proxy* | 365,791 ns | 2,490,333 ns | 2,803,708 ns | 3,274,375 ns |
+
+This run rebuilt 160 rows / 19,200 cells, used 230,400 instance bytes, recorded 19,198 glyph-cache hits, 2 misses, 2 uploads and 306 uploaded bytes, with a 16 MiB atlas budget and 17,007,616 dedicated GPU bytes. The GPU value remains an offscreen completion proxy, not physical display scanout latency. The benchmark was run before this documentation-only evidence update; the commit hash identifies the exact code under measurement.
+
 The full `make bench` Candidate-D run also covered the required fanout/workload/geometry matrix. At 16 viewers and sustained 2-second high output at 200×60 it recorded p95/p99 client-cache latency of 3,237/3,627 µs, 16,544 KiB populated RSS, 22.6% sampled CPU, `3,568` latency samples, 678,423,552 aggregate UDS bytes, `shutdown_ok=true`, and final pending input `0`. The 50- and 100-execution cases were explicitly `PLATFORM_LIMITED` at 34 created executions because the host returned `Device not configured (os error 6)`; this is retained platform evidence, not a Seyal capacity claim.
 
-Against the closest same-host pre-fix renderer run `7084915d940d486623e1e10c72fb05cdd4772d3c`, repeated accepted measurements remained in the same range as the prior 26,500 ns / 386,958 ns medians. This does not establish an absolute product latency target. The final PR validation record is the authority for exact-head measurements after the asynchronous-failure hardening.
+Against the closest same-host pre-fix renderer run `7084915d940d486623e1e10c72fb05cdd4772d3c`, repeated accepted measurements remained in the same range as the prior 26,500 ns / 386,958 ns medians. This does not establish an absolute product latency target. The exact post-correction measurements are recorded above and will also be attached to PR #659 for independent review.
 
 ## Deferred behavior
 

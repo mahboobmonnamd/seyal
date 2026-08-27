@@ -94,7 +94,7 @@ Accepted
                       ├─ Input/TerminalKey/Resize/ResizeRequest   controller only
                       ├─ Resync
                       ├─ ResizeResult               Runtime → client
-                      ├─ DisplaySnapshot            Runtime → client
+                      ├─ DisplaySnapshot             Runtime → client
                       ├─ DisplayDelta                Runtime → client
                       ├─ Lifecycle                   Runtime → client
                       └─ Detach → Ready

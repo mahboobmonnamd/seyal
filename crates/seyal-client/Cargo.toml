@@ -11,11 +11,12 @@ publish = false
 crate-type = ["rlib", "staticlib"]
 
 [dependencies]
+seyal-protocol = { path = "../seyal-protocol" }
 seyal-render = { path = "../seyal-render" }
-seyal-runtime = { path = "../seyal-runtime" }
 
 [dev-dependencies]
 seyal-exec = { path = "../seyal-exec" }
+seyal-runtime = { path = "../seyal-runtime" }
 
 [lints.rust]
 unsafe_code = "deny"

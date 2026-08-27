@@ -13,9 +13,14 @@ name = "seyal-client"
 version = "0.0.0"
 dependencies = [
  "seyal-exec",
+ "seyal-protocol",
  "seyal-render",
  "seyal-runtime",
 ]
+
+[[package]]
+name = "seyal-core"
+version = "0.0.0"
 
 [[package]]
 name = "seyal-exec"
@@ -23,6 +28,14 @@ version = "0.0.0"
 dependencies = [
  "libc",
  "seyal-terminal",
+]
+
+[[package]]
+name = "seyal-protocol"
+version = "0.0.0"
+dependencies = [
+ "libc",
+ "seyal-core",
 ]
 
 [[package]]
@@ -34,7 +47,9 @@ name = "seyal-runtime"
 version = "0.0.0"
 dependencies = [
  "libc",
+ "seyal-core",
  "seyal-exec",
+ "seyal-protocol",
  "stats_alloc",
 ]
 

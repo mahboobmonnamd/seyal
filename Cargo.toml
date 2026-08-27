@@ -1,7 +1,9 @@
 [workspace]
 members = [
+    "crates/seyal-core",
     "crates/seyal-terminal",
     "crates/seyal-exec",
+    "crates/seyal-protocol",
     "crates/seyal-runtime",
     "crates/seyal-render",
     "crates/seyal-client",

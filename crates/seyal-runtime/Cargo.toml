@@ -16,7 +16,9 @@ benchmark-shared-projection = []
 benchmark-instrumentation = []
 
 [dependencies]
+seyal-core = { path = "../seyal-core" }
 seyal-exec = { path = "../seyal-exec" }
+seyal-protocol = { path = "../seyal-protocol" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "=0.2.189"

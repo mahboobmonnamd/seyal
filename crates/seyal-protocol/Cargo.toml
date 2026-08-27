@@ -1,0 +1,17 @@
+[package]
+name = "seyal-protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+seyal-core = { path = "../seyal-core" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "=0.2.189"
+
+[lints.rust]
+unsafe_code = "deny"

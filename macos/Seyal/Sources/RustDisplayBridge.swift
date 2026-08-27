@@ -1,5 +1,39 @@
 import Foundation
 
+// All production calls occur on the AppKit/main queue; the unchecked
+// Sendable conformance is required only because Swift 6 deinit is
+// nonisolated while it hands ownership to the cancellation handlers.
+private final class RustBridgeTeardownCoordinator: @unchecked Sendable {
+    private(set) var activeSourceCount = 0
+    private(set) var disconnectPending = false
+
+    func sourceCreated() {
+        activeSourceCount += 1
+    }
+
+    func sourceCancelled() {
+        guard activeSourceCount > 0 else { return }
+        activeSourceCount -= 1
+        if disconnectPending, activeSourceCount == 0 {
+            finishDisconnect()
+        }
+    }
+
+    func requestDisconnect() {
+        guard !disconnectPending else { return }
+        disconnectPending = true
+        if activeSourceCount == 0 {
+            finishDisconnect()
+        }
+    }
+
+    private func finishDisconnect() {
+        guard disconnectPending else { return }
+        disconnectPending = false
+        seyal_bridge_disconnect()
+    }
+}
+
 @MainActor
 final class RustDisplayBridge {
     typealias FrameHandler = (SeyalPreparedFrame) -> Void
@@ -10,8 +44,7 @@ final class RustDisplayBridge {
     private var readSource: DispatchSourceRead?
     private var writeSource: DispatchSourceWrite?
     private var socketFileDescriptor: Int32 = -1
-    private var activeSourceCount = 0
-    private var disconnectPending = false
+    private let teardown = RustBridgeTeardownCoordinator()
     private(set) var isConnected = false
 
     init(onFrame: @escaping FrameHandler, onError: @escaping ErrorHandler) {
@@ -21,7 +54,7 @@ final class RustDisplayBridge {
 
     @discardableResult
     func start() -> Bool {
-        guard !isConnected, !disconnectPending else { return false }
+        guard !isConnected, !teardown.disconnectPending else { return false }
 
         let result = seyal_bridge_connect_first()
         guard result == 0 else {
@@ -42,10 +75,10 @@ final class RustDisplayBridge {
         source.setEventHandler { [weak self] in
             self?.drainReadyDisplayWork()
         }
-        source.setCancelHandler { [weak self] in
-            self?.sourceDidCancel()
+        source.setCancelHandler { [teardown] in
+            teardown.sourceCancelled()
         }
-        activeSourceCount += 1
+        teardown.sourceCreated()
         readSource = source
         source.resume()
 
@@ -56,10 +89,10 @@ final class RustDisplayBridge {
 
     func stop() {
         guard isConnected || socketFileDescriptor >= 0 else { return }
-        guard !disconnectPending else { return }
+        guard !teardown.disconnectPending else { return }
 
         isConnected = false
-        disconnectPending = true
+        teardown.requestDisconnect()
 
         if let readSource {
             self.readSource = nil
@@ -70,9 +103,6 @@ final class RustDisplayBridge {
             writeSource.cancel()
         }
 
-        if activeSourceCount == 0 {
-            finishDisconnect()
-        }
     }
 
     func publishCurrentFrame() {
@@ -132,27 +162,20 @@ final class RustDisplayBridge {
         source.setEventHandler { [weak self] in
             self?.flushReadyControlWork()
         }
-        source.setCancelHandler { [weak self] in
-            self?.sourceDidCancel()
+        source.setCancelHandler { [teardown] in
+            teardown.sourceCancelled()
         }
-        activeSourceCount += 1
+        teardown.sourceCreated()
         writeSource = source
         source.resume()
     }
 
-    private func sourceDidCancel() {
-        guard activeSourceCount > 0 else { return }
-        activeSourceCount -= 1
-        if disconnectPending, activeSourceCount == 0 {
-            finishDisconnect()
-        }
-    }
-
-    private func finishDisconnect() {
-        guard disconnectPending else { return }
-        disconnectPending = false
-        socketFileDescriptor = -1
-        seyal_bridge_disconnect()
+    deinit {
+        // The coordinator is retained by cancellation handlers, so teardown
+        // completes even if the owning surface destroys this bridge first.
+        teardown.requestDisconnect()
+        readSource?.cancel()
+        writeSource?.cancel()
     }
 
     private func flushReadyControlWork() {

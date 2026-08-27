@@ -33,6 +33,10 @@ final class MetalSurfaceView: NSView {
     private var presentationRetryTimer: Timer?
     private var presentationRetryGeneration: UInt64 = 0
     private var presentationRetryBudget = PresentationRetryBudget()
+    private var preparationRetryTimer: Timer?
+    private var preparationRetryGeneration: UInt64 = 0
+    private var preparationRetryScheduled = false
+    private var preparationRetryBudget = PresentationRetryBudget()
     private(set) var lastBridgeError: Int32?
     private(set) var lastRenderError: Error?
 
@@ -129,6 +133,7 @@ final class MetalSurfaceView: NSView {
         if newWindow == nil {
             renderer.setVisible(false)
             invalidatePreparedPresentation()
+            bridge?.stop()
         }
         super.viewWillMove(toWindow: newWindow)
     }
@@ -197,6 +202,7 @@ final class MetalSurfaceView: NSView {
                 forceNextFrame = false
                 hasPreparedState = true
                 lastRenderError = nil
+                resetPreparationRetries()
                 if shouldRender {
                     beginPresentationAttemptSeries()
                     presentPreparedState()
@@ -210,7 +216,45 @@ final class MetalSurfaceView: NSView {
             hasPreparedState = false
             invalidatePreparedPresentation()
             renderer.invalidatePreparedState()
+            forceNextFrame = true
+            schedulePreparationRetry()
         }
+    }
+
+    private func schedulePreparationRetry() {
+        guard shouldRender,
+              !hasPreparedState,
+              !preparationRetryScheduled,
+              let delay = preparationRetryBudget.claimNextDelay()
+        else {
+            return
+        }
+
+        preparationRetryScheduled = true
+        let generation = preparationRetryGeneration
+        preparationRetryTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.runPreparationRetry(generation: generation)
+            }
+        }
+    }
+
+    private func runPreparationRetry(generation: UInt64) {
+        guard generation == preparationRetryGeneration else { return }
+        preparationRetryTimer = nil
+        preparationRetryScheduled = false
+        guard shouldRender, !hasPreparedState else { return }
+        // Publish only after the current update call has unwound. This keeps
+        // retry recovery asynchronous and avoids re-entering renderer.update.
+        bridge?.publishCurrentFrame()
+    }
+
+    private func resetPreparationRetries() {
+        preparationRetryTimer?.invalidate()
+        preparationRetryTimer = nil
+        preparationRetryGeneration &+= 1
+        preparationRetryScheduled = false
+        preparationRetryBudget.reset()
     }
 
     /// Try to present the already prepared current frame. A temporary drawable
@@ -251,6 +295,7 @@ final class MetalSurfaceView: NSView {
     private func cancelPresentationRetries() {
         presentationPending = false
         resetPresentationRetries()
+        resetPreparationRetries()
     }
 
     private func invalidatePreparedPresentation() {

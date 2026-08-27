@@ -108,22 +108,19 @@ fn pty_eof_live_child_helper() {
         .parse::<u64>()
         .expect("valid PTY EOF helper delay");
 
-    // A Seyal PTY child is a session leader with the slave as its controlling
-    // terminal. On Darwin, merely closing fd 0/1/2 does not reliably relinquish
-    // the controlling-terminal reference. TIOCNOTTY explicitly detaches it;
-    // after the slave descriptors are closed the master can report EOF while
-    // this same primary process intentionally remains alive.
+    // The helper is exec'd directly, so the only PTY slave descriptors in this
+    // process are the stdin/stdout/stderr descriptors installed by
+    // TerminalExecution. Closing exactly those descriptors makes the PTY
+    // endpoint disappear while this same primary process deliberately remains
+    // alive. Do not call TIOCNOTTY here: detaching the controlling terminal is
+    // a separate lifecycle action and can itself cause the session to observe
+    // hangup/exit behavior, which would destroy the state this test must hold.
     //
-    // SAFETY: this code runs only in the dedicated subprocess fixture. stdin is
-    // the PTY slave established by TerminalExecution. Signal disposition and
+    // SAFETY: this code runs only in the dedicated subprocess fixture. The
     // descriptor changes are confined to that subprocess, and _exit avoids the
     // libtest harness trying to write results through the intentionally closed
     // stdout/stderr descriptors.
     unsafe {
-        libc::signal(libc::SIGHUP, libc::SIG_IGN);
-        if libc::ioctl(libc::STDIN_FILENO, libc::TIOCNOTTY as _, 0) < 0 {
-            libc::_exit(91);
-        }
         libc::close(libc::STDIN_FILENO);
         libc::close(libc::STDOUT_FILENO);
         libc::close(libc::STDERR_FILENO);

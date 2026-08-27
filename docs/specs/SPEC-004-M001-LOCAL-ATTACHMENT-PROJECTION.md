@@ -1,9 +1,9 @@
 # SPEC-004 — M001 local attachment and display-state transport
 
-- **Status:** Accepted for M001 Pass 5. Candidate-D production performance validation passed on controlled physical Apple Silicon at benchmark commit `c8c121380002c86a4e42b6737238289db10965af`; Issue #651 remains the closure authority for the complete Pass 5.1 acceptance set. The additive Pass 7 semantic-key extension below is **proposed** by #702 / SPEC-006 until that refinement is accepted.
+- **Status:** Accepted for M001 Pass 5. Candidate-D production performance validation passed on controlled physical Apple Silicon at benchmark commit `c8c121380002c86a4e42b6737238289db10965af`; Issue #651 remains the closure authority for the complete Pass 5.1 acceptance set. The additive Pass 7 semantic-key and Resize-error-correlation amendments below are **proposed** by #702 / SPEC-006 until that refinement is accepted.
 - **Date:** 2026-08-24
-- **Amended:** 2026-08-25, 2026-08-26; Pass 7 extension proposed 2026-08-27
-- **Issue:** #105 (implementation), #651 (Pass 5.1 final acceptance), #702 (Pass 7 semantic-key extension)
+- **Amended:** 2026-08-25, 2026-08-26; Pass 7 extensions proposed 2026-08-27
+- **Issue:** #105 (implementation), #651 (Pass 5.1 final acceptance), #702 (Pass 7 input/resize extension)
 - **Architecture authority:** `ADR-001-LOCAL-DISPLAY-PROJECTION.md`
 - **Depends on:** SPEC-001, SPEC-002, SPEC-003
 
@@ -43,7 +43,7 @@ Large future image/rich-graphics objects are a separate bulk-object concern. M00
 
 The protocol supports runtime discovery, version negotiation, execution enumeration, observer/controller attach, detach, input, resize, explicit resync, initial/current-state snapshots, steady-state display deltas, lifecycle/error notification and graceful close.
 
-The Pass 7 additive extension defined by SPEC-006 adds capability-gated semantic terminal-key intent while keeping mode-sensitive escape encoding inside Runtime. It does not change Candidate-D display semantics.
+The Pass 7 additive extension defined by SPEC-006 adds capability-gated semantic terminal-key intent while keeping mode-sensitive escape encoding inside Runtime. It also assigns connection-local sequence meaning to existing Resize errors so a client can correlate a failure without changing framing version 1.0 or the Resize payload. It does not change Candidate-D display semantics.
 
 The following remain out of scope for Pass 5 itself: Metal rendering, glyph shaping/atlases, AppKit IME/keyboard wiring, Blocks/history persistence, remote/network transport, public SDK/plugin protocol, agents/cloud/commercial features, Runtime-crash live-PTY restoration, Linux/Windows local IPC, Kitty/Sixel/iTerm image protocols, IOSurface/shared-memory bulk transport and M002 VT expansion.
 
@@ -117,6 +117,8 @@ On Darwin, production receive-side ancillary storage is sized to the process des
 
 The Pass 7 `TerminalKey` extension remains protocol framing version `1.0` and is capability-gated. A client must see `CAP_SEMANTIC_TERMINAL_KEY` in `ServerHello` before using message type 17; it must not probe an older Runtime by first sending an unknown message.
 
+Pass 7 Resize failure correlation also leaves framing and type-10 Resize payload unchanged. It gives deterministic meaning to `Error.detail_code` for structurally valid Resize requests as specified in section 9. Existing clients that ignore `detail_code` remain valid.
+
 ## 8. Message types
 
 | Type | Direction | Name |
@@ -175,7 +177,20 @@ No descriptor accompanies `Attached`. A current-state `DisplaySnapshot` is queue
 
 `Input` is `u128 AttachmentId`, `u32 byte_count`, then exactly `byte_count` bytes; `byte_count <= 65536`. For Pass 7 native input, `Input` represents already-committed bytes such as UTF-8 committed text; clients must not use it to move mode-sensitive terminal-key encoding out of Runtime.
 
-`Resize` is `u128 AttachmentId`, `u16 rows`, `u16 columns`; geometry must be nonzero and within section 5 maxima.
+`Resize` remains `u128 AttachmentId`, `u16 rows`, `u16 columns`; geometry must be nonzero and within section 5 maxima.
+
+For Pass 7 error correlation, every connection has a Resize sequence counter independent of terminal/display generations:
+
+- client and Runtime begin at sequence `1` on a new connection;
+- client consumes a sequence only when a not-yet-started Resize frame becomes immutable and begins transmission;
+- Runtime consumes the corresponding sequence when a complete structurally valid type-10 Resize frame is received, before semantic validation;
+- sequence `0` is reserved;
+- sequence wrap is forbidden; reconnect/reattach is required before wrap could occur;
+- local coalescing of an unsent Resize consumes no sequence.
+
+For a semantic error attributable to that structurally valid Resize, `Error.offending_message_type` is `10` and `Error.detail_code` is exactly that connection-local Resize sequence. A framing/truncation/malformed case for which Runtime cannot establish trustworthy Resize correlation uses `detail_code = 0`; a Pass 7 client must fail closed rather than guess.
+
+Runtime emits/queues a semantic Resize error onto mandatory control output before continuing with later client mutations whose success could otherwise make the failure ambiguous. Mandatory errors are ordered, bounded and never presentation-superseded.
 
 `TerminalKey` is exactly 24 bytes:
 
@@ -190,7 +205,7 @@ Its accepted key kinds/modifier/scalar combinations and Runtime encoding semanti
 
 `Lifecycle` is `u128 ExecutionId`, `u8 lifecycle`, seven reserved zero bytes.
 
-`Error` remains 16 bytes: `u16 error_code`, `u16 offending_message_type`, `u32 detail_code`, `u64 reserved`. It never includes terminal contents, input bytes, semantic-key encoded bytes, environment data, secrets or attacker-controlled text.
+`Error` remains 16 bytes: `u16 error_code`, `u16 offending_message_type`, `u32 detail_code`, `u64 reserved`. For type-10 Resize semantic errors, `detail_code` has the correlation meaning above. For other messages it retains the message-specific/zero semantics already defined by their implementation contract. It never includes terminal contents, input bytes, semantic-key encoded bytes, environment data, secrets or attacker-controlled text.
 
 `Goodbye` has an empty payload.
 
@@ -282,7 +297,7 @@ If a new delta is contiguous with the last presentation generation targeted for 
 
 A partially written frame is completed or the connection is closed; bytes from two frames are never interleaved. A slow client may be disconnected under bounded resource policy. No case blocks PTY/VT progress.
 
-Pass 7 client→Runtime input/control backpressure and resize coalescing are defined separately by SPEC-006 and do not weaken the server-side bounds in this section.
+Pass 7 client→Runtime input/control backpressure, resize coalescing, correlated Resize errors and error-class retry gating are defined by SPEC-006 and do not weaken the server-side bounds in this section.
 
 ## 12. Attach, reconnect and resync transactions
 
@@ -292,11 +307,13 @@ Failure before authority publication leaves no attachment/controller record. Cli
 
 Explicit `Resync`, reconnect and detected generation gaps use the same current-state snapshot mechanism. No acknowledgement is required before terminal progress continues.
 
+Reconnect starts a new connection-local Resize sequence at `1`; old sequence values have no meaning across connections and never substitute for `AttachmentId` authority.
+
 ## 13. Resize and final-state ordering
 
 Controller authorization is checked before resize. The PTY/terminal resize transaction remains owned by `TerminalExecution`. A resize that changes dimensions causes canonical full damage and therefore a subsequent display update/snapshot with the new dimensions. There is no projection-memory replacement lifecycle.
 
-Pass 7 further fixes native resize proposal/coalescing ordering and requires the transaction to remain `validate/prepare → fallible PTY winsize → canonical TerminalState commit → damage/projection`; SPEC-006 is normative for that native-client behavior.
+Pass 7 requires the transaction to remain `assign Resize sequence → validate/prepare → fallible PTY winsize → canonical TerminalState commit → damage/projection`. If semantic validation or PTY application fails after sequence assignment, Runtime emits the correlated Resize `Error` described in section 9. The error does not mutate canonical geometry and is not a request for the client to resend immediately; SPEC-006 owns client retry policy.
 
 After primary-child exit Runtime drains remaining PTY bytes into canonical `TerminalState`, publishes any resulting final display update to attached clients through the same bounded presentation path, then sends lifecycle finalization and releases attachment authority/resources. Delivery cannot extend process-lifecycle deadlines indefinitely.
 
@@ -327,7 +344,7 @@ M001 defines:
 14 InternalFailure
 ```
 
-Semantic errors do not mutate canonical state before validation succeeds. Fatal framing/version/ancillary failures close the connection after bounded cleanup.
+Semantic errors do not mutate canonical state before validation succeeds. Fatal framing/version/ancillary failures close the connection after bounded cleanup. SPEC-006 classifies which Resize errors are authority/connection failures versus request/operational failures and explicitly forbids immediate automatic resend loops.
 
 ## 16. Validation requirements
 
@@ -349,7 +366,7 @@ Record p50/p95/p99 output-to-client-state latency, throughput, CPU, RSS, allocat
 
 ### 16.1 Pass 7 additive-extension validation
 
-Before the proposed message type 17/capability bit 2 extension is considered accepted for production, SPEC-006 additionally requires:
+Before the proposed Pass 7 extensions are considered accepted for production, SPEC-006 additionally requires:
 
 - capability negotiation proving older/non-advertising Runtime peers are never sent `TerminalKey`;
 - exact 24-byte `TerminalKey` encode/decode fixtures;
@@ -357,7 +374,13 @@ Before the proposed message type 17/capability bit 2 extension is considered acc
 - Observer/controller/stale-attachment authorization tests;
 - all-or-nothing Runtime key encoding/input-budget admission;
 - FIFO ordering with ordinary `Input` and `Resize` barriers;
-- privacy tests/review proving semantic input payloads are absent from logs.
+- client/Runtime connection-local Resize sequence alignment, zero/wrap handling and reset on reconnect;
+- every structurally valid Resize semantic error echoes the exact request sequence in `Error.detail_code`;
+- an older Resize error cannot invalidate a newer outstanding request;
+- uncorrelatable/impossible Resize error metadata fails closed;
+- injected persistent PTY winsize failure produces one correlated error per permitted attempt and no automatic resend loop;
+- Runtime error ordering is mandatory/control-plane and cannot be presentation-superseded;
+- privacy tests/review proving semantic input payloads and IME composition contents are absent from logs.
 
 ## 17. Acceptance gate
 
@@ -365,6 +388,6 @@ Candidate D is the accepted architecture. The controlled physical-M5-Pro benchma
 
 Pass 5 may leave draft only when production code no longer uses per-attachment shared-memory text/grid projections, SPEC/ADR/code/tests agree, all required validation is green, production-equivalent Candidate-D evidence meets Seyal latency/resource goals, and independent architecture/security/performance review has no unresolved blocking finding.
 
-The Pass 7 semantic-key extension becomes accepted only when the SPEC-006 refinement is explicitly approved and merged. Until then, types/capability values in the proposed extension are reserved by the refinement branch and are not production authority.
+The Pass 7 semantic-key and Resize-correlation amendments become accepted only when the SPEC-006 refinement is explicitly approved and merged. Until then, the proposed type/capability/error-correlation semantics are reserved by the refinement branch and are not production authority.
 
 Comparator/reference shared-projection code may remain only if isolated from production and clearly labelled non-production evidence. It must not be reachable as a hidden text-grid fallback.

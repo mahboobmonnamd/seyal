@@ -16,6 +16,7 @@ The scaffold may establish:
 - a Pane-scoped composer presentation seam;
 - contextual left panel and inspector presentation seams;
 - attention-popover presentation seam;
+- native AppKit menu/key-equivalent routing for presentation-only Workspace/Tab/window navigation;
 - a `TerminalSurfaceHostView` that contains the already-established permanent `MetalSurfaceView` boundary;
 - deterministic preview fixtures behind an explicit preview-only launch path.
 
@@ -31,7 +32,7 @@ This scaffold must not implement or invent:
 - shell integration or command intelligence;
 - agent approval mutations;
 - production notification state;
-- final input/keybinding behavior;
+- terminal-input keybinding behavior that forwards or transforms PTY/TUI input;
 - multiple-pane Runtime semantics.
 
 The normal application path remains the existing minimal Metal surface until the M001 dependency frontier authorizes live UI integration.
@@ -61,7 +62,7 @@ At the canonical `1280x800` preview size:
 
 Where visual concept art conflicts with the current Block sizing, busy-composer, TUI takeover, ownership, or functional-only rules, the current specifications win.
 
-The XCTest layout contract and XCUIAutomation suite are part of this visual contract. XCUI launches the actual `Seyal.app` preview, asserts the visible hierarchy and left-center-right ordering, exercises the Workspaces/Tabs switcher, Inspector rail, side-panel hide/reopen behavior, and Pane-local lifecycle controls, and records a rendered screenshot in the test result bundle for design review. A true pixel-golden comparison must not be claimed until the approved source reference image is deliberately added to the repository as a test asset.
+The XCTest layout contract and XCUIAutomation suite are part of this visual contract. XCUI launches the actual `Seyal.app` preview, asserts the visible hierarchy and left-center-right ordering, exercises the Workspaces/Tabs switcher, Inspector rail, side-panel hide/reopen behavior, native navigation shortcuts, and Pane-local lifecycle controls, and records a rendered screenshot in the test result bundle for design review. A true pixel-golden comparison must not be claimed until the approved source reference image is deliberately added to the repository as a test asset.
 
 ## Preview-only path
 
@@ -91,6 +92,29 @@ left context
 The same Tab identity is used by the top strip and the left Tabs view. Switching Workspace replaces the Workspace-scoped tab inventory rather than showing tabs from multiple Workspaces together.
 
 The left context panel is presentation chrome, not execution authority. Hiding it must not change Workspace, Tab, Pane, draft, focus, or execution identity. Reopening it restores the same navigation state.
+
+## Native navigation shortcuts
+
+macOS shell navigation uses native `NSMenuItem` key equivalents rather than `keyDown` interception. Shortcuts therefore remain discoverable in the menu bar, participate in normal AppKit command routing/accessibility, and do not consume plain Control/Option terminal input that a future PTY/TUI path may require.
+
+The preview shortcut contract is:
+
+| Scope | Previous / Next | Direct selection |
+| --- | --- | --- |
+| Workspace | `⌃⌘[` / `⌃⌘]` | `⌃⌘1` … `⌃⌘9` |
+| Tab | `⇧⌘[` / `⇧⌘]` | `⌘1` … `⌘9` |
+| Window | `⇧⌘\`` / `⌘\`` | `⌥⌘1` … `⌥⌘9` |
+
+Additional native UI commands:
+
+- `⌘T` creates a preview Tab;
+- `⌘W` closes the active preview Tab when another Tab remains;
+- `⌘0` toggles the left navigation sidebar;
+- `⌥⌘0` toggles Inspector.
+
+`⌘1…9` for Tabs and `⌥⌘1…9` for windows intentionally follow established macOS terminal conventions. Workspace shortcuts occupy a separate Control+Command layer so Workspace navigation never conflicts with Tab/window numbering.
+
+Window switching is presentation-level AppKit behavior over existing visible titled windows. It does not create or own Runtime sessions. Keyboard navigation must route through the same shell state/actions as mouse navigation; it must not create a duplicate Workspace/Tab model or reconstruct the shell in a way that loses Pane drafts, focus, Inspector mode, or sidebar visibility.
 
 ## Inspector navigation
 
@@ -154,6 +178,8 @@ The scaffold is acceptable only if:
 - deterministic shell construction participates in the native smoke test;
 - the canonical `1280x800` preview satisfies the frozen three-column layout contract with Inspector flush to the trailing edge;
 - the Workspaces/Tabs switcher follows the frozen compact navigation model;
+- native Workspace/Tab/window shortcuts use AppKit menu key equivalents and route through the same preview state/actions as pointer navigation;
+- shortcut routing preserves existing shell presentation state such as sidebar visibility rather than replacing the shell with a second state owner;
 - the Inspector exposes the frozen right-edge navigation rail using only functional modes backed by current preview context;
 - left context and Inspector hide/reopen controls are functional and the center Pane reclaims hidden side-panel width;
 - each Pane's split and close controls mutate the intended Pane's preview layout state;

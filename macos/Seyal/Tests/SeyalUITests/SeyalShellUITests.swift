@@ -22,6 +22,8 @@ final class SeyalShellUITests: XCTestCase {
         XCTAssertGreaterThan(window.frame.width, 1200)
         XCTAssertGreaterThan(window.frame.height, 760)
 
+        XCTAssertTrue(app.buttons["toggle-left-sidebar"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["toggle-inspector"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.segmentedControls["left-mode"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.staticTexts["WORKSPACES"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.staticTexts["AGENTS · SEYAL OSS"].waitForExistence(timeout: 2))
@@ -38,6 +40,10 @@ final class SeyalShellUITests: XCTestCase {
         XCTAssertTrue(app.buttons["new-tab"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.buttons["pane.split.pane-1"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.staticTexts["Inspector"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["inspector-mode.context"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["inspector-mode.workspace"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["inspector-mode.tab"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["inspector-mode.pane"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.staticTexts["No TerminalExecution attached"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.textViews["composer.pane-1"].waitForExistence(timeout: 2))
 
@@ -136,6 +142,38 @@ final class SeyalShellUITests: XCTestCase {
         let workspace = app.staticTexts["inspector.workspace-name"]
         XCTAssertTrue(workspace.waitForExistence(timeout: 2))
         XCTAssertEqual(workspace.label, "Payments Platform")
+    }
+
+    func testInspectorRailAndBothSidebarsAreFunctional() {
+        let inspectorTabMode = app.buttons["inspector-mode.tab"]
+        XCTAssertTrue(inspectorTabMode.waitForExistence(timeout: 5))
+        inspectorTabMode.click()
+
+        XCTAssertTrue(app.staticTexts["inspector.tab-name"].waitForExistence(timeout: 2))
+        XCTAssertFalse(app.staticTexts["inspector.workspace-name"].exists)
+        XCTAssertEqual(app.staticTexts["inspector-mode-label"].label, "TAB")
+
+        let leftCollapse = app.buttons["left-sidebar-collapse"]
+        XCTAssertTrue(leftCollapse.waitForExistence(timeout: 2))
+        leftCollapse.click()
+        XCTAssertFalse(app.segmentedControls["left-mode"].waitForExistence(timeout: 1))
+
+        let leftToggle = app.buttons["toggle-left-sidebar"]
+        XCTAssertTrue(leftToggle.waitForExistence(timeout: 2))
+        leftToggle.click()
+        XCTAssertTrue(app.segmentedControls["left-mode"].waitForExistence(timeout: 2))
+
+        let inspectorCollapse = app.buttons["inspector-collapse"]
+        XCTAssertTrue(inspectorCollapse.waitForExistence(timeout: 2))
+        inspectorCollapse.click()
+        XCTAssertFalse(app.staticTexts["Inspector"].waitForExistence(timeout: 1))
+
+        let inspectorToggle = app.buttons["toggle-inspector"]
+        XCTAssertTrue(inspectorToggle.waitForExistence(timeout: 2))
+        inspectorToggle.click()
+        XCTAssertTrue(app.staticTexts["Inspector"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["inspector-mode.tab"].waitForExistence(timeout: 2))
+        XCTAssertEqual(app.staticTexts["inspector-mode-label"].label, "TAB")
     }
 
     func testAttentionItemNavigatesInsteadOfBeingDecorative() {

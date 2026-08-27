@@ -6,7 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let contentRect = NSRect(x: 0, y: 0, width: 960, height: 600)
-        let surface = MetalSurfaceView(frame: contentRect)
+        let surface = InteractiveMetalSurfaceView(frame: contentRect)
         let window = NSWindow(
             contentRect: contentRect,
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.contentView = surface
         window.center()
         window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(surface)
         NSApp.activate(ignoringOtherApps: true)
         self.window = window
     }

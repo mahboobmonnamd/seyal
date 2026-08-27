@@ -104,6 +104,35 @@ pub extern "C" fn seyal_bridge_poll() -> i32 {
     })
 }
 
+/// Returns 1 only while a bounded nonblocking control write is pending.
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_wants_write() -> i32 {
+    CLIENT.with(|slot| {
+        let Ok(slot) = slot.try_borrow() else {
+            return -100;
+        };
+        slot.as_ref().map_or(0, |client| i32::from(client.wants_write()))
+    })
+}
+
+/// Advance one pending control write after writable readiness. A partial write
+/// or `WouldBlock` remains queued and is not treated as a disconnect.
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_flush_writable() -> i32 {
+    CLIENT.with(|slot| {
+        let Ok(mut slot) = slot.try_borrow_mut() else {
+            return -100;
+        };
+        let Some(client) = slot.as_mut() else {
+            return -1;
+        };
+        match client.flush_control_write() {
+            Ok(()) => 0,
+            Err(error) => error_code(error),
+        }
+    })
+}
+
 /// Borrow the current contiguous prepared surface.
 ///
 /// The returned cell pointer is owned by the Rust client and is valid until the

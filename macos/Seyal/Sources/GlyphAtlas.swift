@@ -63,7 +63,7 @@ final class TerminalFontResolver {
     func metrics(backingScale: CGFloat) -> TerminalFontMetrics {
         let scale = max(backingScale, 1)
         let pixelFont = CTFontCreateCopyWithAttributes(regular, pointSize * scale, nil, nil)
-        var glyph = glyphForBMPScalar(UInt32(Character("M").asciiValue ?? 77), font: pixelFont) ?? 0
+        var glyph = glyphForBMPScalar(77, font: pixelFont) ?? 0
         var advance = CGSize.zero
         _ = CTFontGetAdvancesForGlyphs(pixelFont, .horizontal, &glyph, &advance, 1)
         let width = max(1, Int(ceil(advance.width)))
@@ -173,6 +173,11 @@ final class GlyphAtlas {
 
     func metrics(backingScale: CGFloat) -> TerminalFontMetrics {
         fontResolver.metrics(backingScale: backingScale)
+    }
+
+    @discardableResult
+    func ensureTextureForRendering() throws -> MTLTexture {
+        try ensureTexture()
     }
 
     func lookup(

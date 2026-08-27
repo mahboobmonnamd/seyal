@@ -35,11 +35,37 @@ typedef struct SeyalPreparedFrame {
     uint64_t damage_word3;
 } SeyalPreparedFrame;
 
+enum SeyalTerminalKeyKind {
+    SEYAL_KEY_ENTER = 1,
+    SEYAL_KEY_TAB = 2,
+    SEYAL_KEY_BACKSPACE = 3,
+    SEYAL_KEY_ESCAPE = 4,
+    SEYAL_KEY_ARROW_UP = 5,
+    SEYAL_KEY_ARROW_DOWN = 6,
+    SEYAL_KEY_ARROW_RIGHT = 7,
+    SEYAL_KEY_ARROW_LEFT = 8,
+    SEYAL_KEY_CONTROL_ASCII = 9,
+};
+
 int32_t seyal_bridge_connect_first(void);
 int32_t seyal_bridge_socket_fd(void);
 int32_t seyal_bridge_poll(void);
 int32_t seyal_bridge_wants_write(void);
 int32_t seyal_bridge_flush_writable(void);
+int32_t seyal_bridge_submit_utf8(const uint8_t *bytes, uint32_t len);
+int32_t seyal_bridge_submit_key(uint16_t kind, uint32_t scalar);
+int32_t seyal_bridge_propose_geometry(
+    double viewport_width,
+    double viewport_height,
+    double horizontal_insets,
+    double vertical_insets,
+    double cell_width,
+    double cell_height,
+    uint8_t meaningful_layout_epoch
+);
+int32_t seyal_bridge_retry_resize(void);
+int32_t seyal_bridge_input_failure(void);
+int32_t seyal_bridge_resize_failure(void);
 SeyalPreparedFrame seyal_bridge_frame(void);
 void seyal_bridge_disconnect(void);
 

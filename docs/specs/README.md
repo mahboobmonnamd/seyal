@@ -7,7 +7,8 @@ Specifications define **observable behavior and enforceable contracts** below ac
 - [`SPEC-001-M001-VT.md`](SPEC-001-M001-VT.md) — M001 incremental VT parser, canonical terminal state, supported/deferred sequences, line identity, resize and damage behavior.
 - [`SPEC-002-M001-PTY.md`](SPEC-002-M001-PTY.md) — M001 local macOS PTY endpoint, nonblocking byte I/O, resize, child lifecycle, detach/terminate and resource behavior.
 - [`SPEC-003-M001-RUNTIME.md`](SPEC-003-M001-RUNTIME.md) — M001 headless Runtime ownership, multi-execution readiness/fairness, logical attachment, Workspace ownership association seam, bounded input, child-exit, nonblocking termination and resource-measurement behavior.
-- [`SPEC-004-M001-LOCAL-ATTACHMENT-PROJECTION.md`](SPEC-004-M001-LOCAL-ATTACHMENT-PROJECTION.md) — **Proposed for M001 Pass 5:** versioned local binary control/input, same-user attachment authority, read-only shared-memory projection ABI, generation publication/resync, hostile-client/resource behavior and the ADR-001 transport comparator contract.
+- [`SPEC-004-M001-LOCAL-ATTACHMENT-PROJECTION.md`](SPEC-004-M001-LOCAL-ATTACHMENT-PROJECTION.md) — **Accepted for M001 Pass 5:** Candidate-D versioned local binary control/input and snapshot/delta display-state transport, same-user attachment authority, generation/resync behavior, hostile-client/resource constraints and measured production-path acceptance.
+- [`SPEC-005-M001-METAL-RENDERER.md`](SPEC-005-M001-METAL-RENDERER.md) — **Proposed for M001 Pass 6:** permanent Metal rendering from committed disposable client display state, damage-driven draw preparation, coarse Rust/native batching, shaping/font fallback, bounded glyph cache/atlas, GPU lifecycle, hidden-surface behavior and deterministic renderer acceptance.
 
 ## When a specification is required
 

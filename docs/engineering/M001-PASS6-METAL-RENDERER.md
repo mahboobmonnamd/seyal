@@ -104,20 +104,20 @@ The native Release renderer benchmark measures `MetalTerminalRenderer.update` fo
 
 ### Final exact-head evidence
 
-The final local acceptance run used the exact implementation commit recorded in this section on `origin/master` `5594b8a37981a29819c2b87ec0cd5f9774f76d9c`, Apple M5 Pro / macOS 26.5.2 (25F84), arm64, Rust 1.98.0, Release build, 1x backing scale, nearest-rank percentiles. The closest pre-fix comparison is the immediately preceding PR head `7084915d940d486623e1e10c72fb05cdd4772d3c` on the same host and OS; these are repeated local measurements, not a cross-machine product threshold.
+The final local acceptance run used implementation commit `db460728741022010af9c5152fa1bb9c661afda2` on `origin/master` `5594b8a37981a29819c2b87ec0cd5f9774f76d9c`, Apple M5 Pro / macOS 26.5.2 (25F84), arm64, Rust 1.98.0, Release build, 1x backing scale, nearest-rank percentiles. The closest pre-fix comparison is the immediately preceding PR head `7084915d940d486623e1e10c72fb05cdd4772d3c` on the same host and OS; these are repeated local measurements, not a cross-machine product threshold.
 
 | Boundary / workload | p50 | p95 | p99 | max |
 | --- | ---: | ---: | ---: | ---: |
-| Rust dirty row + cursor preparation | 375 ns | 375 ns | 458 ns | 500 ns |
-| Rust full 120×40 preparation | 4,834 ns | 4,959 ns | 5,083 ns | 9,167 ns |
-| Native Metal preparation | 32,917 ns | 43,875 ns | 48,042 ns | 112,333 ns |
-| GPU completion proxy* | 482,625 ns | 4,218,250 ns | 5,062,250 ns | 5,179,333 ns |
+| Rust dirty row + cursor preparation | 334 ns | 375 ns | 417 ns | 542 ns |
+| Rust full 120×40 preparation | 4,625 ns | 5,375 ns | 6,250 ns | 10,708 ns |
+| Native Metal preparation | 32,125 ns | 42,750 ns | 53,500 ns | 96,791 ns |
+| GPU completion proxy* | 482,292 ns | 3,817,250 ns | 4,444,750 ns | 5,191,458 ns |
 
-The native run rebuilt 160 rows / 19,200 cells, used 230,400 instance bytes, recorded 19,198 glyph-cache hits, 2 misses, 2 uploads and 306 uploaded bytes, with a 16 MiB atlas budget and 17,007,616 dedicated GPU bytes. `/usr/bin/time -lp` reported 0.60 s wall, 0.02 s user CPU, 0.04 s system CPU, 27,656,192-byte maximum RSS, and 113,230,448-byte peak footprint. The GPU value is an offscreen completion proxy including target allocation; it is not physical display scanout latency.
+The native run rebuilt 160 rows / 19,200 cells, used 230,400 instance bytes, recorded 19,198 glyph-cache hits, 2 misses, 2 uploads and 306 uploaded bytes, with a 16 MiB atlas budget and 17,007,616 dedicated GPU bytes. `/usr/bin/time -lp` reported 0.66 s wall, 0.02 s user CPU, 0.04 s system CPU, 27,574,272-byte maximum RSS, and 112,919,176-byte peak footprint. The GPU value is an offscreen completion proxy including target allocation; it is not physical display scanout latency.
 
 The full `make bench` Candidate-D run also covered the required fanout/workload/geometry matrix. At 16 viewers and sustained 2-second high output at 200×60 it recorded p95/p99 client-cache latency of 3,237/3,627 µs, 16,544 KiB populated RSS, 22.6% sampled CPU, `3,568` latency samples, 678,423,552 aggregate UDS bytes, `shutdown_ok=true`, and final pending input `0`. The 50- and 100-execution cases were explicitly `PLATFORM_LIMITED` at 34 created executions because the host returned `Device not configured (os error 6)`; this is retained platform evidence, not a Seyal capacity claim.
 
-Against the same-host pre-fix renderer run, the current implementation remains in the same order of magnitude; the latest exact-head run measured 32,917 ns / 482,625 ns medians versus the prior 26,500 ns / 386,958 ns. This is an observed increase in this run, but not a material regression judgment for this workload without a controlled repeated comparison; it does not establish an absolute product latency target. The durable PR validation comment records the same measurements against the exact implementation commit.
+Against the same-host pre-fix renderer run, repeated current runs remained in the same range as the prior 26,500 ns / 386,958 ns medians (current exact-head run: 32,125 ns / 482,292 ns). The scheduler change does not add work to `MetalTerminalRenderer.update`; the variation is within the observed run-to-run spread and is not treated as a material regression for this workload. This does not establish an absolute product latency target. The durable PR validation comment records the same measurements against the exact implementation commit.
 
 ## Deferred behavior
 

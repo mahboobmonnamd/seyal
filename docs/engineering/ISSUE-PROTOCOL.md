@@ -124,6 +124,33 @@ Ordinary local implementation choices do not require an ADR.
 
 An active Issue may not absorb unrelated refactoring. Create/link another Issue. If the new finding invalidates architecture/spec/acceptance criteria, stop and run the architecture/spec change process before continuing.
 
+## PR → Issue closure contract
+
+Every mergeable implementation PR has exactly one **owning Issue**. Supporting Issues may be referenced for context, but they are not silently treated as closure targets.
+
+Use a GitHub closing keyword (`Closes #N`, `Fixes #N`, `Resolves #N`) only when all of the following are true:
+
+- the referenced Issue is the PR's owning Issue;
+- the final PR stays within that Issue's scope;
+- the final implementation satisfies the Issue's acceptance criteria;
+- all applicable Definition-of-Done evidence is present or explicitly approved as an allowed exception;
+- merging the PR is expected to make the Issue genuinely **Done**.
+
+Use a non-closing relationship (`Refs #N`, `Part of #N`, or equivalent plain reference) when the PR is any of the following:
+
+- architecture/specification refinement;
+- prerequisite or dependency work;
+- benchmark/evidence gathering that does not complete the owning Issue;
+- partial implementation;
+- follow-up hardening where the parent Issue must remain open;
+- any change whose merge must not move the Issue to Done.
+
+Agents must not use a closing keyword merely because a PR "works on" an Issue. The PR description must not redefine the Issue's acceptance criteria to justify closure; if acceptance materially changes, refine the Issue first.
+
+At final review/verification handoff, explicitly compare the final PR evidence against the owning Issue and record the expected post-merge state. If a closing PR still has an unmet Done gate, change it to a non-closing relationship and leave the Issue open. If a non-closing PR is merged, verify that the Issue remains open. When an Issue is genuinely completed, update stale status prose/checklists so the body does not continue to say `Ready`, `Refinement`, `In Review`, or otherwise contradict its verified state.
+
+Historical imported issues labeled `historical-evidence` are evidence records, not executable current backlog. Their GitHub open/closed state must never be used as proof of current Seyal implementation. Current work must be represented by a Seyal-native owning Issue. Historical records may be archived/closed once their evidence/disposition role is complete, without implying that the capability is implemented or rejected in current Seyal.
+
 ## Independent validation
 
 Architecture, VT/parser, persistence/process-lifetime, security-boundary and performance-sensitive changes require evidence beyond the implementation agent's self-report. Preferred flow:

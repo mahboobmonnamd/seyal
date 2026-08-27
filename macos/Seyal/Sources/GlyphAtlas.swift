@@ -170,12 +170,25 @@ final class TerminalFontResolver {
         )
     }
 
-    /// Resolve one Unicode scalar through CoreText shaping rather than treating
-    /// UTF-16 code units as independent terminal characters. Supplementary-plane
-    /// scalars therefore pass to CoreText as a surrogate pair and may resolve to
-    /// one glyph while Seyal still places that scalar in one M001 terminal cell.
+    /// Resolve one Unicode scalar without making the overwhelmingly common BMP
+    /// terminal path pay for a shaping line allocation. BMP scalars map through
+    /// CoreText's direct character-to-glyph API. Supplementary-plane scalars are
+    /// represented by a UTF-16 surrogate pair and therefore use the shaping path
+    /// so the pair is treated as one Unicode scalar/glyph when the font supports
+    /// it. Seyal still applies the M001 one-cell placement model here; grapheme,
+    /// emoji-width and bidi behavior remain deferred.
     private func glyphForScalar(_ scalar: UInt32, font: CTFont) -> CGGlyph? {
         guard let unicodeScalar = UnicodeScalar(scalar) else { return nil }
+
+        if scalar <= 0xffff {
+            var character = UniChar(scalar)
+            var glyph: CGGlyph = 0
+            guard CTFontGetGlyphsForCharacters(font, &character, &glyph, 1), glyph != 0 else {
+                return nil
+            }
+            return glyph
+        }
+
         let text = String(unicodeScalar)
         let attributed = NSAttributedString(
             string: text,

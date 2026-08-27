@@ -1,6 +1,56 @@
 import Foundation
 import Metal
-import QuartzCore
+@preconcurrency import QuartzCore
+
+@MainActor
+private final class DisplayLinkBenchmarkDriver: NSObject, @preconcurrency CAMetalDisplayLinkDelegate {
+    private let renderer: MetalTerminalRenderer
+    private let link: CAMetalDisplayLink
+    private var startedAt: UInt64?
+    private(set) var samples = [UInt64]()
+
+    init(renderer: MetalTerminalRenderer, layer: CAMetalLayer) {
+        self.renderer = renderer
+        link = CAMetalDisplayLink(metalLayer: layer)
+        super.init()
+        link.delegate = self
+        link.isPaused = true
+        link.add(to: .main, forMode: .common)
+    }
+
+    func submitOne() -> Bool {
+        guard startedAt == nil else { return false }
+        renderer.requestPresent()
+        startedAt = DispatchTime.now().uptimeNanoseconds
+        link.isPaused = false
+        let sampleCount = samples.count
+        let deadline = Date().addingTimeInterval(2)
+        while samples.count == sampleCount, Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.001))
+        }
+        return samples.count == sampleCount + 1
+    }
+
+    func metalDisplayLink(
+        _ link: CAMetalDisplayLink,
+        needsUpdate update: CAMetalDisplayLink.Update
+    ) {
+        link.isPaused = true
+        guard let startedAt,
+              renderer.present(drawable: update.drawable)
+        else {
+            self.startedAt = nil
+            return
+        }
+        samples.append(DispatchTime.now().uptimeNanoseconds - startedAt)
+        self.startedAt = nil
+    }
+
+    deinit {
+        link.delegate = nil
+        link.invalidate()
+    }
+}
 
 @MainActor
 enum RendererValidation {
@@ -350,10 +400,21 @@ enum RendererValidation {
             }
 
             let cellSize = renderer.cellPixelSize(backingScale: 1)
+            let presentationLayer = makePresentationLayer(
+                device: device,
+                width: cellSize.width * columns,
+                height: cellSize.height * rows
+            )
+            let displayLinkDriver = DisplayLinkBenchmarkDriver(
+                renderer: renderer,
+                layer: presentationLayer
+            )
             var preparationSamples = [UInt64]()
-            var gpuCompletionSamples = [UInt64]()
+            var preparedToCommitSamples = [UInt64]()
+            var commitToCompletionSamples = [UInt64]()
             preparationSamples.reserveCapacity(repetitions)
-            gpuCompletionSamples.reserveCapacity(repetitions)
+            preparedToCommitSamples.reserveCapacity(repetitions)
+            commitToCompletionSamples.reserveCapacity(repetitions)
 
             for iteration in 0..<repetitions {
                 let row = iteration % rows
@@ -385,26 +446,29 @@ enum RendererValidation {
                     DispatchTime.now().uptimeNanoseconds - prepareStarted
                 )
 
-                let gpuStarted = DispatchTime.now().uptimeNanoseconds
-                guard renderer.renderOffscreenAndWait(
+                guard let submission = renderer.renderOffscreenAndMeasureSubmission(
                     width: cellSize.width * columns,
                     height: cellSize.height * rows
-                ) != nil else {
+                ) else {
                     return false
                 }
-                gpuCompletionSamples.append(
-                    DispatchTime.now().uptimeNanoseconds - gpuStarted
-                )
+                preparedToCommitSamples.append(submission.preparedToCommitNanoseconds)
+                commitToCompletionSamples.append(submission.commitToCompletionNanoseconds)
+                guard displayLinkDriver.submitOne() else { return false }
             }
 
             let prep = percentileSummary(preparationSamples)
-            let gpu = percentileSummary(gpuCompletionSamples)
+            let preparedToCommit = percentileSummary(preparedToCommitSamples)
+            let commitToCompletion = percentileSummary(commitToCompletionSamples)
+            let presented = percentileSummary(displayLinkDriver.samples)
             let glyph = renderer.glyphStats
-            print("pass6_native_renderer performance_claim=false boundary=prepared_frame_to_metal_gpu_completion_proxy")
+            print("pass6_native_renderer performance_claim=false boundaries=committed_generation_to_prepared_rows,prepared_batch_to_command_commit,command_commit_to_gpu_completion,committed_generation_to_presented_frame_proxy")
             print("device=\(device.name) registry_id=\(device.registryID) os=\(ProcessInfo.processInfo.operatingSystemVersionString) geometry=\(columns)x\(rows) repetitions=\(repetitions) backing_scale=1 percentile_method=nearest_rank")
             print("preparation p50_ns=\(prep.p50) p95_ns=\(prep.p95) p99_ns=\(prep.p99) max_ns=\(prep.max)")
-            print("gpu_completion_proxy p50_ns=\(gpu.p50) p95_ns=\(gpu.p95) p99_ns=\(gpu.p99) max_ns=\(gpu.max) note=includes_offscreen_target_allocation")
-            print("renderer submitted_frames=\(renderer.stats.submittedFrames) rebuilt_rows=\(renderer.stats.rebuiltRows) rebuilt_cells=\(renderer.stats.rebuiltCells) instance_bytes=\(renderer.stats.instanceBytes) glyph_hits=\(glyph.hits) glyph_misses=\(glyph.misses) glyph_uploads=\(glyph.uploads) glyph_uploaded_bytes=\(glyph.uploadedBytes) atlas_budget_bytes=\(GlyphAtlas.budgetBytes) dedicated_gpu_bytes=\(renderer.estimatedDedicatedGPUBytes)")
+            print("prepared_to_command_commit p50_ns=\(preparedToCommit.p50) p95_ns=\(preparedToCommit.p95) p99_ns=\(preparedToCommit.p99) max_ns=\(preparedToCommit.max) note=offscreen_target_allocation_excluded")
+            print("command_commit_to_gpu_completion_proxy p50_ns=\(commitToCompletion.p50) p95_ns=\(commitToCompletion.p95) p99_ns=\(commitToCompletion.p99) max_ns=\(commitToCompletion.max)")
+            print("committed_generation_to_presented_frame_proxy p50_ns=\(presented.p50) p95_ns=\(presented.p95) p99_ns=\(presented.p99) max_ns=\(presented.max) note=one_shot_CAMetalDisplayLink_to_command_commit")
+            print("renderer submitted_frames=\(renderer.stats.submittedFrames) display_link_samples=\(displayLinkDriver.samples.count) coalesced_frames=\(renderer.stats.coalescedFrames) rebuilt_rows=\(renderer.stats.rebuiltRows) rebuilt_cells=\(renderer.stats.rebuiltCells) instance_bytes=\(renderer.stats.instanceBytes) glyph_hits=\(glyph.hits) glyph_misses=\(glyph.misses) glyph_uploads=\(glyph.uploads) glyph_uploaded_bytes=\(glyph.uploadedBytes) atlas_budget_bytes=\(GlyphAtlas.budgetBytes) dedicated_gpu_bytes=\(renderer.estimatedDedicatedGPUBytes)")
             return true
         } catch {
             return false

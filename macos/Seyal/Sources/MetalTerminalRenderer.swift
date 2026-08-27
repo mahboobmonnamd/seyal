@@ -197,6 +197,11 @@ struct MetalRendererStats: Equatable {
     var instanceBytes: UInt64 = 0
 }
 
+struct MetalSubmissionTiming {
+    let preparedToCommitNanoseconds: UInt64
+    let commitToCompletionNanoseconds: UInt64
+}
+
 @MainActor
 final class MetalTerminalRenderer {
     static let maximumFramesInFlight = 1
@@ -547,6 +552,50 @@ final class MetalTerminalRenderer {
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
         return commandBuffer.status == .completed ? texture : nil
+    }
+
+    /// Deterministic benchmark-only timing split. Target allocation is outside
+    /// the measured interval; the first value covers command creation/encoding
+    /// through commit, and the second covers commit through GPU completion.
+    func renderOffscreenAndMeasureSubmission(width: Int, height: Int) -> MetalSubmissionTiming? {
+        guard width > 0,
+              height > 0,
+              let instanceBuffer,
+              instanceCount > 0,
+              let atlasTexture = glyphAtlas.texture
+        else {
+            return nil
+        }
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm,
+            width: width,
+            height: height,
+            mipmapped: false
+        )
+        descriptor.usage = [.renderTarget]
+        descriptor.storageMode = .shared
+        guard let texture = device.makeTexture(descriptor: descriptor) else {
+            return nil
+        }
+        let preparedToCommitStarted = DispatchTime.now().uptimeNanoseconds
+        guard let commandBuffer = makeCommandBuffer(
+                  target: texture,
+                  instanceBuffer: instanceBuffer,
+                  atlasTexture: atlasTexture
+              )
+        else {
+            return nil
+        }
+
+        commandBuffer.commit()
+        let commitFinished = DispatchTime.now().uptimeNanoseconds
+        commandBuffer.waitUntilCompleted()
+        guard commandBuffer.status == .completed else { return nil }
+        let completed = DispatchTime.now().uptimeNanoseconds
+        return MetalSubmissionTiming(
+            preparedToCommitNanoseconds: commitFinished - preparedToCommitStarted,
+            commitToCompletionNanoseconds: completed - commitFinished
+        )
     }
 
     /// Make the current prepared state non-presentable after a failed

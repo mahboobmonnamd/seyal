@@ -176,6 +176,42 @@ final class SeyalShellUITests: XCTestCase {
         XCTAssertEqual(app.staticTexts["inspector-mode-label"].label, "TAB")
     }
 
+    func testNativeKeyboardShortcutsSwitchWorkspaceTabsAndSidebars() {
+        let window = app.windows["Seyal — UI Shell Preview"]
+        XCTAssertTrue(window.waitForExistence(timeout: 5))
+
+        app.typeKey("2", modifierFlags: [.command])
+        let inspectorTab = app.staticTexts["inspector.tab-name"]
+        XCTAssertTrue(inspectorTab.waitForExistence(timeout: 2))
+        XCTAssertEqual(inspectorTab.label, "Agent Development")
+
+        app.typeKey("2", modifierFlags: [.command, .control])
+        let workspace = app.staticTexts["inspector.workspace-name"]
+        XCTAssertTrue(workspace.waitForExistence(timeout: 2))
+        XCTAssertEqual(workspace.label, "Payments Platform")
+
+        app.typeKey("2", modifierFlags: [.command])
+        XCTAssertEqual(app.staticTexts["inspector.tab-name"].label, "Workers")
+
+        app.typeKey("]", modifierFlags: [.command, .control])
+        XCTAssertEqual(app.staticTexts["inspector.workspace-name"].label, "Infra Operations")
+        app.typeKey("[", modifierFlags: [.command, .control])
+        XCTAssertEqual(app.staticTexts["inspector.workspace-name"].label, "Payments Platform")
+
+        app.typeKey("0", modifierFlags: [.command])
+        XCTAssertFalse(app.segmentedControls["left-mode"].waitForExistence(timeout: 1))
+        app.typeKey("0", modifierFlags: [.command])
+        XCTAssertTrue(app.segmentedControls["left-mode"].waitForExistence(timeout: 2))
+
+        app.typeKey("0", modifierFlags: [.command, .option])
+        XCTAssertFalse(app.staticTexts["Inspector"].waitForExistence(timeout: 1))
+        app.typeKey("0", modifierFlags: [.command, .option])
+        XCTAssertTrue(app.staticTexts["Inspector"].waitForExistence(timeout: 2))
+
+        app.typeKey("`", modifierFlags: [.command])
+        XCTAssertTrue(window.exists)
+    }
+
     func testAttentionItemNavigatesInsteadOfBeingDecorative() {
         let attentionButton = app.buttons["attention"]
         XCTAssertTrue(attentionButton.waitForExistence(timeout: 5))

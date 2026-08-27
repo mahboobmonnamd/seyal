@@ -410,6 +410,10 @@ enum RendererValidation {
             // participating in an AppKit window hierarchy. Keep this small
             // benchmark window visible so the measurement exercises the same
             // scheduler/layer contract as production.
+            let application = NSApplication.shared
+            application.setActivationPolicy(.accessory)
+            application.finishLaunching()
+            application.activate(ignoringOtherApps: true)
             let benchmarkWindow = NSWindow(
                 contentRect: NSRect(
                     x: 0,
@@ -425,7 +429,7 @@ enum RendererValidation {
             benchmarkHost.wantsLayer = true
             benchmarkHost.layer?.addSublayer(presentationLayer)
             benchmarkWindow.contentView = benchmarkHost
-            benchmarkWindow.orderFrontRegardless()
+            benchmarkWindow.makeKeyAndOrderFront(nil)
             let displayLinkDriver = DisplayLinkBenchmarkDriver(
                 renderer: renderer,
                 layer: presentationLayer

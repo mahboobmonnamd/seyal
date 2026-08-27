@@ -34,12 +34,12 @@ usable native terminal viewport
 → Runtime authorization + validation/prepare
 → fallible PTY winsize
 → canonical TerminalState resize commit
-→ asynchronous ResizeResult bookkeeping
-→ damage/projection
+→ asynchronous ResizeResult + applied-generation fence
+→ authoritative display projection
 → permanent Metal renderer
 ```
 
-`ResizeResult` is never an acknowledgement dependency for terminal progress. Runtime commits or rejects the resize transaction independently and queues the result asynchronously.
+`ResizeResult` is never an acknowledgement dependency for terminal progress. Runtime commits or rejects the resize transaction independently and queues the result asynchronously. On success, the client retains a bounded `appliedAwaitingProjection` fence until authoritative projection reaches the canonical generation produced by that resize, preventing a successful result from reopening duplicate admission before its display update arrives.
 
 Pass 7 does not create a GUI VT parser, mirrored mode state, client-owned grid, second PTY, temporary text renderer or synchronous GUI acknowledgement dependency.
 
@@ -54,11 +54,12 @@ Pass 7 does not create a GUI VT parser, mirrored mode state, client-owned grid, 
 7. One accepted native input action is admitted atomically. It is never partially accepted, silently truncated, silently dropped or split differently depending on backpressure.
 8. Accepted input preserves FIFO ordering. New input is explicitly rejected on bounded backpressure rather than blocking AppKit/main-thread progress or allocating unbounded memory.
 9. Pass 7 native resize uses explicit request identity. A failure/result may mutate bookkeeping for only the exact request ID it names; an older result cannot invalidate a newer request.
-10. A Runtime resize failure never causes an immediate resend loop. Runtime-reported failures are retry-gated by an external recovery event defined in section 12.6.
-11. Resize never publishes canonical geometry before the PTY accepts the winsize transaction.
-12. `NSTextInputClient` exposes only a bounded ephemeral composition document. Terminal/history text is never returned through text-input APIs and never becomes a second editable text model.
-13. No input/resize path waits synchronously for rendering, display projection, Block semantics, persistence, agents, cloud, telemetry or licensing.
-14. Input, marked text and terminal contents are secret-bearing data and are never emitted by latency instrumentation or normal diagnostic logs.
+10. `ResizeResult(Applied)` does not make the same target immediately eligible for re-admission. A bounded applied-success fence remains until authoritative projection reaches the generation produced by that resize or a later generation supersedes it.
+11. A Runtime resize failure never causes an immediate resend loop. Runtime-reported failures are retry-gated by an external recovery event defined in section 12.6.
+12. Resize never publishes canonical geometry before the PTY accepts the winsize transaction.
+13. `NSTextInputClient` exposes only a bounded ephemeral composition document. Terminal/history text is never returned through text-input APIs and never becomes a second editable text model.
+14. No input/resize path waits synchronously for rendering, display projection, Block semantics, persistence, agents, cloud, telemetry or licensing.
+15. Input, marked text and terminal contents are secret-bearing data and are never emitted by latency instrumentation or normal diagnostic logs.
 
 ## 3. Scope
 
@@ -73,7 +74,8 @@ Pass 7 includes:
 - bounded, nonblocking client input/control queuing;
 - native viewport → rows/columns calculation and authoritative resize submission;
 - explicit correlated `ResizeRequest` / `ResizeResult` protocol extension;
-- desired/unresolved/committed resize reconciliation;
+- desired/unresolved/applied-awaiting-projection/committed resize reconciliation;
+- canonical-generation fencing between successful resize result and authoritative projection;
 - error-class retry gating;
 - resize coalescing with ordering barriers;
 - permanent AppKit `NSTextInputClient` composition seam with explicit UTF-16 range semantics;
@@ -294,9 +296,9 @@ Rules:
 - an ID repeated on the same live connection is malformed and fails closed;
 - request IDs are protocol bookkeeping only, never terminal generations, persistent identities, telemetry IDs or benchmark trace IDs.
 
-### 7.5 `ResizeResult` payload
+### 7.5 `ResizeResult` payload and applied generation
 
-`ResizeResult` is exactly 32 bytes:
+`ResizeResult` is exactly 40 bytes:
 
 ```text
 u128 AttachmentId
@@ -304,6 +306,7 @@ u64  request_id
 u16  result_code
 u16  reserved0 = 0
 u32  detail_code
+u64  applied_generation
 ```
 
 `result_code` is:
@@ -315,11 +318,15 @@ u32  detail_code
 
 For every structurally valid `ResizeRequest` from which Runtime can trust `AttachmentId` and nonzero `request_id`, Runtime queues exactly one `ResizeResult` after the request transaction reaches a final outcome.
 
-- `Applied` is queued only after PTY winsize succeeds and canonical `TerminalState` resize commit completes.
+- `Applied` is queued only after PTY winsize succeeds, canonical `TerminalState` resize commits and canonical damage/generation reflects that commit.
+- On `Applied`, `applied_generation` is the canonical display generation at or after which authoritative projection includes the successful resize. It uses the same monotonically ordered generation domain as SPEC-004 `DisplaySnapshot`/`DisplayDelta`.
+- On any failure result, `applied_generation = 0`.
 - Failure result codes are queued after validation/application failure with canonical geometry unchanged when the transaction did not commit.
 - `detail_code` is zero in M001 unless a later accepted specification assigns a bounded non-secret machine-readable reason.
 - `ResizeResult` is mandatory bounded control output. It is never presentation-superseded.
 - Runtime, PTY, VT and renderer progress never wait for the client to read a result.
+
+The generation field exists for correctness, not telemetry: mandatory control output can overtake an older not-yet-started presentation update. Geometry alone is therefore insufficient to prove that a projection observed after `Applied` actually contains that applied transaction.
 
 If framing/payload corruption prevents trustworthy request-ID extraction, Runtime uses the existing `Error`/fatal protocol path; the Pass 7 client treats an uncorrelatable type-18 failure as protocol failure and never guesses which request failed.
 
@@ -349,7 +356,7 @@ Rules:
 - `ControllerBusy` is an explicit noninteractive state;
 - the Pass 7 surface must not appear to accept terminal typing while only Observer authority exists;
 - no silent fallback may accept native input locally and discard it;
-- reconnect obtains a new attachment/controller lease under normal SPEC-004 semantics; old `AttachmentId` and Resize request IDs are stale;
+- reconnect obtains a new attachment/controller lease under normal SPEC-004 semantics; old `AttachmentId` and resize request IDs are stale;
 - losing the connection or controller authority cancels marked composition locally and stops accepting terminal mutation until authority is re-established.
 
 A future product may offer an intentional read-only observer UI; that is not the success path claimed by Pass 7.
@@ -466,18 +473,20 @@ Pass 7 has one terminal surface. Future composer/Block chrome may change the usa
 
 ## 12. Resize ordering, reconciliation, correlation and retry policy
 
-Correctness requires final-layout convergence, exact request-result correlation and no automatic retry loop under persistent failure.
+Correctness requires final-layout convergence, exact request-result correlation, a success-to-projection fence and no automatic retry loop under persistent failure.
 
 ### 12.1 Client state
 
 The client tracks bounded state:
 
 ```text
-desiredGeometry       latest valid geometry derived from current native layout
-committedGeometry     latest geometry observed from authoritative display projection
-nextResizeRequestId   next nonzero monotonically increasing u64 ID
-unresolvedResizes     bounded ordered records keyed by request_id
-retrySuppression      optional failed target + failure class + recovery epoch
+desiredGeometry             latest valid geometry derived from current native layout
+committedGeometry           latest geometry observed from authoritative display projection
+committedGeneration         latest authoritative display generation observed
+nextResizeRequestId         next nonzero monotonically increasing u64 ID
+unresolvedResizes           bounded ordered records keyed by request_id
+appliedAwaitingProjection   optional latest Applied record not yet covered by projection
+retrySuppression            optional failed target + failure class + recovery epoch
 ```
 
 Each unresolved record contains at least:
@@ -488,18 +497,28 @@ geometry
 phase = queued_not_started | writing | sent_waiting_result
 ```
 
+The success fence contains:
+
+```text
+request_id
+geometry
+applied_generation
+```
+
+Only one applied-success fence is retained: the newest successful request by request ID whose canonical commit has not yet been covered by authoritative projection. When a newer request succeeds, it supersedes an older success fence because its canonical commit occurs later. This keeps the fence constant-size even if presentation delivery is delayed.
+
 The queue byte bound limits queued request records; the protocol requires exactly one `ResizeResult` for every sent structurally valid request, so sent records do not accumulate indefinitely.
 
-`desiredGeometry` is presentation intent, not terminal authority. `committedGeometry` is observational knowledge of canonical state, not a second canonical grid. Request IDs and records are transport bookkeeping only.
+`desiredGeometry` is presentation intent, not terminal authority. `committedGeometry`/`committedGeneration` are observational knowledge from authoritative projection, not a second canonical grid. Request IDs and the success fence are transport/reconciliation bookkeeping only.
 
-The **effective outstanding geometry** is the target of the newest unresolved request, if any.
+For admission, the **newest pending mutation** is the highest-request-ID target among `unresolvedResizes` and `appliedAwaitingProjection`, if either exists.
 
 ### 12.2 Request admission and coalescing
 
 Given valid desired target `D` and no retry suppression blocking `D`:
 
-- if the newest unresolved request already targets `D`, no new request is needed;
-- if no unresolved request exists and `D == committedGeometry`, no request is needed;
+- if the newest pending mutation already targets `D`, no new request is needed;
+- if no unresolved request or applied-success fence exists and `D == committedGeometry`, no request is needed;
 - otherwise enqueue a new `ResizeRequest(D)` or coalesce only the newest `queued_not_started` ResizeRequest when there is no intervening `Input`, `TerminalKey` or other ordering barrier;
 - a request ID is nonzero and unique for the connection. A coalesced not-yet-started request may keep its ID while its target changes;
 - once any byte begins writing, request ID and target are immutable;
@@ -523,26 +542,43 @@ On `ResizeResult(request_id = R)`:
 
 1. find exactly one unresolved record with ID `R`;
 2. if none exists, treat it as `ResizeProtocolFailure`; never guess or mutate another request;
-3. remove only record `R` after processing the result;
-4. never clear, replace or suppress a different newer request because an older request failed;
-5. `Applied` means Runtime completed PTY winsize and canonical resize commit for `R`, but it does **not** directly set `committedGeometry`; authoritative display projection remains the observation source for canonical rendered geometry;
-6. a failure result is classified by section 12.6;
-7. after processing, reconciliation may run, subject to retry suppression.
+3. capture that record's immutable geometry, then remove only record `R`;
+4. never clear, replace or suppress a different newer unresolved request because an older request completed;
+5. if the result is `Applied`, validate its nonzero `applied_generation`, then retain/advance `appliedAwaitingProjection = {R, geometry, applied_generation}` when `R` is newer than the current success fence;
+6. `Applied` does **not** directly set `committedGeometry` or `committedGeneration`; authoritative display projection remains the observation source;
+7. if the result is a failure, require `applied_generation == 0` and classify it under section 12.6;
+8. reconciliation may run after processing, but the applied-success fence participates in admission and therefore prevents the same desired target from being re-enqueued merely because the successful request left `unresolvedResizes`.
 
-If an older request fails while a newer request is unresolved, the newer request remains valid. A bounded non-secret diagnostic may record the older failure, but it cannot trigger resend or invalidate the newer target.
+If an older request fails while a newer request is unresolved, the newer request remains valid. If an older `Applied` result arrives while a newer success fence is already retained, the older result does not move the fence backward.
+
+Required P1 regression:
+
+```text
+desired = 100×30
+request A(100×30) sent
+Runtime commits A at generation 42
+ResizeResult(Applied, A, applied_generation=42) arrives
+projection generation 42 has not arrived yet
+```
+
+After processing `Applied`, `A` leaves `unresolvedResizes` but becomes `appliedAwaitingProjection`. Reconciliation must emit **zero** duplicate `ResizeRequest(100×30)` while the fence remains, regardless of socket writability, queue-capacity changes or additional result processing.
 
 If an authority/connection-class result shows the attachment is no longer allowed to mutate, that authority state applies globally even though request correlation remains exact.
 
-### 12.4 Authoritative projection
+### 12.4 Authoritative projection and fence retirement
 
-When display projection reports geometry `G`:
+When authoritative display projection reports generation `P` and geometry `G`:
 
-- set `committedGeometry = G`;
-- do not fabricate `ResizeResult` success locally; request records are retired only by actual results or connection teardown;
+- validate normal SPEC-004 generation continuity first;
+- set `committedGeneration = P` and `committedGeometry = G` only after that display update commits to the disposable client RenderState;
+- do not fabricate `ResizeResult` success locally; unresolved request records are retired only by actual results or connection teardown;
+- if `appliedAwaitingProjection = F` and `P < F.applied_generation`, keep the fence: this projection predates the successful resize even if `G == F.geometry`;
+- if `P == F.applied_generation`, require `G == F.geometry`; mismatch is `ResizeProtocolFailure` because the result and authoritative projection disagree about the same canonical generation;
+- if `P >= F.applied_generation`, retire `F` after the equality check above. A later generation may legitimately contain a newer canonical geometry and therefore supersedes the fenced success even if `G != F.geometry`;
 - clear stale visible resize-failure state if current desired geometry is now authoritatively committed and no relevant authority/protocol failure remains;
-- rerun reconciliation, except retry suppression still blocks immediate resend of a failed same target.
+- rerun reconciliation after fence processing, except retry suppression still blocks immediate resend of a failed same target.
 
-This deliberately separates request outcome from display observation.
+This generation fence is required because mandatory control output can be delivered ahead of an older queued presentation update. A same-geometry projection with generation lower than `applied_generation` must never clear the fence.
 
 ### 12.5 Runtime transaction and result ordering
 
@@ -553,19 +589,19 @@ validate framing + unique request_id + Controller + AttachmentId + geometry
 → prepare all locally rejectable/infallible terminal resize inputs
 → apply fallible PTY winsize
 → if PTY succeeds, commit canonical TerminalState resize
-→ canonical full damage
-→ queue ResizeResult(Applied, request_id)
-→ normal projection update
+→ canonical full damage / resulting canonical display generation G
+→ queue ResizeResult(Applied, request_id, applied_generation=G)
+→ normal projection update at generation G or a later superseding generation
 ```
 
 On semantic/operational failure after a trustworthy request ID is parsed:
 
 ```text
 canonical state remains uncommitted for that failed transaction
-→ queue exactly one ResizeResult(error_code, request_id)
+→ queue exactly one ResizeResult(error_code, request_id, applied_generation=0)
 ```
 
-The result is mandatory bounded control output and cannot be presentation-superseded. Runtime may continue terminal progress immediately; it never waits for the client to read the result.
+The result is mandatory bounded control output and cannot be presentation-superseded. Runtime may continue terminal progress immediately; it never waits for the client to read the result. Presentation may skip directly to a later snapshot/delta under existing bounded supersession rules, which is why the client fence retires on generation `>= applied_generation`, not only on an exact-generation frame.
 
 If framing corruption prevents trustworthy request-ID extraction, use SPEC-004 Error/fatal cleanup. The client treats that as protocol failure and reconnect/recovery is explicit.
 
@@ -599,7 +635,7 @@ DisplayUnavailable
 InternalFailure
 ```
 
-These surface non-secret `ResizeApplyFailure` state. If the failed request is the newest request for the current desired target and no newer unresolved request already targets that desired geometry, install retry suppression for that target.
+These surface non-secret `ResizeApplyFailure` state. If the failed request is the newest request for the current desired target and no newer pending mutation already targets that desired geometry, install retry suppression for that target.
 
 The same failed target is not automatically resent because the request record was removed, projection changed, socket became writable, local queue capacity changed or Runtime produced more output.
 
@@ -611,11 +647,11 @@ A suppressed target may be retried only after one of:
 
 Each recovery event permits at most one new admission attempt for the currently desired target. Repeated Runtime failure reinstalls suppression. There is no timer-based retry, exponential loop, busy retry or result→reconcile→result recursion.
 
-An unknown `ResizeResult.result_code`, duplicate result, unknown request ID, invalid reserved field or uncorrelatable type-18 protocol failure surfaces `ResizeProtocolFailure`, stops automatic resize submission and requires explicit reconnect/recovery.
+An unknown `ResizeResult.result_code`, invalid `applied_generation`, duplicate result, unknown request ID, invalid reserved field, result/projection generation inconsistency or uncorrelatable type-18 protocol failure surfaces `ResizeProtocolFailure`, stops automatic resize submission and requires explicit reconnect/recovery.
 
 ### 12.7 Connection teardown
 
-Disconnect/reattach invalidates every unresolved request ID and clears request/result transport state. Desired geometry may be recomputed/retained as native layout intent, but nothing from the old connection is treated as committed or retried until new attachment authority exists.
+Disconnect/reattach invalidates every unresolved request ID, clears `appliedAwaitingProjection`, clears request/result transport state and resets generation-fence bookkeeping. Desired geometry may be recomputed/retained as native layout intent, but nothing from the old connection is treated as committed or retried until new attachment authority exists.
 
 ## 13. Exact AppKit `NSTextInputClient` composition seam
 
@@ -756,11 +792,11 @@ Pass 7 measures:
 3. Runtime frame decode/admission → PTY write completion for accepted bytes;
 4. native resize proposal → client admission;
 5. Runtime ResizeRequest receipt → PTY winsize → canonical commit/result queue;
-6. canonical resize commit → first display generation carrying new geometry, where measurable without adding a synchronous acknowledgement dependency.
+6. canonical resize commit → first authoritative display generation at or beyond `ResizeResult.applied_generation`, where measurable without adding a synchronous acknowledgement dependency.
 
 Instrumentation records only monotonic duration, byte/count/geometry sizes, result category and aggregate counters/histograms. It never records text, encoded key bytes, marked text, terminal contents, environment values or secrets.
 
-Request IDs are correctness metadata and must not be repurposed as telemetry or production trace IDs.
+Request IDs and applied generations are correctness metadata and must not be repurposed as telemetry or production trace IDs.
 
 ### 15.1 Pass 7 controlled-host performance gate
 
@@ -782,7 +818,7 @@ Pass 7 must also demonstrate:
 - Pass 6 output/render p99 and active CPU no >10% regression under repeated controlled workload unless independently reviewed variance explains it and repeated median remains within 10%;
 - steady-state client/Runtime RSS attributable to idle Pass 7 path grows by **≤ 2 MiB** total in the controlled single-surface workload;
 - accepted client input/control memory never exceeds the 262,144-byte wire-byte bound plus fixed queue/container overhead;
-- ResizeResult control traffic under live-resize remains bounded and does not create a material output/render regression.
+- `ResizeResult` control traffic plus success-fence bookkeeping under live-resize remains bounded and does not create a material output/render regression.
 
 A target miss blocks Pass 7 unless explicitly re-reviewed with measured evidence.
 
@@ -821,20 +857,21 @@ Every new/renamed production hot-path function participating in input ingress, q
 
 - capabilities bits 2 and 3 negotiate; older Pass 5/6 client tolerates both unknown bits;
 - `TerminalKey` exact 24-byte round-trip and malformed/fuzz cases;
-- `ResizeRequest` exact 32-byte layout; `ResizeResult` exact 32-byte layout;
+- `ResizeRequest` exact 32-byte layout; `ResizeResult` exact 40-byte layout;
 - request ID nonzero/unique/monotonic/reconnect reset/wrap rejection;
 - duplicate request ID rejection;
 - Controller/Observer/stale attachment authorization;
 - every structurally valid ResizeRequest receives exactly one matching ResizeResult;
-- Applied only after PTY winsize + canonical commit;
+- `Applied` only after PTY winsize + canonical commit and carries the resulting canonical `applied_generation`;
+- failure result carries `applied_generation == 0`;
 - failed PTY winsize returns matching `InternalFailure` with canonical dimensions/generation unchanged;
 - malformed/untrusted request-ID path never guesses correlation;
 - older result cannot invalidate newer unresolved request;
-- unknown/duplicate result ID fails closed in client state machine;
+- unknown/duplicate result ID or invalid applied-generation semantics fails closed in client state machine;
 - accepted FIFO order across `Input`, `TerminalKey` and `ResizeRequest` barriers;
 - queue limit/recovery and no unbounded allocation/busy retry.
 
-The local binary-protocol fuzz target includes TerminalKey and correlated ResizeRequest/ResizeResult decode/state transitions.
+The local binary-protocol fuzz target includes `TerminalKey` and correlated `ResizeRequest`/`ResizeResult` decode/state transitions, including malformed/overflowing applied-generation cases.
 
 ### 16.3 Resize tests
 
@@ -843,15 +880,20 @@ The local binary-protocol fuzz target includes TerminalKey and correlated Resize
 - negative viewport/insets and non-positive cell metrics;
 - derived non-finite arithmetic before floor/conversion;
 - tiny positive → 1×1; huge finite → 512×256;
-- desired==committed with no unresolved request → no request;
+- desired==committed with no unresolved request/fence → no request;
 - committed 80×24, unresolved 100×30, desired returns 80×24 → restoring request retained/admitted without a new native event when requests succeed;
 - failed **local admission** retries only after local capacity progress;
+- `ResizeResult(Applied)` arriving before its projection moves the request into `appliedAwaitingProjection` and emits zero duplicate same-target `ResizeRequest`;
+- an older queued projection with the same geometry but generation lower than `applied_generation` does not clear the fence;
+- projection at exactly `applied_generation` must carry the fenced geometry or fail closed;
+- a later projection generation may supersede the fence and then reconciliation uses the newly observed canonical geometry;
+- newer successful request supersedes the older success fence while keeping fence storage constant-size;
 - persistent PTY winsize failure produces one result per permitted attempt and zero automatic retries from result/projection/socket/queue events;
 - same failed target retries at most once after a permitted recovery epoch and repeated failure reinstalls suppression;
-- older failed request does not clear/suppress newer unresolved request;
+- older failed request does not clear/suppress newer unresolved request or success fence;
 - authority-class failure stops mutation until authority recovery;
 - unknown/duplicate/untrusted result surfaces protocol failure and never retries by guessing;
-- disconnect clears unresolved IDs/state; reattach starts fresh ID space;
+- disconnect clears unresolved IDs and applied-success fence; reattach starts fresh ID/generation-fence state;
 - backing-scale-only invalidation does not mutate terminal geometry;
 - rapid live-resize coalesces only adjacent not-yet-started requests;
 - input/resize/input ordering remains exact;
@@ -884,6 +926,8 @@ prove:
 - text-input substring/range queries cannot retrieve prompt/terminal/scrollback content;
 - resize changes PTY/canonical/projection consistently;
 - resize-away-then-return converges under overlapping unresolved requests;
+- force `ResizeResult(Applied)` to be observed before its corresponding presentation update and prove no duplicate same-target request is emitted while the success fence is active;
+- force an older same-geometry projection below the applied generation and prove it cannot falsely retire the fence;
 - injected persistent winsize failure visibly reports and does not spin until permitted recovery;
 - older failed request result cannot invalidate newer target;
 - minimal alternate-screen fixture receives same input/resize path;
@@ -893,7 +937,7 @@ prove:
 
 ### 16.5 Performance evidence
 
-Benchmark sparse typing, key-repeat burst, legal 1/16/64 KiB commits, rejected >64 KiB commit, representative live-resize through M001 maximum, correlated result traffic, persistent-failure no-retry path, input under sustained output, alternate-screen input/resize and idle before/after.
+Benchmark sparse typing, key-repeat burst, legal 1/16/64 KiB commits, rejected >64 KiB commit, representative live-resize through M001 maximum, correlated result traffic including result-before-projection ordering, persistent-failure no-retry path, input under sustained output, alternate-screen input/resize and idle before/after.
 
 Record exact SHA, hardware/OS/build, repetitions/percentile method, baseline/result, p50/p95/p99/max, CPU/RSS, queue depth/high-water, allocations/reallocations where instrumentable and socket/write counts. Never log input/composition content.
 
@@ -907,9 +951,10 @@ Record exact SHA, hardware/OS/build, repetitions/percentile method, baseline/res
 - socket `WouldBlock`: retain accepted FIFO bytes and wait for writable readiness.
 - PTY closed/finalized: reject input/resize and clean resources idempotently.
 - local resize admission backpressure: retain desired geometry and retry on **local** capacity progress because no Runtime request was sent.
-- failed ResizeResult: mutate only its exact request record; never invalidate a newer request; apply section 12.6 retry gate.
+- successful ResizeResult before projection: retain the applied-success fence; do not resend the same newest target merely because the unresolved request was retired.
+- failed ResizeResult: mutate only its exact request record; never invalidate a newer request/fence; apply section 12.6 retry gate.
 - persistent/unknown resize failure: visible non-secret state and wait for permitted meaningful layout/authority/explicit recovery, never internal retry loop.
-- untrusted/unknown result correlation: stop automatic resize submission and require explicit recovery/reconnect.
+- result/projection generation inconsistency or untrusted/unknown result correlation: stop automatic resize submission and require explicit recovery/reconnect.
 - renderer failure does not change terminal authority.
 
 ## 18. Security and privacy
@@ -920,7 +965,7 @@ Record exact SHA, hardware/OS/build, repetitions/percentile method, baseline/res
 - stale AttachmentIds/request IDs never regain authority after reconnect;
 - malformed/unsupported key events fail closed before PTY mutation;
 - rejected committed text is not retained for hidden retry/telemetry/diagnostics;
-- input/resize failure state carries only non-secret category/geometry/request-ID metadata;
+- input/resize failure state carries only non-secret category/geometry/request-ID/generation metadata;
 - `NSTextInputClient` storage/query/range/coordinate methods operate only on bounded ephemeral composition state and never return terminal/history text;
 - optional text-input methods cannot expose terminal transcript as a hidden document model;
 - accessibility/IME helpers do not turn presentation text into authority.
@@ -960,7 +1005,8 @@ Pass 7 implementation is complete only when:
 - queue is bounded/FIFO/readiness-driven with no main-thread busy wait;
 - Pass 7 production resize uses capability-gated correlated `ResizeRequest`/`ResizeResult`, not legacy uncorrelated type 10;
 - request results correlate exactly; older failures cannot invalidate newer requests; persistent failure cannot create automatic retry loops;
-- resize transaction remains PTY winsize → canonical commit → result/projection with no synchronous acknowledgement dependency;
+- `Applied` carries canonical generation and transitions into a bounded `appliedAwaitingProjection` fence so result-before-projection ordering cannot duplicate the same desired resize or starve the projection that retires it;
+- resize transaction remains PTY winsize → canonical commit/generation → result → projection with no synchronous acknowledgement dependency;
 - geometry math is finite-safe and final desired geometry converges when not retry-suppressed by an actual failure;
 - `NSTextInputClient` document is composition-only, bounded and UTF-16-range correct; terminal/history text is never returned;
 - `insertText`/`unmarkText` commit semantics are distinct from cancellation/discard;

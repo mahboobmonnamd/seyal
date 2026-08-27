@@ -1,6 +1,6 @@
 # SPEC-005 — M001 permanent Metal renderer
 
-- **Status:** Proposed for M001 Pass 6
+- **Status:** Accepted for M001 Pass 6 via PR #657
 - **Date:** 2026-08-27
 - **Issue:** #656
 - **Architecture authority:** accepted foundation architecture; `MILESTONE-001.md` section 11 and Pass 6

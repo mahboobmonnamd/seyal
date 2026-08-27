@@ -26,9 +26,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let buildConfiguration = Bundle.main.object(
             forInfoDictionaryKey: Self.buildConfigurationKey
         ) as? String
+        let environment = ProcessInfo.processInfo.environment
         let useShellPreview = Self.shouldUseShellPreview(
             arguments: CommandLine.arguments,
-            environment: ProcessInfo.processInfo.environment,
+            environment: environment,
             buildConfiguration: buildConfiguration
         )
 
@@ -53,7 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.title = "Seyal — UI Shell Preview"
 
             let previewState = SeyalShellPreviewState.makeDefault(
-                includeTestAttention: ProcessInfo.processInfo.environment["SEYAL_UI_TEST_FIXTURES"] == "1"
+                includeTestAttention: environment["SEYAL_UI_TEST_FIXTURES"] == "1"
             )
             window.contentView = SeyalShellPreviewFactory.make(
                 frame: contentRect,
@@ -87,6 +88,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         self.window = window
+
+        #if DEBUG
+        if useShellPreview, environment["SEYAL_UI_TEST_FORCE_SHORTCUT_HINTS"] == "1" {
+            previewShortcutController?.showShortcutHintsForTesting()
+        }
+        #endif
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

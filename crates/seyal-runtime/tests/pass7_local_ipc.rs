@@ -40,7 +40,10 @@ impl Harness {
         let execution_id = runtime
             .create_execution(command, WindowSize::cells(80, 24).expect("size"))
             .expect("execution");
-        let socket = runtime.local_ipc_socket_path().expect("socket").to_path_buf();
+        let socket = runtime
+            .local_ipc_socket_path()
+            .expect("socket")
+            .to_path_buf();
         let deadline = Instant::now() + Duration::from_secs(2);
         let stream = loop {
             match UnixStream::connect(&socket) {
@@ -257,7 +260,10 @@ fn duplicate_resize_request_id_is_correlated_malformed_failure() {
     harness.send(MessageType::ResizeRequest, &request.encode());
     let (kind, payload) = harness.frame();
     assert_eq!(kind, MessageType::ResizeResult as u16);
-    assert_eq!(ResizeResult::decode(&payload).unwrap().result_code, ResizeResultCode::Applied);
+    assert_eq!(
+        ResizeResult::decode(&payload).unwrap().result_code,
+        ResizeResultCode::Applied
+    );
 
     // Consume the projection from the first successful resize before testing
     // the duplicate result, so mandatory-vs-presentation ordering is explicit.

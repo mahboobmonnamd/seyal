@@ -1,6 +1,14 @@
 ## Issue
 
-Closes #
+Owning Issue: #
+
+Choose exactly one relationship and delete the others:
+
+- Closes #
+- Refs #
+- Part of #
+
+Use `Closes`, `Fixes`, or `Resolves` only when merging this PR will satisfy the owning Issue's acceptance criteria and Definition of Done. Use `Refs` / `Part of` for refinement, prerequisites, evidence, partial implementation, or any PR that must leave the Issue open.
 
 ## Goal
 
@@ -50,7 +58,8 @@ Provide reproducible commands/steps from a clean checkout where practical.
 
 ## Scope discipline
 
-- [ ] PR changes only the linked Issue scope.
+- [ ] PR changes only the linked owning Issue scope.
+- [ ] The chosen closing/non-closing Issue relationship matches the final acceptance evidence.
 - [ ] No unrelated cleanup/refactor is included.
 - [ ] No architecture was changed incidentally.
 - [ ] No valid test was weakened to make implementation pass.

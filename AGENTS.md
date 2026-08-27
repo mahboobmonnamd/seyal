@@ -111,7 +111,11 @@ Until production scaffolding exists, `make check` validates governance/documenta
 
 ## Pull requests
 
-Every implementation PR links its Issue, stays inside scope, cites architecture/spec authority, includes required tests and measurable evidence, states security/docs implications, and gives a reproducible verification procedure. CI evidence is required. Core/high-risk changes require independent review; implementers do not self-approve.
+Every implementation PR has exactly one **owning Issue**, stays inside that Issue's scope, cites architecture/spec authority, includes required tests and measurable evidence, states security/docs implications, and gives a reproducible verification procedure. CI evidence is required. Core/high-risk changes require independent review; implementers do not self-approve.
+
+The PR must state the Issue relationship explicitly. Use `Closes #N`, `Fixes #N`, or `Resolves #N` only when merging that PR will satisfy the owning Issue's acceptance criteria and Definition of Done. Refinement, evidence, prerequisite, partial-implementation, or otherwise incomplete PRs must use a non-closing relationship such as `Refs #N` or `Part of #N`. A PR must never close an Issue merely because it worked on that Issue.
+
+Before merge handoff, review/verification must compare the final PR evidence with the owning Issue and verify the expected post-merge Issue state. A closing PR must leave no unmet Done gate; a non-closing PR must leave the Issue open. Correct stale Issue state/checklist text when it contradicts the verified result.
 
 A mergeable implementation PR must contain only production-intent code. Exploratory branches may be useful, but their code is not a merge candidate until the work is explicitly reclassified as production, re-refined, and implemented under normal production gates.
 

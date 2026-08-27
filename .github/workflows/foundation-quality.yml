@@ -2,6 +2,7 @@ name: Foundation Quality
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [master]
 
@@ -23,6 +24,13 @@ jobs:
         run: bash -n scripts/*.sh
       - name: Governance structure
         run: make governance-check
+      - name: PR Issue contract validator self-test
+        run: python3 scripts/test-pr-issue-contract.py
+      - name: PR owning Issue relationship
+        if: github.event_name == 'pull_request'
+        env:
+          SEYAL_PR_BODY: ${{ github.event.pull_request.body }}
+        run: python3 scripts/check-pr-issue-contract.py
       - name: Local documentation links
         run: python3 scripts/check-doc-links.py
       - name: Architecture layering

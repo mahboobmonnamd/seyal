@@ -111,7 +111,8 @@ pub extern "C" fn seyal_bridge_wants_write() -> i32 {
         let Ok(slot) = slot.try_borrow() else {
             return -100;
         };
-        slot.as_ref().map_or(0, |client| i32::from(client.wants_write()))
+        slot.as_ref()
+            .map_or(0, |client| i32::from(client.wants_write()))
     })
 }
 

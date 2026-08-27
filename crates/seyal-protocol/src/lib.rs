@@ -11,6 +11,7 @@ pub use seyal_core::{AttachmentId, ExecutionId};
 pub mod discovery;
 pub mod display;
 pub mod framing;
+mod pass7;
 
 /// Compatibility namespace matching the protocol modules' historical Runtime
 /// location while Runtime and clients migrate to the physical protocol crate.

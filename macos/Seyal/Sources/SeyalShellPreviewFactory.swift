@@ -17,6 +17,280 @@ enum SeyalShellPreviewFactory {
     }
 }
 
+struct SeyalShortcutHintPolicy {
+    static let intentionalHoldDelay: TimeInterval = 0.30
+
+    static func isCommandOnly(_ flags: NSEvent.ModifierFlags) -> Bool {
+        let ignored: NSEvent.ModifierFlags = [.capsLock, .numericPad, .function]
+        let normalized = flags
+            .intersection(.deviceIndependentFlagsMask)
+            .subtracting(ignored)
+        return normalized == [.command]
+    }
+}
+
+@MainActor
+final class SeyalShortcutHintOverlay: NSView {
+    struct Hint: Equatable {
+        let targetAccessibilityID: String
+        let text: String
+        let id: String
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+
+    func present(_ hints: [Hint], in root: NSView) {
+        root.layoutSubtreeIfNeeded()
+        if superview !== root {
+            removeFromSuperview()
+            frame = root.bounds
+            autoresizingMask = [.width, .height]
+            root.addSubview(self, positioned: .above, relativeTo: nil)
+        } else {
+            frame = root.bounds
+        }
+
+        subviews.forEach { $0.removeFromSuperview() }
+        setAccessibilityIdentifier("shortcut-hint-overlay")
+        isHidden = false
+
+        for hint in hints {
+            guard let target = descendant(
+                in: root,
+                accessibilityID: hint.targetAccessibilityID,
+                excluding: self
+            ), !target.isHidden else {
+                continue
+            }
+            addHintBadge(hint, target: target, root: root)
+        }
+    }
+
+    func dismiss() {
+        isHidden = true
+        subviews.forEach { $0.removeFromSuperview() }
+    }
+
+    private func addHintBadge(_ hint: Hint, target: NSView, root: NSView) {
+        let targetRect = target.convert(target.bounds, to: root)
+        guard targetRect.width > 0, targetRect.height > 0 else { return }
+
+        let label = NSTextField(labelWithString: hint.text)
+        label.font = NSFont.monospacedSystemFont(ofSize: 9.5, weight: .semibold)
+        label.textColor = SeyalDesignTokens.Palette.textPrimary
+        label.alignment = .center
+        label.setAccessibilityIdentifier("shortcut-hint.\(hint.id)")
+        label.sizeToFit()
+
+        let horizontalPadding: CGFloat = 5
+        let verticalPadding: CGFloat = 3
+        let badgeSize = NSSize(
+            width: ceil(label.frame.width + horizontalPadding * 2),
+            height: ceil(label.frame.height + verticalPadding * 2)
+        )
+
+        var x = targetRect.maxX - badgeSize.width + 4
+        var y = targetRect.maxY - badgeSize.height + 4
+        x = min(max(4, x), max(4, bounds.width - badgeSize.width - 4))
+        y = min(max(4, y), max(4, bounds.height - badgeSize.height - 4))
+
+        let badge = NSView(frame: NSRect(origin: NSPoint(x: x, y: y), size: badgeSize))
+        badge.wantsLayer = true
+        badge.layer?.cornerRadius = 5
+        badge.layer?.backgroundColor = SeyalDesignTokens.Palette.elevatedBackground.withAlphaComponent(0.97).cgColor
+        badge.layer?.borderWidth = 1
+        badge.layer?.borderColor = SeyalDesignTokens.Palette.focus.cgColor
+
+        label.frame.origin = NSPoint(x: horizontalPadding, y: verticalPadding)
+        badge.addSubview(label)
+        addSubview(badge)
+    }
+
+    private func descendant(
+        in root: NSView,
+        accessibilityID: String,
+        excluding excluded: NSView
+    ) -> NSView? {
+        if root !== excluded, root.accessibilityIdentifier() == accessibilityID {
+            return root
+        }
+        for child in root.subviews where child !== excluded {
+            if let match = descendant(
+                in: child,
+                accessibilityID: accessibilityID,
+                excluding: excluded
+            ) {
+                return match
+            }
+        }
+        return nil
+    }
+}
+
+@MainActor
+final class SeyalShortcutHintMonitor {
+    private weak var window: NSWindow?
+    private let onVisibilityChange: (Bool) -> Void
+    private var flagsMonitor: Any?
+    private var keyDownMonitor: Any?
+    private var appResignObserver: NSObjectProtocol?
+    private var windowBecomeKeyObserver: NSObjectProtocol?
+    private var windowResignKeyObserver: NSObjectProtocol?
+    private var windowCloseObserver: NSObjectProtocol?
+    private var pendingShowTimer: DispatchSourceTimer?
+    private var pendingGeneration = 0
+    private var isVisible = false
+
+    init(window: NSWindow, onVisibilityChange: @escaping (Bool) -> Void) {
+        self.window = window
+        self.onVisibilityChange = onVisibilityChange
+    }
+
+    func start() {
+        guard flagsMonitor == nil else { return }
+
+        flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            self?.update(from: event.modifierFlags, eventWindow: event.window)
+            return event
+        }
+        keyDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            self?.handleKeyDown(event)
+            return event
+        }
+
+        appResignObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.cancelPendingAndHide()
+            }
+        }
+        if let window {
+            windowBecomeKeyObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.didBecomeKeyNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.update(from: NSEvent.modifierFlags, eventWindow: nil)
+                }
+            }
+            windowResignKeyObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.didResignKeyNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.cancelPendingAndHide()
+                }
+            }
+            windowCloseObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.stop()
+                }
+            }
+        }
+    }
+
+    func stop() {
+        if let flagsMonitor {
+            NSEvent.removeMonitor(flagsMonitor)
+            self.flagsMonitor = nil
+        }
+        if let keyDownMonitor {
+            NSEvent.removeMonitor(keyDownMonitor)
+            self.keyDownMonitor = nil
+        }
+        for observer in [
+            appResignObserver,
+            windowBecomeKeyObserver,
+            windowResignKeyObserver,
+            windowCloseObserver,
+        ].compactMap({ $0 }) {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        appResignObserver = nil
+        windowBecomeKeyObserver = nil
+        windowResignKeyObserver = nil
+        windowCloseObserver = nil
+        cancelPendingAndHide()
+    }
+
+    func showImmediatelyForTesting() {
+        setVisible(true)
+    }
+
+    private func handleKeyDown(_ event: NSEvent) {
+        guard isCurrentWindow(eventWindow: event.window) else { return }
+        cancelPendingAndHide()
+    }
+
+    private func update(from flags: NSEvent.ModifierFlags, eventWindow: NSWindow?) {
+        guard isCurrentWindow(eventWindow: eventWindow),
+              SeyalShortcutHintPolicy.isCommandOnly(flags) else {
+            cancelPendingAndHide()
+            return
+        }
+        queueShow()
+    }
+
+    private func isCurrentWindow(eventWindow: NSWindow?) -> Bool {
+        guard let window, window.isKeyWindow else { return false }
+        if let eventWindow {
+            return eventWindow === window
+        }
+        return NSApp.keyWindow === window
+    }
+
+    private func queueShow() {
+        guard !isVisible, pendingShowTimer == nil else { return }
+
+        pendingGeneration &+= 1
+        let generation = pendingGeneration
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + SeyalShortcutHintPolicy.intentionalHoldDelay)
+        timer.setEventHandler { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.showIfStillEligible(generation: generation)
+            }
+        }
+        pendingShowTimer = timer
+        timer.resume()
+    }
+
+    private func showIfStillEligible(generation: Int) {
+        guard pendingGeneration == generation else { return }
+        pendingShowTimer?.cancel()
+        pendingShowTimer = nil
+        guard isCurrentWindow(eventWindow: nil),
+              SeyalShortcutHintPolicy.isCommandOnly(NSEvent.modifierFlags) else {
+            return
+        }
+        setVisible(true)
+    }
+
+    private func cancelPendingAndHide() {
+        pendingGeneration &+= 1
+        pendingShowTimer?.cancel()
+        pendingShowTimer = nil
+        setVisible(false)
+    }
+
+    private func setVisible(_ visible: Bool) {
+        guard visible != isVisible else { return }
+        isVisible = visible
+        onVisibilityChange(visible)
+    }
+}
+
 /// Native macOS command routing for the deterministic shell preview.
 ///
 /// Keyboard shortcuts are expressed as NSMenuItem key equivalents rather than
@@ -25,8 +299,16 @@ enum SeyalShellPreviewFactory {
 /// stealing non-Command terminal input that must eventually reach the PTY path.
 @MainActor
 final class SeyalPreviewShortcutController: NSObject {
+    enum CloseTarget: Equatable {
+        case pane(String)
+        case tab(String)
+        case window
+    }
+
     private weak var window: NSWindow?
     private let state: SeyalShellPreviewState
+    private let hintOverlay = SeyalShortcutHintOverlay(frame: .zero)
+    private var hintMonitor: SeyalShortcutHintMonitor?
 
     init(window: NSWindow, state: SeyalShellPreviewState) {
         self.window = window
@@ -45,6 +327,61 @@ final class SeyalPreviewShortcutController: NSObject {
 
         NSApp.mainMenu = mainMenu
         NSApp.windowsMenu = windowRoot.submenu
+        installHintMonitor()
+    }
+
+    func showShortcutHintsForTesting() {
+        hintMonitor?.showImmediatelyForTesting()
+    }
+
+    private func installHintMonitor() {
+        guard let window, hintMonitor == nil else { return }
+        let monitor = SeyalShortcutHintMonitor(window: window) { [weak self] visible in
+            guard let self else { return }
+            if visible {
+                self.presentShortcutHints()
+            } else {
+                self.hintOverlay.dismiss()
+            }
+        }
+        hintMonitor = monitor
+        monitor.start()
+    }
+
+    private func presentShortcutHints() {
+        guard let root = window?.contentView else { return }
+        hintOverlay.present(currentShortcutHints(), in: root)
+    }
+
+    private func currentShortcutHints() -> [SeyalShortcutHintOverlay.Hint] {
+        var hints: [SeyalShortcutHintOverlay.Hint] = []
+
+        for (index, workspace) in state.workspaces.prefix(9).enumerated() {
+            hints.append(.init(
+                targetAccessibilityID: "workspace.\(workspace.id)",
+                text: "⌃⌘\(index + 1)",
+                id: "workspace.\(workspace.id)"
+            ))
+        }
+        for (index, tab) in state.activeWorkspace.tabs.prefix(9).enumerated() {
+            hints.append(.init(
+                targetAccessibilityID: "tab.\(tab.id)",
+                text: "⌘\(index + 1)",
+                id: "tab.\(tab.id)"
+            ))
+        }
+
+        hints.append(contentsOf: [
+            .init(targetAccessibilityID: "new-tab", text: "⌘T", id: "new-tab"),
+            .init(targetAccessibilityID: "toggle-left-sidebar", text: "⌘0", id: "left-sidebar"),
+            .init(targetAccessibilityID: "toggle-inspector", text: "⌥⌘0", id: "inspector"),
+            .init(
+                targetAccessibilityID: "pane.focus.\(state.activeTab.focusedPaneID)",
+                text: "⌘W",
+                id: "close-focused-context"
+            ),
+        ])
+        return hints
     }
 
     private func makeApplicationMenu() -> NSMenuItem {
@@ -132,8 +469,8 @@ final class SeyalPreviewShortcutController: NSObject {
             modifiers: [.command]
         ))
         menu.addItem(makeItem(
-            title: "Close Tab",
-            action: #selector(closeTab(_:)),
+            title: "Close Focused Pane / Tab / Window",
+            action: #selector(closeFocusedContext(_:)),
             keyEquivalent: "w",
             modifiers: [.command]
         ))
@@ -248,8 +585,15 @@ final class SeyalPreviewShortcutController: NSObject {
     }
 
     @objc
-    func closeTab(_ sender: Any?) {
-        sendShellAction("closeTab:", identifier: state.activeTab.id)
+    func closeFocusedContext(_ sender: Any?) {
+        switch Self.closeTarget(for: state) {
+        case let .pane(paneID):
+            sendShellAction("closePane:", identifier: paneID)
+        case let .tab(tabID):
+            sendShellAction("closeTab:", identifier: tabID)
+        case .window:
+            window?.performClose(nil)
+        }
     }
 
     @objc
@@ -275,6 +619,16 @@ final class SeyalPreviewShortcutController: NSObject {
     @objc
     func selectWindowByNumber(_ sender: NSMenuItem) {
         selectWindow(index: sender.tag)
+    }
+
+    static func closeTarget(for state: SeyalShellPreviewState) -> CloseTarget {
+        if state.activeTab.paneCount > 1 {
+            return .pane(state.activeTab.focusedPaneID)
+        }
+        if state.activeWorkspace.tabs.count > 1 {
+            return .tab(state.activeTab.id)
+        }
+        return .window
     }
 
     private func selectWorkspace(offset: Int) {

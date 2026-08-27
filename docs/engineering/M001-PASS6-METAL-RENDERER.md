@@ -108,14 +108,14 @@ The final local acceptance run used implementation commit `a7abeb50c179be293eca5
 
 | Boundary / workload | p50 | p95 | p99 | max |
 | --- | ---: | ---: | ---: | ---: |
-| Rust dirty row + cursor preparation | 333 ns | 458 ns | 500 ns | 7,083 ns |
-| Rust full 120×40 preparation | 4,500 ns | 4,958 ns | 6,000 ns | 6,166 ns |
-| Native Metal preparation | 33,208 ns | 47,542 ns | 61,042 ns | 120,625 ns |
-| GPU completion proxy* | 477,667 ns | 3,531,042 ns | 4,861,791 ns | 5,497,459 ns |
+| Rust dirty row + cursor preparation | 375 ns | 375 ns | 458 ns | 500 ns |
+| Rust full 120×40 preparation | 4,875 ns | 5,084 ns | 5,875 ns | 9,791 ns |
+| Native Metal preparation | 26,333 ns | 38,583 ns | 44,166 ns | 95,250 ns |
+| GPU completion proxy* | 373,875 ns | 2,414,292 ns | 3,356,500 ns | 4,541,375 ns |
 
-The native run rebuilt 160 rows / 19,200 cells, used 230,400 instance bytes, recorded 19,198 glyph-cache hits, 2 misses, 2 uploads and 306 uploaded bytes, with a 16 MiB atlas budget and 17,007,616 dedicated GPU bytes. `/usr/bin/time -lp` reported 0.64 s wall, 0.02 s user CPU, 0.04 s system CPU, 27,623,424-byte maximum RSS, and 112,984,712-byte peak footprint. The GPU value is an offscreen completion proxy including target allocation; it is not physical display scanout latency.
+The native run rebuilt 160 rows / 19,200 cells, used 230,400 instance bytes, recorded 19,198 glyph-cache hits, 2 misses, 2 uploads and 306 uploaded bytes, with a 16 MiB atlas budget and 17,007,616 dedicated GPU bytes. `/usr/bin/time -lp` reported 0.12 s wall, 0.01 s user CPU, 0.03 s system CPU, 27,705,344-byte maximum RSS, and 113,017,480-byte peak footprint. The GPU value is an offscreen completion proxy including target allocation; it is not physical display scanout latency.
 
-The full `make bench` Candidate-D run also covered the required fanout/workload/geometry matrix. At 16 viewers and sustained 2-second high output at 200×60 it recorded p95/p99 client-cache latency of 2,956/3,382 µs, 16,336 KiB populated RSS, 22.7% sampled CPU, `3,568` latency samples, 678,423,552 aggregate UDS bytes, `shutdown_ok=true`, and final pending input `0`. The 50- and 100-execution cases were explicitly `PLATFORM_LIMITED` at 34 created executions because the host returned `Device not configured (os error 6)`; this is retained platform evidence, not a Seyal capacity claim.
+The full `make bench` Candidate-D run also covered the required fanout/workload/geometry matrix. At 16 viewers and sustained 2-second high output at 200×60 it recorded p95/p99 client-cache latency of 3,237/3,627 µs, 16,544 KiB populated RSS, 22.6% sampled CPU, `3,568` latency samples, 678,423,552 aggregate UDS bytes, `shutdown_ok=true`, and final pending input `0`. The 50- and 100-execution cases were explicitly `PLATFORM_LIMITED` at 34 created executions because the host returned `Device not configured (os error 6)`; this is retained platform evidence, not a Seyal capacity claim.
 
 Against the same-host pre-fix renderer run, the current implementation remains in the same order of magnitude; the latest exact-head run measured 26,333 ns / 373,875 ns medians versus the prior 26,500 ns / 386,958 ns. This supports no material regression judgment for this workload only; it does not establish an absolute product latency target. The durable PR validation comment records the same measurements against the exact implementation commit.
 

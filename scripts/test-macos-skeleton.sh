@@ -91,8 +91,20 @@ grep -q 'NSMenuItem' "$SOURCES/SeyalShellPreviewFactory.swift" \
   || fail "native shell navigation shortcuts must be discoverable AppKit menu commands"
 grep -q 'keyEquivalentModifierMask' "$SOURCES/SeyalShellPreviewFactory.swift" \
   || fail "native shell navigation shortcuts must use AppKit key equivalents"
+grep -q 'closeFocusedContext' "$SOURCES/SeyalShellPreviewFactory.swift" \
+  || fail "Command-W must route through hierarchical Pane/Tab/Window close semantics"
+grep -q 'static func closeTarget' "$SOURCES/SeyalShellPreviewFactory.swift" \
+  || fail "hierarchical close target policy must remain explicit and testable"
+grep -q 'SeyalShortcutHintOverlay' "$SOURCES/SeyalShellPreviewFactory.swift" \
+  || fail "Command-hold shortcut hint overlay is missing"
+grep -q 'intentionalHoldDelay: TimeInterval = 0.30' "$SOURCES/SeyalShellPreviewFactory.swift" \
+  || fail "shortcut hints must require the intentional 300 ms Command-only hold"
+grep -q 'addLocalMonitorForEvents(matching: .flagsChanged)' "$SOURCES/SeyalShellPreviewFactory.swift" \
+  || fail "shortcut hint monitor must observe modifier transitions"
+grep -q 'addLocalMonitorForEvents(matching: .keyDown)' "$SOURCES/SeyalShellPreviewFactory.swift" \
+  || fail "shortcut hints must cancel when another key is pressed"
 if grep -q 'override func keyDown' "$SOURCES/SeyalShellPreviewFactory.swift"; then
-  fail "shell navigation shortcuts must not use raw keyDown interception"
+  fail "shell navigation shortcuts must not override raw keyDown handling"
 fi
 grep -q 'TerminalSurfaceHostView' "$PROJECT/project.pbxproj" \
   || fail "permanent Metal terminal-surface host is missing from the native target"

@@ -68,6 +68,7 @@ final class MetalSurfaceView: NSView {
     override func layout() {
         super.layout()
         updateDrawableSize()
+        guard shouldRender else { return }
         renderer.requestPresent()
         presentPreparedState()
     }
@@ -76,7 +77,19 @@ final class MetalSurfaceView: NSView {
         super.viewDidChangeBackingProperties()
         updateDrawableSize()
         forceNextFrame = true
-        bridge?.publishCurrentFrame()
+        if shouldRender {
+            bridge?.publishCurrentFrame()
+        }
+    }
+
+    override func viewDidHide() {
+        super.viewDidHide()
+        updateVisibility()
+    }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        updateVisibility()
     }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
@@ -111,19 +124,23 @@ final class MetalSurfaceView: NSView {
         updateVisibility()
     }
 
+    private var shouldRender: Bool {
+        guard let window else { return false }
+        return !window.isMiniaturized
+            && window.occlusionState.contains(.visible)
+            && !isHiddenOrHasHiddenAncestor
+    }
+
     private func updateVisibility() {
-        let visible = window.map {
-            !$0.isMiniaturized && $0.occlusionState.contains(.visible)
-        } ?? false
-        let shouldRender = visible && !isHidden
-        if shouldRender {
+        let renderable = shouldRender
+        if renderable {
             forceNextFrame = true
             if bridge?.isConnected == false {
                 _ = bridge?.start()
             }
         }
-        renderer.setVisible(shouldRender)
-        if shouldRender {
+        renderer.setVisible(renderable)
+        if renderable {
             bridge?.publishCurrentFrame()
             renderer.requestPresent()
             presentPreparedState()
@@ -144,7 +161,9 @@ final class MetalSurfaceView: NSView {
             if result == .updated {
                 forceNextFrame = false
                 lastRenderError = nil
-                presentPreparedState()
+                if shouldRender {
+                    presentPreparedState()
+                }
             }
         } catch {
             lastRenderError = error
@@ -152,7 +171,7 @@ final class MetalSurfaceView: NSView {
     }
 
     private func presentPreparedState() {
-        guard let metalLayer = layer as? CAMetalLayer else { return }
+        guard shouldRender, let metalLayer = layer as? CAMetalLayer else { return }
         _ = renderer.present(layer: metalLayer)
     }
 

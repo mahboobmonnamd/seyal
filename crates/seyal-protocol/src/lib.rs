@@ -6,10 +6,10 @@
 
 pub use seyal_core::{AttachmentId, ExecutionId};
 
-pub mod display;
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 pub mod discovery;
+pub mod display;
 pub mod framing;
 
 /// Compatibility namespace matching the protocol modules' historical Runtime

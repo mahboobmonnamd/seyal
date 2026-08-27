@@ -10,14 +10,14 @@ use std::sync::Arc;
 #[cfg(feature = "benchmark-instrumentation")]
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(test)]
+use seyal_exec::ProjectionAttributes;
 use seyal_exec::{
     ProjectionCell, ProjectionColor, TerminalProjectionSnapshot, TerminalProjectionUpdate,
 };
 #[cfg(test)]
-use seyal_exec::ProjectionAttributes;
-use seyal_protocol::framing::{self, MAX_FRAME_PAYLOAD};
-#[cfg(test)]
 use seyal_protocol::framing::HEADER_LEN;
+use seyal_protocol::framing::{self, MAX_FRAME_PAYLOAD};
 
 pub use seyal_protocol::display::{
     DISPLAY_CELL_LEN, DISPLAY_CHUNK_HEADER_LEN, DecodedDisplayChunk, DisplayAttributes,
@@ -477,6 +477,7 @@ mod tests {
         let mut update = sample_update(256, 512, 21, ProjectionDamage::full(256));
         update.cells[0].scalar = 'Z';
         let batch = encode_delta(&update, 20).unwrap();
+        assert!(batch.frames.len() > 1);
         let chunks = batch
             .frames
             .iter()

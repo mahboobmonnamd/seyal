@@ -705,7 +705,7 @@ final class SeyalPreviewShortcutController: NSObject {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    static func wrappedIndex(current: Int, count: Int, offset: Int) -> Int {
+    nonisolated static func wrappedIndex(current: Int, count: Int, offset: Int) -> Int {
         precondition(count > 0)
         let value = (current + offset) % count
         return value >= 0 ? value : value + count

@@ -152,7 +152,7 @@ final class MetalDisplayLinkLease {
 }
 
 @MainActor
-final class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
+class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     private let metalDevice: any MTLDevice
     private let renderer: MetalTerminalRenderer
     private var bridge: RustDisplayBridge?
@@ -213,6 +213,14 @@ final class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
             },
             onError: { [weak self] code in
                 self?.lastBridgeError = code
+                DispatchQueue.main.async { [weak self] in
+                    self?.terminalBridgeDidFail(code)
+                }
+            },
+            onStatusChanged: { [weak self] in
+                DispatchQueue.main.async { [weak self] in
+                    self?.terminalBridgeStatusDidChange()
+                }
             }
         )
         self.bridge = bridge
@@ -226,6 +234,83 @@ final class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
 
     override func makeBackingLayer() -> CALayer {
         CAMetalLayer()
+    }
+
+    /// Narrow subclass hooks for Pass 7 presentation-only failure/focus state.
+    /// They never transfer PTY, VT, grid or renderer authority into AppKit.
+    func terminalBridgeDidFail(_ code: Int32) {
+        _ = code
+    }
+
+    func terminalBridgeStatusDidChange() {}
+
+    var terminalBridgeIsConnected: Bool {
+        bridge?.isConnected == true
+    }
+
+    @discardableResult
+    func terminalSubmitCommittedText(_ text: String) -> Int32 {
+        bridge?.submitCommittedText(text) ?? -10
+    }
+
+    @discardableResult
+    func terminalSubmitKey(kind: UInt16, scalar: UInt32) -> Int32 {
+        bridge?.submitKey(kind: kind, scalar: scalar) ?? -10
+    }
+
+    @discardableResult
+    func terminalProposeGeometry(
+        viewportWidth: Double,
+        viewportHeight: Double,
+        horizontalInsets: Double,
+        verticalInsets: Double,
+        cellWidth: Double,
+        cellHeight: Double,
+        meaningfulLayoutEpoch: Bool
+    ) -> Int32 {
+        bridge?.proposeGeometry(
+            viewportWidth: viewportWidth,
+            viewportHeight: viewportHeight,
+            horizontalInsets: horizontalInsets,
+            verticalInsets: verticalInsets,
+            cellWidth: cellWidth,
+            cellHeight: cellHeight,
+            meaningfulLayoutEpoch: meaningfulLayoutEpoch
+        ) ?? -10
+    }
+
+    @discardableResult
+    func terminalRetryResize() -> Int32 {
+        bridge?.retryResize() ?? -10
+    }
+
+    func terminalInputFailureCode() -> Int32 {
+        bridge?.inputFailureCode() ?? 4
+    }
+
+    func terminalResizeFailureCode() -> Int32 {
+        bridge?.resizeFailureCode() ?? 201
+    }
+
+    func terminalCurrentFrame() -> SeyalPreparedFrame? {
+        bridge?.currentFrame()
+    }
+
+    /// Logical cell metrics come from the permanent renderer's font/atlas metric
+    /// source. Resize code must not independently remeasure fonts.
+    func terminalLogicalCellSize() -> CGSize {
+        let pixels = renderer.cellPixelSize(backingScale: 1)
+        return CGSize(width: CGFloat(pixels.width), height: CGFloat(pixels.height))
+    }
+
+    /// Candidate-window anchoring needs logical points for the current screen.
+    func terminalPresentationCellSize() -> CGSize {
+        let scale = max(window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1, 1)
+        let pixels = renderer.cellPixelSize(backingScale: scale)
+        return CGSize(
+            width: CGFloat(pixels.width) / scale,
+            height: CGFloat(pixels.height) / scale
+        )
     }
 
     override func layout() {

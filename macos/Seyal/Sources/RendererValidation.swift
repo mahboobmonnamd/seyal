@@ -29,7 +29,14 @@ private final class DisplayLinkBenchmarkDriver: NSObject, @preconcurrency CAMeta
         while samples.count == sampleCount, Date() < deadline {
             RunLoop.current.run(until: Date().addingTimeInterval(0.001))
         }
-        return samples.count == sampleCount + 1
+        let receivedSample = samples.count == sampleCount + 1
+        if !receivedSample {
+            // A headless macOS runner may have no WindowServer/display session,
+            // so no CAMetalDisplayLink opportunity can arrive. Do not leave a
+            // stale in-flight request blocking later benchmark iterations.
+            startedAt = nil
+        }
+        return receivedSample
     }
 
     func metalDisplayLink(
@@ -440,6 +447,10 @@ enum RendererValidation {
             preparationSamples.reserveCapacity(repetitions)
             preparedToCommitSamples.reserveCapacity(repetitions)
             commitToCompletionSamples.reserveCapacity(repetitions)
+            var presentationProxyAvailable = true
+            let presentationProxyRequired = ProcessInfo.processInfo.environment[
+                "SEYAL_REQUIRE_DISPLAY_LINK_BENCHMARK"
+            ] == "1"
 
             for iteration in 0..<repetitions {
                 let row = iteration % rows
@@ -479,20 +490,30 @@ enum RendererValidation {
                 }
                 preparedToCommitSamples.append(submission.preparedToCommitNanoseconds)
                 commitToCompletionSamples.append(submission.commitToCompletionNanoseconds)
-                guard displayLinkDriver.submitOne() else { return false }
+                if presentationProxyAvailable, !displayLinkDriver.submitOne() {
+                    guard presentationProxyRequired else {
+                        presentationProxyAvailable = false
+                        continue
+                    }
+                    return false
+                }
             }
 
             let prep = percentileSummary(preparationSamples)
             let preparedToCommit = percentileSummary(preparedToCommitSamples)
             let commitToCompletion = percentileSummary(commitToCompletionSamples)
-            let presented = percentileSummary(displayLinkDriver.samples)
             let glyph = renderer.glyphStats
             print("pass6_native_renderer performance_claim=false boundaries=committed_generation_to_prepared_rows,prepared_batch_to_command_commit,command_commit_to_gpu_completion,committed_generation_to_presented_frame_proxy")
             print("device=\(device.name) registry_id=\(device.registryID) os=\(ProcessInfo.processInfo.operatingSystemVersionString) geometry=\(columns)x\(rows) repetitions=\(repetitions) backing_scale=1 percentile_method=nearest_rank")
             print("preparation p50_ns=\(prep.p50) p95_ns=\(prep.p95) p99_ns=\(prep.p99) max_ns=\(prep.max)")
             print("prepared_to_command_commit p50_ns=\(preparedToCommit.p50) p95_ns=\(preparedToCommit.p95) p99_ns=\(preparedToCommit.p99) max_ns=\(preparedToCommit.max) note=offscreen_target_allocation_excluded")
             print("command_commit_to_gpu_completion_proxy p50_ns=\(commitToCompletion.p50) p95_ns=\(commitToCompletion.p95) p99_ns=\(commitToCompletion.p99) max_ns=\(commitToCompletion.max)")
-            print("committed_generation_to_presented_frame_proxy p50_ns=\(presented.p50) p95_ns=\(presented.p95) p99_ns=\(presented.p99) max_ns=\(presented.max) note=one_shot_CAMetalDisplayLink_to_command_commit")
+            if presentationProxyAvailable {
+                let presented = percentileSummary(displayLinkDriver.samples)
+                print("committed_generation_to_presented_frame_proxy p50_ns=\(presented.p50) p95_ns=\(presented.p95) p99_ns=\(presented.p99) max_ns=\(presented.max) note=one_shot_CAMetalDisplayLink_to_command_commit")
+            } else {
+                print("committed_generation_to_presented_frame_proxy status=PLATFORM_LIMITED samples=0 reason=no_WindowServer_display_session")
+            }
             print("renderer submitted_frames=\(renderer.stats.submittedFrames) display_link_samples=\(displayLinkDriver.samples.count) coalesced_frames=\(renderer.stats.coalescedFrames) rebuilt_rows=\(renderer.stats.rebuiltRows) rebuilt_cells=\(renderer.stats.rebuiltCells) instance_bytes=\(renderer.stats.instanceBytes) glyph_hits=\(glyph.hits) glyph_misses=\(glyph.misses) glyph_uploads=\(glyph.uploads) glyph_uploaded_bytes=\(glyph.uploadedBytes) atlas_budget_bytes=\(GlyphAtlas.budgetBytes) dedicated_gpu_bytes=\(renderer.estimatedDedicatedGPUBytes)")
             benchmarkWindow.orderOut(nil)
             return true

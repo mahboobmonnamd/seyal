@@ -4,8 +4,14 @@ import Foundation
 // Sendable conformance is required only because Swift 6 deinit is
 // nonisolated while it hands ownership to the cancellation handlers.
 private final class RustBridgeTeardownCoordinator: @unchecked Sendable {
+    private let disconnect: () -> Void
     private(set) var activeSourceCount = 0
     private(set) var disconnectPending = false
+    var onDisconnected: (() -> Void)?
+
+    init(disconnect: @escaping () -> Void = { seyal_bridge_disconnect() }) {
+        self.disconnect = disconnect
+    }
 
     func sourceCreated() {
         activeSourceCount += 1
@@ -30,7 +36,8 @@ private final class RustBridgeTeardownCoordinator: @unchecked Sendable {
     private func finishDisconnect() {
         guard disconnectPending else { return }
         disconnectPending = false
-        seyal_bridge_disconnect()
+        disconnect()
+        onDisconnected?()
     }
 }
 
@@ -46,15 +53,38 @@ final class RustDisplayBridge {
     private var socketFileDescriptor: Int32 = -1
     private let teardown = RustBridgeTeardownCoordinator()
     private(set) var isConnected = false
+    private var reconnectRequested = false
+
+    static func teardownReconnectStateSelfTest() -> Bool {
+        var disconnects = 0
+        let coordinator = RustBridgeTeardownCoordinator {
+            disconnects += 1
+        }
+        coordinator.sourceCreated()
+        coordinator.requestDisconnect()
+        guard coordinator.disconnectPending, disconnects == 0 else { return false }
+        coordinator.sourceCancelled()
+        return !coordinator.disconnectPending
+            && coordinator.activeSourceCount == 0
+            && disconnects == 1
+    }
 
     init(onFrame: @escaping FrameHandler, onError: @escaping ErrorHandler) {
         self.onFrame = onFrame
         self.onError = onError
+        teardown.onDisconnected = { [weak self] in
+            self?.teardownCompleted()
+        }
     }
 
     @discardableResult
     func start() -> Bool {
-        guard !isConnected, !teardown.disconnectPending else { return false }
+        guard !isConnected else { return true }
+        if teardown.disconnectPending {
+            reconnectRequested = true
+            return false
+        }
+        reconnectRequested = false
 
         let result = seyal_bridge_connect_first()
         guard result == 0 else {
@@ -88,6 +118,7 @@ final class RustDisplayBridge {
     }
 
     func stop() {
+        reconnectRequested = false
         guard isConnected || socketFileDescriptor >= 0 else { return }
         guard !teardown.disconnectPending else { return }
 
@@ -103,6 +134,12 @@ final class RustDisplayBridge {
             writeSource.cancel()
         }
 
+    }
+
+    private func teardownCompleted() {
+        guard reconnectRequested else { return }
+        reconnectRequested = false
+        _ = start()
     }
 
     func publishCurrentFrame() {
@@ -173,6 +210,7 @@ final class RustDisplayBridge {
     deinit {
         // The coordinator is retained by cancellation handlers, so teardown
         // completes even if the owning surface destroys this bridge first.
+        reconnectRequested = false
         teardown.requestDisconnect()
         readSource?.cancel()
         writeSource?.cancel()

@@ -214,7 +214,10 @@ final class MetalSurfaceView: NSView {
             // failed replacement must not leave a partially updated live
             // buffer eligible for a later present.
             hasPreparedState = false
-            invalidatePreparedPresentation()
+            // Keep the preparation recovery series alive across failures. The
+            // lifecycle invalidation path resets it; resetting here would make
+            // a persistent resource failure retry forever at the first delay.
+            cancelPresentationRetries()
             renderer.invalidatePreparedState()
             forceNextFrame = true
             schedulePreparationRetry()
@@ -295,12 +298,12 @@ final class MetalSurfaceView: NSView {
     private func cancelPresentationRetries() {
         presentationPending = false
         resetPresentationRetries()
-        resetPreparationRetries()
     }
 
     private func invalidatePreparedPresentation() {
         hasPreparedState = false
         cancelPresentationRetries()
+        resetPreparationRetries()
     }
 
     private func schedulePresentationRetry() {
@@ -353,9 +356,11 @@ enum Pass6RegressionValidation {
     static func selfTest() -> Bool {
         supplementaryScalarResolutionSelfTest()
             && presentationRetryBudgetSelfTest()
+            && preparationRetryBudgetSelfTest()
             && transientDrawableRecoverySelfTest()
             && RendererValidation.inFlightVisibilityRecoverySelfTest()
             && RendererValidation.failedReplacementInvalidationSelfTest()
+            && RustDisplayBridge.teardownReconnectStateSelfTest()
     }
 
     private static func supplementaryScalarResolutionSelfTest() -> Bool {
@@ -377,6 +382,21 @@ enum Pass6RegressionValidation {
         }
         budget.reset()
         return !budget.exhausted && budget.claimNextDelay() != nil
+    }
+
+    private static func preparationRetryBudgetSelfTest() -> Bool {
+        // Model repeated preparation failures without resetting the series.
+        // Four delayed attempts are allowed; a persistent failure must not
+        // schedule a fifth attempt or restart at the first delay.
+        var budget = PresentationRetryBudget()
+        var delayedAttempts = 0
+        for _ in 0..<8 {
+            guard budget.claimNextDelay() != nil else { break }
+            delayedAttempts += 1
+        }
+        return delayedAttempts == 4
+            && budget.exhausted
+            && budget.claimNextDelay() == nil
     }
 
     private static func transientDrawableRecoverySelfTest() -> Bool {

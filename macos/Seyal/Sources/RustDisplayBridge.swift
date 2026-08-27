@@ -10,6 +10,8 @@ final class RustDisplayBridge {
     private var readSource: DispatchSourceRead?
     private var writeSource: DispatchSourceWrite?
     private var socketFileDescriptor: Int32 = -1
+    private var activeSourceCount = 0
+    private var disconnectPending = false
     private(set) var isConnected = false
 
     init(onFrame: @escaping FrameHandler, onError: @escaping ErrorHandler) {
@@ -19,7 +21,7 @@ final class RustDisplayBridge {
 
     @discardableResult
     func start() -> Bool {
-        guard !isConnected else { return true }
+        guard !isConnected, !disconnectPending else { return false }
 
         let result = seyal_bridge_connect_first()
         guard result == 0 else {
@@ -40,6 +42,10 @@ final class RustDisplayBridge {
         source.setEventHandler { [weak self] in
             self?.drainReadyDisplayWork()
         }
+        source.setCancelHandler { [weak self] in
+            self?.sourceDidCancel()
+        }
+        activeSourceCount += 1
         readSource = source
         source.resume()
 
@@ -49,14 +55,23 @@ final class RustDisplayBridge {
     }
 
     func stop() {
-        readSource?.cancel()
-        readSource = nil
-        writeSource?.cancel()
-        writeSource = nil
-        socketFileDescriptor = -1
-        if isConnected {
-            seyal_bridge_disconnect()
-            isConnected = false
+        guard isConnected || socketFileDescriptor >= 0 else { return }
+        guard !disconnectPending else { return }
+
+        isConnected = false
+        disconnectPending = true
+
+        if let readSource {
+            self.readSource = nil
+            readSource.cancel()
+        }
+        if let writeSource {
+            self.writeSource = nil
+            writeSource.cancel()
+        }
+
+        if activeSourceCount == 0 {
+            finishDisconnect()
         }
     }
 
@@ -117,8 +132,27 @@ final class RustDisplayBridge {
         source.setEventHandler { [weak self] in
             self?.flushReadyControlWork()
         }
+        source.setCancelHandler { [weak self] in
+            self?.sourceDidCancel()
+        }
+        activeSourceCount += 1
         writeSource = source
         source.resume()
+    }
+
+    private func sourceDidCancel() {
+        guard activeSourceCount > 0 else { return }
+        activeSourceCount -= 1
+        if disconnectPending, activeSourceCount == 0 {
+            finishDisconnect()
+        }
+    }
+
+    private func finishDisconnect() {
+        guard disconnectPending else { return }
+        disconnectPending = false
+        socketFileDescriptor = -1
+        seyal_bridge_disconnect()
     }
 
     private func flushReadyControlWork() {

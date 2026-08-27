@@ -590,6 +590,112 @@ enum RendererValidation {
         return updated == .updated && renderer.glyphStats.resets > resetsAfterCompletion
     }
 
+    static func inFlightVisibilityRecoverySelfTest() -> Bool {
+        guard let device = MTLCreateSystemDefaultDevice() else { return false }
+        do {
+            let renderer = try MetalTerminalRenderer(device: device)
+            let cells = [preparedCell(scalar: UInt32(ascii: "A"))]
+            var damage = DamageMask()
+            damage.mark(row: 0)
+            guard try cells.withUnsafeBufferPointer({ buffer in
+                try renderer.update(
+                    frame: NativePreparedFrame(
+                        cells: buffer,
+                        generation: 1,
+                        rows: 1,
+                        columns: 1,
+                        damage: damage
+                    ),
+                    backingScale: 1,
+                    forceFullRebuild: true
+                ) == .updated
+            }) else { return false }
+
+            let cellSize = renderer.cellPixelSize(backingScale: 1)
+            let layer = makePresentationLayer(
+                device: device,
+                width: cellSize.width,
+                height: cellSize.height
+            )
+            var currentFrameRequests = 0
+            renderer.onNeedsCurrentFrame = { currentFrameRequests += 1 }
+            let completedBefore = renderer.stats.completedFrames
+            guard renderer.present(layer: layer), renderer.hasFrameInFlight else {
+                return false
+            }
+            renderer.setVisible(false)
+            renderer.setVisible(true)
+            return waitForGPUCompletion(renderer, after: completedBefore)
+                && currentFrameRequests == 1
+                && renderer.hasDedicatedSurfaceResources
+        } catch {
+            return false
+        }
+    }
+
+    static func failedReplacementInvalidationSelfTest() -> Bool {
+        guard let device = MTLCreateSystemDefaultDevice() else { return false }
+        do {
+            let renderer = try MetalTerminalRenderer(device: device)
+            var cells = [
+                preparedCell(scalar: UInt32(ascii: "A")),
+                preparedCell(scalar: UInt32(ascii: "B"))
+            ]
+            var damage = DamageMask()
+            damage.mark(row: 0)
+            guard try cells.withUnsafeBufferPointer({ buffer in
+                try renderer.update(
+                    frame: NativePreparedFrame(
+                        cells: buffer,
+                        generation: 1,
+                        rows: 1,
+                        columns: 2,
+                        damage: damage
+                    ),
+                    backingScale: 1,
+                    forceFullRebuild: true
+                ) == .updated
+            }), renderer.hasPresentablePreparedState else { return false }
+
+            cells[1].reserved = 1
+            do {
+                _ = try cells.withUnsafeBufferPointer { buffer in
+                    try renderer.update(
+                        frame: NativePreparedFrame(
+                            cells: buffer,
+                            generation: 2,
+                            rows: 1,
+                            columns: 2,
+                            damage: damage
+                        ),
+                        backingScale: 1,
+                        forceFullRebuild: true
+                    )
+                }
+                return false
+            } catch {
+                guard !renderer.hasPresentablePreparedState else { return false }
+            }
+
+            cells[1].reserved = 0
+            return try cells.withUnsafeBufferPointer { buffer in
+                try renderer.update(
+                    frame: NativePreparedFrame(
+                        cells: buffer,
+                        generation: 3,
+                        rows: 1,
+                        columns: 2,
+                        damage: damage
+                    ),
+                    backingScale: 1,
+                    forceFullRebuild: true
+                ) == .updated && renderer.hasPresentablePreparedState
+            }
+        } catch {
+            return false
+        }
+    }
+
     private static func makePresentationLayer(
         device: MTLDevice,
         width: Int,

@@ -204,6 +204,12 @@ final class MetalSurfaceView: NSView {
             }
         } catch {
             lastRenderError = error
+            // Renderer preparation is incremental for damage efficiency.  A
+            // failed replacement must not leave a partially updated live
+            // buffer eligible for a later present.
+            hasPreparedState = false
+            invalidatePreparedPresentation()
+            renderer.invalidatePreparedState()
         }
     }
 
@@ -303,6 +309,8 @@ enum Pass6RegressionValidation {
         supplementaryScalarResolutionSelfTest()
             && presentationRetryBudgetSelfTest()
             && transientDrawableRecoverySelfTest()
+            && RendererValidation.inFlightVisibilityRecoverySelfTest()
+            && RendererValidation.failedReplacementInvalidationSelfTest()
     }
 
     private static func supplementaryScalarResolutionSelfTest() -> Bool {

@@ -241,6 +241,14 @@ final class MetalTerminalRenderer {
         instanceBuffer != nil || glyphAtlas.estimatedResidentBytes != 0
     }
 
+    var hasPresentablePreparedState: Bool {
+        needsPresent && instanceBuffer != nil && instanceCount > 0 && glyphAtlas.texture != nil
+    }
+
+    var hasFrameInFlight: Bool {
+        framesInFlight != 0
+    }
+
     var glyphStats: GlyphAtlasStats {
         glyphAtlas.stats
     }
@@ -263,6 +271,10 @@ final class MetalTerminalRenderer {
         guard visible != value else { return }
         visible = value
         if value {
+            // A surface can become visible again before the last hidden-frame
+            // command buffer completes.  Showing it cancels the deferred
+            // release; completion must rebuild/publish the current frame.
+            releaseWhenIdle = false
             deferredNeedsFullRebuild = true
             needsCurrentFrameWhenIdle = true
             if framesInFlight == 0 {
@@ -316,6 +328,13 @@ final class MetalTerminalRenderer {
             needsCurrentFrameWhenIdle = true
             stats.coalescedFrames &+= 1
             return .deferred
+        }
+
+        var preparationSucceeded = false
+        defer {
+            if !preparationSucceeded {
+                invalidatePreparedState()
+            }
         }
 
         let scale = max(backingScale, 1)
@@ -396,6 +415,7 @@ final class MetalTerminalRenderer {
             stats.rebuiltRows &+= 1
             stats.rebuiltCells &+= UInt64(frame.columns)
         }
+        preparationSucceeded = true
         return .updated
     }
 
@@ -474,6 +494,16 @@ final class MetalTerminalRenderer {
     func handleDrawableUnavailable() {
         stats.drawableMisses &+= 1
         needsPresent = true
+    }
+
+    /// Make the current prepared state non-presentable after a failed
+    /// replacement update.  `rebuildRows` writes into the live shared buffer
+    /// for damage efficiency, so a later failure must never leave that
+    /// partially updated buffer eligible for presentation.
+    func invalidatePreparedState() {
+        needsPresent = false
+        deferredNeedsFullRebuild = true
+        needsCurrentFrameWhenIdle = true
     }
 
     private func allocateInstanceBuffer(rows: Int, columns: Int) throws {
@@ -606,11 +636,12 @@ final class MetalTerminalRenderer {
             deferredNeedsFullRebuild = true
             needsCurrentFrameWhenIdle = true
         }
-        if releaseWhenIdle || !visible {
+        if !visible {
             releaseWhenIdle = false
             releaseDedicatedResources()
             return
         }
+        releaseWhenIdle = false
         if !deferredDamage.isEmpty || deferredNeedsFullRebuild || needsCurrentFrameWhenIdle {
             requestCurrentFrameIfNeeded()
         }

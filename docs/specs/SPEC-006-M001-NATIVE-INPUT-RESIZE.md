@@ -30,12 +30,16 @@ The required resize path is:
 usable native terminal viewport
 → desired rows/columns proposal
 → bounded client control queue
+→ correlated ResizeRequest
 → Runtime authorization + validation/prepare
 → fallible PTY winsize
 → canonical TerminalState resize commit
+→ asynchronous ResizeResult bookkeeping
 → damage/projection
 → permanent Metal renderer
 ```
+
+`ResizeResult` is never an acknowledgement dependency for terminal progress. Runtime commits or rejects the resize transaction independently and queues the result asynchronously.
 
 Pass 7 does not create a GUI VT parser, mirrored mode state, client-owned grid, second PTY, temporary text renderer or synchronous GUI acknowledgement dependency.
 
@@ -49,8 +53,8 @@ Pass 7 does not create a GUI VT parser, mirrored mode state, client-owned grid, 
 6. Semantic terminal keys cross the client/Runtime boundary as typed logical keys, not pre-encoded escape bytes.
 7. One accepted native input action is admitted atomically. It is never partially accepted, silently truncated, silently dropped or split differently depending on backpressure.
 8. Accepted input preserves FIFO ordering. New input is explicitly rejected on bounded backpressure rather than blocking AppKit/main-thread progress or allocating unbounded memory.
-9. Native resize convergence is driven by distinct desired, outstanding and committed client facts; correlated Runtime failures may invalidate only the resize request that actually failed.
-10. A Runtime resize error never causes an immediate resend loop. Runtime-reported failures are retry-gated by an external recovery event defined in section 12.5.
+9. Pass 7 native resize uses explicit request identity. A failure/result may mutate bookkeeping for only the exact request ID it names; an older result cannot invalidate a newer request.
+10. A Runtime resize failure never causes an immediate resend loop. Runtime-reported failures are retry-gated by an external recovery event defined in section 12.6.
 11. Resize never publishes canonical geometry before the PTY accepts the winsize transaction.
 12. `NSTextInputClient` exposes only a bounded ephemeral composition document. Terminal/history text is never returned through text-input APIs and never becomes a second editable text model.
 13. No input/resize path waits synchronously for rendering, display projection, Block semantics, persistence, agents, cloud, telemetry or licensing.
@@ -68,8 +72,9 @@ Pass 7 includes:
 - Controller attachment for an interactive client;
 - bounded, nonblocking client input/control queuing;
 - native viewport → rows/columns calculation and authoritative resize submission;
-- desired/outstanding/committed resize reconciliation;
-- correlated resize-error handling and retry gating;
+- explicit correlated `ResizeRequest` / `ResizeResult` protocol extension;
+- desired/unresolved/committed resize reconciliation;
+- error-class retry gating;
 - resize coalescing with ordering barriers;
 - permanent AppKit `NSTextInputClient` composition seam with explicit UTF-16 range semantics;
 - minimum accessibility/focus seam on the Metal surface;
@@ -209,35 +214,36 @@ M001 does not claim:
 
 Unsupported combinations must not be silently rewritten into a different supported key.
 
-## 7. SPEC-004 additive semantic-key protocol extension
+## 7. SPEC-004 additive Pass 7 protocol extension
 
-Pass 7 adds a capability-gated message to the existing SPEC-004 protocol without changing framing version `1.0`.
+Pass 7 adds semantic-key and correlated-resize messages without changing framing version `1.0`.
 
-### 7.1 Capability
+### 7.1 Capabilities
 
-Server capability bit 2 is:
+Server capability bits added by Pass 7 are:
 
 ```text
 CAP_SEMANTIC_TERMINAL_KEY = 1 << 2
+CAP_CORRELATED_RESIZE     = 1 << 3
 ```
 
-A Pass 7 interactive client requires this capability before sending `TerminalKey`. An older Runtime that does not advertise it remains valid for Pass 5/6 display but is not Pass 7 interactive-capable.
+A Pass 7 interactive native client requires both capabilities before enabling its full input/resize success path. An older Runtime remains valid for Pass 5/6 display but is not Pass 7 interactive-capable.
 
-Existing Pass 5/6 clients tolerate unknown `ServerHello.server_capabilities` bits and require only `CAP_BINARY_DISPLAY`; therefore advertising bit 2 is backward compatible with the current 1.0 client. The Pass 7 implementation must retain a regression test proving this compatibility.
+Existing Pass 5/6 clients tolerate unknown `ServerHello.server_capabilities` bits and require only `CAP_BINARY_DISPLAY`; advertising bits 2 and 3 therefore remains backward compatible with the current 1.0 display client. Regression tests must preserve this behavior.
 
-The client must not probe support by sending an unknown message first.
+The client must not probe support by sending unknown messages first.
 
-### 7.2 Message type
-
-Message type 17 is:
+### 7.2 Message types
 
 ```text
 17  C→R  TerminalKey
+18  C→R  ResizeRequest
+19  R→C  ResizeResult
 ```
 
-It is legal only in `Attached` state for the attachment's current `Controller`. Observer use returns `PermissionDenied`; stale/foreign attachment IDs fail under existing SPEC-004 rules.
+Legacy type-10 `Resize` remains defined by SPEC-004 for existing protocol compatibility. The Pass 7 native surface must use `ResizeRequest` after `CAP_CORRELATED_RESIZE` negotiation and must not use uncorrelated type 10 for its production resize path.
 
-### 7.3 Payload
+### 7.3 `TerminalKey` payload
 
 `TerminalKey` is exactly 24 bytes:
 
@@ -266,7 +272,58 @@ M001 `modifiers` is zero for kinds 1–8. `ControlAscii` requires exactly bit 0 
 
 Malformed `TerminalKey` frames return `MalformedPayload` without terminal mutation. Unknown kind values are malformed in protocol 1.0.
 
-### 7.4 Why `Input` remains
+### 7.4 `ResizeRequest` payload and identity
+
+`ResizeRequest` is exactly 32 bytes:
+
+```text
+u128 AttachmentId
+u64  request_id
+u16  rows
+u16  columns
+u32  reserved = 0
+```
+
+Rules:
+
+- `request_id` is client-generated, connection-local and nonzero;
+- IDs increase monotonically for that connection; wrap/reuse is forbidden;
+- reconnect starts a fresh request-ID space because the connection and `AttachmentId` change;
+- a not-yet-started coalesced request may keep its existing ID while its unsent target is replaced; once any byte of the frame is written, both ID and geometry are immutable;
+- Runtime validates `AttachmentId`, Controller authority, request ID, reserved bits and geometry before terminal mutation;
+- an ID repeated on the same live connection is malformed and fails closed;
+- request IDs are protocol bookkeeping only, never terminal generations, persistent identities, telemetry IDs or benchmark trace IDs.
+
+### 7.5 `ResizeResult` payload
+
+`ResizeResult` is exactly 32 bytes:
+
+```text
+u128 AttachmentId
+u64  request_id
+u16  result_code
+u16  reserved0 = 0
+u32  detail_code
+```
+
+`result_code` is:
+
+```text
+0  Applied
+1..14  same numeric meanings as SPEC-004 Error codes
+```
+
+For every structurally valid `ResizeRequest` from which Runtime can trust `AttachmentId` and nonzero `request_id`, Runtime queues exactly one `ResizeResult` after the request transaction reaches a final outcome.
+
+- `Applied` is queued only after PTY winsize succeeds and canonical `TerminalState` resize commit completes.
+- Failure result codes are queued after validation/application failure with canonical geometry unchanged when the transaction did not commit.
+- `detail_code` is zero in M001 unless a later accepted specification assigns a bounded non-secret machine-readable reason.
+- `ResizeResult` is mandatory bounded control output. It is never presentation-superseded.
+- Runtime, PTY, VT and renderer progress never wait for the client to read a result.
+
+If framing/payload corruption prevents trustworthy request-ID extraction, Runtime uses the existing `Error`/fatal protocol path; the Pass 7 client treats an uncorrelatable type-18 failure as protocol failure and never guesses which request failed.
+
+### 7.6 Why `Input` remains
 
 `Input` remains the efficient bulk path for already-committed bytes such as UTF-8 committed text. `TerminalKey` exists only where the client must preserve semantic intent so Runtime can own terminal encoding.
 
@@ -292,7 +349,7 @@ Rules:
 - `ControllerBusy` is an explicit noninteractive state;
 - the Pass 7 surface must not appear to accept terminal typing while only Observer authority exists;
 - no silent fallback may accept native input locally and discard it;
-- reconnect obtains a new attachment/controller lease under normal SPEC-004 semantics; old `AttachmentId` values are stale;
+- reconnect obtains a new attachment/controller lease under normal SPEC-004 semantics; old `AttachmentId` and Resize request IDs are stale;
 - losing the connection or controller authority cancels marked composition locally and stops accepting terminal mutation until authority is re-established.
 
 A future product may offer an intentional read-only observer UI; that is not the success path claimed by Pass 7.
@@ -305,8 +362,8 @@ M001 client-side accepted-but-not-fully-written wire bytes are bounded to **262,
 
 Requirements:
 
-- FIFO for `Input`, `TerminalKey`, non-coalesced `Resize` and mandatory control messages;
-- no per-key thread/task/process;
+- FIFO for `Input`, `TerminalKey`, non-coalesced `ResizeRequest` and mandatory control messages;
+- no per-key or per-resize thread/task/process;
 - no busy retry on `WouldBlock`;
 - writable readiness is armed only while bytes remain;
 - a partially written frame is immutable and completed before another frame begins;
@@ -328,8 +385,6 @@ The exact behavior is:
 5. atomically admit the complete frame, including framing overhead, only if it fits the remaining 262,144-byte client queue budget;
 6. if it does not fit, reject the **entire** commit locally as `ClientBackpressure` before any byte from that commit becomes owned by the queue;
 7. never submit a prefix and never split a Unicode scalar or one AppKit committed callback across multiple `Input` frames in M001.
-
-This removes the previous “rejected or chunked” ambiguity. Chunked paste/bulk-input semantics, if needed later, require an explicit later contract.
 
 `TerminalKey` admission is likewise atomic for its complete frame. A rejected semantic key is not partially encoded or queued.
 
@@ -365,7 +420,7 @@ For transient client-queue backpressure, the visible busy state may clear after 
 
 AppKit computes a rows/columns **desired proposal** from the usable terminal viewport in logical points and the permanent renderer's cell metrics/insets.
 
-Before subtraction, division, `floor` or integer conversion, validate **every operand**:
+Before subtraction, division, `floor` or integer conversion, validate every operand:
 
 ```text
 viewportWidth, viewportHeight,
@@ -382,7 +437,7 @@ usableWidth  = viewportWidth  - horizontalInsets
 usableHeight = viewportHeight - verticalInsets
 ```
 
-Both derived usable dimensions must also be finite and strictly positive. Then compute `usableWidth / cellWidth` and `usableHeight / cellHeight`; each ratio must be finite and strictly positive before `floor` or numeric conversion.
+Both derived usable dimensions must also be finite and strictly positive. The division ratios must be finite and strictly positive before `floor` or conversion.
 
 Only after those checks:
 
@@ -393,15 +448,15 @@ rows    = clamp(floor(usableHeight / cellHeight), 1, 256)
 
 Clamping occurs while still in floating/numeric-safe form before conversion to the bounded integer wire type.
 
-If any source operand is NaN or ±Infinity, any required sign constraint fails, any derived subtraction/division is non-finite, or either usable dimension is non-positive, there is **no valid desired geometry** for that layout sample and no new `Resize` is admitted from it.
+If any source operand is NaN or ±Infinity, any required sign constraint fails, any derived subtraction/division is non-finite, or either usable dimension is non-positive, there is no valid desired geometry for that layout sample and no new request is admitted.
 
-A tiny but positive valid viewport therefore converges to at least `1×1`, while an extremely large but finite viewport is capped at `512×256` rather than retaining stale geometry.
+A tiny but positive valid viewport converges to at least `1×1`; an extremely large but finite viewport is capped at `512×256`.
 
 The implementation must use one authoritative renderer/layout cell-metric source rather than independently re-measuring fonts in resize code.
 
 ### 11.2 Backing scale
 
-A backing-scale change may invalidate renderer resources under SPEC-005, but it must not change Runtime rows/columns unless the usable logical geometry/cell layout actually yields different rows/columns.
+A backing-scale change may invalidate renderer resources under SPEC-005, but it must not change Runtime rows/columns unless the usable logical geometry/cell layout yields different rows/columns.
 
 GPU pixel dimensions are not terminal geometry authority.
 
@@ -411,115 +466,114 @@ Pass 7 has one terminal surface. Future composer/Block chrome may change the usa
 
 ## 12. Resize ordering, reconciliation, correlation and retry policy
 
-Window live-resize may generate more native geometry events than Runtime should process individually. Correctness requires convergence without allowing an older Runtime error to invalidate a newer resize or allowing persistent PTY failure to cause an internal resend loop.
+Correctness requires final-layout convergence, exact request-result correlation and no automatic retry loop under persistent failure.
 
-### 12.1 Client convergence state
+### 12.1 Client state
 
-The client tracks:
-
-```text
-desiredGeometry          latest valid geometry derived from current native layout
-outstandingGeometry      latest Resize target accepted by the client queue but not yet
-                         observed as canonical through authoritative projection
-outstandingResizeSeq     sequence of that latest transmitted/queued target when assigned
-committedGeometry        latest geometry observed from authoritative display projection
-resizeRetrySuppression   optional failed target + failure class + recovery epoch
-```
-
-`desiredGeometry` is presentation intent, not terminal authority. `committedGeometry` is observational knowledge of canonical state, not a second canonical grid. Outstanding/retry fields are bounded client transport facts only.
-
-When a layout sample is invalid under section 11.1, no invalid target is emitted. When valid layout returns, desired geometry is recomputed.
-
-### 12.2 Correlated Resize errors without changing framing 1.0
-
-SPEC-004 defines a connection-local `Resize` sequence for message type 10.
-
-Rules:
-
-- sequence value `0` is reserved and never assigned to a normal Resize;
-- client and Runtime each initialize `nextResizeSequence = 1` for a new connection;
-- the client consumes a sequence only when a not-yet-started Resize frame becomes immutable and begins socket transmission; local coalescing before that point consumes no sequence;
-- Runtime consumes the next sequence when it receives the corresponding complete structurally valid Resize frame, before semantic authorization/geometry/PTy application;
-- because frames are FIFO, partially written frames are immutable and a broken connection resets both sides, the two counters remain aligned for a conforming client;
-- for any semantic `Error` caused by that structurally valid Resize, `Error.offending_message_type = 10` and `Error.detail_code = resizeSequence`;
-- `detail_code = 0` means no trustworthy Resize correlation exists and a Pass 7 client must fail closed rather than guess which request failed;
-- sequence wrap is forbidden. Before `u32::MAX` would wrap to zero, the client stops admitting new Resize frames and requires reconnect/reattach; Runtime likewise never silently wraps.
-
-The sequence is protocol bookkeeping only. It is not a terminal generation, trace ID, telemetry identifier or persistence identity.
-
-Runtime must enqueue a Resize semantic `Error` on mandatory control output before continuing with later client mutations whose success could otherwise make the error ambiguous. Mandatory errors are never presentation-superseded.
-
-### 12.3 Required reconciliation algorithm
-
-Reconciliation runs when desired/committed/outstanding state changes, when local queue capacity recovers after a **local admission failure**, or when a recovery event explicitly permitted by section 12.5 occurs.
-
-Given valid desired target `D` and no retry suppression that blocks `D`:
+The client tracks bounded state:
 
 ```text
-if outstandingGeometry exists:
-    if D == outstandingGeometry:
-        no new Resize is needed
-    else:
-        try to enqueue/coalesce Resize(D) without crossing an ordering barrier
-        if admission succeeds:
-            outstandingGeometry = D
-        if admission fails locally:
-            retain D as desired and retry only on later local-capacity/state progress
-else:
-    if D == committedGeometry:
-        no new Resize is needed
-    else:
-        try to enqueue Resize(D)
-        if admission succeeds:
-            outstandingGeometry = D
-        if admission fails locally:
-            retain D as desired and retry only on later local-capacity/state progress
+desiredGeometry       latest valid geometry derived from current native layout
+committedGeometry     latest geometry observed from authoritative display projection
+nextResizeRequestId   next nonzero monotonically increasing u64 ID
+unresolvedResizes     bounded ordered records keyed by request_id
+retrySuppression      optional failed target + failure class + recovery epoch
 ```
 
-The suppression rule is therefore **not** “equal to committed OR outstanding.” A desired geometry equal to committed must still be admitted when a different outstanding target could later move Runtime away from that desired geometry.
+Each unresolved record contains at least:
 
-Required regression:
+```text
+request_id
+geometry
+phase = queued_not_started | writing | sent_waiting_result
+```
+
+The queue byte bound limits queued request records; the protocol requires exactly one `ResizeResult` for every sent structurally valid request, so sent records do not accumulate indefinitely.
+
+`desiredGeometry` is presentation intent, not terminal authority. `committedGeometry` is observational knowledge of canonical state, not a second canonical grid. Request IDs and records are transport bookkeeping only.
+
+The **effective outstanding geometry** is the target of the newest unresolved request, if any.
+
+### 12.2 Request admission and coalescing
+
+Given valid desired target `D` and no retry suppression blocking `D`:
+
+- if the newest unresolved request already targets `D`, no new request is needed;
+- if no unresolved request exists and `D == committedGeometry`, no request is needed;
+- otherwise enqueue a new `ResizeRequest(D)` or coalesce only the newest `queued_not_started` ResizeRequest when there is no intervening `Input`, `TerminalKey` or other ordering barrier;
+- a request ID is nonzero and unique for the connection. A coalesced not-yet-started request may keep its ID while its target changes;
+- once any byte begins writing, request ID and target are immutable;
+- local queue admission failure retains desired geometry and may retry when **local** queue capacity progresses because no Runtime request was sent.
+
+The client must not move resize across accepted input/key frames, reorder input around resize, mutate a partially written frame or build unbounded resize backlog.
+
+Required convergence regression:
 
 ```text
 committed = 80×24
-outstanding = 100×30
+request A = 100×30 unresolved
 desired changes back to 80×24
 ```
 
-The client must queue/coalesce a restoring `80×24` target, or retain it as desired until local admission is possible. Runtime must eventually converge back to `80×24` if no Runtime failure suppresses that target.
+A restoring `80×24` request must be queued/coalesced in native event order, even though `80×24` still equals the last committed projection. Final convergence cannot depend on another native resize event when requests succeed.
 
-When authoritative projection reports geometry `G`:
+### 12.3 `ResizeResult` handling
+
+On `ResizeResult(request_id = R)`:
+
+1. find exactly one unresolved record with ID `R`;
+2. if none exists, treat it as `ResizeProtocolFailure`; never guess or mutate another request;
+3. remove only record `R` after processing the result;
+4. never clear, replace or suppress a different newer request because an older request failed;
+5. `Applied` means Runtime completed PTY winsize and canonical resize commit for `R`, but it does **not** directly set `committedGeometry`; authoritative display projection remains the observation source for canonical rendered geometry;
+6. a failure result is classified by section 12.6;
+7. after processing, reconciliation may run, subject to retry suppression.
+
+If an older request fails while a newer request is unresolved, the newer request remains valid. A bounded non-secret diagnostic may record the older failure, but it cannot trigger resend or invalidate the newer target.
+
+If an authority/connection-class result shows the attachment is no longer allowed to mutate, that authority state applies globally even though request correlation remains exact.
+
+### 12.4 Authoritative projection
+
+When display projection reports geometry `G`:
 
 - set `committedGeometry = G`;
-- if `outstandingGeometry == G`, clear the corresponding outstanding target/sequence;
-- clear a stale visible resize-failure state if the current desired geometry is now authoritatively committed;
-- rerun reconciliation, except that section 12.5 suppression still blocks automatic resend of a failed same target.
+- do not fabricate `ResizeResult` success locally; request records are retired only by actual results or connection teardown;
+- clear stale visible resize-failure state if current desired geometry is now authoritatively committed and no relevant authority/protocol failure remains;
+- rerun reconciliation, except retry suppression still blocks immediate resend of a failed same target.
 
-### 12.4 Ordering and coalescing
+This deliberately separates request outcome from display observation.
 
-The client may coalesce only a not-yet-started `Resize` that is the newest queued mutation and has no intervening `Input`, `TerminalKey` or other ordering barrier. The unsent target may be replaced by the newest desired geometry. No Resize sequence is consumed until the final coalesced frame actually begins transmission.
+### 12.5 Runtime transaction and result ordering
 
-It must not:
+Runtime applies each `ResizeRequest` exactly as:
 
-- mutate a partially written resize frame;
-- move a resize across accepted input/key frames;
-- reorder input around a resize to improve coalescing;
-- build an unbounded resize backlog;
-- discard the latest desired geometry merely because an earlier geometry equals current committed state.
+```text
+validate framing + unique request_id + Controller + AttachmentId + geometry
+→ prepare all locally rejectable/infallible terminal resize inputs
+→ apply fallible PTY winsize
+→ if PTY succeeds, commit canonical TerminalState resize
+→ canonical full damage
+→ queue ResizeResult(Applied, request_id)
+→ normal projection update
+```
 
-### 12.5 Runtime-error classification and retry gate
+On semantic/operational failure after a trustworthy request ID is parsed:
 
-A Runtime `Error` for `Resize` is **not** a retry trigger.
+```text
+canonical state remains uncommitted for that failed transaction
+→ queue exactly one ResizeResult(error_code, request_id)
+```
 
-First correlate it using `detail_code`:
+The result is mandatory bounded control output and cannot be presentation-superseded. Runtime may continue terminal progress immediately; it never waits for the client to read the result.
 
-- `detail_code == 0`, a sequence greater than the last sent sequence, a duplicate impossible sequence, or an unknown error code is a protocol/compatibility failure. Surface a non-secret `ResizeProtocolFailure`, stop automatic resize submission and require explicit reconnect/recovery.
-- an error sequence older than the latest outstanding Resize must never clear or replace the newer outstanding target;
-- an error matching the latest outstanding sequence may clear only that matching outstanding transport fact.
+If framing corruption prevents trustworthy request-ID extraction, use SPEC-004 Error/fatal cleanup. The client treats that as protocol failure and reconnect/recovery is explicit.
 
-Error classes are:
+### 12.6 Runtime failure classes and retry gate
 
-**Authority / connection state**
+A failed `ResizeResult` is not itself a retry trigger.
+
+**Authority / connection state:**
 
 ```text
 InvalidState
@@ -533,9 +587,9 @@ UnknownMessage
 MalformedPayload
 ```
 
-These disable resize mutation for the affected connection/attachment. Do not resend because of socket writability, queue capacity, projection updates or the error itself. Retry is allowed only after the corresponding authority/connection/reattach transition or an explicit recovery action establishes a new usable mutation state.
+These disable resize mutation for the affected connection/attachment. Do not resend because of socket writability, queue capacity, projection updates or the result itself. Retry only after the corresponding connection/controller/reattach recovery or explicit recovery establishes usable authority.
 
-**Request / operational failure**
+**Request / operational failure:**
 
 ```text
 CapacityExceeded
@@ -545,37 +599,23 @@ DisplayUnavailable
 InternalFailure
 ```
 
-These surface a non-secret `ResizeApplyFailure` with the error category and failed target but never terminal contents. If the failed sequence is the latest outstanding request for the current desired target, install `resizeRetrySuppression` for that target. The same target is not automatically resent because outstanding state cleared, projection changed, socket became writable, local queue capacity changed or Runtime continued producing output.
+These surface non-secret `ResizeApplyFailure` state. If the failed request is the newest request for the current desired target and no newer unresolved request already targets that desired geometry, install retry suppression for that target.
+
+The same failed target is not automatically resent because the request record was removed, projection changed, socket became writable, local queue capacity changed or Runtime produced more output.
 
 A suppressed target may be retried only after one of:
 
-1. a **new meaningful native-layout epoch** caused by viewport dimensions, insets or authoritative cell metrics changing and producing a fresh valid layout sample;
-2. an explicit user/system recovery action such as “retry resize”;
-3. reconnect/reattach or controller-authority recovery when that recovery is relevant to the failure class.
+1. a **new meaningful native-layout epoch** caused by viewport dimensions, insets or authoritative cell metrics changing and producing a fresh valid sample;
+2. an explicit user/system “retry resize” recovery action;
+3. reconnect/reattach or Controller-authority recovery when relevant to the failure class.
 
-Each recovery event permits at most one new admission attempt for the currently desired target. A repeated Runtime failure reinstalls suppression. There is no timer-based retry, exponential-retry loop, busy retry or error→reconcile→error recursion.
+Each recovery event permits at most one new admission attempt for the currently desired target. Repeated Runtime failure reinstalls suppression. There is no timer-based retry, exponential loop, busy retry or result→reconcile→result recursion.
 
-Local client-queue admission failure is intentionally different: no request reached Runtime, so the latest desired geometry may retry once local queue capacity progresses, as section 12.3 states.
+An unknown `ResizeResult.result_code`, duplicate result, unknown request ID, invalid reserved field or uncorrelatable type-18 protocol failure surfaces `ResizeProtocolFailure`, stops automatic resize submission and requires explicit reconnect/recovery.
 
-If an older correlated Resize fails while a newer Resize is outstanding, the older failure may be recorded as a bounded diagnostic counter/state but must not invalidate, resend or suppress the newer request. Connection/authority-class failures still apply globally because they invalidate the mutation authority itself.
+### 12.7 Connection teardown
 
-### 12.6 Runtime transaction
-
-Runtime applies a received resize exactly as:
-
-```text
-assign connection-local Resize sequence
-→ validate Controller + AttachmentId + geometry
-→ prepare all locally rejectable/infallible terminal resize inputs
-→ apply fallible PTY winsize
-→ if PTY succeeds, commit canonical TerminalState resize
-→ canonical full damage
-→ normal projection update
-```
-
-If PTY winsize fails, canonical rows/columns and damage generation remain unchanged and Runtime emits the correlated `InternalFailure` Resize error. No success acknowledgement is required for terminal progress; the client observes canonical geometry through display state.
-
-Repeated identical geometry that is the current desired target and already committed with no conflicting outstanding target or active recovery request is a no-op.
+Disconnect/reattach invalidates every unresolved request ID and clears request/result transport state. Desired geometry may be recomputed/retained as native layout intent, but nothing from the old connection is treated as committed or retried until new attachment authority exists.
 
 ## 13. Exact AppKit `NSTextInputClient` composition seam
 
@@ -592,15 +632,7 @@ utf16Length          NSString/NSAttributedString UTF-16 code-unit length
 maxUtf8Bytes         65,536
 ```
 
-It never contains:
-
-- committed terminal input;
-- visible terminal rows/cells;
-- scrollback/history;
-- shell prompt text;
-- renderer cache text;
-- semantic transcript/Blocks;
-- clipboard contents.
+It never contains committed terminal input, visible terminal rows/cells, scrollback/history, shell prompt text, renderer cache text, semantic transcript/Blocks or clipboard contents.
 
 All `NSRange` values in the `NSTextInputClient` seam are interpreted in UTF-16 code units relative to this ephemeral document, matching Foundation/AppKit string indexing. Range arithmetic is overflow checked before use.
 
@@ -616,48 +648,48 @@ The complete composition document must remain `<= 65,536` UTF-8 bytes. An update
 
 `markedRange()`
 
-- when marked text exists with UTF-16 length `N`, returns `{0, N}`;
+- with UTF-16 length `N > 0`, returns `{0, N}`;
 - otherwise returns `{NSNotFound, 0}` exactly.
 
 `selectedRange()`
 
-- while marked text exists, returns the stored validated selection entirely inside `0...N`;
-- with no marked text, returns `{0, 0}`, representing the only insertion point in the empty composition document;
-- it never reports a range into terminal/history text.
+- while marked text exists, returns the stored validated selection wholly inside `0...N`;
+- with no marked text, returns `{0, 0}`, the only insertion point in the empty composition document;
+- never reports a terminal/history range.
 
 `setMarkedText(_:selectedRange:replacementRange:)`
 
 - accepts only `NSString` or `NSAttributedString`; attributes are discarded;
 - `replacementRange == {NSNotFound, 0}` means replace the current composition selection/insertion point;
 - any explicit replacement range must lie wholly inside the current composition document;
-- replacement and resulting selection are computed with overflow-checked UTF-16 ranges;
-- the callback applies atomically to the ephemeral document only after the resulting UTF-8 size and ranges validate;
-- `selectedRange` is relative to the newly supplied marked string, and the stored absolute selection is translated to the resulting composition document;
-- it never submits PTY bytes.
+- replacement and resulting selection use overflow-checked UTF-16 ranges;
+- apply atomically only after resulting UTF-8 size and ranges validate;
+- `selectedRange` is relative to the newly supplied marked string and is translated to the resulting absolute composition selection;
+- never submits PTY bytes.
 
 `attributedSubstring(forProposedRange:actualRange:)`
 
 - operates only on the ephemeral composition document;
-- if the requested location lies completely outside the composition document, returns `nil` and sets `actualRange` to `{NSNotFound, 0}` when supplied;
-- otherwise intersects with the document range and adjusts to valid composed-character boundaries before returning an attributed/plain substring;
-- `actualRange` reports the final UTF-16 range actually returned;
+- if requested location lies completely outside the document, returns `nil` and sets `actualRange` to `{NSNotFound, 0}` when supplied;
+- otherwise intersects with the document and adjusts to valid composed-character boundaries before returning a substring;
+- `actualRange` reports the final UTF-16 range returned;
 - terminal/history text is never consulted as fallback context.
 
 `insertText(_:replacementRange:)`
 
 - accepts only `NSString` or `NSAttributedString`, using only the plain string;
-- an explicit replacement range is supported only when it is `NSNotFound` or lies wholly inside the ephemeral composition document;
+- an explicit replacement range is supported only when `NSNotFound` or wholly inside the ephemeral composition document;
 - a range outside that document is `UnsupportedReplacementRange`; Seyal does not pretend terminal history is editable text storage;
-- the supplied string is the committed text and is admitted atomically through section 10.1;
+- the supplied string is committed atomically through section 10.1;
 - after the commit attempt, clear the composition document regardless of success/failure so rejected content is not retained for hidden replay;
-- if admission fails, surface the non-secret `InputAdmissionFailure` reason and do not silently retry.
+- failed admission surfaces non-secret `InputAdmissionFailure` and is never automatically replayed.
 
 `unmarkText()`
 
-- is a **commit**, not a cancellation, when marked text exists;
+- is a **commit**, not cancellation, when marked text exists;
 - snapshot the current marked plain string, atomically submit it through section 10.1 as one committed-text action, then clear the composition document regardless of admission result;
-- if no marked text exists it is a no-op;
-- failed admission is surfaced visibly/accessibly and is never automatically replayed.
+- if no marked text exists, it is a no-op;
+- failed admission is visible/accessibility-safe and never automatically replayed.
 
 `validAttributesForMarkedText()`
 
@@ -668,24 +700,24 @@ The complete composition document must remain `<= 65,536` UTF-8 bytes. An update
 - never derives geometry by reading terminal/history text;
 - validates/intersects the requested UTF-16 range only against the ephemeral composition document;
 - returns the current disposable terminal-cursor/candidate anchor converted to **screen coordinates**;
-- the M001 anchor is a zero-width caret rectangle with finite height derived from the renderer's current cell/cursor presentation metrics;
-- `actualRange`, when supplied, reports the validated/intersected composition range; for the empty document `{0,0}` is valid;
-- if no safe cursor/window conversion is available, return a bounded zero-width fallback at the visible terminal surface rather than inventing terminal text geometry.
+- the M001 anchor is a zero-width caret rectangle with finite height derived from renderer cursor/cell presentation metrics;
+- `actualRange`, when supplied, reports the validated/intersected composition range; `{0,0}` is valid for the empty document;
+- if safe cursor/window conversion is unavailable, return a bounded zero-width fallback at the visible terminal surface rather than inventing terminal text geometry.
 
 `characterIndex(for:)`
 
-- M001 has no inline per-character preedit hit-test geometry, so it returns `NSNotFound` for all screen points;
-- it never maps a point into terminal cells/history and never exposes terminal text positions.
+- M001 has no inline per-character preedit hit-test geometry, so returns `NSNotFound` for all screen points;
+- never maps a point into terminal cells/history or exposes terminal text positions.
 
 `doCommand(by:)`
 
 - must not invoke arbitrary editing selectors against terminal/history state;
-- it participates only in the event-routing disposition for the current AppKit input event. Known input-system consumption is recorded locally; otherwise the native event router may classify the original event as a supported terminal semantic key after the text-input context declines it;
+- participates only in disposition of the current AppKit input event. Input-system consumption is recorded locally; otherwise the native event router may classify the original event after the text-input context declines it;
 - one physical event still follows exactly one route.
 
-The optional `attributedString()` method is omitted in M001. If an SDK/platform compatibility shim requires it later, it may return only the ephemeral composition document and never terminal/history content.
+The optional `attributedString()` method is omitted in M001. If a later SDK/platform compatibility shim requires it, it may return only the ephemeral composition document and never terminal/history content.
 
-Optional coordinate/text-access methods, if implemented, are likewise composition-only. `windowLevel()` reports the owning `NSWindow` level; no method may synthesize a larger document model.
+Optional coordinate/text-access methods, if implemented, are composition-only. `windowLevel()` reports the owning `NSWindow` level; no method may synthesize a larger text document.
 
 ### 13.3 Cancellation and lifecycle are not `unmarkText`
 
@@ -717,128 +749,115 @@ M001 does not claim a complete screen-reader text-range/transcript implementatio
 
 ## 15. Latency instrumentation, budgets and privacy
 
-Pass 7 keeps latency measurement active at these boundaries:
+Pass 7 measures:
 
 1. native event receipt → client admission result;
 2. client queue admission → successful socket-frame completion;
 3. Runtime frame decode/admission → PTY write completion for accepted bytes;
 4. native resize proposal → client admission;
-5. Runtime resize receipt → PTY winsize completion → canonical commit/error classification;
-6. canonical resize commit → first display generation carrying the new geometry, where measurable without adding acknowledgement to terminal progress.
+5. Runtime ResizeRequest receipt → PTY winsize → canonical commit/result queue;
+6. canonical resize commit → first display generation carrying new geometry, where measurable without adding a synchronous acknowledgement dependency.
 
 Instrumentation records only monotonic duration, byte/count/geometry sizes, result category and aggregate counters/histograms. It never records text, encoded key bytes, marked text, terminal contents, environment values or secrets.
 
-Production protocol messages do not gain tracing IDs solely for benchmarking. The connection-local Resize sequence is required correctness metadata for correlating errors, not benchmark instrumentation. Cross-process end-to-end measurements use controlled benchmark/test harnesses; production hot paths retain local low-overhead boundary metrics.
+Request IDs are correctness metadata and must not be repurposed as telemetry or production trace IDs.
 
 ### 15.1 Pass 7 controlled-host performance gate
 
-Before production implementation begins, the implementation Issue records the exact controlled Apple-Silicon host/OS/build baseline from current `master` and freezes its benchmark command/repetition/percentile method. The first implementation must meet these M001 engineering targets on that controlled host; they are acceptance targets, not universal device SLAs:
+Before implementation begins, the implementation Issue records the exact controlled Apple-Silicon host/OS/build baseline from current `master` and freezes benchmark command/repetition/percentile method.
 
-- sparse native event receipt → client admission: p99 **≤ 100 µs**;
-- client admission → complete socket write when the socket is writable and uncontended: p99 **≤ 250 µs**;
-- Runtime frame decode/admission → PTY write completion when PTY is writable and uncontended: p99 **≤ 250 µs**;
-- controlled sparse native event receipt → PTY write completion: p99 **≤ 750 µs**;
-- Runtime resize receipt → canonical commit at 120×40: p99 **≤ 1 ms**;
-- Runtime resize receipt → canonical commit at the practical M001 maximum: p99 **≤ 2 ms**.
+Targets:
 
-If measurement methodology cannot directly observe one cross-process composed boundary without perturbing the hot path, report the measurable component boundaries and a controlled harness-derived composition rather than adding per-event production tracing IDs.
+- sparse native event receipt → client admission p99 **≤ 100 µs**;
+- client admission → complete socket write when writable/uncontended p99 **≤ 250 µs**;
+- Runtime frame decode/admission → PTY write when writable/uncontended p99 **≤ 250 µs**;
+- controlled sparse native receipt → PTY write p99 **≤ 750 µs**;
+- Runtime resize receipt → canonical commit at 120×40 p99 **≤ 1 ms**;
+- Runtime resize receipt → canonical commit at practical M001 maximum p99 **≤ 2 ms**.
 
 Pass 7 must also demonstrate:
 
-- **no persistent timer/poll loop** added for idle input/resize or resize-error retry;
-- idle CPU remains within measurement noise of the Pass 6 baseline;
-- Pass 6 output/render p99 and active CPU show **no >10% regression** under the same controlled workload unless an independently reviewed measurement explains noise/host variance and the repeated-run median stays within 10%;
-- steady-state client/Runtime RSS attributable to the Pass 7 idle path grows by **≤ 2 MiB** total on the controlled single-surface workload;
-- accepted client input/control memory never exceeds the 262,144-byte wire-byte bound plus fixed queue/container overhead.
+- no persistent timer/poll loop for idle input/resize or retry;
+- idle CPU within Pass 6 measurement noise;
+- Pass 6 output/render p99 and active CPU no >10% regression under repeated controlled workload unless independently reviewed variance explains it and repeated median remains within 10%;
+- steady-state client/Runtime RSS attributable to idle Pass 7 path grows by **≤ 2 MiB** total in the controlled single-surface workload;
+- accepted client input/control memory never exceeds the 262,144-byte wire-byte bound plus fixed queue/container overhead;
+- ResizeResult control traffic under live-resize remains bounded and does not create a material output/render regression.
 
-A target miss blocks Pass 7 unless the performance specification/target is explicitly re-reviewed with measured evidence; it must not be waived merely because functional tests pass.
+A target miss blocks Pass 7 unless explicitly re-reviewed with measured evidence.
 
-Every new or renamed production hot-path function participating in input ingress, queue admission, Runtime dispatch/encoding, PTY write service or resize commit must be registered in `scripts/check-hot-path.py` as required by `docs/engineering/PERFORMANCE.md`.
+Every new/renamed production hot-path function participating in input ingress, queue admission, Runtime dispatch/encoding, PTY write service or resize commit must be registered in `scripts/check-hot-path.py`.
 
 ## 16. Required tests and validation
 
 ### 16.1 Native/AppKit deterministic tests
 
-- first-responder acceptance and focus transitions;
-- one-event/one-route classification;
-- Command shortcut non-leak to PTY;
-- committed ASCII and non-ASCII UTF-8;
-- one committed callback → exactly one atomic `Input` frame;
-- >65,536-byte committed callback rejects completely with visible `CommitTooLarge` state and zero queued prefix;
-- queue-full committed callback rejects completely with visible `ClientBackpressure` state and zero queued prefix;
+- first-responder acceptance/focus transitions and one-event/one-route classification;
+- Command shortcut non-leak;
+- committed ASCII/non-ASCII UTF-8;
+- one committed callback → one atomic `Input` frame;
+- >65,536-byte commit and queue-full commit reject atomically with visible non-secret state;
 - dead-key composition commit;
-- Return, Tab, Backspace, Escape and arrows;
-- every Control ASCII mapping in section 6.2;
-- Control modifier-set fixtures for Control-only, Control+Shift and Control+CapsLock;
-- Shift-produced `@`, `^`, `_`, `?` normalization;
-- synthetic non-US-layout fixture proving scalar-derived rather than physical-US-keycode mapping;
-- Command/Option/Function/NumericPad Control combinations are unsupported rather than aliased;
-- key-repeat ordering;
-- unsupported modifiers/keys do not alias to supported behavior;
-- `CompositionDocument` contains only marked text and is bounded by 65,536 UTF-8 bytes;
+- Return, Tab, Backspace, Escape, arrows and every Control ASCII mapping;
+- Control-only, Control+Shift, Control+CapsLock and Shift-produced `@`, `^`, `_`, `?`;
+- synthetic non-US-layout scalar-derived mapping;
+- unsupported Command/Option/Function/NumericPad Control combinations;
+- `CompositionDocument` only contains marked text and remains bounded;
 - all composition ranges are UTF-16 and overflow checked;
-- `hasMarkedText`, exact `{0,N}`/`{NSNotFound,0}` `markedRange`, and `selectedRange` semantics;
-- `setMarkedText` replacement/selection behavior for `NSNotFound`, explicit in-range replacement, surrogate pairs and composed-character strings;
+- exact `hasMarkedText`, `markedRange`, `selectedRange` semantics;
+- `setMarkedText` replacement/selection with `NSNotFound`, explicit in-range replacement, surrogate pairs and composed-character strings;
 - out-of-document replacement never queries/replaces terminal/history text;
-- `attributedSubstring` intersects out-of-bounds ranges with the composition document and never returns terminal/history text;
-- `validAttributesForMarkedText == []` and incoming attributes do not escape the composition seam;
-- `firstRect` uses finite screen-coordinate candidate geometry without consulting terminal/history text;
-- `characterIndex(for:) == NSNotFound` for M001 and never maps terminal cells to text indices;
-- `insertText` commits atomically then clears composition on both success and visible failure;
-- `unmarkText` commits current marked text atomically rather than discarding it;
-- `discardMarkedText`/focus/controller/connection loss clears composition with zero PTY submission;
-- over-limit/invalid composition update fails closed and discards conversion without PTY submission;
-- active-IME Enter/Escape/arrows/control keys are consumed by IME when appropriate and are not duplicated into terminal input;
-- no duplicate delivery through AppKit text interpretation.
+- `attributedSubstring` intersection and terminal/history non-exposure;
+- `validAttributesForMarkedText == []`;
+- `firstRect` finite screen-coordinate candidate geometry without terminal/history text;
+- `characterIndex(for:) == NSNotFound`;
+- `insertText` commits then clears composition on success/failure;
+- `unmarkText` commits current marked text rather than discarding it;
+- `discardMarkedText`/focus/controller/connection loss clears with zero PTY submission;
+- over-limit/invalid composition fails closed and discards conversion;
+- active-IME control/navigation keys are not duplicated into terminal input.
 
 ### 16.2 Protocol/Runtime tests
 
-- `CAP_SEMANTIC_TERMINAL_KEY` negotiation;
-- a current Pass 5/6 client still accepts `ServerHello` with the new unknown-to-it capability bit set;
-- `TerminalKey` round-trip and exact 24-byte layout;
-- malformed key kind/modifiers/scalar/reserved behavior;
-- Observer rejection, Controller success, stale/foreign attachment rejection;
-- whole-key admission/backpressure with no partial escape sequence;
-- Runtime encoder expected M001 bytes;
-- accepted FIFO order across `Input`, `TerminalKey` and `Resize` barriers;
-- client 262,144-byte queue limit and recovery after writable progress;
-- no unbounded allocation/busy retry under stalled Runtime socket;
-- client/Runtime Resize sequence starts at 1, increments only for started/received complete Resize frames and never wraps to zero;
-- every semantic Resize `Error` echoes the exact sequence in `detail_code`;
-- uncorrelatable `detail_code == 0`, impossible future sequence and duplicate impossible sequence fail closed;
-- older correlated Resize errors never invalidate a newer outstanding resize;
-- Runtime queues a resize error before processing later client mutations that could make correlation ambiguous.
+- capabilities bits 2 and 3 negotiate; older Pass 5/6 client tolerates both unknown bits;
+- `TerminalKey` exact 24-byte round-trip and malformed/fuzz cases;
+- `ResizeRequest` exact 32-byte layout; `ResizeResult` exact 32-byte layout;
+- request ID nonzero/unique/monotonic/reconnect reset/wrap rejection;
+- duplicate request ID rejection;
+- Controller/Observer/stale attachment authorization;
+- every structurally valid ResizeRequest receives exactly one matching ResizeResult;
+- Applied only after PTY winsize + canonical commit;
+- failed PTY winsize returns matching `InternalFailure` with canonical dimensions/generation unchanged;
+- malformed/untrusted request-ID path never guesses correlation;
+- older result cannot invalidate newer unresolved request;
+- unknown/duplicate result ID fails closed in client state machine;
+- accepted FIFO order across `Input`, `TerminalKey` and `ResizeRequest` barriers;
+- queue limit/recovery and no unbounded allocation/busy retry.
 
-The `TerminalKey` decoder and Resize correlation/error-state paths are included in the existing local binary-protocol fuzz target and receive retained regression seeds for malformed kinds/modifiers/scalars, truncation, invalid/zero/impossible Resize sequence details and error ordering.
+The local binary-protocol fuzz target includes TerminalKey and correlated ResizeRequest/ResizeResult decode/state transitions.
 
 ### 16.3 Resize tests
 
-- valid viewport/cell-metric floor-and-clamp calculation;
-- NaN, +Infinity and -Infinity independently injected into each of viewport width/height, horizontal/vertical insets and cell width/height produce no proposal;
-- negative viewport/insets and zero/non-positive cell metrics produce no proposal;
-- derived non-finite subtraction/division path produces no proposal before `floor`/conversion;
-- tiny positive viewport converges to 1×1;
-- huge finite viewport clamps to 512×256;
-- invalid/non-positive usable viewport does not propose invalid geometry;
-- no-outstanding desired==committed rows/columns produces no request;
-- convergence regression: committed 80×24, outstanding 100×30, desired returns to 80×24, and 80×24 is still restored without a further native event when no Runtime failure suppresses it;
-- failed **local admission** of a restoring desired resize retains desired state and retries after local queue-capacity recovery;
-- projection commit/outstanding transition reruns reconciliation without bypassing runtime-error suppression;
-- persistent PTY winsize failure emits one correlated error and causes zero automatic resend attempts from error/outstanding/projection/socket/queue events;
-- the same failed target retries at most once after a permitted meaningful layout/recovery epoch, and repeated failure reinstalls suppression;
-- an older failed resize sequence cannot clear/suppress a newer outstanding target;
-- authority-class errors stop mutation until authority/attachment recovery;
-- uncorrelatable/unknown resize errors surface `ResizeProtocolFailure` and do not guess/retry;
-- disconnect/reattach resets sequence/retry transport state while retaining only safe desired layout intent;
+- valid floor/clamp;
+- NaN/+Infinity/-Infinity independently for every viewport/inset/cell operand;
+- negative viewport/insets and non-positive cell metrics;
+- derived non-finite arithmetic before floor/conversion;
+- tiny positive → 1×1; huge finite → 512×256;
+- desired==committed with no unresolved request → no request;
+- committed 80×24, unresolved 100×30, desired returns 80×24 → restoring request retained/admitted without a new native event when requests succeed;
+- failed **local admission** retries only after local capacity progress;
+- persistent PTY winsize failure produces one result per permitted attempt and zero automatic retries from result/projection/socket/queue events;
+- same failed target retries at most once after a permitted recovery epoch and repeated failure reinstalls suppression;
+- older failed request does not clear/suppress newer unresolved request;
+- authority-class failure stops mutation until authority recovery;
+- unknown/duplicate/untrusted result surfaces protocol failure and never retries by guessing;
+- disconnect clears unresolved IDs/state; reattach starts fresh ID space;
 - backing-scale-only invalidation does not mutate terminal geometry;
-- rapid live-resize coalesces only adjacent unsent resize work and consumes no Resize sequence until transmission starts;
+- rapid live-resize coalesces only adjacent not-yet-started requests;
 - input/resize/input ordering remains exact;
-- partially written resize is immutable;
-- observer/invalid/stale geometry rejection;
-- injected PTY winsize failure leaves canonical dimensions/generation unchanged;
-- successful resize commits canonical geometry only after PTY success;
-- resulting projection dimensions match committed canonical state;
-- repeated resize/show/hide/focus cycles do not leak resources.
+- partially written request immutable;
+- resulting projection matches committed canonical state;
+- repeated resize/show/hide/focus cycles leak no resources.
 
 ### 16.4 End-to-end acceptance
 
@@ -856,71 +875,55 @@ native AppKit terminal surface
 → permanent Metal renderer
 ```
 
-prove at minimum:
+prove:
 
-- focus terminal and type a simple shell command;
-- Backspace edits before submission;
-- Control-C reaches the shell/application as the expected control byte;
-- at least the supported Shift-produced Control ASCII cases follow section 6.2;
-- arrows traverse the Runtime semantic-key encoder and reach PTY in M001 normal encoding without claiming ncurses capability;
-- dead-key and at least one real IME composition path update only ephemeral composition state before commit;
-- `unmarkText` commit and explicit discard/cancel are demonstrably different paths;
-- text-input substring/range queries cannot retrieve shell prompt, terminal row or scrollback contents;
-- resizing the window changes PTY/canonical/projection geometry consistently;
-- resize-away-then-return converges to the current desired geometry even when an older resize was outstanding;
-- injected persistent winsize failure visibly reports one failure and does not spin/retry until a permitted recovery event;
-- an older resize failure arriving while a newer request exists does not invalidate the newer target;
-- the accepted minimal alternate-screen fixture receives the same input/resize path;
-- output continues correctly while input is backpressured/stalled on a separate test client;
-- an intentionally filled client queue causes visible non-secret input rejection rather than silent loss or main-thread blocking;
-- observer cannot mutate the execution.
+- focus/type a shell command, Backspace, Control-C and supported arrows;
+- supported Shift-produced Control ASCII cases;
+- real dead-key and at least one real IME path keep preedit local before commit;
+- `unmarkText` commit differs from explicit discard/cancel;
+- text-input substring/range queries cannot retrieve prompt/terminal/scrollback content;
+- resize changes PTY/canonical/projection consistently;
+- resize-away-then-return converges under overlapping unresolved requests;
+- injected persistent winsize failure visibly reports and does not spin until permitted recovery;
+- older failed request result cannot invalidate newer target;
+- minimal alternate-screen fixture receives same input/resize path;
+- output continues while another test client is input-backpressured;
+- intentionally full client queue causes visible non-secret input rejection;
+- observer cannot mutate execution.
 
 ### 16.5 Performance evidence
 
-Benchmark at minimum:
+Benchmark sparse typing, key-repeat burst, legal 1/16/64 KiB commits, rejected >64 KiB commit, representative live-resize through M001 maximum, correlated result traffic, persistent-failure no-retry path, input under sustained output, alternate-screen input/resize and idle before/after.
 
-- sparse typing;
-- sustained synthetic key-repeat burst;
-- 1 KiB / 16 KiB / 64 KiB committed-text submissions where legal;
-- rejected >64 KiB committed-text path without payload logging/copy amplification beyond bounded conversion;
-- repeated live-resize from 80×24 through representative larger geometries and M001 maximum;
-- resize-error path proving no retry loop/idle polling under persistent injected PTY winsize failure;
-- input while sustained terminal output is active;
-- alternate-screen input/resize;
-- idle terminal before/after Pass 7 to detect new polling/CPU cost.
-
-Record exact commit SHA, hardware/OS/build mode, run/repetition count, percentile method, baseline/result, p50/p95/p99/max, CPU/RSS, queue depth/high-water, allocations/reallocations where instrumentable, socket/write counts where instrumentable and the section 15.1 pass/fail decision. No benchmark may depend on logging terminal/input contents.
+Record exact SHA, hardware/OS/build, repetitions/percentile method, baseline/result, p50/p95/p99/max, CPU/RSS, queue depth/high-water, allocations/reallocations where instrumentable and socket/write counts. Never log input/composition content.
 
 ## 17. Failure behavior
 
-- Runtime unavailable/disconnected: stop terminal mutation acceptance, preserve UI responsiveness, discard marked conversion without sending it and surface a non-secret diagnostic state.
-- `ControllerBusy`: remain explicitly noninteractive; never preempt or silently drop apparently accepted typing.
-- committed text >65,536 UTF-8 bytes: atomically reject the complete commit; do not chunk or submit a prefix; surface `CommitTooLarge` visibly/accessibly without retaining content.
-- client queue full: atomically reject the new input action before ownership, surface `ClientBackpressure` visibly/accessibly, retain no rejected payload and do not block AppKit/main thread.
-- rejected input is never automatically replayed; the user retries after the visible failure state because implicit replay can duplicate intent.
+- Runtime unavailable/disconnected: stop mutation acceptance, discard marked conversion without sending, preserve UI responsiveness and surface non-secret state.
+- `ControllerBusy`: explicitly noninteractive; no preemption or silent typing loss.
+- committed text >65,536 UTF-8 bytes: atomic complete rejection, no chunk/prefix, visible `CommitTooLarge`.
+- client queue full: atomic rejection before ownership, visible `ClientBackpressure`, no main-thread block.
+- rejected input never automatically replays.
 - socket `WouldBlock`: retain accepted FIFO bytes and wait for writable readiness.
-- malformed server/client protocol: use SPEC-004 failure/cleanup semantics.
-- PTY closed/execution finalized: reject input/resize and release controller/client resources idempotently.
-- local resize admission backpressure: retain latest valid desired geometry and reconcile after **local** capacity changes because no Runtime request was sent.
-- Runtime resize `Error`: correlate by Resize sequence; never invalidate a newer request; never immediately resend the failed same target; apply section 12.5 retry suppression.
-- persistent/unknown resize failure: surface a non-secret failure state and wait for a permitted meaningful layout/authority/explicit recovery event, never an internal retry loop.
-- uncorrelatable resize error: stop automatic resize submission and require explicit recovery/reconnect rather than guessing.
-- renderer failure: does not change input/resize/terminal authority; canonical terminal progress remains independent.
+- PTY closed/finalized: reject input/resize and clean resources idempotently.
+- local resize admission backpressure: retain desired geometry and retry on **local** capacity progress because no Runtime request was sent.
+- failed ResizeResult: mutate only its exact request record; never invalidate a newer request; apply section 12.6 retry gate.
+- persistent/unknown resize failure: visible non-secret state and wait for permitted meaningful layout/authority/explicit recovery, never internal retry loop.
+- untrusted/unknown result correlation: stop automatic resize submission and require explicit recovery/reconnect.
+- renderer failure does not change terminal authority.
 
 ## 18. Security and privacy
 
-Input and IME text may contain passwords, tokens and secrets. Therefore:
-
 - no normal/error/performance log contains input payloads, semantic encoded bytes, marked text or terminal contents;
-- protocol validation happens before allocation/mutation beyond bounded receive buffers;
-- only the authenticated attached Controller can submit `Input`, `TerminalKey` or `Resize`;
-- stale `AttachmentId` values never regain authority after reconnect;
-- malformed or unsupported key events fail closed before PTY mutation;
-- rejected committed text is not retained for hidden automatic retry, telemetry or diagnostics;
-- `InputAdmissionFailure`, `ResizeApplyFailure` and `ResizeProtocolFailure` carry only non-secret category/geometry/sequence metadata;
+- protocol validation happens before unbounded allocation or mutation;
+- only authenticated attached Controller submits `Input`, `TerminalKey` or `ResizeRequest`;
+- stale AttachmentIds/request IDs never regain authority after reconnect;
+- malformed/unsupported key events fail closed before PTY mutation;
+- rejected committed text is not retained for hidden retry/telemetry/diagnostics;
+- input/resize failure state carries only non-secret category/geometry/request-ID metadata;
 - `NSTextInputClient` storage/query/range/coordinate methods operate only on bounded ephemeral composition state and never return terminal/history text;
-- optional text-input methods cannot be used as a backdoor to expose a terminal transcript;
-- accessibility/IME helpers do not scrape terminal text into trusted action authority.
+- optional text-input methods cannot expose terminal transcript as a hidden document model;
+- accessibility/IME helpers do not turn presentation text into authority.
 
 ## 19. Explicit non-goals
 
@@ -944,28 +947,26 @@ commercial features
 SwiftUI/NSTextView terminal rendering
 ```
 
-These are deferred, not silently approximated.
-
 ## 20. Pass 7 definition of done
 
-Pass 7 implementation is complete only when all of these are true:
+Pass 7 implementation is complete only when:
 
-- real AppKit key event → Runtime → PTY → shell/application path works on the permanent production terminal surface;
-- committed text and semantic terminal keys follow this specification;
-- Control-key native normalization is explicit, layout-aware and covered for Shift-produced symbols/modifier combinations without a physical-US-keycode table;
-- committed-text callbacks are one-frame atomic in M001, and oversize/backpressure rejection is visible, accessible, non-secret and never silent;
-- Runtime owns all terminal-key escape encoding and the client contains no mirrored VT/mode authority;
-- interactive surface holds explicit Controller authority or is visibly noninteractive;
-- input/control queue is bounded, FIFO and readiness-driven with no main-thread busy wait;
-- resize obeys desired/outstanding/committed reconciliation plus correlated request-error handling and propose → authorize/prepare → PTY winsize → canonical commit → damage/projection;
-- older resize errors cannot invalidate newer requests and persistent Runtime resize failure cannot create an automatic resend loop;
-- resize storms remain bounded without crossing input-order barriers, all geometry operands are validated before numeric conversion and final desired geometry converges when not retry-suppressed by an actual Runtime failure;
-- the `NSTextInputClient` document is composition-only, bounded and UTF-16-range correct; terminal/history text is never returned to the input system;
-- `insertText`/`unmarkText` commit semantics are distinct from cancellation/discard semantics and marked text never leaks before commit;
-- focus/IME/accessibility seams exist on the Metal surface;
+- real AppKit key event → Runtime → PTY → shell/application works on permanent Metal surface;
+- committed text/semantic keys follow this spec;
+- Control normalization is explicit/layout-aware/tested;
+- committed callbacks are atomic and rejection is visible/accessibility-safe/non-secret;
+- Runtime owns terminal-key encoding; client has no mirrored VT/mode authority;
+- interactive surface owns Controller authority or is visibly noninteractive;
+- queue is bounded/FIFO/readiness-driven with no main-thread busy wait;
+- Pass 7 production resize uses capability-gated correlated `ResizeRequest`/`ResizeResult`, not legacy uncorrelated type 10;
+- request results correlate exactly; older failures cannot invalidate newer requests; persistent failure cannot create automatic retry loops;
+- resize transaction remains PTY winsize → canonical commit → result/projection with no synchronous acknowledgement dependency;
+- geometry math is finite-safe and final desired geometry converges when not retry-suppressed by an actual failure;
+- `NSTextInputClient` document is composition-only, bounded and UTF-16-range correct; terminal/history text is never returned;
+- `insertText`/`unmarkText` commit semantics are distinct from cancellation/discard;
 - deterministic/native/protocol/integration/failure/fuzz tests pass;
-- exact-head latency/CPU/RSS evidence meets section 15.1 and no material Pass 6 output/render regression is found;
-- all new/renamed production hot-path functions are registered in the deterministic hot-path guardrail;
+- exact-head latency/CPU/RSS evidence meets section 15 and no material Pass 6 regression exists;
+- all new/renamed hot functions are in deterministic hot-path guardrail;
 - OSS remains independent of commercial code;
-- no Pass 8+ behavior is included as scope creep;
-- independent final architecture/performance/security review has no unresolved blocking finding.
+- no Pass 8+ scope creep;
+- independent final architecture/performance/security review has no unresolved blocker.

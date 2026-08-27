@@ -606,15 +606,22 @@ fn connect_stream(path: &Path) -> Result<UnixStream, ClientError> {
 }
 
 fn hello(stream: &mut UnixStream) -> Result<(), ClientError> {
+    // SPEC-004 reserves ClientHello capability bits in M001. The client
+    // advertises zero and verifies the server's binary-display capability in
+    // ServerHello before proceeding.
     send_control(
         stream,
         MessageType::ClientHello,
         &ClientHello {
-            client_capabilities: CAP_BINARY_DISPLAY,
+            client_capabilities: 0,
         }
         .encode(),
     )?;
     let (kind, payload) = read_blocking_frame(stream)?;
+    if kind == MessageType::Error {
+        let error = ErrorMessage::decode(&payload).map_err(|_| ClientError::Protocol)?;
+        return Err(ClientError::Server(error.error_code));
+    }
     if kind != MessageType::ServerHello {
         return Err(ClientError::Protocol);
     }

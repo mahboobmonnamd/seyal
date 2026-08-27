@@ -17,6 +17,7 @@ The scaffold may establish:
 - contextual left panel and inspector presentation seams;
 - attention-popover presentation seam;
 - native AppKit menu/key-equivalent routing for presentation-only Workspace/Tab/window navigation;
+- transient Command-hold shortcut-discovery overlays that do not alter layout;
 - a `TerminalSurfaceHostView` that contains the already-established permanent `MetalSurfaceView` boundary;
 - deterministic preview fixtures behind an explicit preview-only launch path.
 
@@ -62,7 +63,7 @@ At the canonical `1280x800` preview size:
 
 Where visual concept art conflicts with the current Block sizing, busy-composer, TUI takeover, ownership, or functional-only rules, the current specifications win.
 
-The XCTest layout contract and XCUIAutomation suite are part of this visual contract. XCUI launches the actual `Seyal.app` preview, asserts the visible hierarchy and left-center-right ordering, exercises the Workspaces/Tabs switcher, Inspector rail, side-panel hide/reopen behavior, native navigation shortcuts, and Pane-local lifecycle controls, and records a rendered screenshot in the test result bundle for design review. A true pixel-golden comparison must not be claimed until the approved source reference image is deliberately added to the repository as a test asset.
+The XCTest layout contract and XCUIAutomation suite are part of this visual contract. XCUI launches the actual `Seyal.app` preview, asserts the visible hierarchy and left-center-right ordering, exercises the Workspaces/Tabs switcher, Inspector rail, side-panel hide/reopen behavior, native navigation shortcuts, hierarchical close behavior, shortcut-hint presentation, and Pane-local lifecycle controls, and records a rendered screenshot in the test result bundle for design review. A true pixel-golden comparison must not be claimed until the approved source reference image is deliberately added to the repository as a test asset.
 
 ## Preview-only path
 
@@ -108,13 +109,33 @@ The preview shortcut contract is:
 Additional native UI commands:
 
 - `⌘T` creates a preview Tab;
-- `⌘W` closes the active preview Tab when another Tab remains;
+- `⌘W` closes the focused context from the inside out: if the active Tab has more than one Pane it closes the focused Pane; once one Pane remains it closes the active Tab if another Tab exists; once the Window contains one Tab with one Pane it closes the Window;
 - `⌘0` toggles the left navigation sidebar;
 - `⌥⌘0` toggles Inspector.
+
+A Tab never enters a zero-Pane state. Repeated `⌘W` therefore peels **Pane → Tab → Window** across invocations instead of bulk-deleting panes or bypassing the active Pane.
 
 `⌘1…9` for Tabs and `⌥⌘1…9` for windows intentionally follow established macOS terminal conventions. Workspace shortcuts occupy a separate Control+Command layer so Workspace navigation never conflicts with Tab/window numbering.
 
 Window switching is presentation-level AppKit behavior over existing visible titled windows. It does not create or own Runtime sessions. Keyboard navigation must route through the same shell state/actions as mouse navigation; it must not create a duplicate Workspace/Tab model or reconstruct the shell in a way that loses Pane drafts, focus, Inspector mode, or sidebar visibility.
+
+## Command-hold shortcut discovery
+
+Holding **Command only** intentionally for 300 ms shows compact shortcut labels over currently reachable controls. This is a transient discovery layer, not another toolbar or navigation model.
+
+Rules:
+
+- hints are scoped to the current key Window;
+- the 300 ms delay prevents normal Command chords from flashing the overlay;
+- releasing Command hides the hints;
+- pressing any non-modifier key before or after presentation cancels/hides them;
+- adding Shift, Option, or Control to the held Command cancels the Command-only discovery state;
+- app deactivation or key-window loss cancels/hides the hints;
+- the overlay is hit-test transparent and must not alter Auto Layout or move any shell content;
+- only controls backed by real shortcuts receive hints;
+- the labels reflect the current shortcut map dynamically, including numbered Workspaces/Tabs, `⌘T`, `⌘W`, `⌘0`, and `⌥⌘0` where their target is visible.
+
+The discovery overlay may observe local key/modifier events only to determine visibility and must return those events unchanged. Actual shortcut execution remains native `NSMenuItem` key-equivalent routing.
 
 ## Inspector navigation
 
@@ -179,6 +200,8 @@ The scaffold is acceptable only if:
 - the canonical `1280x800` preview satisfies the frozen three-column layout contract with Inspector flush to the trailing edge;
 - the Workspaces/Tabs switcher follows the frozen compact navigation model;
 - native Workspace/Tab/window shortcuts use AppKit menu key equivalents and route through the same preview state/actions as pointer navigation;
+- `⌘W` follows the explicit focused Pane → active Tab → Window close sequence without producing a zero-Pane Tab;
+- a Command-only 300 ms hold exposes hit-test-transparent, no-layout-shift shortcut labels and cancels on key/modifier/focus loss;
 - shortcut routing preserves existing shell presentation state such as sidebar visibility rather than replacing the shell with a second state owner;
 - the Inspector exposes the frozen right-edge navigation rail using only functional modes backed by current preview context;
 - left context and Inspector hide/reopen controls are functional and the center Pane reclaims hidden side-panel width;

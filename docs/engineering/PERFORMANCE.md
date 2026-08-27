@@ -89,7 +89,7 @@ Steady-state display extraction must be damage-sized: a partial canonical damage
 
 ## Pass-5 decisive benchmark
 
-Before PR #106 may be Ready for Review/merge, benchmark the real selected path:
+For M001 Pass 5.1 final acceptance, benchmark the real selected path:
 
 ```text
 real shell/process
@@ -210,11 +210,42 @@ No renderer acknowledgement is allowed in the canonical PTY/VT progress path.
 
 Synthetic `pass5_delta_transport` remains diagnostic evidence only because it does not traverse the real production Runtime path.
 
-The production `runtime_scalability` benchmark must exercise the exact selected Candidate-D Runtime path before its results can satisfy the final Pass-5 performance gate.
+`crates/seyal-runtime/benches/pass5_production_transport.rs` is the decisive Candidate-D benchmark: it is the only benchmark that traverses the full real selected path (real child → real PTY → Seyal VT → canonical damage → Candidate-D binary encode → production UDS → real client `DisplayCache`) across the required fanout/population/geometry/workload matrix. `runtime_scalability` remains pre-Pass-5 headless execution-scalability evidence and does not by itself satisfy the Pass-5 transport performance gate.
 
 Earlier single-sample or asymmetric results must not be promoted to final architecture claims. Host PTY ceilings must be reported as platform-limited evidence, not hidden or reinterpreted as a Seyal scalability limit.
 
 Benchmark output is evidence only for the exact commit/build/environment that produced it.
+
+## M001 Pass 5.1 final controlled evidence
+
+The final physical-Apple-Silicon acceptance run was produced by the production benchmark at commit `c8c121380002c86a4e42b6737238289db10965af` with:
+
+```text
+macOS 26.5.2 (25F84)
+model Mac17,9
+Apple M5 Pro
+rustc 1.98.0 (88d9e12ae 2026-08-18)
+release build
+percentile method: nearest-rank
+```
+
+The decisive `sustained_high_output_2s` workload at `200x60` completed for same-execution fanout `1/2/4/8/16` without timeout, panic, platform error, shutdown failure, or pending accepted-but-unwritten input. Across two physical M5 Pro runs, the 16-viewer case measured approximately:
+
+- p95 update-to-client-cache latency: `3.168–6.336 ms`;
+- p99 update-to-client-cache latency: `3.682–6.780 ms`;
+- sampled CPU: `24–35.9%`;
+- populated RSS: approximately `15.9–18.4 MiB`;
+- source PTY throughput: approximately `220–274 KiB/s`;
+- aggregate UDS throughput: approximately `166–207 MB/s`;
+- `shutdown_ok=true` and `aggregate_pending_input_final=0`.
+
+The ordinary 16-viewer interactive case remained substantially lower latency (about `122 µs` p95 in the captured run). The full matrix also exercised token streaming, normal command output, burst/scroll, partial/full TUI redraw, alternate screen, reconnect, maximum representative geometry, and cleanup.
+
+Execution-population cases requested at 50 and 100 were reported `PLATFORM_LIMITED` on this host after 27 live PTYs with the exact platform error `Device not configured (os error 6)`. This is retained as host/platform evidence and is not reinterpreted as a Seyal execution-capacity limit.
+
+The earlier Apple M2 Pro runs remain useful diagnostic evidence because they demonstrated large host-contention variance and exposed why shared/uncontrolled hosts cannot establish absolute product thresholds. They are not the final performance sign-off record.
+
+**Decision:** the controlled physical-M5-Pro evidence does not trigger ADR-001's Candidate-D reopen rule. Candidate D passes the M001 Pass 5.1 performance architecture gate. The high cumulative allocation volume observed in full-redraw/alternate-screen stress remains an optimization target and regression signal; it is not promoted to a retained-RSS claim and is not, by itself, an M001 architecture blocker.
 
 ## Reopen rule
 

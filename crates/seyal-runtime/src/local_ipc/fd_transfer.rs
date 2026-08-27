@@ -5,6 +5,7 @@
 //! module. Every unsafe block is narrowly scoped and documented.
 
 use std::{
+    cell::RefCell,
     io,
     os::fd::{FromRawFd, OwnedFd, RawFd},
 };
@@ -12,7 +13,7 @@ use std::{
 #[cfg(feature = "benchmark-instrumentation")]
 use std::sync::atomic::{AtomicU64, Ordering};
 
-const ANCILLARY_BUFFER_BYTES: usize = 256;
+const SEND_ANCILLARY_BUFFER_BYTES: usize = 256;
 
 #[cfg(feature = "benchmark-instrumentation")]
 static BENCH_SEND_SYSCALLS: AtomicU64 = AtomicU64::new(0);
@@ -45,26 +46,93 @@ pub fn benchmark_syscall_counters() -> BenchmarkSyscallCounters {
     }
 }
 
-// `cmsghdr` requires native alignment. Keep the stack buffer more strictly
+// `cmsghdr` requires native alignment. Keep send-side scratch more strictly
 // aligned than Darwin requires so the CMSG macros never observe an unaligned
 // control header.
 #[repr(align(16))]
-struct AncillaryBuffer([u8; ANCILLARY_BUFFER_BYTES]);
+struct SendAncillaryBuffer([u8; SEND_ANCILLARY_BUFFER_BYTES]);
 
-impl AncillaryBuffer {
+impl SendAncillaryBuffer {
     fn new() -> Self {
-        Self([0; ANCILLARY_BUFFER_BYTES])
+        Self([0; SEND_ANCILLARY_BUFFER_BYTES])
     }
 }
 
-fn cmsg_space_for_fd_count(count: usize) -> usize {
+// The receive side must be able to absorb every descriptor XNU can install in
+// this process. Darwin has a long-standing SCM_RIGHTS truncation hazard: when
+// the ancillary buffer is too small, descriptors not reported to user space
+// can remain installed in the receiving process. Size this reusable scratch to
+// the process descriptor table instead of using a small fixed buffer.
+#[repr(align(16))]
+#[derive(Clone, Copy)]
+struct AlignedWord {
+    _bytes: [u8; 16],
+}
+
+struct ReceiveAncillaryBuffer {
+    storage: Vec<AlignedWord>,
+    byte_len: usize,
+}
+
+impl ReceiveAncillaryBuffer {
+    fn for_process_fd_table() -> io::Result<Self> {
+        // SAFETY: getdtablesize takes no pointers and only reports this
+        // process's descriptor-table size.
+        let limit = unsafe { libc::getdtablesize() };
+        if limit <= 0 {
+            return Err(io::Error::other(
+                "getdtablesize returned an invalid descriptor-table size",
+            ));
+        }
+        Self::for_fd_capacity(limit as usize)
+    }
+
+    fn for_fd_capacity(fd_capacity: usize) -> io::Result<Self> {
+        let byte_len = checked_cmsg_space_for_fd_count(fd_capacity.max(1))?;
+        let word_bytes = std::mem::size_of::<AlignedWord>();
+        let word_count = byte_len.div_ceil(word_bytes).max(1);
+        let mut storage = Vec::new();
+        storage.try_reserve_exact(word_count).map_err(|error| {
+            io::Error::other(format!(
+                "failed to reserve SCM_RIGHTS receive buffer for {fd_capacity} descriptors: {error}"
+            ))
+        })?;
+        storage.resize(word_count, AlignedWord { _bytes: [0; 16] });
+        Ok(Self { storage, byte_len })
+    }
+
+    fn as_mut_ptr(&mut self) -> *mut libc::c_void {
+        self.storage.as_mut_ptr().cast::<libc::c_void>()
+    }
+
+    fn start_addr(&self) -> usize {
+        self.storage.as_ptr() as usize
+    }
+}
+
+thread_local! {
+    // Runtime services local IPC on one poll thread, so this is one reusable
+    // allocation in production rather than one allocation or large memset per
+    // recvmsg call. Tests using additional threads get isolated scratch.
+    static RECEIVE_ANCILLARY: RefCell<Option<ReceiveAncillaryBuffer>> = const {
+        RefCell::new(None)
+    };
+}
+
+fn checked_cmsg_space_for_fd_count(count: usize) -> io::Result<usize> {
     let bytes = count
         .checked_mul(std::mem::size_of::<RawFd>())
-        .expect("SCM_RIGHTS descriptor count overflow");
-    let bytes = u32::try_from(bytes).expect("SCM_RIGHTS payload exceeds Darwin CMSG limit");
+        .ok_or_else(|| io::Error::other("SCM_RIGHTS descriptor count overflow"))?;
+    let bytes = u32::try_from(bytes)
+        .map_err(|_| io::Error::other("SCM_RIGHTS payload exceeds Darwin CMSG limit"))?;
     // SAFETY: `CMSG_SPACE` only computes a size from its integer argument;
     // it performs no memory access.
-    unsafe { libc::CMSG_SPACE(bytes) as usize }
+    Ok(unsafe { libc::CMSG_SPACE(bytes) as usize })
+}
+
+fn cmsg_space_for_fd_count(count: usize) -> usize {
+    checked_cmsg_space_for_fd_count(count)
+        .expect("SCM_RIGHTS descriptor count must fit Darwin CMSG limits")
 }
 
 fn cmsg_len(payload_bytes: usize) -> usize {
@@ -112,9 +180,9 @@ pub fn send_with_fd(socket: RawFd, bytes: &[u8], fd: Option<RawFd>) -> io::Resul
     };
 
     let control_len = cmsg_space_for_fd_count(1);
-    if control_len > ANCILLARY_BUFFER_BYTES {
+    if control_len > SEND_ANCILLARY_BUFFER_BYTES {
         return Err(io::Error::other(
-            "SCM_RIGHTS control message exceeds fixed ancillary buffer",
+            "SCM_RIGHTS control message exceeds fixed send ancillary buffer",
         ));
     }
 
@@ -122,7 +190,7 @@ pub fn send_with_fd(socket: RawFd, bytes: &[u8], fd: Option<RawFd>) -> io::Resul
         iov_base: bytes.as_ptr() as *mut libc::c_void,
         iov_len: bytes.len(),
     };
-    let mut cmsg_buffer = AncillaryBuffer::new();
+    let mut cmsg_buffer = SendAncillaryBuffer::new();
     // SAFETY: `libc::msghdr` is a plain-old-data C struct; a zeroed value is
     // a valid empty starting point and all fields consumed by sendmsg are set
     // below before use.
@@ -163,24 +231,45 @@ pub fn send_with_fd(socket: RawFd, bytes: &[u8], fd: Option<RawFd>) -> io::Resul
 /// Receives into `buffer`, returning the byte count and at most one
 /// transferred descriptor. Anything other than zero or one complete
 /// `SCM_RIGHTS` descriptor is returned as [`RecvFd::Malformed`]. Every
-/// descriptor delivered by the kernel on a malformed/truncated path is owned
+/// descriptor visible in received ancillary data on a malformed path is owned
 /// and closed before this function returns.
 ///
 /// Runtime uses this same receive primitive for C→Runtime traffic even though
 /// descriptors are never legal in that direction; the connection layer treats
 /// both [`RecvFd::One`] and [`RecvFd::Malformed`] as protocol-fatal.
 pub fn recv_with_fd(socket: RawFd, buffer: &mut [u8]) -> io::Result<(usize, RecvFd)> {
+    RECEIVE_ANCILLARY.with(|slot| {
+        let mut slot = slot
+            .try_borrow_mut()
+            .map_err(|_| io::Error::other("reentrant ancillary receive is not supported"))?;
+        if slot.is_none() {
+            *slot = Some(ReceiveAncillaryBuffer::for_process_fd_table()?);
+        }
+        recv_with_buffer(
+            socket,
+            buffer,
+            slot.as_mut()
+                .expect("receive ancillary buffer was initialized above"),
+        )
+    })
+}
+
+fn recv_with_buffer(
+    socket: RawFd,
+    buffer: &mut [u8],
+    ancillary: &mut ReceiveAncillaryBuffer,
+) -> io::Result<(usize, RecvFd)> {
     let mut iov = libc::iovec {
         iov_base: buffer.as_mut_ptr().cast::<libc::c_void>(),
         iov_len: buffer.len(),
     };
-    let mut cmsg_buffer = AncillaryBuffer::new();
-    // SAFETY: see `send_with_fd`'s identical zeroing rationale.
+    // SAFETY: `libc::msghdr` is plain-old-data and all fields consumed by
+    // recvmsg are initialized below.
     let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
     msg.msg_iov = &mut iov;
     msg.msg_iovlen = 1;
-    msg.msg_control = cmsg_buffer.0.as_mut_ptr().cast::<libc::c_void>();
-    msg.msg_controllen = cmsg_buffer.0.len() as _;
+    msg.msg_control = ancillary.as_mut_ptr();
+    msg.msg_controllen = ancillary.byte_len as _;
 
     // SAFETY: `msg` is fully initialized with an aligned control buffer and
     // `socket` is a live caller-owned descriptor.
@@ -191,18 +280,57 @@ pub fn recv_with_fd(socket: RawFd, buffer: &mut [u8]) -> io::Result<(usize, Recv
         return Err(io::Error::last_os_error());
     }
 
+    Ok((result as usize, parse_received_ancillary(&msg, ancillary)))
+}
+
+fn parse_received_ancillary(msg: &libc::msghdr, ancillary: &ReceiveAncillaryBuffer) -> RecvFd {
+    let reported_control_len = msg.msg_controllen as usize;
+    let control_len = reported_control_len.min(ancillary.byte_len);
+    let control_start = ancillary.start_addr();
+    let Some(control_end) = control_start.checked_add(control_len) else {
+        return RecvFd::Malformed;
+    };
+
     let mut first_fd: Option<OwnedFd> = None;
     let mut received_count = 0usize;
-    let mut malformed = msg.msg_flags & libc::MSG_CTRUNC != 0;
-    let header_len = cmsg_len(0);
+    let mut malformed = msg.msg_flags & libc::MSG_CTRUNC != 0
+        || reported_control_len > ancillary.byte_len
+        || msg.msg_control as usize != control_start;
 
-    // Walk even when MSG_CTRUNC is set so every complete descriptor the
-    // kernel did place in our buffer is closed before reporting malformed.
-    // SAFETY: `msg` was just populated by a successful recvmsg and its control
-    // pointer/length still refer to `cmsg_buffer`.
-    let mut cmsg = unsafe { libc::CMSG_FIRSTHDR(&msg) };
+    if control_len == 0 {
+        return if malformed {
+            RecvFd::Malformed
+        } else {
+            RecvFd::None
+        };
+    }
+
+    let header_len = cmsg_len(0);
+    let header_struct_len = std::mem::size_of::<libc::cmsghdr>();
+    let fd_bytes = std::mem::size_of::<RawFd>();
+
+    // Use a bounded msghdr for the CMSG walker. XNU may return a cmsg_len that
+    // extends beyond msg_controllen when MSG_CTRUNC is set; never let a CMSG
+    // macro use more than the storage we actually own.
+    // SAFETY: zeroed msghdr is valid as an empty walker descriptor.
+    let mut walk_msg: libc::msghdr = unsafe { std::mem::zeroed() };
+    walk_msg.msg_control = msg.msg_control;
+    walk_msg.msg_controllen = control_len as _;
+
+    // SAFETY: walk_msg points only at the bounded live ancillary storage.
+    let mut cmsg = unsafe { libc::CMSG_FIRSTHDR(&walk_msg) };
     while !cmsg.is_null() {
-        // SAFETY: `cmsg` comes from the CMSG walker for `msg`'s live buffer.
+        let cmsg_addr = cmsg as usize;
+        let Some(header_end) = cmsg_addr.checked_add(header_struct_len) else {
+            malformed = true;
+            break;
+        };
+        if cmsg_addr < control_start || header_end > control_end {
+            malformed = true;
+            break;
+        }
+
+        // SAFETY: the complete cmsghdr structure is inside the bounded buffer.
         let (level, kind, len) = unsafe {
             (
                 (*cmsg).cmsg_level,
@@ -210,58 +338,94 @@ pub fn recv_with_fd(socket: RawFd, buffer: &mut [u8]) -> io::Result<(usize, Recv
                 (*cmsg).cmsg_len as usize,
             )
         };
+        if len < header_len {
+            malformed = true;
+            break;
+        }
+
+        let Some(declared_end) = cmsg_addr.checked_add(len) else {
+            malformed = true;
+            break;
+        };
+        let truncated_header = declared_end > control_end;
+        malformed |= truncated_header;
+        let bounded_end = declared_end.min(control_end);
+
+        // SAFETY: cmsg itself is in-bounds. CMSG_DATA only calculates the data
+        // address following this validated header.
+        let data_addr = unsafe { libc::CMSG_DATA(cmsg) as usize };
+        if data_addr < cmsg_addr || data_addr > bounded_end {
+            malformed = true;
+            break;
+        }
+
         if level == libc::SOL_SOCKET && kind == libc::SCM_RIGHTS {
-            if len < header_len {
+            let payload_bytes = bounded_end - data_addr;
+            if payload_bytes == 0 || !payload_bytes.is_multiple_of(fd_bytes) {
                 malformed = true;
-            } else {
-                let payload_bytes = len - header_len;
-                let fd_bytes = std::mem::size_of::<RawFd>();
-                if payload_bytes == 0 || !payload_bytes.is_multiple_of(fd_bytes) {
+            }
+            let count = payload_bytes / fd_bytes;
+            for index in 0..count {
+                let Some(offset) = index.checked_mul(fd_bytes) else {
                     malformed = true;
+                    break;
+                };
+                let Some(fd_addr) = data_addr.checked_add(offset) else {
+                    malformed = true;
+                    break;
+                };
+                let Some(fd_end) = fd_addr.checked_add(fd_bytes) else {
+                    malformed = true;
+                    break;
+                };
+                if fd_end > bounded_end {
+                    malformed = true;
+                    break;
                 }
-                let count = payload_bytes / fd_bytes;
-                for index in 0..count {
-                    // SAFETY: `index` stays inside the complete descriptor
-                    // payload described by this cmsghdr.
-                    let raw_fd = unsafe {
-                        std::ptr::read_unaligned(
-                            libc::CMSG_DATA(cmsg)
-                                .cast::<u8>()
-                                .add(index * fd_bytes)
-                                .cast::<RawFd>(),
-                        )
-                    };
-                    if raw_fd < 0 {
-                        malformed = true;
-                        continue;
-                    }
-                    // SAFETY: SCM_RIGHTS returns a fresh descriptor owned by
-                    // this process; wrapping it immediately gives deterministic
-                    // close-on-drop behavior on every rejection path.
-                    let owned = unsafe { OwnedFd::from_raw_fd(raw_fd) };
-                    received_count += 1;
-                    if received_count == 1 {
-                        first_fd = Some(owned);
-                    } else {
-                        malformed = true;
-                        drop(owned);
-                    }
+
+                // SAFETY: fd_addr..fd_end is a complete RawFd inside the
+                // validated SCM_RIGHTS payload copied by recvmsg.
+                let raw_fd = unsafe { std::ptr::read_unaligned(fd_addr as *const RawFd) };
+                if raw_fd < 0 {
+                    malformed = true;
+                    continue;
+                }
+                // SAFETY: SCM_RIGHTS externalization creates a fresh descriptor
+                // in this process. Wrapping it immediately gives deterministic
+                // close-on-drop behavior for every rejection path.
+                let owned = unsafe { OwnedFd::from_raw_fd(raw_fd) };
+                received_count += 1;
+                if received_count == 1 {
+                    first_fd = Some(owned);
+                } else {
+                    malformed = true;
+                    drop(owned);
                 }
             }
+        } else {
+            // No inbound ancillary type other than SCM_RIGHTS is part of the
+            // Candidate-D local protocol.
+            malformed = true;
         }
-        // SAFETY: `cmsg` is a valid pointer produced by the same CMSG walker.
-        cmsg = unsafe { libc::CMSG_NXTHDR(&msg, cmsg) };
+
+        if truncated_header {
+            break;
+        }
+
+        // SAFETY: cmsg has a validated in-bounds length and walk_msg itself is
+        // clamped to the owned control buffer.
+        cmsg = unsafe { libc::CMSG_NXTHDR(&walk_msg, cmsg) };
     }
 
     if malformed {
         drop(first_fd);
-        return Ok((result as usize, RecvFd::Malformed));
+        return RecvFd::Malformed;
     }
 
     match (received_count, first_fd) {
-        (0, None) => Ok((result as usize, RecvFd::None)),
-        (1, Some(fd)) => Ok((result as usize, RecvFd::One(fd))),
-        _ => Ok((result as usize, RecvFd::Malformed)),
+        (0, None) => RecvFd::None,
+        (1, Some(fd)) => RecvFd::One(fd),
+        _ => RecvFd::Malformed,
     }
 }
 
@@ -269,8 +433,8 @@ pub enum RecvFd {
     None,
     One(OwnedFd),
     /// More than one descriptor, a truncated ancillary set or a malformed
-    /// descriptor control message was received. All received descriptors are
-    /// already closed.
+    /// control message was received. Every descriptor visible to user space is
+    /// already closed on this path.
     Malformed,
 }
 
@@ -282,12 +446,12 @@ mod tests {
 
     fn send_fds(socket: RawFd, bytes: &[u8], fds: &[RawFd]) -> io::Result<usize> {
         let control_len = cmsg_space_for_fd_count(fds.len());
-        assert!(control_len <= ANCILLARY_BUFFER_BYTES);
+        assert!(control_len <= SEND_ANCILLARY_BUFFER_BYTES);
         let mut iov = libc::iovec {
             iov_base: bytes.as_ptr() as *mut libc::c_void,
             iov_len: bytes.len(),
         };
-        let mut control = AncillaryBuffer::new();
+        let mut control = SendAncillaryBuffer::new();
         // SAFETY: zeroed msghdr is initialized before sendmsg below.
         let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
         msg.msg_iov = &mut iov;
@@ -365,5 +529,55 @@ mod tests {
         let (received, fd) = recv_with_fd(b.as_raw_fd(), &mut buffer).unwrap();
         assert_eq!(&buffer[..received], b"fds");
         assert!(matches!(fd, RecvFd::Malformed));
+    }
+
+    #[test]
+    fn truncated_oversized_rights_header_is_bounded_and_closes_visible_fds() {
+        let source = std::fs::File::open("/dev/null").unwrap();
+        // SAFETY: dup duplicates a valid descriptor and returns a new owned raw
+        // descriptor on success.
+        let first = unsafe { libc::dup(source.as_raw_fd()) };
+        // SAFETY: same rationale as above.
+        let second = unsafe { libc::dup(source.as_raw_fd()) };
+        assert!(first >= 0 && second >= 0);
+
+        let mut ancillary = ReceiveAncillaryBuffer::for_fd_capacity(2).unwrap();
+        let visible_len = cmsg_len(2 * std::mem::size_of::<RawFd>());
+        assert!(visible_len <= ancillary.byte_len);
+
+        // SAFETY: zeroed msghdr is populated before parsing below.
+        let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+        msg.msg_control = ancillary.as_mut_ptr();
+        msg.msg_controllen = visible_len as _;
+        msg.msg_flags = libc::MSG_CTRUNC;
+
+        // SAFETY: the buffer is aligned and large enough for two visible FDs.
+        let cmsg = unsafe { libc::CMSG_FIRSTHDR(&msg) };
+        assert!(!cmsg.is_null());
+        unsafe {
+            (*cmsg).cmsg_level = libc::SOL_SOCKET;
+            (*cmsg).cmsg_type = libc::SCM_RIGHTS;
+            // Model XNU's truncation quirk: cmsg_len may claim bytes beyond
+            // msg_controllen. The parser must clamp to the owned buffer.
+            (*cmsg).cmsg_len = (visible_len + 64) as _;
+            std::ptr::write_unaligned(libc::CMSG_DATA(cmsg).cast::<RawFd>(), first);
+            std::ptr::write_unaligned(
+                libc::CMSG_DATA(cmsg)
+                    .cast::<u8>()
+                    .add(std::mem::size_of::<RawFd>())
+                    .cast::<RawFd>(),
+                second,
+            );
+        }
+
+        assert!(matches!(
+            parse_received_ancillary(&msg, &ancillary),
+            RecvFd::Malformed
+        ));
+        // SAFETY: F_GETFD only probes whether these integer descriptors remain
+        // open; it does not mutate descriptor state.
+        assert_eq!(unsafe { libc::fcntl(first, libc::F_GETFD) }, -1);
+        // SAFETY: same rationale as above.
+        assert_eq!(unsafe { libc::fcntl(second, libc::F_GETFD) }, -1);
     }
 }

@@ -1,10 +1,13 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,
+    time::{Duration, Instant},
 };
 
 use seyal_exec::{ExecutionReactor, ReactorEventKind, RegistrationToken, WindowSize};
 
+#[cfg(feature = "test-fault-injection")]
+use crate::test_fault::{self, FaultPoint};
 use crate::{
     AttachmentId, ExecutionId, RuntimeError,
     display::{self, EncodedDisplayBatch, MAX_DISPLAY_COLUMNS, MAX_DISPLAY_ROWS},
@@ -19,12 +22,15 @@ use crate::{
             ExecutionListEntry, Lifecycle as WireLifecycle, MessageType, Resize as WireResize,
             Role,
         },
+        recovery,
     },
 };
 
 use super::{ExecutionLifecycle, Runtime};
 
 const RESYNC_SNAPSHOT_BUDGET_PER_POLL: usize = 2;
+const ACCEPT_BACKOFF_INITIAL: Duration = Duration::from_millis(10);
+const ACCEPT_BACKOFF_MAX: Duration = Duration::from_millis(250);
 
 pub(super) struct ConnectionMeta {
     attachment: Option<AttachmentId>,
@@ -42,6 +48,8 @@ pub(super) struct LocalIpcState {
     pub(super) server: LocalIpcServer,
     pub(super) socket_path: PathBuf,
     pub(super) listener_reactor_token: RegistrationToken,
+    listener_backoff_deadline: Option<Instant>,
+    listener_backoff_delay: Duration,
     attachments: AttachmentRegistry,
     connections: HashMap<u64, ConnectionMeta>,
     reactor_connections: HashMap<RegistrationToken, u64>,
@@ -76,6 +84,14 @@ impl LocalIpcState {
         })?;
         let server =
             LocalIpcServer::bind(&socket_path, crate::local_ipc::connection::MAX_CONNECTIONS)?;
+        #[cfg(feature = "test-fault-injection")]
+        if test_fault::take(FaultPoint::ListenerReactorRegistration) {
+            drop(server);
+            let _ = std::fs::remove_file(&socket_path);
+            return Err(RuntimeError::Io(std::io::Error::other(
+                "injected listener reactor registration failure",
+            )));
+        }
         let listener_reactor_token = match reactor.register_auxiliary(server.listener_fd()) {
             Ok(token) => token,
             Err(error) => {
@@ -88,6 +104,8 @@ impl LocalIpcState {
             server,
             socket_path,
             listener_reactor_token,
+            listener_backoff_deadline: None,
+            listener_backoff_delay: ACCEPT_BACKOFF_INITIAL,
             attachments: AttachmentRegistry::new(),
             connections: HashMap::new(),
             reactor_connections: HashMap::new(),
@@ -105,6 +123,49 @@ impl Drop for LocalIpcState {
 }
 
 impl Runtime {
+    pub(super) fn local_ipc_deadline(&self) -> Option<Instant> {
+        self.local_ipc
+            .as_ref()
+            .and_then(|state| state.listener_backoff_deadline)
+    }
+
+    pub(super) fn service_local_deadline(&mut self, now: Instant) -> Result<(), RuntimeError> {
+        let token = self.local_ipc.as_ref().and_then(|state| {
+            state
+                .listener_backoff_deadline
+                .filter(|deadline| *deadline <= now)
+                .map(|_| state.listener_reactor_token)
+        });
+        let Some(token) = token else {
+            return Ok(());
+        };
+        self.reactor.set_readable(token, true)?;
+        if let Some(state) = self.local_ipc.as_mut() {
+            state.listener_backoff_deadline = None;
+        }
+        Ok(())
+    }
+
+    fn backoff_local_listener(&mut self) -> Result<(), RuntimeError> {
+        let (token, delay) = match self.local_ipc.as_ref() {
+            Some(state) => (state.listener_reactor_token, state.listener_backoff_delay),
+            None => return Ok(()),
+        };
+        self.reactor.set_readable(token, false)?;
+        if let Some(state) = self.local_ipc.as_mut() {
+            state.listener_backoff_deadline = Some(Instant::now() + delay);
+            state.listener_backoff_delay = delay.saturating_mul(2).min(ACCEPT_BACKOFF_MAX);
+        }
+        Ok(())
+    }
+
+    fn reset_local_listener_backoff(&mut self) {
+        if let Some(state) = self.local_ipc.as_mut() {
+            state.listener_backoff_deadline = None;
+            state.listener_backoff_delay = ACCEPT_BACKOFF_INITIAL;
+        }
+    }
+
     pub(super) fn service_local_reactor_event(
         &mut self,
         reactor_token: RegistrationToken,
@@ -150,8 +211,30 @@ impl Runtime {
             let Some(state) = self.local_ipc.as_mut() else {
                 return Ok(());
             };
-            state.server.accept_ready()?
+            #[cfg(feature = "test-fault-injection")]
+            if test_fault::take(FaultPoint::AcceptResourcePressure) {
+                Vec::new()
+            } else {
+                state.server.accept_ready()?
+            }
+            #[cfg(not(feature = "test-fault-injection"))]
+            {
+                state.server.accept_ready()?
+            }
         };
+
+        // A level-triggered listener event that yields no admission/rejection
+        // progress is a pressure/spurious-readiness condition. Disarm the
+        // listener and retry through Runtime's deadline scheduler instead of
+        // immediately returning to the same readable knote. This bounds CPU
+        // under repeated accept resource failures without adding a thread or
+        // polling loop and also protects capacity-pressure cases.
+        if events.is_empty() {
+            self.backoff_local_listener()?;
+            return Ok(());
+        }
+        self.reset_local_listener_backoff();
+
         for event in events {
             match event {
                 ServerEvent::Connected { token } => {
@@ -162,6 +245,13 @@ impl Runtime {
                     let Some(fd) = fd else {
                         continue;
                     };
+                    #[cfg(feature = "test-fault-injection")]
+                    if test_fault::take(FaultPoint::ConnectionReactorRegistration) {
+                        if let Some(state) = self.local_ipc.as_mut() {
+                            state.server.close(token);
+                        }
+                        continue;
+                    }
                     match self.reactor.register_auxiliary(fd) {
                         Ok(reactor_token) => {
                             if let Some(state) = self.local_ipc.as_mut() {
@@ -305,6 +395,33 @@ impl Runtime {
             return false;
         }
         self.sync_local_writable(token)
+    }
+
+    /// Records that a connection must converge from a fresh canonical
+    /// snapshot. Repeated continuity failures collapse to one token. If an
+    /// older snapshot is already pending/in-flight we retain the request but do
+    /// not wake-spin; the writable event that completes the older snapshot will
+    /// return through `publish_display_updates`, where the latest snapshot can
+    /// be materialized.
+    fn schedule_snapshot_recovery(&mut self, token: u64) {
+        let should_wake = if let Some(state) = self.local_ipc.as_mut() {
+            if !state.connections.contains_key(&token) || !state.server.contains(token) {
+                false
+            } else if recovery::schedule_snapshot_recovery(
+                &mut state.pending_resync,
+                &mut state.pending_resync_set,
+                token,
+            ) {
+                !state.server.has_snapshot_delivery(token)
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if should_wake {
+            let _ = self.reactor.waker().wake();
+        }
     }
 
     fn send_error(&mut self, token: u64, code: ErrorCode, offending: u16) {
@@ -713,35 +830,34 @@ impl Runtime {
             return;
         }
 
-        let queued = if let Some(state) = self.local_ipc.as_mut() {
-            if state.server.has_snapshot_delivery(token) {
-                false
-            } else if state.pending_resync_set.insert(token) {
-                state.pending_resync.push_back(token);
-                true
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-        if queued {
-            let _ = self.reactor.waker().wake();
-        }
+        self.schedule_snapshot_recovery(token);
     }
 
     /// Performs bounded expensive recovery work after normal reactor events.
-    /// Many Resync frames from one connection collapse to one full snapshot.
+    /// Explicit resync and continuity loss share the same deduplicated queue.
+    /// Snapshot materialization is budgeted per execution, not per viewer: all
+    /// ready viewers for one execution reuse one encoded immutable batch.
     pub(super) fn service_pending_resyncs(&mut self) {
-        let mut serviced = 0usize;
-        while serviced < RESYNC_SNAPSHOT_BUDGET_PER_POLL {
+        let scan_limit = self
+            .local_ipc
+            .as_ref()
+            .map_or(0, |state| state.pending_resync.len());
+        let mut inspected = 0usize;
+        let mut materialized = 0usize;
+        let mut shared_batches: HashMap<ExecutionId, EncodedDisplayBatch> = HashMap::new();
+
+        while inspected < scan_limit {
             let token = {
                 let Some(state) = self.local_ipc.as_mut() else {
                     return;
                 };
                 let mut next = None;
-                while let Some(candidate) = state.pending_resync.pop_front() {
-                    if state.pending_resync_set.remove(&candidate) {
+                while inspected < scan_limit {
+                    let Some(candidate) = state.pending_resync.pop_front() else {
+                        break;
+                    };
+                    inspected += 1;
+                    if state.pending_resync_set.contains(&candidate) {
                         next = Some(candidate);
                         break;
                     }
@@ -751,14 +867,22 @@ impl Runtime {
             let Some(token) = token else {
                 break;
             };
-            serviced += 1;
 
-            if !self.local_connection_exists(token)
-                || self
-                    .local_ipc
-                    .as_ref()
-                    .is_some_and(|state| state.server.has_snapshot_delivery(token))
-            {
+            if !self.local_connection_exists(token) {
+                if let Some(state) = self.local_ipc.as_mut() {
+                    state.pending_resync_set.remove(&token);
+                }
+                continue;
+            }
+
+            let snapshot_active = self
+                .local_ipc
+                .as_ref()
+                .is_some_and(|state| state.server.has_snapshot_delivery(token));
+            if snapshot_active {
+                if let Some(state) = self.local_ipc.as_mut() {
+                    state.pending_resync.push_back(token);
+                }
                 continue;
             }
 
@@ -770,29 +894,65 @@ impl Runtime {
                     .ok()
             });
             let Some(execution_id) = execution_id else {
-                continue;
-            };
-            let Some(entry) = self.entries.get(&execution_id) else {
-                continue;
-            };
-            let snapshot = entry.execution.projection_snapshot();
-            match display::encode_snapshot(&snapshot) {
-                Ok(batch) => {
-                    let _ = self.send_snapshot_batch(token, batch);
+                if let Some(state) = self.local_ipc.as_mut() {
+                    state.pending_resync_set.remove(&token);
                 }
-                Err(_) => self.send_error(
-                    token,
-                    ErrorCode::DisplayUnavailable,
-                    MessageType::Resync as u16,
-                ),
+                continue;
+            };
+
+            let batch = if let Some(batch) = shared_batches.get(&execution_id) {
+                Some(batch.clone())
+            } else if materialized >= RESYNC_SNAPSHOT_BUDGET_PER_POLL {
+                if let Some(state) = self.local_ipc.as_mut() {
+                    state.pending_resync.push_back(token);
+                }
+                continue;
+            } else {
+                materialized += 1;
+                let encoded = self
+                    .entries
+                    .get(&execution_id)
+                    .map(|entry| entry.execution.projection_snapshot())
+                    .and_then(|snapshot| display::encode_snapshot(&snapshot).ok());
+                match encoded {
+                    Some(batch) => {
+                        shared_batches.insert(execution_id, batch.clone());
+                        Some(batch)
+                    }
+                    None => {
+                        if let Some(state) = self.local_ipc.as_mut() {
+                            state.pending_resync_set.remove(&token);
+                        }
+                        self.send_error(
+                            token,
+                            ErrorCode::DisplayUnavailable,
+                            MessageType::Resync as u16,
+                        );
+                        None
+                    }
+                }
+            };
+
+            let Some(batch) = batch else {
+                continue;
+            };
+            if let Some(state) = self.local_ipc.as_mut() {
+                state.pending_resync_set.remove(&token);
             }
+            let _ = self.send_snapshot_batch(token, batch);
         }
 
-        if self
-            .local_ipc
-            .as_ref()
-            .is_some_and(|state| !state.pending_resync_set.is_empty())
-        {
+        // If the materialization budget left ready work in the queue, schedule
+        // one more bounded turn. Tokens blocked on an in-flight snapshot rely
+        // on their socket writable event rather than causing a wake spin.
+        let ready_pending = self.local_ipc.as_ref().is_some_and(|state| {
+            state.pending_resync.iter().any(|token| {
+                state.pending_resync_set.contains(token)
+                    && state.server.contains(*token)
+                    && !state.server.has_snapshot_delivery(*token)
+            })
+        });
+        if ready_pending {
             let _ = self.reactor.waker().wake();
         }
     }
@@ -897,7 +1057,6 @@ impl Runtime {
                 let base_generation = previous.generation;
                 match display::encode_delta(&update, base_generation) {
                     Ok(delta) => {
-                        let mut recovery_snapshot: Option<EncodedDisplayBatch> = None;
                         for (_, token) in viewers {
                             let result = self.local_ipc.as_mut().and_then(|state| {
                                 state.server.try_enqueue_delta(token, delta.clone()).ok()
@@ -907,24 +1066,12 @@ impl Runtime {
                                     self.sync_local_writable(token);
                                 }
                                 Some(DeltaEnqueueResult::NeedSnapshot) => {
-                                    if recovery_snapshot.is_none() {
-                                        recovery_snapshot = self
-                                            .entries
-                                            .get(&execution_id)
-                                            .map(|entry| entry.execution.projection_snapshot())
-                                            .and_then(|snapshot| {
-                                                display::encode_snapshot(&snapshot).ok()
-                                            });
-                                    }
-                                    if let Some(batch) = recovery_snapshot.clone() {
-                                        let _ = self.send_snapshot_batch(token, batch);
-                                    } else {
-                                        self.send_error(
-                                            token,
-                                            ErrorCode::DisplayUnavailable,
-                                            MessageType::DisplaySnapshot as u16,
-                                        );
-                                    }
+                                    // Continuity loss is a state requirement,
+                                    // not a command to encode a full grid on
+                                    // every source generation. Defer and
+                                    // coalesce until this connection can accept
+                                    // one current snapshot.
+                                    self.schedule_snapshot_recovery(token);
                                 }
                                 None => self.close_local_connection(token),
                             }

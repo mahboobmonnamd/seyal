@@ -1,10 +1,14 @@
 use std::{
     fmt,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+static PROCESS_ID_PREFIX: OnceLock<u64> = OnceLock::new();
 const DEFAULT_WORKSPACE: u128 = 0x5345_5941_4c2d_4d30_3031_2d57_4f52_4b01;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -66,18 +70,47 @@ impl_id_wire_bytes!(AttachmentId);
 impl_id_wire_bytes!(ProjectionId);
 
 fn unique_id(domain: u64) -> u128 {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let sequence = NEXT_ID.fetch_add(1, Ordering::Relaxed) as u128;
-    let pid = std::process::id() as u128;
-    let value = nanos.rotate_left(29)
-        ^ (sequence << 32)
-        ^ (pid << 80)
-        ^ ((domain as u128) << 48)
-        ^ domain as u128;
-    value.max(1)
+    // Keep the monotonic sequence in a disjoint half of the identifier. The
+    // previous XOR composition allowed timestamp changes to cancel sequence
+    // changes and could therefore collide during rapid attachment creation.
+    // A single process-global sequence now makes same-process uniqueness an
+    // invariant rather than a probabilistic property.
+    let sequence = NEXT_ID
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            current.checked_add(1)
+        })
+        .expect("Seyal process-local identifier sequence exhausted");
+    compose_unique_id(process_id_prefix(), domain, sequence)
+}
+
+fn process_id_prefix() -> u64 {
+    *PROCESS_ID_PREFIX.get_or_init(|| {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let low = nanos as u64;
+        let high = (nanos >> 64) as u64;
+        let pid = std::process::id() as u64;
+        let address = (&NEXT_ID as *const AtomicU64 as usize) as u64;
+        mix64(low ^ high.rotate_left(17) ^ pid.rotate_left(31) ^ address)
+    })
+}
+
+fn compose_unique_id(process_prefix: u64, domain: u64, sequence: u64) -> u128 {
+    let namespace = mix64(process_prefix ^ domain);
+    ((namespace as u128) << 64) | sequence as u128
+}
+
+fn mix64(mut value: u64) -> u64 {
+    // SplitMix64 finalizer: cheap avalanche for the once-per-process prefix and
+    // domain namespace. It is not used as the uniqueness mechanism; the
+    // disjoint monotonic low 64 bits provide that guarantee within a process.
+    value ^= value >> 30;
+    value = value.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value ^= value >> 27;
+    value = value.wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
 }
 
 macro_rules! impl_id_display {
@@ -98,6 +131,8 @@ impl_id_display!(ProjectionId);
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
 
     #[test]
@@ -109,6 +144,25 @@ mod tests {
         assert_ne!(first_runtime, second_runtime);
         assert_ne!(first_execution, second_execution);
         assert_ne!(first_runtime.to_string(), first_execution.to_string());
+    }
+
+    #[test]
+    fn composition_keeps_sequence_changes_disjoint_from_prefix_changes() {
+        let prefix = 0x0123_4567_89ab_cdef;
+        let domain = 0x4154_5441_4348_0001;
+        let first = compose_unique_id(prefix, domain, 1);
+        let second = compose_unique_id(prefix, domain, 2);
+        assert_ne!(first, second);
+        assert_eq!(first as u64, 1);
+        assert_eq!(second as u64, 2);
+    }
+
+    #[test]
+    fn rapid_attachment_ids_are_unique() {
+        let mut seen = HashSet::with_capacity(100_000);
+        for _ in 0..100_000 {
+            assert!(seen.insert(AttachmentId::new()));
+        }
     }
 
     #[test]

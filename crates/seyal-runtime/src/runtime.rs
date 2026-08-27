@@ -30,6 +30,66 @@ const EVENT_CAPACITY: usize = 128;
 const READ_BUFFER_SIZE: usize = 16 * 1024;
 const CONTROL_DISPATCH_QUANTUM: usize = 64;
 const ROLLBACK_REAP_TICK: Duration = Duration::from_millis(10);
+/// A `PrimaryExited` reactor event is kernel-confirmed (`NOTE_EXIT`) but
+/// `waitpid(WNOHANG)` can still momentarily report the child as running — the
+/// exit notification and reap-ability are not the same instant. This is the
+/// retry cadence for re-attempting the reap rather than discarding the
+/// one-shot notification and stranding the execution with no deadline.
+const PRIMARY_EXIT_REAP_RETRY: Duration = Duration::from_millis(10);
+/// PTY EOF is terminal-I/O state, not process-exit truth. A short bounded
+/// exponential probe covers the narrow race where a process exits around
+/// NOTE_EXIT registration and the first `try_wait` has not become reapable
+/// yet. If the child is genuinely still alive, probing stops completely and
+/// the still-armed process-exit knote remains authoritative.
+const PTY_EOF_REAP_PROBE_INITIAL: Duration = Duration::from_millis(10);
+const PTY_EOF_REAP_PROBE_MAX: Duration = Duration::from_millis(320);
+const PTY_EOF_REAP_PROBE_LIMIT: u8 = 6;
+
+#[derive(Clone, Copy, Debug)]
+struct PtyEofReapProbe {
+    deadline: Instant,
+    delay: Duration,
+    remaining: u8,
+}
+
+impl PtyEofReapProbe {
+    fn new(now: Instant) -> Self {
+        Self {
+            deadline: now + PTY_EOF_REAP_PROBE_INITIAL,
+            delay: PTY_EOF_REAP_PROBE_INITIAL,
+            remaining: PTY_EOF_REAP_PROBE_LIMIT,
+        }
+    }
+
+    fn next(self, now: Instant) -> Option<Self> {
+        if self.remaining <= 1 {
+            return None;
+        }
+        let delay = self.delay.saturating_mul(2).min(PTY_EOF_REAP_PROBE_MAX);
+        Some(Self {
+            deadline: now + delay,
+            delay,
+            remaining: self.remaining - 1,
+        })
+    }
+}
+
+#[cfg(feature = "benchmark-instrumentation")]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BenchmarkRuntimeDiagnostics {
+    pub pty_bytes_read: u64,
+    pub pty_read_calls: u64,
+    pub source_timestamp_samples: usize,
+    pub latest_damage_generation: u64,
+}
+
+#[cfg(feature = "benchmark-instrumentation")]
+#[derive(Default)]
+struct BenchmarkRuntimeState {
+    pty_bytes_read: u64,
+    pty_read_calls: u64,
+    source_times: HashMap<(ExecutionId, u64), Instant>,
+}
 
 #[derive(Clone, Debug)]
 pub enum LocalIpcMode {
@@ -81,6 +141,10 @@ pub enum ExecutionLifecycle {
     Running,
     TerminatingGraceful,
     TerminatingForced,
+    /// The kernel has confirmed the primary process exited (`NOTE_EXIT`),
+    /// but the reap (`waitpid`) has not yet completed. Always transient and
+    /// retried on a short deadline; never a terminal state.
+    PrimaryExitPending,
     DrainingAfterPrimaryExit,
     TerminationFailed,
 }
@@ -96,9 +160,20 @@ pub struct ExecutionSummary {
 #[derive(Clone, Copy, Debug)]
 enum Lifecycle {
     Running,
-    TerminatingGraceful { deadline: Instant },
-    TerminatingForced { deadline: Instant },
-    DrainingAfterPrimaryExit { deadline: Instant, exit: ChildExit },
+    TerminatingGraceful {
+        deadline: Instant,
+    },
+    TerminatingForced {
+        deadline: Instant,
+    },
+    /// See `ExecutionLifecycle::PrimaryExitPending`.
+    PrimaryExitPending {
+        deadline: Instant,
+    },
+    DrainingAfterPrimaryExit {
+        deadline: Instant,
+        exit: ChildExit,
+    },
     TerminationFailed,
 }
 
@@ -108,6 +183,7 @@ impl Lifecycle {
             Self::Running => ExecutionLifecycle::Running,
             Self::TerminatingGraceful { .. } => ExecutionLifecycle::TerminatingGraceful,
             Self::TerminatingForced { .. } => ExecutionLifecycle::TerminatingForced,
+            Self::PrimaryExitPending { .. } => ExecutionLifecycle::PrimaryExitPending,
             Self::DrainingAfterPrimaryExit { .. } => ExecutionLifecycle::DrainingAfterPrimaryExit,
             Self::TerminationFailed => ExecutionLifecycle::TerminationFailed,
         }
@@ -117,6 +193,7 @@ impl Lifecycle {
         match self {
             Self::TerminatingGraceful { deadline }
             | Self::TerminatingForced { deadline }
+            | Self::PrimaryExitPending { deadline }
             | Self::DrainingAfterPrimaryExit { deadline, .. } => Some(deadline),
             Self::Running | Self::TerminationFailed => None,
         }
@@ -133,6 +210,7 @@ struct Entry {
     workspace_id: WorkspaceId,
     attachments: HashSet<AttachmentId>,
     lifecycle: Lifecycle,
+    pty_eof_reap_probe: Option<PtyEofReapProbe>,
     pending_input: VecDeque<AcceptedInput>,
     reserved_input: Arc<AtomicUsize>,
     ingress_active: Arc<AtomicBool>,
@@ -146,6 +224,20 @@ impl Entry {
             attachment_count: self.attachments.len(),
             lifecycle: self.lifecycle.public(),
         }
+    }
+
+    fn next_deadline(&self) -> Option<Instant> {
+        [
+            self.lifecycle.deadline(),
+            self.pty_eof_reap_probe.map(|probe| probe.deadline),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+    }
+
+    fn terminal_io_active(&self) -> bool {
+        self.lifecycle.accepts_input() && self.ingress_active.load(Ordering::Acquire)
     }
 }
 
@@ -167,6 +259,8 @@ pub struct Runtime {
     rollback_reap: Vec<TerminalExecution>,
     #[cfg(target_os = "macos")]
     local_ipc: Option<LocalIpcState>,
+    #[cfg(feature = "benchmark-instrumentation")]
+    benchmark: BenchmarkRuntimeState,
 }
 
 impl Runtime {
@@ -203,6 +297,8 @@ impl Runtime {
             rollback_reap: Vec::new(),
             #[cfg(target_os = "macos")]
             local_ipc,
+            #[cfg(feature = "benchmark-instrumentation")]
+            benchmark: BenchmarkRuntimeState::default(),
         })
     }
 
@@ -233,6 +329,47 @@ impl Runtime {
 
     pub fn aggregate_accepted_but_unwritten_bytes(&self) -> usize {
         self.aggregate_reserved.load(Ordering::Acquire)
+    }
+
+    #[cfg(feature = "benchmark-instrumentation")]
+    pub fn reset_benchmark_runtime_counters(&mut self) {
+        self.benchmark = BenchmarkRuntimeState {
+            source_times: HashMap::with_capacity(4096),
+            ..BenchmarkRuntimeState::default()
+        };
+    }
+
+    #[cfg(feature = "benchmark-instrumentation")]
+    pub fn benchmark_source_timestamp(
+        &self,
+        execution_id: ExecutionId,
+        generation: u64,
+    ) -> Option<Instant> {
+        self.benchmark
+            .source_times
+            .get(&(execution_id, generation))
+            .copied()
+    }
+
+    #[cfg(feature = "benchmark-instrumentation")]
+    pub fn benchmark_runtime_diagnostics(
+        &self,
+        execution_id: ExecutionId,
+    ) -> BenchmarkRuntimeDiagnostics {
+        BenchmarkRuntimeDiagnostics {
+            pty_bytes_read: self.benchmark.pty_bytes_read,
+            pty_read_calls: self.benchmark.pty_read_calls,
+            source_timestamp_samples: self
+                .benchmark
+                .source_times
+                .keys()
+                .filter(|(id, _)| *id == execution_id)
+                .count(),
+            latest_damage_generation: self
+                .entries
+                .get(&execution_id)
+                .map_or(0, |entry| entry.execution.terminal().damage_generation()),
+        }
     }
 
     pub fn list(&self) -> Vec<ExecutionSummary> {
@@ -297,6 +434,7 @@ impl Runtime {
             workspace_id: self.default_workspace,
             attachments: HashSet::new(),
             lifecycle: Lifecycle::Running,
+            pty_eof_reap_probe: None,
             pending_input: VecDeque::new(),
             reserved_input,
             ingress_active,
@@ -313,7 +451,7 @@ impl Runtime {
             .entries
             .get(&id)
             .ok_or(RuntimeError::UnknownExecution)?;
-        if !entry.lifecycle.accepts_input() {
+        if !entry.terminal_io_active() {
             return Err(RuntimeError::ExecutionNotRunning);
         }
         Ok(InputIngress::new(
@@ -358,7 +496,7 @@ impl Runtime {
             .entries
             .get_mut(&id)
             .ok_or(RuntimeError::UnknownExecution)?;
-        if !matches!(entry.lifecycle, Lifecycle::Running) {
+        if !entry.terminal_io_active() {
             return Err(RuntimeError::ExecutionNotRunning);
         }
         entry.execution.resize(size)?;
@@ -374,6 +512,7 @@ impl Runtime {
         if !matches!(entry.lifecycle, Lifecycle::Running) {
             return Ok(());
         }
+        entry.pty_eof_reap_probe = None;
         entry.ingress_active.store(false, Ordering::Release);
         entry.pending_input.clear();
         self.reactor.set_writable(entry.token, false)?;
@@ -483,7 +622,7 @@ impl Runtime {
                 Ok(ControlMessage::Input(input)) => {
                     let id = input.execution_id;
                     if let Some(entry) = self.entries.get_mut(&id)
-                        && entry.lifecycle.accepts_input()
+                        && entry.terminal_io_active()
                     {
                         entry.pending_input.push_back(input);
                         self.service_writes(id)?;
@@ -499,30 +638,95 @@ impl Runtime {
         Ok(handled)
     }
 
+    fn mark_terminal_io_closed(&mut self, id: ExecutionId) -> Result<(), RuntimeError> {
+        let token = {
+            let entry = self
+                .entries
+                .get_mut(&id)
+                .ok_or(RuntimeError::UnknownExecution)?;
+            entry.ingress_active.store(false, Ordering::Release);
+            entry.pending_input.clear();
+            entry.token
+        };
+        self.reactor.set_writable(token, false)?;
+        self.reactor.set_readable(token, false)?;
+        Ok(())
+    }
+
     fn service_reads(&mut self, id: ExecutionId) -> Result<(), RuntimeError> {
         let mut consumed = 0usize;
         let mut drain_complete = false;
         while consumed < self.config.read_dispatch_bytes {
             let remaining = self.config.read_dispatch_bytes - consumed;
             let read_len = remaining.min(self.read_buffer.len());
-            let outcome = {
+            let (outcome, _generation_before, _generation_after) = {
                 let entry = self
                     .entries
                     .get_mut(&id)
                     .ok_or(RuntimeError::UnknownExecution)?;
-                entry
+                let generation_before = entry.execution.terminal().damage_generation();
+                let outcome = entry
                     .execution
-                    .read_output(&mut self.read_buffer[..read_len])?
+                    .read_output(&mut self.read_buffer[..read_len])?;
+                let generation_after = entry.execution.terminal().damage_generation();
+                (outcome, generation_before, generation_after)
             };
             match outcome {
-                ReadOutcome::Bytes(0) | ReadOutcome::WouldBlock | ReadOutcome::Eof => {
+                ReadOutcome::Eof => {
+                    // PTY EOF proves only that terminal I/O is gone. A child
+                    // may deliberately close fd 0/1/2 and remain alive, so do
+                    // not mutate process lifecycle from this signal. Disarm
+                    // the level-triggered read filter while preserving the
+                    // independently registered process-exit watch.
+                    self.mark_terminal_io_closed(id)?;
+                    if matches!(
+                        self.entries.get(&id).map(|entry| entry.lifecycle),
+                        Some(Lifecycle::Running | Lifecycle::PrimaryExitPending { .. })
+                    ) {
+                        let exit = {
+                            let entry = self
+                                .entries
+                                .get_mut(&id)
+                                .ok_or(RuntimeError::UnknownExecution)?;
+                            entry.execution.try_wait()?
+                        };
+                        if let Some(exit) = exit {
+                            self.enter_drain(id, exit)?;
+                        } else if let Some(entry) = self.entries.get_mut(&id)
+                            && matches!(entry.lifecycle, Lifecycle::Running)
+                            && entry.pty_eof_reap_probe.is_none()
+                        {
+                            entry.pty_eof_reap_probe = Some(PtyEofReapProbe::new(Instant::now()));
+                        }
+                    }
                     drain_complete = matches!(
                         self.entries.get(&id).map(|entry| entry.lifecycle),
                         Some(Lifecycle::DrainingAfterPrimaryExit { .. })
                     );
                     break;
                 }
-                ReadOutcome::Bytes(count) => consumed += count,
+                ReadOutcome::Bytes(0) | ReadOutcome::WouldBlock => {
+                    drain_complete = matches!(
+                        self.entries.get(&id).map(|entry| entry.lifecycle),
+                        Some(Lifecycle::DrainingAfterPrimaryExit { .. })
+                    );
+                    break;
+                }
+                ReadOutcome::Bytes(count) => {
+                    consumed += count;
+                    #[cfg(feature = "benchmark-instrumentation")]
+                    {
+                        self.benchmark.pty_bytes_read =
+                            self.benchmark.pty_bytes_read.saturating_add(count as u64);
+                        self.benchmark.pty_read_calls =
+                            self.benchmark.pty_read_calls.saturating_add(1);
+                        if _generation_after > _generation_before {
+                            self.benchmark
+                                .source_times
+                                .insert((id, _generation_after), Instant::now());
+                        }
+                    }
+                }
             }
         }
         if drain_complete {
@@ -540,7 +744,7 @@ impl Runtime {
                 .entries
                 .get_mut(&id)
                 .ok_or(RuntimeError::UnknownExecution)?;
-            if !entry.lifecycle.accepts_input() {
+            if !entry.terminal_io_active() {
                 entry.pending_input.clear();
                 token = entry.token;
                 pending = false;
@@ -577,11 +781,22 @@ impl Runtime {
                 .entries
                 .get_mut(&id)
                 .ok_or(RuntimeError::UnknownExecution)?;
+            entry.pty_eof_reap_probe = None;
             entry.execution.try_wait()?
         };
         if let Some(exit) = exit {
             self.enter_drain(id, exit)?;
             self.service_reads(id)?;
+        } else if let Some(entry) = self.entries.get_mut(&id)
+            && matches!(entry.lifecycle, Lifecycle::Running)
+        {
+            // `PrimaryExited` is one-shot and will never repeat for this
+            // registration. Unlike PTY EOF, this event is kernel-confirmed
+            // process-exit truth, so a short reap retry is a valid lifecycle
+            // transition rather than terminal-I/O state leakage.
+            entry.lifecycle = Lifecycle::PrimaryExitPending {
+                deadline: Instant::now() + PRIMARY_EXIT_REAP_RETRY,
+            };
         }
         Ok(())
     }
@@ -591,6 +806,7 @@ impl Runtime {
             .entries
             .get_mut(&id)
             .ok_or(RuntimeError::UnknownExecution)?;
+        entry.pty_eof_reap_probe = None;
         entry.ingress_active.store(false, Ordering::Release);
         entry.pending_input.clear();
         self.reactor.set_writable(entry.token, false)?;
@@ -603,6 +819,43 @@ impl Runtime {
 
     fn process_deadlines(&mut self) -> Result<(), RuntimeError> {
         let now = Instant::now();
+
+        let probe_due = self
+            .entries
+            .iter()
+            .filter_map(|(&id, entry)| {
+                entry
+                    .pty_eof_reap_probe
+                    .filter(|probe| probe.deadline <= now)
+                    .map(|_| id)
+            })
+            .collect::<Vec<_>>();
+        for id in probe_due {
+            if !matches!(
+                self.entries.get(&id).map(|entry| entry.lifecycle),
+                Some(Lifecycle::Running)
+            ) {
+                if let Some(entry) = self.entries.get_mut(&id) {
+                    entry.pty_eof_reap_probe = None;
+                }
+                continue;
+            }
+            let exit = {
+                let entry = self
+                    .entries
+                    .get_mut(&id)
+                    .ok_or(RuntimeError::UnknownExecution)?;
+                entry.execution.try_wait()?
+            };
+            if let Some(exit) = exit {
+                self.enter_drain(id, exit)?;
+                self.service_reads(id)?;
+            } else if let Some(entry) = self.entries.get_mut(&id) {
+                entry.pty_eof_reap_probe =
+                    entry.pty_eof_reap_probe.and_then(|probe| probe.next(now));
+            }
+        }
+
         let due = self
             .entries
             .iter()
@@ -657,6 +910,23 @@ impl Runtime {
                         entry.lifecycle = Lifecycle::TerminationFailed;
                     }
                 }
+                Some(Lifecycle::PrimaryExitPending { .. }) => {
+                    let exit = {
+                        let entry = self
+                            .entries
+                            .get_mut(&id)
+                            .ok_or(RuntimeError::UnknownExecution)?;
+                        entry.execution.try_wait()?
+                    };
+                    if let Some(exit) = exit {
+                        self.enter_drain(id, exit)?;
+                        self.service_reads(id)?;
+                    } else if let Some(entry) = self.entries.get_mut(&id) {
+                        entry.lifecycle = Lifecycle::PrimaryExitPending {
+                            deadline: now + PRIMARY_EXIT_REAP_RETRY,
+                        };
+                    }
+                }
                 Some(Lifecycle::DrainingAfterPrimaryExit { exit, .. }) => {
                     let _ = exit;
                     self.finalize(id)?;
@@ -664,6 +934,9 @@ impl Runtime {
                 Some(Lifecycle::Running | Lifecycle::TerminationFailed) | None => {}
             }
         }
+
+        #[cfg(target_os = "macos")]
+        self.service_local_deadline(now)?;
         Ok(())
     }
 
@@ -688,14 +961,23 @@ impl Runtime {
 
     fn bound_wait_by_deadline(&self, requested: Option<Duration>) -> Option<Duration> {
         let now = Instant::now();
-        let lifecycle = self
+        let execution = self
             .entries
             .values()
-            .filter_map(|entry| entry.lifecycle.deadline())
+            .filter_map(Entry::next_deadline)
             .min()
             .map(|deadline| deadline.saturating_duration_since(now));
         let rollback = (!self.rollback_reap.is_empty()).then_some(ROLLBACK_REAP_TICK);
-        [requested, lifecycle, rollback].into_iter().flatten().min()
+        #[cfg(target_os = "macos")]
+        let local = self
+            .local_ipc_deadline()
+            .map(|deadline| deadline.saturating_duration_since(now));
+        #[cfg(not(target_os = "macos"))]
+        let local: Option<Duration> = None;
+        [requested, execution, rollback, local]
+            .into_iter()
+            .flatten()
+            .min()
     }
 
     fn kill_unpublished(&mut self, mut execution: TerminalExecution) {

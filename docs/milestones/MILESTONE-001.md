@@ -652,15 +652,13 @@ Pixel/golden tests may be used for stable synthetic glyph/geometry cases where p
 
 ### 12.8 Local Runtime attachment security
 
-Before Pass 5 is accepted, complete a focused threat/security review of the Unix-domain control path and shared-memory projection covering at minimum:
+Before Pass 5 is accepted, complete a focused threat/security review of the Unix-domain control and display-model transport path (ADR-001 Candidate D; the shared-memory projection alternative considered here was not selected for production — see ADR-001 §13.3 note below) covering at minimum:
 
 - Unix-domain socket location, ownership and permissions;
 - same-user client authentication/authorization;
 - Runtime discovery without trusting attacker-controlled filesystem paths;
 - controller versus observer authority;
-- malformed or oversized control/protocol messages;
-- shared-memory object ownership, permissions, lifetime and cleanup;
-- stale/reused shared-memory identifiers;
+- malformed or oversized control/protocol messages, including truncated ancillary data (`MSG_CTRUNC`);
 - bounds/version/generation validation before reads;
 - client crash and Runtime crash cleanup behavior;
 - prevention of client mutation of canonical terminal state;
@@ -727,7 +725,7 @@ M001 must publish measured results next to those targets.
 
 ### 13.3 Projection decision benchmark
 
-Pass 5 must compare:
+Pass 5 compared:
 
 ```text
 A. compact binary Unix-domain snapshot/delta transport
@@ -736,7 +734,7 @@ B. selected hybrid Unix-domain control + shared-memory projection
 
 Use identical workloads. Record latency, CPU, RSS, copies/bytes, allocations, reconnect cost, and slow/dead client behavior.
 
-If A is materially simpler and measurably equivalent/better across the M001 workload envelope, amend ADR-001 with evidence before changing implementation. No benchmark outcome may move authoritative VT into the GUI.
+**Resolved**: ADR-001 selected option A (Candidate D — compact binary UDS snapshot/delta transport) as the production architecture; option B remains in the tree only as isolated, non-default comparator/reference evidence. See ADR-001's "Measured evidence" section for the production-path benchmark results. No benchmark outcome moved authoritative VT into the GUI.
 
 ---
 

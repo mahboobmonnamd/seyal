@@ -63,6 +63,21 @@ An Issue or PR cannot override architecture/specification. Existing code is neve
 9. Do not refactor unrelated code. Create/link another Issue instead.
 10. If an approved screenshot/mockup is visual authority for native UI, run the `image-to-code` skill before implementation. Complete its forensic design/component inventory and issue plan first; split the work into multiple Issues when the visual spans independently reviewable boundaries.
 
+## Adversarial lifecycle and event-loop review
+
+Core Runtime, PTY, process-lifecycle, local-IPC, reactor, persistence and scheduler changes require an adversarial state review in addition to their happy-path acceptance tests.
+
+- **Orthogonal-state rule:** do not collapse independent facts into one lifecycle state. Explicitly reason about combinations such as child alive/dead, PTY open/closed, attached/detached, controller/observer, terminating/not terminating and GUI connected/disconnected.
+- **Termination invariant:** while Seyal still owns a live primary child/process group, explicit terminate and Runtime shutdown must retain a valid signalling/reap path regardless of PTY, attachment or presentation state.
+- **Level-trigger progress invariant:** every level-triggered readiness handler must make progress, drain the readiness condition, or disarm/throttle that source before returning. A no-progress turn may never immediately re-enter an unbounded hot loop.
+- **Retry invariant:** fixed-frequency unbounded retries are prohibited for conditions that can persist. Use an authoritative event when available; otherwise use bounded retries or bounded/exponential deadline backoff with an explicit stop/convergence rule.
+- **Inverse regression rule:** whenever a fix assumes `A -> B`, add the adversarial case where the A-like signal happens without B when the platform permits it. Examples include PTY EOF while the primary child remains alive and disconnect while execution remains healthy.
+- **Persistent-failure rule:** one-shot fault injection is not sufficient evidence for resource-pressure/event-loop paths. Test repeated/N-times failure and prove unrelated PTY work continues, retry frequency remains bounded, recovery succeeds and resources return to baseline.
+- **Late-fix restart rule:** after a late lifecycle, concurrency, backpressure, security or benchmark fix, rerun a focused first-principles review of the affected state matrix. Do not review only the final diff and infer that earlier acceptance still closes every adjacent state.
+- **Green-CI rule:** CI proves only represented behavior. Final review must explicitly identify important unrepresented states and either add coverage or document why they are impossible by construction.
+
+These are merge gates for high-risk Runtime/reactor work, not optional reviewer suggestions.
+
 ## Repository map
 
 - `docs/architecture/` — accepted architecture, ADRs, rationale, UI architecture.

@@ -6,6 +6,9 @@
 
 use std::sync::Arc;
 
+#[cfg(feature = "benchmark-instrumentation")]
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use seyal_exec::{
     ProjectionAttributes, ProjectionCell, ProjectionColor, TerminalProjectionSnapshot,
     TerminalProjectionUpdate,
@@ -19,6 +22,42 @@ pub const MAX_DISPLAY_ROWS: u16 = 256;
 pub const MAX_DISPLAY_COLUMNS: u16 = 512;
 pub const MAX_DISPLAY_CELLS: usize = 131_072;
 pub const MAX_DISPLAY_BATCH_BYTES: usize = 4 * 1024 * 1024;
+
+#[cfg(feature = "benchmark-instrumentation")]
+static BENCH_SNAPSHOT_ENCODES: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "benchmark-instrumentation")]
+static BENCH_DELTA_ENCODES: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "benchmark-instrumentation")]
+static BENCH_SNAPSHOT_BYTES: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "benchmark-instrumentation")]
+static BENCH_DELTA_BYTES: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(feature = "benchmark-instrumentation")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BenchmarkDisplayCounters {
+    pub snapshot_encodes: u64,
+    pub delta_encodes: u64,
+    pub snapshot_bytes: u64,
+    pub delta_bytes: u64,
+}
+
+#[cfg(feature = "benchmark-instrumentation")]
+pub fn reset_benchmark_display_counters() {
+    BENCH_SNAPSHOT_ENCODES.store(0, Ordering::Relaxed);
+    BENCH_DELTA_ENCODES.store(0, Ordering::Relaxed);
+    BENCH_SNAPSHOT_BYTES.store(0, Ordering::Relaxed);
+    BENCH_DELTA_BYTES.store(0, Ordering::Relaxed);
+}
+
+#[cfg(feature = "benchmark-instrumentation")]
+pub fn benchmark_display_counters() -> BenchmarkDisplayCounters {
+    BenchmarkDisplayCounters {
+        snapshot_encodes: BENCH_SNAPSHOT_ENCODES.load(Ordering::Relaxed),
+        delta_encodes: BENCH_DELTA_ENCODES.load(Ordering::Relaxed),
+        snapshot_bytes: BENCH_SNAPSHOT_BYTES.load(Ordering::Relaxed),
+        delta_bytes: BENCH_DELTA_BYTES.load(Ordering::Relaxed),
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DisplayKind {
@@ -151,7 +190,7 @@ pub fn encode_snapshot(
     snapshot: &TerminalProjectionSnapshot,
 ) -> Result<EncodedDisplayBatch, DisplayError> {
     validate_snapshot(snapshot)?;
-    encode_rows(
+    let batch = encode_rows(
         DisplayMeta {
             generation: snapshot.source_damage_generation,
             rows: snapshot.rows,
@@ -166,7 +205,13 @@ pub fn encode_snapshot(
         0,
         snapshot.rows,
         &snapshot.cells,
-    )
+    )?;
+    #[cfg(feature = "benchmark-instrumentation")]
+    {
+        BENCH_SNAPSHOT_ENCODES.fetch_add(1, Ordering::Relaxed);
+        BENCH_SNAPSHOT_BYTES.fetch_add(batch.total_bytes as u64, Ordering::Relaxed);
+    }
+    Ok(batch)
 }
 
 pub fn encode_delta(
@@ -176,7 +221,7 @@ pub fn encode_delta(
     validate_update(update)?;
     let first_row = update.damage.first_row;
     let row_count = update.damage.row_count();
-    encode_rows(
+    let batch = encode_rows(
         DisplayMeta {
             generation: update.source_damage_generation,
             rows: update.rows,
@@ -191,7 +236,13 @@ pub fn encode_delta(
         first_row,
         row_count,
         &update.cells,
-    )
+    )?;
+    #[cfg(feature = "benchmark-instrumentation")]
+    {
+        BENCH_DELTA_ENCODES.fetch_add(1, Ordering::Relaxed);
+        BENCH_DELTA_BYTES.fetch_add(batch.total_bytes as u64, Ordering::Relaxed);
+    }
+    Ok(batch)
 }
 
 fn encode_rows(

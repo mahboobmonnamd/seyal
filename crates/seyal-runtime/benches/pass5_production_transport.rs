@@ -20,7 +20,10 @@ use seyal_exec::{CommandSpec, WindowSize};
 #[cfg(target_os = "macos")]
 use seyal_runtime::{
     ExecutionId, LocalIpcMode, Runtime, RuntimeConfig,
-    display::{DecodedDisplayChunk, DisplayCache, decode_chunk, empty_cache},
+    display::{
+        DecodedDisplayChunk, DisplayCache, benchmark_display_counters, decode_chunk, empty_cache,
+        reset_benchmark_display_counters,
+    },
     local_ipc::{
         fd_transfer::{benchmark_syscall_counters, reset_benchmark_syscall_counters},
         framing::{
@@ -104,7 +107,7 @@ fn run_macos() {
         "pass5_production_transport architecture=Candidate-D performance_claim=false path=real_child->PTY->Seyal_VT->canonical_damage->damage_sized_model_update->production_UDS->client_DisplayCache"
     );
     println!(
-        "measurement_labels=MEASURED|PLATFORM_LIMITED percentile_method=nearest_rank repetitions_interactive=32 syscall_counts=feature_gated_exact_invocations queue_depth=bounded_by_production_contract"
+        "measurement_labels=MEASURED|PLATFORM_LIMITED percentile_method=nearest_rank streaming_latency_boundary=pty_read_damage_commit_to_client_cache_apply syscall_counts=feature_gated_exact_invocations"
     );
     print_host_metadata();
 
@@ -200,9 +203,6 @@ fn worker() {
     let rows = args[5].parse::<u16>().expect("rows");
     let requested_fanout = args[6].parse::<usize>().expect("fanout");
 
-    // Keep benchmark-owned filesystem paths intentionally short. Darwin Unix-domain
-    // sockets have a 104-byte sun_path limit; workload identity is reported separately.
-    // Each worker is a fresh process, so its PID uniquely scopes temporary paths.
     let suffix = format!("{:x}", process::id());
     let mut config = RuntimeConfig::m001().expect("M001 config");
     config.singleton_path = env::temp_dir().join(format!("s5p-{suffix}.lock"));
@@ -245,7 +245,7 @@ fn worker() {
     let create_us = create_start.elapsed().as_micros();
     let Some(&execution_id) = ids.first() else {
         println!(
-            "pass5_production_result workload={} population_requested={} population_created=0 fanout_requested={} geometry={}x{} classification=PLATFORM_LIMITED platform_error={:?}",
+            "pass5_production_result workload={} population_requested={} population_created=0 population_attached=0 population_hidden=0 fanout_requested={} geometry={}x{} classification=PLATFORM_LIMITED platform_error={:?}",
             workload.name(),
             requested_population,
             requested_fanout,
@@ -278,24 +278,50 @@ fn worker() {
         client.reset_measurement_counters();
     }
 
+    // Only `execution_id` (ids[0]) ever receives an attachment in this
+    // benchmark; population beyond that exists purely to measure Runtime
+    // capacity, matching Workstream D's required attached-vs-hidden split.
+    let population_attached = ids
+        .iter()
+        .filter(|&&id| {
+            runtime
+                .lookup(id)
+                .is_some_and(|summary| summary.attachment_count > 0)
+        })
+        .count();
+    let population_hidden = ids.len() - population_attached;
+
+    // Preallocate benchmark bookkeeping before the measured allocation region.
+    let mut latency_samples = Vec::with_capacity(32_768);
+    runtime.reset_benchmark_runtime_counters();
+    reset_benchmark_display_counters();
     reset_benchmark_syscall_counters();
+
     let allocation_region = Region::new(GLOBAL);
     let measurement = if workload == Workload::Interactive {
         measure_interactive(
             &mut runtime,
             &mut clients,
             controller_attachment,
-            execution_id,
+            &mut latency_samples,
         )
     } else {
-        measure_streaming(&mut runtime, &mut clients, controller_attachment, workload)
+        measure_streaming(
+            &mut runtime,
+            &mut clients,
+            controller_attachment,
+            execution_id,
+            workload,
+            &mut latency_samples,
+        )
     };
     let allocation_stats = allocation_region.change();
     let syscall_counters = benchmark_syscall_counters();
+    let display_counters = benchmark_display_counters();
+    let runtime_diagnostics = runtime.benchmark_runtime_diagnostics(execution_id);
     assert!(clients.iter().all(|client| client.cache.generation > 0));
 
-    // Capture measured fanout counters before reconnect changes connection membership.
-    let bytes_received = clients
+    let aggregate_uds_bytes = clients
         .iter()
         .map(|client| client.bytes_received)
         .sum::<usize>();
@@ -303,8 +329,8 @@ fn worker() {
         .iter()
         .map(|client| client.display_batches)
         .sum::<usize>();
-    let snapshots = clients.iter().map(|client| client.snapshots).sum::<usize>();
-    let deltas = clients.iter().map(|client| client.deltas).sum::<usize>();
+    let snapshots_received = clients.iter().map(|client| client.snapshots).sum::<usize>();
+    let deltas_received = clients.iter().map(|client| client.deltas).sum::<usize>();
     let client_read_syscalls = clients
         .iter()
         .map(|client| client.read_syscalls)
@@ -315,30 +341,39 @@ fn worker() {
         .max()
         .unwrap_or(0);
 
-    // The production server intentionally caps live connections at 16. At the
-    // 16-viewer case, reconnect must model a real disconnect/reconnect rather
-    // than opening a 17th connection and treating the correct rejection as a
-    // benchmark failure. Drop one observer, wait until Runtime reclaims its
-    // attachment, then replace that viewer with the reconnecting observer.
+    let source_pty_bps =
+        bytes_per_second(runtime_diagnostics.pty_bytes_read, measurement.elapsed_us);
+    let display_model_bytes = display_counters
+        .snapshot_bytes
+        .saturating_add(display_counters.delta_bytes);
+    let display_model_bps = bytes_per_second(display_model_bytes, measurement.elapsed_us);
+    let aggregate_uds_bps = bytes_per_second(aggregate_uds_bytes as u64, measurement.elapsed_us);
+    let per_viewer_uds_bps = if fanout == 0 {
+        0
+    } else {
+        aggregate_uds_bps / fanout as u128
+    };
+
+    // At the 16-viewer connection cap, reconnect by replacing one observer.
     let replace_existing_viewer = clients.len() == 16;
     if replace_existing_viewer {
-        let disconnected = clients.pop().expect("observer available for reconnect");
-        drop(disconnected);
-        let disconnect_deadline = Instant::now() + Duration::from_secs(2);
+        drop(clients.pop().expect("observer available for reconnect"));
+        let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             runtime
                 .poll_once(Some(Duration::from_millis(1)))
                 .expect("Runtime poll while reclaiming disconnected viewer");
-            let attachment_count = runtime
+            if runtime
                 .lookup(execution_id)
                 .map(|summary| summary.attachment_count)
-                .unwrap_or(0);
-            if attachment_count < fanout {
+                .unwrap_or(0)
+                < fanout
+            {
                 break;
             }
             assert!(
-                Instant::now() < disconnect_deadline,
-                "disconnected viewer was not reclaimed before reconnect"
+                Instant::now() < deadline,
+                "disconnected viewer was not reclaimed"
             );
         }
     }
@@ -347,18 +382,15 @@ fn worker() {
     let mut reconnect =
         BenchClient::connect_and_attach(&mut runtime, &socket_path, execution_id, Role::Observer);
     let reconnect_us = reconnect_start.elapsed().as_micros();
-    let reconnect_generation = reconnect.cache.generation;
-    assert!(reconnect_generation >= current_generation);
+    assert!(reconnect.cache.generation >= current_generation);
     reconnect.drain_available().expect("reconnect drain");
     if replace_existing_viewer {
         clients.push(reconnect);
-        assert_eq!(clients.len(), fanout);
     } else {
         drop(reconnect);
     }
 
     let populated = process_metrics();
-
     drop(clients);
     for _ in 0..8 {
         let _ = runtime.poll_once(Some(Duration::from_millis(2)));
@@ -374,34 +406,52 @@ fn worker() {
     } else {
         "PLATFORM_LIMITED"
     };
+    let latency_boundary = if workload == Workload::Interactive {
+        "controller_input_send_to_all_viewers_advanced"
+    } else {
+        "pty_read_damage_commit_to_client_cache_apply"
+    };
+
     println!(
-        "pass5_production_result workload={} population_requested={} population_created={} fanout_requested={} fanout_attached={} geometry={}x{} classification={} create_us={} attach_setup_us={} latency_p50_us={} latency_p95_us={} latency_p99_us={} runtime_poll_phase_us={} client_decode_apply_phase_us={} elapsed_us={} throughput_payload_bytes_per_sec={} socket_bytes_received={} client_read_syscalls={} server_send_syscalls={} server_sendmsg_syscalls={} runtime_recvmsg_syscalls={} display_batches={} snapshots={} deltas={} resync_or_recovery_snapshots={} allocations={} reallocations={} bytes_allocated={} reconnect_full_snapshot_us={} rss_baseline_kib={} rss_populated_kib={} rss_final_kib={} incremental_rss_kib={} cpu_percent_sample={} threads_baseline={} threads_populated={} threads_final={} fd_baseline={} fd_populated={} fd_final={} teardown_us={} shutdown_ok={} aggregate_pending_input_final={} semantic_generation={} platform_error={:?}",
+        "pass5_production_result workload={} population_requested={} population_created={} population_attached={} population_hidden={} fanout_requested={} fanout_attached={} geometry={}x{} classification={} latency_boundary={} latency_sample_count={} latency_p50_us={} latency_p95_us={} latency_p99_us={} create_us={} attach_setup_us={} runtime_poll_phase_us={} client_decode_apply_phase_us={} elapsed_us={} source_pty_bytes={} source_pty_bytes_per_sec={} pty_read_calls={} source_timestamp_samples={} display_model_bytes={} display_model_bytes_per_sec={} snapshot_encodes={} delta_encodes={} aggregate_uds_bytes={} aggregate_uds_bytes_per_sec={} per_viewer_uds_bytes_per_sec={} client_read_syscalls={} server_send_syscalls={} server_sendmsg_syscalls={} runtime_recvmsg_syscalls={} display_batches_received={} snapshots_received={} deltas_received={} process_allocations={} process_reallocations={} process_bytes_allocated={} reconnect_full_snapshot_us={} rss_baseline_kib={} rss_populated_kib={} rss_final_kib={} incremental_rss_kib={} cpu_percent_sample={} threads_baseline={} threads_populated={} threads_final={} fd_baseline={} fd_populated={} fd_final={} teardown_us={} shutdown_ok={} aggregate_pending_input_final={} semantic_generation={} latest_damage_generation={} platform_error={:?}",
         workload.name(),
         requested_population,
         ids.len(),
+        population_attached,
+        population_hidden,
         requested_fanout,
         fanout,
         columns,
         rows,
         classification,
-        create_us,
-        setup_us,
+        latency_boundary,
+        measurement.sample_count,
         measurement.p50_us,
         measurement.p95_us,
         measurement.p99_us,
+        create_us,
+        setup_us,
         measurement.runtime_poll_us,
         measurement.client_apply_us,
         measurement.elapsed_us,
-        measurement.throughput_payload_bytes_per_sec,
-        bytes_received,
+        runtime_diagnostics.pty_bytes_read,
+        source_pty_bps,
+        runtime_diagnostics.pty_read_calls,
+        runtime_diagnostics.source_timestamp_samples,
+        display_model_bytes,
+        display_model_bps,
+        display_counters.snapshot_encodes,
+        display_counters.delta_encodes,
+        aggregate_uds_bytes,
+        aggregate_uds_bps,
+        per_viewer_uds_bps,
         client_read_syscalls,
         syscall_counters.send,
         syscall_counters.sendmsg,
         syscall_counters.recvmsg,
         display_batches,
-        snapshots,
-        deltas,
-        snapshots,
+        snapshots_received,
+        deltas_received,
         allocation_stats.allocations,
         allocation_stats.reallocations,
         allocation_stats.bytes_allocated,
@@ -421,8 +471,10 @@ fn worker() {
         shutdown.is_ok(),
         runtime.aggregate_accepted_but_unwritten_bytes(),
         current_generation,
+        runtime_diagnostics.latest_damage_generation,
         platform_error,
     );
+
     shutdown.expect("controlled Runtime teardown");
     drop(runtime);
     let _ = fs::remove_dir_all(runtime_dir);
@@ -434,44 +486,44 @@ fn workload_command(workload: Workload) -> CommandSpec {
         Workload::Interactive => CommandSpec::new("/bin/cat"),
         Workload::Command => CommandSpec::new("/bin/sh").args([
             "-c",
-            "read _; /bin/ls -la /usr/bin | /usr/bin/head -n 200; printf 'DONE\\r\\n'; sleep 1",
+            "read _; /bin/ls -la /usr/bin | /usr/bin/head -n 200; printf 'DONE\r\n'; sleep 1",
         ]),
         Workload::Token => CommandSpec::new("/bin/sh").args([
             "-c",
-            "read _; i=0; while [ $i -lt 200 ]; do printf 'tok%04d ' \"$i\"; sleep 0.005; i=$((i+1)); done; printf 'DONE\\r\\n'; sleep 1",
+            "read _; i=0; while [ $i -lt 200 ]; do printf 'tok%04d ' \"$i\"; sleep 0.005; i=$((i+1)); done; printf 'DONE\r\n'; sleep 1",
         ]),
         Workload::Burst => CommandSpec::new("/bin/sh").args([
             "-c",
-            "read _; yes BURST | head -n 10000; printf 'DONE\\r\\n'; sleep 1",
+            "read _; yes BURST | head -n 10000; printf 'DONE\r\n'; sleep 1",
         ]),
         Workload::Sustained => CommandSpec::new("/bin/sh").args([
             "-c",
-            "read _; i=0; while [ $i -lt 220 ]; do printf '%04096d\\r\\n' 0; sleep 0.01; i=$((i+1)); done; printf 'DONE\\r\\n'; sleep 1",
+            "read _; i=0; while [ $i -lt 220 ]; do printf '%04096d\r\n' 0; sleep 0.01; i=$((i+1)); done; printf 'DONE\r\n'; sleep 1",
         ]),
         Workload::TuiPartial => CommandSpec::new("/bin/sh").args([
             "-c",
-            "read _; printf '\\033[2J'; i=0; while [ $i -lt 100 ]; do printf '\\033[2;1HPART%04d' \"$i\"; printf '\\033[10;1Hvalue%04d' \"$i\"; sleep 0.01; i=$((i+1)); done; printf '\\033[1;1HDONE'; sleep 1",
+            "read _; printf '\x1b[2J'; i=0; while [ $i -lt 100 ]; do printf '\x1b[2;1HPART%04d' \"$i\"; printf '\x1b[10;1Hvalue%04d' \"$i\"; sleep 0.01; i=$((i+1)); done; printf '\x1b[1;1HDONE'; sleep 1",
         ]),
         Workload::Tui => CommandSpec::new("/bin/sh").args([
             "-c",
-            "read _; i=0; while [ $i -lt 100 ]; do printf '\\033[HFRAME%04d\\r\\n' \"$i\"; j=0; while [ $j -lt 30 ]; do printf 'row%02d value%04d\\r\\n' \"$j\" \"$i\"; j=$((j+1)); done; sleep 0.01; i=$((i+1)); done; printf 'DONE\\r\\n'; sleep 1",
+            "read _; i=0; while [ $i -lt 100 ]; do printf '\x1b[HFRAME%04d\r\n' \"$i\"; j=0; while [ $j -lt 30 ]; do printf 'row%02d value%04d\r\n' \"$j\" \"$i\"; j=$((j+1)); done; sleep 0.01; i=$((i+1)); done; printf 'DONE\r\n'; sleep 1",
         ]),
         Workload::Alternate => CommandSpec::new("/bin/sh").args([
             "-c",
-            "read _; printf '\\033[?1049h'; i=0; while [ $i -lt 100 ]; do printf '\\033[HAFRAME%04d\\r\\n' \"$i\"; j=0; while [ $j -lt 30 ]; do printf 'alt%02d value%04d\\r\\n' \"$j\" \"$i\"; j=$((j+1)); done; sleep 0.01; i=$((i+1)); done; printf 'DONE\\r\\n'; sleep 1",
+            "read _; printf '\x1b[?1049h'; i=0; while [ $i -lt 100 ]; do printf '\x1b[HAFRAME%04d\r\n' \"$i\"; j=0; while [ $j -lt 30 ]; do printf 'alt%02d value%04d\r\n' \"$j\" \"$i\"; j=$((j+1)); done; sleep 0.01; i=$((i+1)); done; printf 'DONE\r\n'; sleep 1",
         ]),
     }
 }
 
 #[cfg(target_os = "macos")]
 struct Measurement {
+    sample_count: usize,
     p50_us: u128,
     p95_us: u128,
     p99_us: u128,
     runtime_poll_us: u128,
     client_apply_us: u128,
     elapsed_us: u128,
-    throughput_payload_bytes_per_sec: u128,
 }
 
 #[cfg(target_os = "macos")]
@@ -479,18 +531,18 @@ fn measure_interactive(
     runtime: &mut Runtime,
     clients: &mut [BenchClient],
     controller_attachment: seyal_runtime::AttachmentId,
-    _execution_id: ExecutionId,
+    samples: &mut Vec<u128>,
 ) -> Measurement {
-    let mut samples = Vec::with_capacity(32);
+    samples.clear();
     let mut runtime_poll_us = 0u128;
     let mut client_apply_us = 0u128;
     let overall = Instant::now();
 
     for _ in 0..32 {
-        let before = clients
-            .iter()
-            .map(|client| client.cache.generation)
-            .collect::<Vec<_>>();
+        let mut before = [0u64; 16];
+        for (index, client) in clients.iter().enumerate() {
+            before[index] = client.cache.generation;
+        }
         let started = Instant::now();
         send_client_frame(
             runtime,
@@ -517,8 +569,8 @@ fn measure_interactive(
             client_apply_us += client_start.elapsed().as_micros();
             if clients
                 .iter()
-                .zip(&before)
-                .all(|(client, generation)| client.cache.generation > *generation)
+                .enumerate()
+                .all(|(index, client)| client.cache.generation > before[index])
             {
                 break;
             }
@@ -532,13 +584,13 @@ fn measure_interactive(
 
     samples.sort_unstable();
     Measurement {
-        p50_us: percentile(&samples, 50),
-        p95_us: percentile(&samples, 95),
-        p99_us: percentile(&samples, 99),
+        sample_count: samples.len(),
+        p50_us: percentile(samples, 50),
+        p95_us: percentile(samples, 95),
+        p99_us: percentile(samples, 99),
         runtime_poll_us,
         client_apply_us,
         elapsed_us: overall.elapsed().as_micros(),
-        throughput_payload_bytes_per_sec: 0,
     }
 }
 
@@ -547,8 +599,11 @@ fn measure_streaming(
     runtime: &mut Runtime,
     clients: &mut [BenchClient],
     controller_attachment: seyal_runtime::AttachmentId,
+    execution_id: ExecutionId,
     workload: Workload,
+    samples: &mut Vec<u128>,
 ) -> Measurement {
+    samples.clear();
     let started = Instant::now();
     send_client_frame(
         runtime,
@@ -560,13 +615,33 @@ fn measure_streaming(
         }
         .encode(),
     );
+    // These deadlines are hang-detector safety margins, not performance
+    // assertions. Latency/throughput are measured independently by the
+    // repeated source-to-client samples and result counters below.
+    //
+    // Issue #651 evidence shows that sleep-paced shell workloads stretch
+    // substantially on GitHub's virtual Apple-Silicon runners even when
+    // Runtime is caught up. For sustained output, the old 8s detector fired
+    // after only 586161/901120 source bytes while PTY reads averaged ~819 B,
+    // far below Runtime's 16 KiB read quantum; the measured producer pacing
+    // implied ~12.3s to finish, so that workload keeps a 20s detector.
+    //
+    // The final merge-result CI found the same effect on the shorter paced
+    // workloads: TuiPartial and Tui completed in ~5.53s and ~5.55s, while
+    // Alternate reached 54500 bytes in 6.00s with 604 PTY reads (~90 B/read),
+    // nearly the expected ~55.6 KiB source volume. That is producer pacing,
+    // not a Runtime backlog. Give sleep-paced token/TUI workloads a 12s
+    // detector while preserving their workload, measurement boundaries and
+    // percentile calculations unchanged.
     let deadline = Instant::now()
-        + if workload == Workload::Sustained {
-            Duration::from_secs(8)
-        } else {
-            Duration::from_secs(6)
+        + match workload {
+            Workload::Sustained => Duration::from_secs(20),
+            Workload::Token | Workload::TuiPartial | Workload::Tui | Workload::Alternate => {
+                Duration::from_secs(12)
+            }
+            Workload::Command | Workload::Burst => Duration::from_secs(6),
+            Workload::Interactive => unreachable!("interactive uses measure_interactive"),
         };
-    let mut completion_samples = vec![0u128; clients.len()];
     let mut runtime_poll_us = 0u128;
     let mut client_apply_us = 0u128;
 
@@ -578,39 +653,92 @@ fn measure_streaming(
         runtime_poll_us += poll_start.elapsed().as_micros();
 
         let client_start = Instant::now();
-        for (index, client) in clients.iter_mut().enumerate() {
-            client.drain_available().expect("client drain");
-            if completion_samples[index] == 0 && cache_contains(&client.cache, "DONE") {
-                completion_samples[index] = started.elapsed().as_micros();
-            }
+        for client in clients.iter_mut() {
+            client
+                .drain_available_with_batch_hook(|generation| {
+                    let source = runtime
+                        .benchmark_source_timestamp(execution_id, generation)
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "committed display generation {generation} has no benchmark source timestamp"
+                            )
+                        });
+                    samples.push(Instant::now().duration_since(source).as_micros());
+                })
+                .expect("client drain");
         }
         client_apply_us += client_start.elapsed().as_micros();
-        if completion_samples.iter().all(|value| *value > 0) {
+
+        if clients
+            .iter()
+            .all(|client| cache_contains_ascii(&client.cache, b"DONE"))
+        {
             break;
         }
-        assert!(Instant::now() < deadline, "streaming workload timed out");
+        if Instant::now() >= deadline {
+            print_streaming_timeout_diagnostics(runtime, clients, execution_id, workload, started);
+            panic!("streaming workload timed out");
+        }
     }
 
-    let elapsed = started.elapsed();
-    let total_bytes = clients
+    assert!(
+        !samples.is_empty(),
+        "streaming benchmark produced no source-to-client latency samples"
+    );
+    let elapsed_us = started.elapsed().as_micros();
+    samples.sort_unstable();
+    Measurement {
+        sample_count: samples.len(),
+        p50_us: percentile(samples, 50),
+        p95_us: percentile(samples, 95),
+        p99_us: percentile(samples, 99),
+        runtime_poll_us,
+        client_apply_us,
+        elapsed_us,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn print_streaming_timeout_diagnostics(
+    runtime: &Runtime,
+    clients: &[BenchClient],
+    execution_id: ExecutionId,
+    workload: Workload,
+    started: Instant,
+) {
+    let runtime_diagnostics = runtime.benchmark_runtime_diagnostics(execution_id);
+    let display = benchmark_display_counters();
+    let syscalls = benchmark_syscall_counters();
+    let aggregate_uds_bytes = clients
         .iter()
         .map(|client| client.bytes_received)
         .sum::<usize>();
-    let bytes_per_sec = if elapsed.as_nanos() == 0 {
-        0
-    } else {
-        (total_bytes as u128 * 1_000_000_000u128) / elapsed.as_nanos()
-    };
-    completion_samples.sort_unstable();
-    Measurement {
-        p50_us: percentile(&completion_samples, 50),
-        p95_us: percentile(&completion_samples, 95),
-        p99_us: percentile(&completion_samples, 99),
-        runtime_poll_us,
-        client_apply_us,
-        elapsed_us: elapsed.as_micros(),
-        throughput_payload_bytes_per_sec: bytes_per_sec,
-    }
+    let display_batches = clients
+        .iter()
+        .map(|client| client.display_batches)
+        .sum::<usize>();
+    let client_reads = clients
+        .iter()
+        .map(|client| client.read_syscalls)
+        .sum::<usize>();
+    eprintln!(
+        "pass5_streaming_timeout workload={} elapsed_us={} pty_bytes_read={} pty_read_calls={} latest_damage_generation={} source_timestamp_samples={} display_model_bytes={} snapshot_encodes={} delta_encodes={} aggregate_uds_bytes={} display_batches_received={} client_read_syscalls={} server_send_syscalls={} server_sendmsg_syscalls={} runtime_recvmsg_syscalls={}",
+        workload.name(),
+        started.elapsed().as_micros(),
+        runtime_diagnostics.pty_bytes_read,
+        runtime_diagnostics.pty_read_calls,
+        runtime_diagnostics.latest_damage_generation,
+        runtime_diagnostics.source_timestamp_samples,
+        display.snapshot_bytes.saturating_add(display.delta_bytes),
+        display.snapshot_encodes,
+        display.delta_encodes,
+        aggregate_uds_bytes,
+        display_batches,
+        client_reads,
+        syscalls.send,
+        syscalls.sendmsg,
+        syscalls.recvmsg,
+    );
 }
 
 #[cfg(target_os = "macos")]
@@ -620,6 +748,13 @@ fn percentile(sorted: &[u128], percentile: usize) -> u128 {
     }
     let rank = (percentile * sorted.len()).div_ceil(100).max(1);
     sorted[rank.saturating_sub(1).min(sorted.len() - 1)]
+}
+
+#[cfg(target_os = "macos")]
+fn bytes_per_second(bytes: u64, elapsed_us: u128) -> u128 {
+    (bytes as u128 * 1_000_000)
+        .checked_div(elapsed_us)
+        .unwrap_or(0)
 }
 
 #[cfg(target_os = "macos")]
@@ -655,7 +790,7 @@ impl BenchClient {
         stream.set_nonblocking(true).expect("nonblocking client");
         let mut client = Self {
             stream,
-            buffered: Vec::new(),
+            buffered: Vec::with_capacity(512 * 1024),
             cache: empty_cache(),
             attachment_id: seyal_runtime::AttachmentId::from_bytes([0; 16]),
             pending: None,
@@ -709,6 +844,13 @@ impl BenchClient {
     }
 
     fn drain_available(&mut self) -> std::io::Result<()> {
+        self.drain_available_with_batch_hook(|_| {})
+    }
+
+    fn drain_available_with_batch_hook<F>(&mut self, mut on_batch: F) -> std::io::Result<()>
+    where
+        F: FnMut(u64),
+    {
         let mut buffer = [0u8; 32 * 1024];
         loop {
             match self.stream.read(&mut buffer) {
@@ -761,6 +903,10 @@ impl BenchClient {
                     MessageType::DisplayDelta => self.deltas += 1,
                     _ => unreachable!(),
                 }
+                // One nonblocking socket drain may contain multiple complete
+                // presentation batches. Observe each committed cache generation
+                // here so percentile sampling cannot silently collapse them.
+                on_batch(self.cache.generation);
             }
         }
         Ok(())
@@ -854,15 +1000,18 @@ fn take_frame(buffer: &mut Vec<u8>) -> Option<(u16, Vec<u8>)> {
 }
 
 #[cfg(target_os = "macos")]
-fn cache_contains(cache: &DisplayCache, needle: &str) -> bool {
-    if cache.columns == 0 {
-        return false;
+fn cache_contains_ascii(cache: &DisplayCache, needle: &[u8]) -> bool {
+    if cache.columns == 0 || needle.is_empty() || needle.iter().any(|byte| !byte.is_ascii()) {
+        return needle.is_empty();
     }
-    cache.cells.chunks(cache.columns as usize).any(|row| {
-        row.iter()
-            .map(|cell| cell.scalar)
-            .collect::<String>()
-            .contains(needle)
+    let columns = cache.columns as usize;
+    cache.cells.chunks(columns).any(|row| {
+        row.windows(needle.len()).any(|window| {
+            window
+                .iter()
+                .zip(needle)
+                .all(|(cell, byte)| cell.scalar == *byte as char)
+        })
     })
 }
 

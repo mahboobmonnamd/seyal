@@ -30,6 +30,16 @@ pub struct AttachmentId(u128);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ProjectionId(u128);
 
+/// Durable-semantics Workspace metadata identity for one Block record.
+///
+/// This value type owns no Block lifecycle or persistence authority. Runtime /
+/// Workspace composition decides when a Block exists. Generation deliberately
+/// uses the same process-unique namespace source as Seyal's other fresh opaque
+/// identities rather than a Runtime-local counter, so a new Runtime incarnation
+/// does not intentionally reuse a prior Workspace Block identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct BlockId(u128);
+
 // Fresh authority identities intentionally have no `Default`: default
 // construction would hide a stateful identity-generation side effect.
 #[allow(clippy::new_without_default)]
@@ -67,6 +77,16 @@ impl AttachmentId {
     }
 }
 
+// Block identity is durable Workspace metadata semantics, not a Runtime-local
+// sequence. Fresh generation therefore has no `Default` and uses a distinct
+// globally namespaced domain from Runtime/Execution/Attachment identities.
+#[allow(clippy::new_without_default)]
+impl BlockId {
+    pub fn new() -> Self {
+        Self(unique_id(0x424c_4f43_4b00_0001))
+    }
+}
+
 macro_rules! impl_id_wire_bytes {
     ($type:ty) => {
         impl $type {
@@ -85,6 +105,7 @@ impl_id_wire_bytes!(RuntimeId);
 impl_id_wire_bytes!(ExecutionId);
 impl_id_wire_bytes!(AttachmentId);
 impl_id_wire_bytes!(ProjectionId);
+impl_id_wire_bytes!(BlockId);
 
 fn unique_id(domain: u64) -> u128 {
     let sequence = NEXT_ID
@@ -137,6 +158,7 @@ impl_id_display!(WorkspaceId);
 impl_id_display!(ExecutionId);
 impl_id_display!(AttachmentId);
 impl_id_display!(ProjectionId);
+impl_id_display!(BlockId);
 
 #[cfg(test)]
 mod tests {
@@ -175,6 +197,27 @@ mod tests {
     }
 
     #[test]
+    fn block_ids_are_unique_and_disjoint_from_runtime_identity_domain() {
+        let mut seen = HashSet::with_capacity(100_000);
+        for _ in 0..100_000 {
+            assert!(seen.insert(BlockId::new()));
+        }
+        let block = BlockId::new();
+        let runtime = RuntimeId::new();
+        assert_ne!(block.to_string(), runtime.to_string());
+    }
+
+    #[test]
+    fn block_id_generation_namespace_changes_across_runtime_like_prefixes() {
+        let domain = 0x424c_4f43_4b00_0001;
+        let prior_runtime_like_prefix = 0x1111_2222_3333_4444;
+        let later_runtime_like_prefix = 0x5555_6666_7777_8888;
+        let prior = compose_unique_id(prior_runtime_like_prefix, domain, 1);
+        let later = compose_unique_id(later_runtime_like_prefix, domain, 1);
+        assert_ne!(prior, later);
+    }
+
+    #[test]
     fn default_workspace_identity_is_runtime_independent() {
         let before = WorkspaceId::m001_default();
         let _runtime_a = RuntimeId::new();
@@ -188,9 +231,11 @@ mod tests {
         let execution = ExecutionId::new();
         let attachment = AttachmentId::new();
         let projection = ProjectionId::from_bytes([0x5a; 16]);
+        let block = BlockId::new();
         assert_eq!(RuntimeId::from_bytes(runtime.to_bytes()), runtime);
         assert_eq!(ExecutionId::from_bytes(execution.to_bytes()), execution);
         assert_eq!(AttachmentId::from_bytes(attachment.to_bytes()), attachment);
         assert_eq!(ProjectionId::from_bytes(projection.to_bytes()), projection);
+        assert_eq!(BlockId::from_bytes(block.to_bytes()), block);
     }
 }

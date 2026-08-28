@@ -19,7 +19,7 @@ final class SeyalShellUITests: XCTestCase {
     func testShellLaunchesWithFrozenCoreHierarchyWithoutFabricatedRuntimeOutput() {
         let window = app.windows["Seyal — UI Shell Preview"]
         XCTAssertTrue(window.waitForExistence(timeout: 5))
-        XCTAssertGreaterThan(window.frame.width, 1200)
+        XCTAssertGreaterThanOrEqual(window.frame.width, 1048)
         XCTAssertGreaterThan(window.frame.height, 760)
 
         XCTAssertTrue(app.buttons["toggle-left-sidebar"].waitForExistence(timeout: 2))

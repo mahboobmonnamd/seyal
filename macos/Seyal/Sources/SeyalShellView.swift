@@ -967,6 +967,7 @@ final class SeyalShellView: NSView {
         mode.font = SeyalDesignTokens.Typography.section
         mode.textColor = SeyalDesignTokens.Palette.focus
         mode.setAccessibilityIdentifier("inspector-mode-label")
+        mode.setAccessibilityLabel(inspectorMode.title.uppercased())
 
         let stack = NSStackView(views: [titleRow, mode])
         stack.orientation = .vertical
@@ -1037,6 +1038,7 @@ final class SeyalShellView: NSView {
         value.alignment = .right
         value.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         value.setAccessibilityIdentifier("inspector.\(row.id)")
+        value.setAccessibilityLabel(row.value)
 
         let rowStack = NSStackView(views: [label, value])
         rowStack.orientation = .horizontal

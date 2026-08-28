@@ -33,8 +33,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             buildConfiguration: buildConfiguration
         )
 
+        let previewWidth: CGFloat
+        if useShellPreview {
+            // The preview must fit the smallest hosted macOS display while still
+            // satisfying the frozen shell's minimum horizontal geometry.
+            let availableWidth = NSScreen.main?.visibleFrame.width ?? 1280
+            previewWidth = min(1280, max(1050, availableWidth - 32))
+        } else {
+            previewWidth = 960
+        }
         let contentRect = useShellPreview
-            ? NSRect(x: 0, y: 0, width: 1280, height: 800)
+            ? NSRect(x: 0, y: 0, width: previewWidth, height: 800)
             : NSRect(x: 0, y: 0, width: 960, height: 600)
 
         let window = NSWindow(

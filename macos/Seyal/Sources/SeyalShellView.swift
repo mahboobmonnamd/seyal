@@ -677,7 +677,7 @@ final class SeyalShellView: NSView {
         pane.translatesAutoresizingMaskIntoConstraints = false
         pane.wantsLayer = true
         pane.layer?.cornerRadius = SeyalDesignTokens.Layout.paneCornerRadius
-        pane.layer?.borderWidth = isFocused ? 1.25 : 1
+        pane.layer?.borderWidth = isFocused ? 0.75 : 0.5
         pane.layer?.borderColor = (isFocused
             ? SeyalDesignTokens.Palette.focus
             : SeyalDesignTokens.Palette.separator).cgColor
@@ -1193,7 +1193,7 @@ final class SeyalShellView: NSView {
         state.focusPane(id: paneID)
         for (id, pane) in paneContainers {
             let focused = id == state.activeTab.focusedPaneID
-            pane.layer?.borderWidth = focused ? 1.25 : 1
+            pane.layer?.borderWidth = focused ? 0.75 : 0.5
             pane.layer?.borderColor = (focused
                 ? SeyalDesignTokens.Palette.focus
                 : SeyalDesignTokens.Palette.separator).cgColor

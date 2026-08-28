@@ -24,7 +24,7 @@ final class BlockView: NSView {
     private func buildUI() {
         wantsLayer = true
         layer?.cornerRadius = SeyalDesignTokens.Layout.blockCornerRadius
-        layer?.borderWidth = presentation.isSelected ? 1.25 : 1
+        layer?.borderWidth = presentation.isSelected ? 0.75 : 0.5
         layer?.borderColor = (presentation.isSelected
             ? SeyalDesignTokens.Palette.focus
             : SeyalDesignTokens.Palette.separator).cgColor
@@ -120,7 +120,7 @@ final class BlockView: NSView {
             : (presentation.isSelected
                 ? SeyalDesignTokens.Palette.blockSelectedBackground
                 : SeyalDesignTokens.Palette.blockBackground).cgColor
-        layer?.borderWidth = active ? 0 : (presentation.isSelected ? 1.25 : 1)
+        layer?.borderWidth = active ? 0 : (presentation.isSelected ? 0.75 : 0.5)
     }
 
     /// Action labels remain a presentation seam. Runtime-dependent actions are

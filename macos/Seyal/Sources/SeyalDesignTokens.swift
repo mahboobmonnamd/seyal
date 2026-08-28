@@ -3,15 +3,15 @@ import AppKit
 enum SeyalDesignTokens {
     enum Layout {
         static let topChromeHeight: CGFloat = 48
-        static let leftContextWidth: CGFloat = 236
-        static let inspectorWidth: CGFloat = 292
+        static let leftContextWidth: CGFloat = 220
+        static let inspectorWidth: CGFloat = 248
         static let inspectorRailWidth: CGFloat = 36
-        static let paneCornerRadius: CGFloat = 12
-        static let blockCornerRadius: CGFloat = 10
-        static let compactSpacing: CGFloat = 6
-        static let standardSpacing: CGFloat = 10
-        static let panelInset: CGFloat = 12
-        static let composerMinHeight: CGFloat = 58
+        static let paneCornerRadius: CGFloat = 8
+        static let blockCornerRadius: CGFloat = 8
+        static let compactSpacing: CGFloat = 4
+        static let standardSpacing: CGFloat = 8
+        static let panelInset: CGFloat = 10
+        static let composerMinHeight: CGFloat = 52
         static let composerMaxPreviewHeight: CGFloat = 116
         static let tabMinWidth: CGFloat = 118
         static let tabMaxWidth: CGFloat = 190
@@ -46,13 +46,13 @@ enum SeyalDesignTokens {
         static var elevatedBackground: NSColor { rgb(20, 26, 36) }
         static var blockBackground: NSColor { rgb(15, 21, 30) }
         static var blockSelectedBackground: NSColor { rgb(18, 25, 36) }
-        static var separator: NSColor { rgb(39, 46, 59) }
-        static var subtleSeparator: NSColor { rgb(30, 36, 47) }
+        static var separator: NSColor { rgb(34, 40, 52) }
+        static var subtleSeparator: NSColor { rgb(26, 32, 42) }
         static var textPrimary: NSColor { rgb(231, 234, 240) }
         static var textSecondary: NSColor { rgb(157, 166, 184) }
         static var textTertiary: NSColor { rgb(100, 112, 132) }
-        static var focus: NSColor { rgb(128, 92, 246) }
-        static var focusSoft: NSColor { rgb(39, 31, 65) }
+        static var focus: NSColor { rgb(132, 100, 232) }
+        static var focusSoft: NSColor { rgb(33, 28, 57) }
         static var success: NSColor { rgb(56, 211, 159) }
         static var warning: NSColor { rgb(245, 165, 36) }
         static var failure: NSColor { rgb(249, 112, 102) }
@@ -88,7 +88,7 @@ enum SeyalDesignTokens {
     ) {
         view.wantsLayer = true
         view.layer?.cornerRadius = radius
-        view.layer?.borderWidth = 1
+        view.layer?.borderWidth = 0.5
         view.layer?.borderColor = Palette.separator.cgColor
         view.layer?.backgroundColor = background.cgColor
     }

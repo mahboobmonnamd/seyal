@@ -25,6 +25,23 @@ final class SeyalShellComponentTests: XCTestCase {
     }
 
     @MainActor
+    func testVisualHierarchyKeepsSecondaryChromeQuietAndCompact() {
+        XCTAssertLessThanOrEqual(SeyalDesignTokens.Layout.leftContextWidth, 220)
+        XCTAssertLessThanOrEqual(SeyalDesignTokens.Layout.inspectorWidth, 248)
+        XCTAssertLessThanOrEqual(SeyalDesignTokens.Layout.blockCornerRadius, 8)
+
+        let block = BlockView(
+            presentation: BlockPresentation(
+                id: "quiet", command: "pwd", state: .completed, elapsed: "Done",
+                timestamp: nil, isSelected: false, actions: []
+            ),
+            bodyView: NSView()
+        )
+
+        XCTAssertEqual(block.layer?.borderWidth ?? -1, CGFloat(0.5), accuracy: CGFloat(0.01))
+    }
+
+    @MainActor
     func testBlockTUITakeoverHidesOnlyPresentationChrome() {
         let body = NSView()
         body.translatesAutoresizingMaskIntoConstraints = false

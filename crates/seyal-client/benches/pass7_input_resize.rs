@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 #[cfg(target_os = "macos")]
 use std::{
     fs,
@@ -7,20 +9,18 @@ use std::{
         mpsc,
     },
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
-#[cfg(target_os = "macos")]
-use seyal_client::{GridGeometry, LocalDisplayClient};
 #[cfg(target_os = "macos")]
 use seyal_client::pass7_benchmark::{
     pass7_client_benchmark_marks, pass7_client_benchmark_now_ns,
     reset_pass7_client_benchmark_marks,
 };
 #[cfg(target_os = "macos")]
-use seyal_exec::{CommandSpec, WindowSize};
+use seyal_client::{GridGeometry, LocalDisplayClient};
 #[cfg(target_os = "macos")]
-use seyal_runtime::{ExecutionId, LocalIpcMode, Runtime, RuntimeConfig};
+use seyal_exec::{CommandSpec, WindowSize};
 #[cfg(target_os = "macos")]
 use seyal_runtime::local_ipc::framing::Role;
 #[cfg(target_os = "macos")]
@@ -28,6 +28,8 @@ use seyal_runtime::pass7_benchmark::{
     pass7_benchmark_now_ns, pass7_runtime_benchmark_marks,
     reset_pass7_runtime_benchmark_marks,
 };
+#[cfg(target_os = "macos")]
+use seyal_runtime::{ExecutionId, LocalIpcMode, Runtime, RuntimeConfig};
 
 const PERFORMANCE_CLAIM: &str = "performance_claim=false";
 #[cfg(target_os = "macos")]

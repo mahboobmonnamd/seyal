@@ -31,6 +31,7 @@
 		A10000000000000000000013 /* CoreText.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000016 /* CoreText.framework */; };
 		A10000000000000000000014 /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000017 /* CoreGraphics.framework */; };
 		A10000000000000000000015 /* TerminalInputSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000018 /* TerminalInputSurface.swift */; };
+		A10000000000000000000017 /* CommandBlockBodyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001A /* CommandBlockBodyView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -80,6 +81,7 @@
 		A20000000000000000000017 /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
 		A20000000000000000000018 /* TerminalInputSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalInputSurface.swift; sourceTree = "<group>"; };
 		A20000000000000000000019 /* SeyalShellProductionFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeyalShellProductionFactory.swift; sourceTree = "<group>"; };
+		A2000000000000000000001A /* CommandBlockBodyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandBlockBodyView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -137,6 +139,7 @@
 				A2000000000000000000000E /* SeyalShellView.swift */,
 				A2000000000000000000000F /* SeyalShellPreviewFactory.swift */,
 				A20000000000000000000019 /* SeyalShellProductionFactory.swift */,
+				A2000000000000000000001A /* CommandBlockBodyView.swift */,
 				A20000000000000000000018 /* TerminalInputSurface.swift */,
 				A20000000000000000000010 /* RustDisplayBridge.swift */,
 				A20000000000000000000011 /* GlyphAtlas.swift */,
@@ -318,6 +321,7 @@
 				A1000000000000000000000C /* SeyalShellView.swift in Sources */,
 				A1000000000000000000000D /* SeyalShellPreviewFactory.swift in Sources */,
 				A10000000000000000000016 /* SeyalShellProductionFactory.swift in Sources */,
+				A10000000000000000000017 /* CommandBlockBodyView.swift in Sources */,
 				A10000000000000000000015 /* TerminalInputSurface.swift in Sources */,
 				A1000000000000000000000E /* RustDisplayBridge.swift in Sources */,
 				A1000000000000000000000F /* GlyphAtlas.swift in Sources */,

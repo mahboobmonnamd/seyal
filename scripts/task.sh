@@ -49,6 +49,7 @@ case "$cmd" in
     python3 scripts/check-hot-path.py
     python3 scripts/check-benchmark-contract.py
     python3 scripts/check-pass5-benchmark-coverage.py --self-test
+    python3 scripts/check-pass7-benchmark-coverage.py --self-test
     bash scripts/test-tooling.sh
     python3 scripts/test-workspace.py
     python3 scripts/test-harnesses.py
@@ -84,7 +85,12 @@ case "$cmd" in
         # Pass 7 measures its own native-input/client/Runtime/PTY and correlated
         # resize boundaries. It intentionally remains separate from Pass 5
         # Candidate-D transport and Pass 6 Metal renderer evidence.
-        cargo_pinned bench -p seyal-client --bench pass7_input_resize --features benchmark-instrumentation --locked
+        pass7_log="$(mktemp -t seyal-pass7-benchmark.XXXXXX)"
+        trap 'rm -f "$pass7_log"' EXIT
+        cargo_pinned bench -p seyal-client --bench pass7_input_resize --features benchmark-instrumentation --locked 2>&1 | tee "$pass7_log"
+        python3 scripts/check-pass7-benchmark-coverage.py "$pass7_log"
+        rm -f "$pass7_log"
+        trap - EXIT
 
         # Pass 5 ends at the committed client display cache. Measure the distinct
         # Pass-6 native boundary separately in a Release app and label GPU

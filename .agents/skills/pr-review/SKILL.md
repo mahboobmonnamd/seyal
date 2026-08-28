@@ -1,21 +1,29 @@
 ---
 name: pr-review
-description: Seyal facade for AI-SDLC code review, adding Seyal architecture, terminal hot-path, repository, and specialist evidence requirements.
+description: Seyal facade for generic AI-SDLC PR merge-readiness review, adding terminal architecture, hot-path, repository, and specialist evidence requirements.
 ---
 
 # Pull request review
 
-Follow the canonical generic procedure in `.sdlc/framework/skills/code-review/SKILL.md`. If it is unavailable, run `make bootstrap-agents` first.
+Follow the canonical generic merge-readiness procedure in `.sdlc/framework/skills/pr-review/SKILL.md`. If it is unavailable, run `make bootstrap-agents` first.
+
+This is Seyal's user-facing final PR review entrypoint. A caller asking whether a PR is ready to merge should use this skill; the generic orchestrator will run or consume focused `code-review`, `verification`, and only the specialist reviews required by risk and project policy.
 
 Apply only these Seyal-specific rules on top of the generic procedure:
 
-1. Review the linked GitHub Issue, `AGENTS.md`, and every governing architecture/ADR/spec/milestone source before accepting implementation rationale.
-2. Enforce the Issue's in/out scope and Seyal's single-authoritative-state rules. Flag duplicate VT/grid/runtime ownership, temporary production paths, or architecture-by-precedent as blocking.
-3. Treat new synchronous terminal hot-path dependencies, unnecessary IPC/serialization/allocations/locks/language round trips, or licensing/cloud coupling as architecture/performance concerns requiring explicit authority.
-4. Inspect required terminal evidence where applicable: conformance fixtures, fuzz/regression corpus, PTY/integration/failure tests, renderer checks, and measured latency/CPU/RSS/GPU results.
-5. Require `security-review`, documentation validation, macOS UI/accessibility evidence, or other specialist review only when the Issue's risk/impact classification requires it.
-6. Verify tests were not weakened and claims do not exceed measurements. `make check`/CI success is required evidence, not sufficient proof by itself.
-7. A clean review maps to AI-SDLC `APPROVE_FOR_VERIFICATION`; it does not mark the Issue or milestone Done. Route next to `verification`.
-8. Core/high-risk work must retain the independent-review requirement in `ISSUE-PROTOCOL.md`.
+1. Review the owning GitHub Issue, `AGENTS.md`, and every governing architecture/ADR/spec/milestone source before accepting implementation rationale or completion claims.
+2. Enforce the Issue's in/out scope and Seyal's single-authoritative-state rules. Duplicate PTY/VT/grid/runtime ownership, temporary production paths, hidden alternate render/input/state engines, or architecture-by-precedent are merge blockers.
+3. Treat new synchronous terminal hot-path dependencies, unnecessary IPC/serialization/allocations/locks/language round trips, per-event task/thread/process creation, persistence/agent/cloud/licensing coupling, or unbounded retry/backpressure behavior as architecture/performance risks requiring explicit authority and evidence.
+4. Require exact-head evidence appropriate to the change: conformance fixtures, fuzz/regression corpus, PTY/runtime/integration/failure tests, native/renderer checks, and measured latency/CPU/RSS/GPU or other resource evidence where the Issue/spec requires it.
+5. For benchmark/performance claims, inspect actual timer/counter boundaries, workload, successful/deferred/rejected sample populations, environment, build mode, statistics and exact revision. A printed label is never measurement authority.
+6. When a required capability cannot run in hosted CI, distinguish `ENVIRONMENT_UNSUPPORTED` from `FAILED`; require any project-authorized physical/interative/hardware evidence on the exact applicable head rather than treating the limitation itself as a pass.
+7. Require `security-review`, documentation validation, macOS UI/accessibility evidence, `performance-gate`, terminal conformance/fuzzing, or other specialist review only when the Issue's risk/impact classification or governing spec requires it.
+8. Verify tests were not weakened and claims do not exceed measurements. `make check` and exact-head CI are required evidence where applicable, never sufficient proof by themselves.
+9. Re-resolve the PR head immediately before `READY_TO_MERGE`; if executable or acceptance-relevant code moved, invalidate affected review/verification/evidence and review the new delta.
+10. Verify the PR's `Closes`/`Refs` relationship and Issue checklist/Done state are truthful for the post-merge outcome. `READY_TO_MERGE` must not silently close an Issue with unmet gates.
+11. Core/high-risk work must retain the independent-review requirement in `docs/engineering/ISSUE-PROTOCOL.md`; implementers do not self-approve.
+12. OSS must remain independent of commercial code. Inspect `seyal-commercial` only when needed to validate the edition boundary; never make it an OSS authority.
 
-If a reusable review-rule defect is found, fix it in `ai-sdlc` rather than duplicating generic code-review procedure here.
+For a narrower request that asks only for implementation/diff defects or regressions and does not ask for merge readiness, use the separate `code-review` skill.
+
+If a reusable PR-review rule defect is found, fix it in `ai-sdlc` rather than duplicating generic orchestration here.

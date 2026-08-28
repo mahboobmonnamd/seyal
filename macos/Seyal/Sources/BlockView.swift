@@ -113,7 +113,7 @@ final class BlockView: NSView {
         chromeDivider?.isHidden = active
         contentStack?.spacing = active ? 0 : SeyalDesignTokens.Layout.compactSpacing
         contentStack?.edgeInsets = active
-            ? .zero
+            ? NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
             : NSEdgeInsets(top: 10, left: 12, bottom: 12, right: 12)
         layer?.backgroundColor = active
             ? NSColor.clear.cgColor

@@ -3,6 +3,13 @@ import XCTest
 final class SeyalShellUITests: XCTestCase {
     private var app: XCUIApplication!
 
+    private var leftModeControl: XCUIElement {
+        let segmentedControl = app.segmentedControls["left-mode"]
+        return segmentedControl.exists
+            ? segmentedControl
+            : app.radioGroups["left-mode"]
+    }
+
     override func setUpWithError() throws {
         continueAfterFailure = false
         app = XCUIApplication()
@@ -24,7 +31,7 @@ final class SeyalShellUITests: XCTestCase {
 
         XCTAssertTrue(app.buttons["toggle-left-sidebar"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.buttons["toggle-inspector"].waitForExistence(timeout: 2))
-        XCTAssertTrue(app.segmentedControls["left-mode"].waitForExistence(timeout: 2))
+        XCTAssertTrue(leftModeControl.waitForExistence(timeout: 2))
         XCTAssertTrue(app.staticTexts["WORKSPACES"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.staticTexts["AGENTS · SEYAL OSS"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.buttons["workspace.workspace-seyal"].waitForExistence(timeout: 2))
@@ -59,7 +66,7 @@ final class SeyalShellUITests: XCTestCase {
     }
 
     func testWorkspaceTabsSwitcherUsesCompactFrozenLeftPanelModel() {
-        let mode = app.segmentedControls["left-mode"]
+        let mode = leftModeControl
         XCTAssertTrue(mode.waitForExistence(timeout: 5))
 
         let tabsSegment = mode.buttons["Tabs"]
@@ -156,12 +163,12 @@ final class SeyalShellUITests: XCTestCase {
         let leftCollapse = app.buttons["left-sidebar-collapse"]
         XCTAssertTrue(leftCollapse.waitForExistence(timeout: 2))
         leftCollapse.click()
-        XCTAssertFalse(app.segmentedControls["left-mode"].waitForExistence(timeout: 1))
+        XCTAssertFalse(leftModeControl.waitForExistence(timeout: 1))
 
         let leftToggle = app.buttons["toggle-left-sidebar"]
         XCTAssertTrue(leftToggle.waitForExistence(timeout: 2))
         leftToggle.click()
-        XCTAssertTrue(app.segmentedControls["left-mode"].waitForExistence(timeout: 2))
+        XCTAssertTrue(leftModeControl.waitForExistence(timeout: 2))
 
         let inspectorCollapse = app.buttons["inspector-collapse"]
         XCTAssertTrue(inspectorCollapse.waitForExistence(timeout: 2))
@@ -199,9 +206,9 @@ final class SeyalShellUITests: XCTestCase {
         XCTAssertEqual(app.staticTexts["inspector.workspace-name"].label, "Payments Platform")
 
         app.typeKey("0", modifierFlags: [.command])
-        XCTAssertFalse(app.segmentedControls["left-mode"].waitForExistence(timeout: 1))
+        XCTAssertFalse(leftModeControl.waitForExistence(timeout: 1))
         app.typeKey("0", modifierFlags: [.command])
-        XCTAssertTrue(app.segmentedControls["left-mode"].waitForExistence(timeout: 2))
+        XCTAssertTrue(leftModeControl.waitForExistence(timeout: 2))
 
         app.typeKey("0", modifierFlags: [.command, .option])
         XCTAssertFalse(app.staticTexts["Inspector"].waitForExistence(timeout: 1))

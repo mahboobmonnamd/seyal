@@ -916,6 +916,8 @@ impl Runtime {
             );
             return;
         };
+        #[cfg(feature = "benchmark-instrumentation")]
+        crate::pass7_benchmark::mark_pass7_resize_receipt();
 
         let monotonic = self.local_ipc.as_mut().is_some_and(|state| {
             let Some(meta) = state.connections.get_mut(&token) else {
@@ -980,6 +982,8 @@ impl Runtime {
 
         match self.resize(execution_id, size) {
             Ok(()) => {
+                #[cfg(feature = "benchmark-instrumentation")]
+                crate::pass7_benchmark::mark_pass7_resize_commit();
                 let generation = self
                     .entries
                     .get(&execution_id)

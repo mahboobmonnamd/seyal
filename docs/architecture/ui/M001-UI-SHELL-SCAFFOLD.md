@@ -1,6 +1,6 @@
 # M001 UI Shell Scaffold Boundary
 
-**Status:** Implementation boundary for the pre-Pass-6 native shell scaffold  
+**Status:** Implementation boundary for the pre-Pass-6 native shell scaffold
 **Authority:** subordinate to `M001-CORE-TERMINAL-REFERENCE-SCREEN.md`, its companion UI specs, M001 pass ordering, and accepted Runtime/TerminalExecution ownership
 
 ## Purpose

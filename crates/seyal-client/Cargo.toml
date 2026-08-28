@@ -6,6 +6,11 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
+autobenches = false
+
+[features]
+default = []
+benchmark-instrumentation = []
 
 [lib]
 crate-type = ["rlib", "staticlib"]
@@ -16,7 +21,12 @@ seyal-render = { path = "../seyal-render" }
 
 [dev-dependencies]
 seyal-exec = { path = "../seyal-exec" }
-seyal-runtime = { path = "../seyal-runtime" }
+seyal-runtime = { path = "../seyal-runtime", features = ["benchmark-instrumentation"] }
 
 [lints.rust]
 unsafe_code = "deny"
+
+[[bench]]
+name = "pass7_input_resize"
+harness = false
+required-features = ["benchmark-instrumentation"]

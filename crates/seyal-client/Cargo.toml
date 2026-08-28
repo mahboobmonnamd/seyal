@@ -30,3 +30,8 @@ unsafe_code = "deny"
 name = "pass7_input_resize"
 harness = false
 required-features = ["benchmark-instrumentation"]
+
+[[bench]]
+name = "pass7_validation_matrix"
+harness = false
+required-features = ["benchmark-instrumentation"]

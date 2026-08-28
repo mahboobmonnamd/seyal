@@ -694,16 +694,16 @@ impl LocalDisplayClient {
         }
         if completed {
             #[cfg(feature = "benchmark-instrumentation")]
-            let completed_input = self
-                .outbound
-                .front()
-                .is_some_and(|pending| matches!(pending.kind, OutboundKind::Input | OutboundKind::TerminalKey));
+            let completed_input = self.outbound.front().is_some_and(|pending| {
+                matches!(
+                    pending.kind,
+                    OutboundKind::Input | OutboundKind::TerminalKey
+                )
+            });
             self.outbound.pop_front();
             #[cfg(feature = "benchmark-instrumentation")]
             if completed_input {
-                crate::pass7_benchmark::mark_pass7_client_socket_complete(
-                    self.outbound_wire_bytes,
-                );
+                crate::pass7_benchmark::mark_pass7_client_socket_complete(self.outbound_wire_bytes);
             }
         }
         if self.input_failure == Some(InputAdmissionFailure::ClientBackpressure) {

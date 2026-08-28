@@ -9,7 +9,7 @@ AI_SDLC_DIR="${ROOT}/.sdlc/framework"
 # Reviewed/pinned developer-tool inputs. Update only through a normal Seyal PR.
 XCODEBUILD_MCP_VERSION="2.7.0"
 AI_SDLC_REPO="https://github.com/mahboobmonnamd/ai-sdlc.git"
-AI_SDLC_COMMIT="30fdbadfb16080094b42edf4e008e4ed4bef6b44"
+AI_SDLC_COMMIT="105e0cedc392a4468308d9bbfd6c273ad44924fe"
 AI_SDLC_SKILLS=(
   project-context
   development-readiness
@@ -17,6 +17,7 @@ AI_SDLC_SKILLS=(
   implementation
   code-review
   verification
+  pr-review
 )
 
 info() { printf '[seyal bootstrap] %s\n' "$*"; }
@@ -168,7 +169,7 @@ configure_copilot() {
 verify_repo_skills() {
   local required=(
     architecture-change implement-issue issue-refinement milestone-validation
-    performance-gate pr-review security-review vt-tdd project-context
+    performance-gate pr-review code-review security-review vt-tdd project-context
     development-readiness verification
     macos-native-design macos-ui-testing macos-accessibility visual-regression
     terminal-conformance metal-renderer rust-fuzzing apple-platform-docs image-to-code

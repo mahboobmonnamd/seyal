@@ -6,6 +6,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(feature = "test-fault-injection")]
+use seyal_exec::test_fault::{self, FaultPoint};
 use seyal_exec::{CommandSpec, WindowSize};
 use seyal_runtime::{
     AttachmentId, LocalIpcMode, Runtime, RuntimeConfig,
@@ -275,6 +277,64 @@ fn duplicate_resize_request_id_is_correlated_malformed_failure() {
         ResizeResult::decode(&payload).unwrap().result_code,
         ResizeResultCode::Error(seyal_runtime::local_ipc::framing::ErrorCode::MalformedPayload)
     );
+}
+
+#[cfg(feature = "test-fault-injection")]
+#[test]
+fn persistent_winsize_failure_is_bounded_before_canonical_commit() {
+    let (mut harness, execution_id) = Harness::new(CommandSpec::new("/bin/cat"));
+    harness.hello();
+    let (attached, cache) = harness.attach(execution_id, Role::Controller);
+    let initial_generation = cache.generation;
+
+    // Fail exactly the permitted attempts. The endpoint fault is injected
+    // before TerminalState::resize, so every rejected request must leave the
+    // canonical geometry and generation untouched.
+    test_fault::fail_times(FaultPoint::ResizeWinsize, 3);
+    for request_id in 1..=3 {
+        harness.send(
+            MessageType::ResizeRequest,
+            &ResizeRequest {
+                attachment_id: attached.attachment_id,
+                request_id,
+                rows: 40,
+                columns: 120,
+            }
+            .encode(),
+        );
+        let (kind, payload) = harness.frame();
+        assert_eq!(kind, MessageType::ResizeResult as u16);
+        let result = ResizeResult::decode(&payload).unwrap();
+        assert_eq!(result.request_id, request_id);
+        assert_eq!(
+            result.result_code,
+            ResizeResultCode::Error(seyal_runtime::local_ipc::framing::ErrorCode::InternalFailure)
+        );
+        assert_eq!(result.applied_generation, 0);
+    }
+    assert_eq!(test_fault::remaining(FaultPoint::ResizeWinsize), 0);
+    let execution = harness.runtime.execution(execution_id).unwrap();
+    assert_eq!(execution.terminal().damage_generation(), initial_generation);
+    assert_eq!(execution.terminal().rows(), 24);
+    assert_eq!(execution.terminal().cols(), 80);
+
+    // Recovery is explicit: once the fault epoch is cleared, a new request
+    // may apply and publish one new canonical generation.
+    harness.send(
+        MessageType::ResizeRequest,
+        &ResizeRequest {
+            attachment_id: attached.attachment_id,
+            request_id: 4,
+            rows: 40,
+            columns: 120,
+        }
+        .encode(),
+    );
+    let (kind, payload) = harness.frame();
+    assert_eq!(kind, MessageType::ResizeResult as u16);
+    let result = ResizeResult::decode(&payload).unwrap();
+    assert_eq!(result.result_code, ResizeResultCode::Applied);
+    assert_eq!(result.applied_generation, initial_generation + 1);
 }
 
 #[test]

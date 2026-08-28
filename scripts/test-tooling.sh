@@ -60,6 +60,45 @@ grep -q '.sdlc/framework/skills/verification/SKILL.md' .agents/skills/verificati
 [[ -f .sdlc/context/_meta.yaml ]] || fail "Seyal SDLC context metadata is missing"
 [[ -f .sdlc/graph/context-index.json ]] || fail "Seyal derived context index is missing"
 python3 -m json.tool .sdlc/graph/context-index.json >/dev/null || fail "Seyal context index is not valid JSON"
+python3 <<'PY' || fail "Seyal context index source fingerprints are stale"
+import hashlib
+import json
+from pathlib import Path
+
+root = Path('.')
+with (root / '.sdlc/graph/context-index.json').open(encoding='utf-8') as handle:
+    index = json.load(handle)
+
+errors = []
+for node in index.get('nodes', []):
+    node_id = node.get('id', '<unknown>')
+    for source in node.get('sources', []):
+        rel = source.get('path')
+        fingerprint = source.get('fingerprint')
+        if isinstance(fingerprint, dict):
+            expected = fingerprint.get('value')
+        else:
+            expected = fingerprint
+        if not isinstance(rel, str) or not isinstance(expected, str):
+            errors.append(f'{node_id}: malformed source fingerprint')
+            continue
+        path = root / rel
+        if not path.is_file():
+            errors.append(f'{node_id}: missing source {rel}')
+            continue
+        data = path.read_bytes()
+        header = f'blob {len(data)}\0'.encode('utf-8')
+        actual = hashlib.sha1(header + data).hexdigest()
+        if actual != expected:
+            errors.append(
+                f'{node_id}: stale source {rel}: index={expected} current={actual}'
+            )
+
+if errors:
+    for error in errors:
+        print(f'[seyal tooling test] {error}')
+    raise SystemExit(1)
+PY
 [[ ! -e scripts/project_context.py ]] || fail "generic project-context implementation must not be duplicated in Seyal"
 grep -q '^/.sdlc/framework/' .gitignore || fail "materialized AI-SDLC framework must remain untracked"
 

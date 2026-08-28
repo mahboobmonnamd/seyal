@@ -8,7 +8,7 @@ use std::{
 
 use seyal_exec::{CommandSpec, WindowSize};
 use seyal_runtime::{
-    LocalIpcMode, Runtime, RuntimeConfig,
+    AttachmentId, LocalIpcMode, Runtime, RuntimeConfig,
     display::{DecodedDisplayChunk, DisplayCache, decode_chunk, empty_cache},
     local_ipc::framing::{
         Attach, Attached, CAP_CORRELATED_RESIZE, CAP_SEMANTIC_TERMINAL_KEY, ClientHello,
@@ -274,5 +274,49 @@ fn duplicate_resize_request_id_is_correlated_malformed_failure() {
     assert_eq!(
         ResizeResult::decode(&payload).unwrap().result_code,
         ResizeResultCode::Error(seyal_runtime::local_ipc::framing::ErrorCode::MalformedPayload)
+    );
+}
+
+#[test]
+fn unauthorized_resize_cannot_poison_request_id_sequence() {
+    let (mut harness, execution_id) = Harness::new(CommandSpec::new("/bin/cat"));
+    harness.hello();
+    let (attached, _cache) = harness.attach(execution_id, Role::Controller);
+
+    // This frame is structurally valid but carries a stale attachment. Its
+    // large request ID must not advance the live connection's ordering state.
+    harness.send(
+        MessageType::ResizeRequest,
+        &ResizeRequest {
+            attachment_id: AttachmentId::from_bytes(999u128.to_le_bytes()),
+            request_id: 99,
+            rows: 30,
+            columns: 100,
+        }
+        .encode(),
+    );
+    let (kind, payload) = harness.frame();
+    assert_eq!(kind, MessageType::ResizeResult as u16);
+    assert_eq!(
+        ResizeResult::decode(&payload).unwrap().result_code,
+        ResizeResultCode::Error(seyal_runtime::local_ipc::framing::ErrorCode::StaleIdentity)
+    );
+
+    // The first valid request ID remains usable after the rejected request.
+    harness.send(
+        MessageType::ResizeRequest,
+        &ResizeRequest {
+            attachment_id: attached.attachment_id,
+            request_id: 1,
+            rows: 30,
+            columns: 100,
+        }
+        .encode(),
+    );
+    let (kind, payload) = harness.frame();
+    assert_eq!(kind, MessageType::ResizeResult as u16);
+    assert_eq!(
+        ResizeResult::decode(&payload).unwrap().result_code,
+        ResizeResultCode::Applied
     );
 }

@@ -919,28 +919,6 @@ impl Runtime {
         #[cfg(feature = "benchmark-instrumentation")]
         crate::pass7_benchmark::mark_pass7_resize_receipt();
 
-        let monotonic = self.local_ipc.as_mut().is_some_and(|state| {
-            let Some(meta) = state.connections.get_mut(&token) else {
-                return false;
-            };
-            if request.request_id <= meta.last_resize_request_id {
-                false
-            } else {
-                meta.last_resize_request_id = request.request_id;
-                true
-            }
-        });
-        if !monotonic {
-            self.send_resize_result(
-                token,
-                request.attachment_id,
-                request.request_id,
-                ResizeResultCode::Error(ErrorCode::MalformedPayload),
-                0,
-            );
-            return;
-        }
-
         let execution_id = match self.local_ipc.as_ref().map(|state| {
             state
                 .attachments
@@ -968,6 +946,32 @@ impl Runtime {
                 return;
             }
         };
+
+        // Request ordering is connection bookkeeping, not an authorization
+        // boundary. Validate the attachment/controller first so an
+        // unauthorized or stale request cannot poison the request-ID sequence
+        // for a later valid attachment on this connection.
+        let monotonic = self.local_ipc.as_mut().is_some_and(|state| {
+            let Some(meta) = state.connections.get_mut(&token) else {
+                return false;
+            };
+            if request.request_id <= meta.last_resize_request_id {
+                false
+            } else {
+                meta.last_resize_request_id = request.request_id;
+                true
+            }
+        });
+        if !monotonic {
+            self.send_resize_result(
+                token,
+                request.attachment_id,
+                request.request_id,
+                ResizeResultCode::Error(ErrorCode::MalformedPayload),
+                0,
+            );
+            return;
+        }
 
         let Ok(size) = WindowSize::cells(request.columns, request.rows) else {
             self.send_resize_result(

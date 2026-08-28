@@ -1427,6 +1427,48 @@ mod tests {
     }
 
     #[test]
+    fn applied_fence_is_pending_until_authoritative_generation_catches_up() {
+        let desired = geometry(30, 100);
+        let committed = geometry(24, 80);
+        let fence = AppliedFence {
+            request_id: 4,
+            geometry: desired,
+            applied_generation: 12,
+        };
+
+        // A successful result is still pending projection, so reconciliation
+        // must not admit another request for the same target.
+        assert!(!resize_needs_mutation(
+            desired,
+            committed,
+            Some(fence.geometry)
+        ));
+        assert_eq!(
+            newest_pending_geometry(&VecDeque::new(), Some(fence)),
+            Some(desired)
+        );
+    }
+
+    #[test]
+    fn newer_unresolved_resize_remains_authoritative_over_older_applied_fence() {
+        let older = AppliedFence {
+            request_id: 4,
+            geometry: geometry(30, 100),
+            applied_generation: 12,
+        };
+        let newer = ResizeRecord {
+            request_id: 5,
+            geometry: geometry(40, 120),
+            phase: ResizePhase::SentWaitingResult,
+        };
+
+        assert_eq!(
+            newest_pending_geometry(&VecDeque::from([newer]), Some(older)),
+            Some(geometry(40, 120))
+        );
+    }
+
+    #[test]
     fn invalid_terminal_key_requests_fail_before_wire_encoding() {
         assert!(!valid_terminal_key_request(
             TerminalKeyKind::ControlAscii,

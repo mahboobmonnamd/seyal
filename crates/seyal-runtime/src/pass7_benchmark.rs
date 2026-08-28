@@ -19,6 +19,7 @@ static RESIZE_RECEIPT_NS: AtomicU64 = AtomicU64::new(0);
 static RESIZE_COMMIT_NS: AtomicU64 = AtomicU64::new(0);
 static INPUT_ADMISSION_COUNT: AtomicU64 = AtomicU64::new(0);
 static PTY_WRITE_COUNT: AtomicU64 = AtomicU64::new(0);
+static PTY_WRITE_BYTES: AtomicU64 = AtomicU64::new(0);
 static RESIZE_RECEIPT_COUNT: AtomicU64 = AtomicU64::new(0);
 static RESIZE_COMMIT_COUNT: AtomicU64 = AtomicU64::new(0);
 static RUNTIME_QUEUE_HIGH_WATER: AtomicUsize = AtomicUsize::new(0);
@@ -31,6 +32,7 @@ pub struct Pass7RuntimeBenchmarkMarks {
     pub resize_commit_ns: u64,
     pub input_admission_count: u64,
     pub pty_write_count: u64,
+    pub pty_write_bytes: u64,
     pub resize_receipt_count: u64,
     pub resize_commit_count: u64,
     pub runtime_queue_high_water_bytes: usize,
@@ -48,6 +50,7 @@ pub fn reset_pass7_runtime_benchmark_marks() {
     RESIZE_COMMIT_NS.store(0, Ordering::SeqCst);
     INPUT_ADMISSION_COUNT.store(0, Ordering::SeqCst);
     PTY_WRITE_COUNT.store(0, Ordering::SeqCst);
+    PTY_WRITE_BYTES.store(0, Ordering::SeqCst);
     RESIZE_RECEIPT_COUNT.store(0, Ordering::SeqCst);
     RESIZE_COMMIT_COUNT.store(0, Ordering::SeqCst);
     RUNTIME_QUEUE_HIGH_WATER.store(0, Ordering::SeqCst);
@@ -61,6 +64,7 @@ pub fn pass7_runtime_benchmark_marks() -> Pass7RuntimeBenchmarkMarks {
         resize_commit_ns: RESIZE_COMMIT_NS.load(Ordering::SeqCst),
         input_admission_count: INPUT_ADMISSION_COUNT.load(Ordering::SeqCst),
         pty_write_count: PTY_WRITE_COUNT.load(Ordering::SeqCst),
+        pty_write_bytes: PTY_WRITE_BYTES.load(Ordering::SeqCst),
         resize_receipt_count: RESIZE_RECEIPT_COUNT.load(Ordering::SeqCst),
         resize_commit_count: RESIZE_COMMIT_COUNT.load(Ordering::SeqCst),
         runtime_queue_high_water_bytes: RUNTIME_QUEUE_HIGH_WATER.load(Ordering::SeqCst),
@@ -73,9 +77,10 @@ pub(crate) fn mark_pass7_input_admission(queue_bytes: usize) {
     INPUT_ADMISSION_COUNT.fetch_add(1, Ordering::SeqCst);
 }
 
-pub(crate) fn mark_pass7_pty_write() {
+pub(crate) fn mark_pass7_pty_write(bytes: usize) {
     PTY_WRITE_NS.store(pass7_benchmark_now_ns(), Ordering::SeqCst);
     PTY_WRITE_COUNT.fetch_add(1, Ordering::SeqCst);
+    PTY_WRITE_BYTES.fetch_add(u64::try_from(bytes).unwrap_or(u64::MAX), Ordering::SeqCst);
 }
 
 pub(crate) fn mark_pass7_resize_receipt() {
@@ -100,12 +105,14 @@ mod tests {
     fn benchmark_marks_are_metadata_only_and_resettable() {
         reset_pass7_runtime_benchmark_marks();
         mark_pass7_input_admission(17);
-        mark_pass7_pty_write();
+        mark_pass7_pty_write(5);
+        mark_pass7_pty_write(7);
         mark_pass7_resize_receipt();
         mark_pass7_resize_commit();
         let marks = pass7_runtime_benchmark_marks();
         assert_eq!(marks.input_admission_count, 1);
-        assert_eq!(marks.pty_write_count, 1);
+        assert_eq!(marks.pty_write_count, 2);
+        assert_eq!(marks.pty_write_bytes, 12);
         assert_eq!(marks.resize_receipt_count, 1);
         assert_eq!(marks.resize_commit_count, 1);
         assert_eq!(marks.runtime_queue_high_water_bytes, 17);

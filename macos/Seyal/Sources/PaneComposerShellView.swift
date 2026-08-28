@@ -149,13 +149,12 @@ final class PaneComposerShellView: NSView, NSTextViewDelegate {
         onDraftChange?(editor.string)
     }
 
-    func doCommand(by selector: Selector) -> Bool {
+    func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         guard selector == #selector(NSResponder.insertNewline(_:)),
-              let editor,
               let event = NSApp.currentEvent,
               !event.modifierFlags.contains(.shift)
         else { return false }
-        let command = editor.string.trimmingCharacters(in: .whitespacesAndNewlines)
+        let command = textView.string.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !command.isEmpty else { return true }
         onSubmit?(command)
         return true

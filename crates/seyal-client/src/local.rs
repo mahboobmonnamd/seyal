@@ -22,9 +22,9 @@ use seyal_runtime::{
         framing::{
             Attach, Attached, CAP_BINARY_DISPLAY, CAP_CORRELATED_RESIZE, CAP_SEMANTIC_TERMINAL_KEY,
             ClientHello, ErrorCode, ErrorMessage, ExecutionList, FrameHeader, HEADER_LEN, InputRef,
-            Lifecycle, MAX_FRAME_PAYLOAD, MAX_INPUT_BYTES, MessageType, ResizeRequest, ResizeResult,
-            ResizeResultCode, Resync, Role, ServerHello, TerminalKey, TerminalKeyKind,
-            TerminalKeyModifiers, encode_frame,
+            Lifecycle, MAX_FRAME_PAYLOAD, MAX_INPUT_BYTES, MessageType, ResizeRequest,
+            ResizeResult, ResizeResultCode, Resync, Role, ServerHello, TerminalKey,
+            TerminalKeyKind, TerminalKeyModifiers, encode_frame,
         },
     },
 };
@@ -720,7 +720,7 @@ impl LocalDisplayClient {
                         }
                     }
                     MessageType::ResizeResult => {
-                        let payload = &frame[HEADER_LEN..frame_end];
+                        let payload = &frame[HEADER_LEN..];
                         let result = ResizeResult::decode(payload).map_err(|_| {
                             self.resize_failure = Some(ResizeFailure::Protocol);
                             ClientError::ResizeProtocolFailure
@@ -728,7 +728,7 @@ impl LocalDisplayClient {
                         self.accept_resize_result(result)?;
                     }
                     MessageType::Error => {
-                        let payload = &frame[HEADER_LEN..frame_end];
+                        let payload = &frame[HEADER_LEN..];
                         let error =
                             ErrorMessage::decode(payload).map_err(|_| ClientError::Protocol)?;
                         return Err(ClientError::Server(error.error_code));
@@ -960,10 +960,8 @@ impl LocalDisplayClient {
             return Ok(());
         }
 
-        let newest_pending = newest_pending_geometry(
-            &self.unresolved_resizes,
-            self.applied_awaiting_projection,
-        );
+        let newest_pending =
+            newest_pending_geometry(&self.unresolved_resizes, self.applied_awaiting_projection);
         if !resize_needs_mutation(desired, self.committed_geometry, newest_pending) {
             return Ok(());
         }

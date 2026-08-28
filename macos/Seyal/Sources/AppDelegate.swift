@@ -77,13 +77,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.contentView = surface
             window.makeFirstResponder(surface)
         }
-#else
-        window.title = "Seyal"
-        let surface = InteractiveMetalSurfaceView(frame: contentRect)
-        window.contentView = surface
-        window.makeFirstResponder(surface)
-#endif
-
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)

@@ -797,9 +797,9 @@ final class SeyalShellView: NSView {
         return button
     }
 
-    /// Each Pane owns one normal transcript scroll surface. The preview deliberately
-    /// contains no fabricated command/output. The permanent Metal host is visible,
-    /// but no TerminalExecution or display state is attached before Pass 6.
+    /// Each Pane owns one normal transcript scroll surface. The shell owns layout
+    /// and pane presentation; the embedded interactive Metal surface owns native
+    /// input, resize, and the Rust display bridge.
     private func makeTranscript(paneID: String) -> NSScrollView {
         let scroll = NSScrollView()
         scroll.drawsBackground = false
@@ -818,22 +818,6 @@ final class SeyalShellView: NSView {
         host.translatesAutoresizingMaskIntoConstraints = false
         document.addSubview(host)
 
-        let title = NSTextField(labelWithString: "No TerminalExecution attached")
-        title.font = SeyalDesignTokens.Typography.bodyEmphasized
-        title.textColor = SeyalDesignTokens.Palette.textSecondary
-        title.alignment = .center
-
-        let detail = NSTextField(labelWithString: "UI preview only · terminal authority remains unwired until Pass 6")
-        detail.font = SeyalDesignTokens.Typography.metadata
-        detail.textColor = SeyalDesignTokens.Palette.textTertiary
-        detail.alignment = .center
-
-        let empty = NSStackView(views: [title, detail])
-        empty.orientation = .vertical
-        empty.alignment = .centerX
-        empty.spacing = 4
-        empty.translatesAutoresizingMaskIntoConstraints = false
-        document.addSubview(empty)
         scroll.documentView = document
 
         NSLayoutConstraint.activate([
@@ -841,8 +825,6 @@ final class SeyalShellView: NSView {
             host.trailingAnchor.constraint(equalTo: document.trailingAnchor),
             host.topAnchor.constraint(equalTo: document.topAnchor),
             host.bottomAnchor.constraint(equalTo: document.bottomAnchor),
-            empty.centerXAnchor.constraint(equalTo: document.centerXAnchor),
-            empty.centerYAnchor.constraint(equalTo: document.centerYAnchor),
             document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
             document.heightAnchor.constraint(greaterThanOrEqualTo: scroll.contentView.heightAnchor),
         ])

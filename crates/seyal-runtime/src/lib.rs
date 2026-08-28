@@ -28,6 +28,6 @@ pub mod test_fault;
 
 pub use capability::{CapabilityPolicy, m001_term_name};
 pub use error::RuntimeError;
-pub use ids::{AttachmentId, ExecutionId, ProjectionId, RuntimeId, WorkspaceId};
+pub use ids::{AttachmentId, BlockId, ExecutionId, ProjectionId, RuntimeId, WorkspaceId};
 pub use input::InputIngress;
 pub use runtime::{ExecutionLifecycle, ExecutionSummary, LocalIpcMode, Runtime, RuntimeConfig};

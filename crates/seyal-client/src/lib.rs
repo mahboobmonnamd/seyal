@@ -13,6 +13,9 @@ extern crate seyal_protocol as seyal_runtime;
 
 #[cfg(target_os = "macos")]
 mod local;
+#[cfg(all(target_os = "macos", feature = "benchmark-instrumentation"))]
+#[doc(hidden)]
+pub mod pass7_benchmark;
 
 #[cfg(target_os = "macos")]
 pub use local::{

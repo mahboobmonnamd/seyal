@@ -11,8 +11,10 @@ This is **reference-consumer integration evidence**, not the model/evaluation be
 Seyal consumes AI-SDLC `main` at exact commit:
 
 ```text
-30fdbadfb16080094b42edf4e008e4ed4bef6b44
+105e0cedc392a4468308d9bbfd6c273ad44924fe
 ```
+
+This is the merge commit for AI-SDLC PR #9, which adds the generic `pr-review` merge-readiness orchestrator while retaining focused `code-review` and criterion-level `verification` as separate reusable capabilities.
 
 The pin is developer tooling only and is materialized by `make bootstrap-agents` under ignored `.sdlc/framework/`. Product build/test/runtime paths do not depend on it.
 
@@ -24,27 +26,29 @@ The pin is developer tooling only and is materialized by `make bootstrap-agents`
 | `development-readiness` | AI-SDLC `development-readiness` | `ISSUE-PROTOCOL.md` Ready checklist and architecture triggers |
 | `issue-refinement` | AI-SDLC `work-item-design` | GitHub Issue fields, milestone frontier, terminal evidence classification |
 | `implement-issue` | AI-SDLC `implementation` | one Issue/worktree/branch/PR, `make check`, docs/domain gates |
-| `pr-review` | AI-SDLC `code-review` | terminal ownership/hot-path and specialist evidence checks |
-| `verification` | AI-SDLC `verification` | Seyal Issue evidence and repository/domain gates |
+| `code-review` | AI-SDLC `code-review` | focused terminal architecture/hot-path implementation review |
+| `verification` | AI-SDLC `verification` | Seyal Issue criterion/evidence and repository/domain gates |
+| `pr-review` | AI-SDLC `pr-review` | final terminal architecture, exact-head, performance/security/evidence and Issue-state merge gates |
 | `milestone-validation` | AI-SDLC `verification` | aggregate milestone criteria and milestone sequencing |
 
-Seyal intentionally does not add separate local `work-item-design`, `implementation`, or `code-review` aliases because the existing Seyal facades are the project discovery surface for those activities.
+`code-review` and `pr-review` are intentionally separate. `code-review` answers the narrow implementation/diff question and returns an implementation-review handoff such as `APPROVE_FOR_VERIFICATION`; `pr-review` answers whether the exact merge candidate is genuinely ready to merge and orchestrates or consumes code review, verification and risk-based specialist evidence.
+
+Seyal intentionally does not add separate local `work-item-design` or `implementation` aliases because the existing Seyal facades remain the project discovery surface for those activities.
 
 ## Reference scenario 1 — work-item design and readiness
 
-Issue #58 is the reference work item:
+The reference-consumer pattern begins with a bounded developer-tooling work item:
 
-- accepted outcome: consume the merged AI-SDLC core-loop skills;
-- explicit non-goal: no terminal/runtime production behavior changes;
-- dependency: AI-SDLC project-context/core-loop and Seyal project-context integration already merged;
-- ownership boundary: developer tooling, agent skills/adapters, `.sdlc` metadata, and engineering documentation;
-- measurable acceptance: generic procedure is not duplicated, adapters stay thin, pin is deterministic, tooling checks stay green.
+- accepted outcome is explicit;
+- runtime/product behavior is an explicit non-goal unless the owning Issue says otherwise;
+- dependencies and ownership boundaries are known;
+- acceptance is measurable through deterministic pin/discovery/integration evidence.
 
-`issue-refinement` delegates the generic work-item structure to AI-SDLC `work-item-design`; `development-readiness` then adds the Seyal Ready checklist. Missing architecture or a proposal to change Rust/Swift/runtime behavior would route out of this work item instead of being absorbed silently.
+`issue-refinement` delegates generic work-item structure to AI-SDLC `work-item-design`; `development-readiness` then adds the Seyal Ready checklist. Missing architecture or an unexpected proposal to change terminal/runtime behavior routes out of the tooling work item instead of being absorbed silently.
 
 ## Reference scenario 2 — implementation handoff
 
-The Issue #58 implementation is constrained to developer-workflow surfaces:
+A framework-integration Issue is constrained to developer-workflow surfaces such as:
 
 ```text
 scripts/bootstrap-dev.sh
@@ -57,35 +61,51 @@ docs/engineering/*
 
 The generic AI-SDLC implementation procedure supplies scope/evidence/stop semantics. `implement-issue` adds Seyal's repository workflow and required checks.
 
-A correct implementation handoff is `IMPLEMENTED_FOR_REVIEW`, not `VERIFIED`. Any discovered need to change terminal/runtime code, architecture ownership, or product behavior is a scope/authority conflict and must stop this Issue.
+A correct implementation handoff is `IMPLEMENTED_FOR_REVIEW`, not `VERIFIED` or `READY_TO_MERGE`. Any discovered need to change terminal/runtime code, architecture ownership, or product behavior is a scope/authority conflict and must stop the tooling Issue.
 
-## Reference scenario 3 — code review
+## Reference scenario 3 — focused code review
 
-`pr-review` delegates generic review discipline to AI-SDLC `code-review` and adds Seyal-specific blocking checks. For this integration, review must reject at least these classes of defect:
+`code-review` delegates focused implementation-review discipline to AI-SDLC `code-review` and adds Seyal-specific blocking checks. It must reject at least these classes of defect when applicable:
 
-- a production Rust/Swift/PTY/VT/renderer/runtime change hidden in the tooling Issue;
+- production Rust/Swift/PTY/VT/renderer/runtime changes hidden in a tooling Issue;
 - a copied generic SDLC procedure that creates a second authoritative workflow;
 - a bootstrap pin that does not match `.sdlc` metadata/index;
 - missing generic skill files at the pinned revision;
-- duplicate discovery aliases that compete with established Seyal facades;
+- incorrect facade mapping;
 - weakened tooling checks that allow drift silently.
 
-A clean review is only `APPROVE_FOR_VERIFICATION`.
+A clean focused review is only `APPROVE_FOR_VERIFICATION`; it is not a final merge verdict.
 
 ## Reference scenario 4 — verification
 
-`verification` applies the AI-SDLC criterion/evidence contract to Issue #58. The repository supplies deterministic evidence for the integration contract:
+`verification` applies the AI-SDLC criterion/evidence contract to the owning Issue. Repository evidence for this integration includes:
 
 - `scripts/test-tooling.sh` checks the exact full-SHA framework pin;
-- all six generic AI-SDLC skills are declared and verified by bootstrap;
-- the project-context tool and derived index validation remain required;
-- `issue-refinement`, `implement-issue`, `pr-review`, and `milestone-validation` point to their generic AI-SDLC authorities;
-- direct `development-readiness` and `verification` adapters exist for `.agents` and Claude discovery;
-- `.sdlc/context/_meta.yaml` and `.sdlc/graph/context-index.json` must match the bootstrap pin;
-- the generic project-context implementation is not duplicated in Seyal;
+- all required generic AI-SDLC skills are declared and verified by bootstrap;
+- the project-context tool and derived-index validation remain required;
+- `issue-refinement`, `implement-issue`, `code-review`, `pr-review`, and `milestone-validation` point to their intended generic AI-SDLC authorities;
+- direct `project-context`, `development-readiness`, `code-review`, and `verification` adapters exist for `.agents` and Claude discovery;
+- `.sdlc/context/_meta.yaml` and `.sdlc/graph/context-index.json` match the bootstrap pin;
+- generic procedures are not duplicated in Seyal;
 - normal product build/test/runtime commands remain independent of AI-SDLC.
 
-The final Issue verdict still depends on normal Seyal PR CI/review evidence. This document does not convert structural integration into a self-approved completion claim.
+A passing verification proves the mapped acceptance criteria represented by that evidence; it still does not by itself issue the final exact-head merge-readiness verdict.
+
+## Reference scenario 5 — final PR review
+
+`pr-review` delegates the generic merge-readiness orchestration to AI-SDLC `pr-review` and adds Seyal's terminal/domain gates.
+
+The facade must ensure or consume:
+
+1. focused `code-review` for non-trivial production changes;
+2. criterion-level `verification` for every mandatory acceptance gate;
+3. only the specialist reviews required by the Issue/spec/risk profile;
+4. exact-head CI/check freshness;
+5. truthful benchmark/resource boundaries and exact-revision evidence where required;
+6. accurate PR/Issue/docs claims and post-merge Issue state;
+7. a final re-resolution of the PR head before `READY_TO_MERGE`.
+
+Green CI is evidence, not proof of unrepresented behavior. Hosted-environment limitations must be classified explicitly and cannot become a pass unless project-authorized alternate evidence proves the criterion on the applicable exact revision.
 
 ## What this evidence does not prove
 

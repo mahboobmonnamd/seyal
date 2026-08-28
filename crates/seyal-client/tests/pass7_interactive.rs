@@ -73,8 +73,12 @@ impl RuntimeHarness {
     }
 
     fn connect_controller(&self) -> LocalDisplayClient {
-        LocalDisplayClient::connect_execution(&self.socket_path, self.execution_id, Role::Controller)
-            .expect("controller attach")
+        LocalDisplayClient::connect_execution(
+            &self.socket_path,
+            self.execution_id,
+            Role::Controller,
+        )
+        .expect("controller attach")
     }
 
     fn connect_observer(&self) -> LocalDisplayClient {
@@ -103,7 +107,10 @@ fn pump_until(client: &mut LocalDisplayClient, predicate: impl Fn(&LocalDisplayC
         if predicate(client) {
             return;
         }
-        assert!(Instant::now() < deadline, "Pass 7 client condition timed out");
+        assert!(
+            Instant::now() < deadline,
+            "Pass 7 client condition timed out"
+        );
         match client.poll_prepare() {
             Ok(_) => {}
             Err(error) => panic!("Pass 7 client failed: {error:?}"),

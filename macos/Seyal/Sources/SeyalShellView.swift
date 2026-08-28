@@ -46,6 +46,7 @@ final class SeyalShellView: NSView {
     private var paneContainers: [String: NSView] = [:]
     private var composerViews: [String: PaneComposerShellView] = [:]
     private var tuiBlocks: [String: BlockView] = [:]
+    private var terminalSurfaces: [String: InteractiveMetalSurfaceView] = [:]
     private var tuiPaneIDs: Set<String> = []
     private var paneFocusLabels: [String: NSTextField] = [:]
     private var isLeftContextVisible = true
@@ -85,6 +86,7 @@ final class SeyalShellView: NSView {
         composerViews.removeAll()
         paneFocusLabels.removeAll()
         tuiBlocks.removeAll()
+        terminalSurfaces.removeAll()
         tuiPaneIDs.removeAll()
         subviews.forEach { $0.removeFromSuperview() }
         buildUI()
@@ -756,6 +758,9 @@ final class SeyalShellView: NSView {
             },
             onDraftChange: { [weak self] draft in
                 self?.state.updateDraft(draft, paneID: paneID)
+            },
+            onSubmit: { [weak self] command in
+                self?.submitComposerCommand(command, paneID: paneID) ?? false
             }
         )
         composerViews[paneID] = composer
@@ -786,6 +791,17 @@ final class SeyalShellView: NSView {
             composer.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
         ])
         return pane
+    }
+
+    /// Composer commands are committed to the same bridge-backed execution
+    /// represented by the pane's Block. The newline is part of the user action;
+    /// it is not synthesized by the renderer or by a second shell process.
+    private func submitComposerCommand(_ command: String, paneID: String) -> Bool {
+        guard !tuiPaneIDs.contains(paneID),
+              let surface = terminalSurfaces[paneID]
+        else { return false }
+
+        return surface.terminalSubmitCommittedText(command + "\n") == 0
     }
 
     private func setPaneTUI(paneID: String, active: Bool) {
@@ -849,6 +865,7 @@ final class SeyalShellView: NSView {
                 self?.setPaneTUI(paneID: paneID, active: active)
             }
             surface.heightAnchor.constraint(greaterThanOrEqualToConstant: 360).isActive = true
+            terminalSurfaces[paneID] = surface
 
             let blockID = "block-\(surface.terminalExecutionIdentity ?? "pending")"
             let block = BlockView(

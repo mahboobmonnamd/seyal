@@ -62,6 +62,33 @@ final class SeyalShellComponentTests: XCTestCase {
     }
 
     @MainActor
+    func testComposerReturnSubmitsCommandAndClearsAcceptedDraft() {
+        var submitted: String?
+        var draftChanges: [String] = []
+        let composer = PaneComposerShellView(
+            mode: .available,
+            draft: "",
+            onDraftChange: { draftChanges.append($0) },
+            onSubmit: { command in
+                submitted = command
+                return true
+            }
+        )
+        let editor = NSTextView(frame: .zero)
+        editor.string = "printf hello"
+
+        XCTAssertTrue(
+            composer.textView(
+                editor,
+                doCommandBy: #selector(NSStandardKeyBindingResponding.insertNewline(_:))
+            )
+        )
+        XCTAssertEqual(submitted, "printf hello")
+        XCTAssertEqual(editor.string, "")
+        XCTAssertEqual(draftChanges, [""])
+    }
+
+    @MainActor
     func testShellHasExactlyOneVerticalTranscriptScrollOwnerInitially() {
         let shell = SeyalShellPreviewFactory.make(
             frame: NSRect(x: 0, y: 0, width: 1280, height: 800)

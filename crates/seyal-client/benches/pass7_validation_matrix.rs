@@ -16,14 +16,13 @@ use seyal_client::{ClientError, GridGeometry, LocalDisplayClient};
 #[cfg(target_os = "macos")]
 use seyal_exec::{CommandSpec, WindowSize};
 #[cfg(target_os = "macos")]
-use seyal_runtime::{ExecutionId, LocalIpcMode, Runtime, RuntimeConfig};
-#[cfg(target_os = "macos")]
 use seyal_runtime::local_ipc::framing::{Role, TerminalKeyKind};
 #[cfg(target_os = "macos")]
 use seyal_runtime::pass7_benchmark::{
-    pass7_benchmark_now_ns, pass7_runtime_benchmark_marks,
-    reset_pass7_runtime_benchmark_marks,
+    pass7_benchmark_now_ns, pass7_runtime_benchmark_marks, reset_pass7_runtime_benchmark_marks,
 };
+#[cfg(target_os = "macos")]
+use seyal_runtime::{ExecutionId, LocalIpcMode, Runtime, RuntimeConfig};
 
 const PERFORMANCE_CLAIM: &str = "performance_claim=false";
 #[cfg(target_os = "macos")]
@@ -39,9 +38,7 @@ fn main() {
     let _contract_clock = Instant::now();
 
     #[cfg(not(target_os = "macos"))]
-    println!(
-        "pass7_validation_matrix PLATFORM_LIMITED target_os!=macos {PERFORMANCE_CLAIM}"
-    );
+    println!("pass7_validation_matrix PLATFORM_LIMITED target_os!=macos {PERFORMANCE_CLAIM}");
 
     #[cfg(target_os = "macos")]
     run_macos();
@@ -93,7 +90,10 @@ impl RuntimeHarness {
 
             let mut runtime = Runtime::new(config).expect("Runtime");
             let execution_id = runtime
-                .create_execution(command, WindowSize::cells(80, 24).expect("initial geometry"))
+                .create_execution(
+                    command,
+                    WindowSize::cells(80, 24).expect("initial geometry"),
+                )
                 .expect("execution");
             let socket_path = runtime
                 .local_ipc_socket_path()
@@ -195,7 +195,10 @@ fn measure_commit_size(label: &str, bytes: usize) {
         wait_for_pty_bytes(&mut client, expected);
         let marks = pass7_runtime_benchmark_marks();
         assert_eq!(marks.input_admission_count, 1, "one Input frame per commit");
-        assert_eq!(marks.pty_write_bytes, expected, "complete commit reached PTY");
+        assert_eq!(
+            marks.pty_write_bytes, expected,
+            "complete commit reached PTY"
+        );
         assert!(marks.pty_write_ns >= start_ns);
         samples.push_ns(marks.pty_write_ns - start_ns);
         max_client_queue = max_client_queue.max(client.outbound_wire_bytes());
@@ -312,7 +315,10 @@ fn measure_input_under_output() {
             observed_output_progress = true;
         }
     }
-    assert!(observed_output_progress, "sustained output path was not observed");
+    assert!(
+        observed_output_progress,
+        "sustained output path was not observed"
+    );
 
     let stats = samples.stats();
     println!(
@@ -394,7 +400,10 @@ fn wait_until(client: &mut LocalDisplayClient, predicate: impl Fn(&LocalDisplayC
             client.flush_control_write().expect("client writable flush");
         }
         let _ = client.poll_prepare();
-        assert!(Instant::now() < deadline, "Pass 7 matrix condition timed out");
+        assert!(
+            Instant::now() < deadline,
+            "Pass 7 matrix condition timed out"
+        );
         thread::yield_now();
     }
 }
@@ -410,18 +419,15 @@ fn settle(client: &mut LocalDisplayClient) {
         if !client.wants_write() {
             return;
         }
-        assert!(Instant::now() < deadline, "Pass 7 matrix client did not settle");
+        assert!(
+            Instant::now() < deadline,
+            "Pass 7 matrix client did not settle"
+        );
     }
 }
 
 #[cfg(target_os = "macos")]
-fn print_case(
-    label: &str,
-    bytes: usize,
-    stats: Stats,
-    client_queue: usize,
-    runtime_queue: usize,
-) {
+fn print_case(label: &str, bytes: usize, stats: Stats, client_queue: usize, runtime_queue: usize) {
     println!(
         "pass7_matrix case={} classification=MEASURED sample_count={} committed_bytes={} p50_us={:.3} p95_us={:.3} p99_us={:.3} max_us={:.3} client_queue_high_water_bytes={} runtime_queue_high_water_bytes={} final_pty_completion=true {PERFORMANCE_CLAIM}",
         label,

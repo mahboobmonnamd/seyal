@@ -50,6 +50,7 @@ case "$cmd" in
     python3 scripts/check-benchmark-contract.py
     python3 scripts/check-pass5-benchmark-coverage.py --self-test
     python3 scripts/check-pass7-benchmark-coverage.py --self-test
+    python3 scripts/check-pass7-validation-matrix.py --self-test
     bash scripts/test-tooling.sh
     python3 scripts/test-workspace.py
     python3 scripts/test-harnesses.py
@@ -92,6 +93,17 @@ case "$cmd" in
         rm -f "$pass7_log"
         trap - EXIT
 
+        # The Pass 7 matrix separately proves full-action PTY completion for
+        # large commits and burst/contention/alternate-screen workload classes.
+        # It keeps still-unmeasured failure/AppKit boundaries explicitly
+        # NOT_CLAIMED instead of allowing partial evidence to masquerade as DoD.
+        pass7_matrix_log="$(mktemp -t seyal-pass7-matrix.XXXXXX)"
+        trap 'rm -f "$pass7_matrix_log"' EXIT
+        cargo_pinned bench -p seyal-client --bench pass7_validation_matrix --features benchmark-instrumentation --locked 2>&1 | tee "$pass7_matrix_log"
+        python3 scripts/check-pass7-validation-matrix.py "$pass7_matrix_log"
+        rm -f "$pass7_matrix_log"
+        trap - EXIT
+
         # Pass 5 ends at the committed client display cache. Measure the distinct
         # Pass-6 native boundary separately in a Release app and label GPU
         # completion as a presentation proxy rather than claiming display scanout.
@@ -103,6 +115,7 @@ case "$cmd" in
         echo "[seyal Pass-5 benchmark coverage] measured Candidate-D validation skipped: production benchmark is macOS-only; validator self-test is enforced by make check."
         echo "[seyal Pass-6 renderer benchmark] native Metal measurement skipped: macOS-only."
         echo "[seyal Pass-7 input/resize benchmark] native measurement skipped: macOS-only."
+        echo "[seyal Pass-7 validation matrix] native measurement skipped: macOS-only."
       fi
     else
       echo "[seyal task] bench: harness metadata recorder passed; no production benchmark target exists yet and no performance result is claimed."

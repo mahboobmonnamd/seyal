@@ -14,8 +14,7 @@ use std::{
 
 #[cfg(target_os = "macos")]
 use seyal_client::pass7_benchmark::{
-    pass7_client_benchmark_marks, pass7_client_benchmark_now_ns,
-    reset_pass7_client_benchmark_marks,
+    pass7_client_benchmark_marks, pass7_client_benchmark_now_ns, reset_pass7_client_benchmark_marks,
 };
 #[cfg(target_os = "macos")]
 use seyal_client::{GridGeometry, LocalDisplayClient};
@@ -25,8 +24,7 @@ use seyal_exec::{CommandSpec, WindowSize};
 use seyal_runtime::local_ipc::framing::Role;
 #[cfg(target_os = "macos")]
 use seyal_runtime::pass7_benchmark::{
-    pass7_benchmark_now_ns, pass7_runtime_benchmark_marks,
-    reset_pass7_runtime_benchmark_marks,
+    pass7_benchmark_now_ns, pass7_runtime_benchmark_marks, reset_pass7_runtime_benchmark_marks,
 };
 #[cfg(target_os = "macos")]
 use seyal_runtime::{ExecutionId, LocalIpcMode, Runtime, RuntimeConfig};
@@ -44,9 +42,7 @@ fn main() {
     let _contract_clock = Instant::now();
 
     #[cfg(not(target_os = "macos"))]
-    println!(
-        "pass7_input_resize PLATFORM_LIMITED target_os!=macos {PERFORMANCE_CLAIM}"
-    );
+    println!("pass7_input_resize PLATFORM_LIMITED target_os!=macos {PERFORMANCE_CLAIM}");
 
     #[cfg(target_os = "macos")]
     run_macos();
@@ -174,8 +170,12 @@ impl RuntimeHarness {
     }
 
     fn connect_controller(&self) -> LocalDisplayClient {
-        LocalDisplayClient::connect_execution(&self.socket_path, self.execution_id, Role::Controller)
-            .expect("controller attach")
+        LocalDisplayClient::connect_execution(
+            &self.socket_path,
+            self.execution_id,
+            Role::Controller,
+        )
+        .expect("controller attach")
     }
 
     fn finish(self) {
@@ -265,7 +265,10 @@ fn measure_input_boundaries() {
     let native_pty_stats = native_to_pty.stats_us();
     let measured = process_metrics();
 
-    print_stats("controlled_native_callback_to_client_admission", native_client_stats);
+    print_stats(
+        "controlled_native_callback_to_client_admission",
+        native_client_stats,
+    );
     print_stats("client_admission_to_socket_complete", client_socket_stats);
     print_stats("runtime_frame_admission_to_pty_write", runtime_pty_stats);
     print_stats("controlled_native_callback_to_pty_write", native_pty_stats);
@@ -323,7 +326,10 @@ fn run_input_sample(
     }
     let client_marks = pass7_client_benchmark_marks();
     let runtime_marks = pass7_runtime_benchmark_marks();
-    assert_eq!(client_marks.admission_count, 1, "one client admission per sample");
+    assert_eq!(
+        client_marks.admission_count, 1,
+        "one client admission per sample"
+    );
     assert_eq!(
         client_marks.socket_complete_count, 1,
         "one client socket completion per sample"
@@ -366,8 +372,7 @@ fn run_input_sample(
         "native->PTY",
     );
     *client_high_water = (*client_high_water).max(client_marks.queue_high_water_bytes);
-    *runtime_high_water =
-        (*runtime_high_water).max(runtime_marks.runtime_queue_high_water_bytes);
+    *runtime_high_water = (*runtime_high_water).max(runtime_marks.runtime_queue_high_water_bytes);
 }
 
 #[cfg(target_os = "macos")]
@@ -386,7 +391,10 @@ fn wait_for_input_completion(client: &mut LocalDisplayClient) {
         if runtime_marks.pty_write_count > 0 && client_marks.socket_complete_count > 0 {
             return;
         }
-        assert!(Instant::now() < deadline, "Pass 7 input benchmark timed out");
+        assert!(
+            Instant::now() < deadline,
+            "Pass 7 input benchmark timed out"
+        );
         thread::yield_now();
     }
 }
@@ -521,7 +529,10 @@ fn wait_for_resize_commit(client: &mut LocalDisplayClient, geometry: GridGeometr
         {
             return;
         }
-        assert!(Instant::now() < deadline, "Pass 7 resize benchmark timed out");
+        assert!(
+            Instant::now() < deadline,
+            "Pass 7 resize benchmark timed out"
+        );
         thread::yield_now();
     }
 }
@@ -615,20 +626,36 @@ fn process_metrics() -> Metrics {
         .expect("ps metrics");
     let line = String::from_utf8_lossy(&output.stdout);
     let mut fields = line.split_whitespace();
-    let rss_kib = fields.next().and_then(|value| value.parse().ok()).unwrap_or(0);
-    let cpu_percent = fields.next().and_then(|value| value.parse().ok()).unwrap_or(0.0);
-    let parsed_threads = fields.next().and_then(|value| value.parse().ok()).unwrap_or(0);
+    let rss_kib = fields
+        .next()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
+    let cpu_percent = fields
+        .next()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0.0);
+    let parsed_threads = fields
+        .next()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
     let threads = if parsed_threads == 0 {
         Command::new("/bin/ps")
             .args(["-M", "-p", &pid.to_string()])
             .output()
             .ok()
-            .map(|output| String::from_utf8_lossy(&output.stdout).lines().skip(1).count())
+            .map(|output| {
+                String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .skip(1)
+                    .count()
+            })
             .unwrap_or(0)
     } else {
         parsed_threads
     };
-    let fds = fs::read_dir("/dev/fd").map(|entries| entries.count()).unwrap_or(0);
+    let fds = fs::read_dir("/dev/fd")
+        .map(|entries| entries.count())
+        .unwrap_or(0);
     Metrics {
         rss_kib,
         cpu_percent,

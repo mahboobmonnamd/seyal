@@ -27,7 +27,7 @@ impl AcceptedInput {
     pub(crate) fn consume(&mut self, count: usize) {
         self.offset += count;
         #[cfg(all(target_os = "macos", feature = "benchmark-instrumentation"))]
-        crate::pass7_benchmark::mark_pass7_pty_write();
+        crate::pass7_benchmark::mark_pass7_pty_write(count);
         self.reservation.consume(count);
     }
 

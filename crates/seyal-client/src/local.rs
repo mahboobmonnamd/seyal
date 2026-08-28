@@ -624,6 +624,8 @@ impl LocalDisplayClient {
     }
 
     fn admit_frame(&mut self, bytes: Vec<u8>, kind: OutboundKind) -> Result<(), ClientError> {
+        #[cfg(feature = "benchmark-instrumentation")]
+        let benchmark_input = matches!(kind, OutboundKind::Input | OutboundKind::TerminalKey);
         let next = self
             .outbound_wire_bytes
             .checked_add(bytes.len())
@@ -634,6 +636,13 @@ impl LocalDisplayClient {
         self.outbound_wire_bytes = next;
         self.outbound
             .push_back(PendingControlWrite::new(bytes, kind));
+        #[cfg(feature = "benchmark-instrumentation")]
+        {
+            crate::pass7_benchmark::observe_pass7_client_queue(self.outbound_wire_bytes);
+            if benchmark_input {
+                crate::pass7_benchmark::mark_pass7_client_admission(self.outbound_wire_bytes);
+            }
+        }
         Ok(())
     }
 
@@ -684,7 +693,18 @@ impl LocalDisplayClient {
             self.set_resize_phase(request_id, phase)?;
         }
         if completed {
+            #[cfg(feature = "benchmark-instrumentation")]
+            let completed_input = self
+                .outbound
+                .front()
+                .is_some_and(|pending| matches!(pending.kind, OutboundKind::Input | OutboundKind::TerminalKey));
             self.outbound.pop_front();
+            #[cfg(feature = "benchmark-instrumentation")]
+            if completed_input {
+                crate::pass7_benchmark::mark_pass7_client_socket_complete(
+                    self.outbound_wire_bytes,
+                );
+            }
         }
         if self.input_failure == Some(InputAdmissionFailure::ClientBackpressure) {
             self.input_failure = None;

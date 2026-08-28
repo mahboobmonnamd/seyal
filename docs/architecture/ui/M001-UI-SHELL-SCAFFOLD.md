@@ -1,5 +1,10 @@
 # M001 UI Shell Scaffold Boundary
 
+> Architecture amendment: [`M001-FLOW-BLOCKS-DEFAULT-AND-TUI-TAKEOVER.md`](M001-FLOW-BLOCKS-DEFAULT-AND-TUI-TAKEOVER.md)
+> establishes Flow/Blocks as the production default. This scaffold document's
+> preview-only boundary remains valid for fixture data, but must not be used to
+> justify a raw-terminal default in the production application.
+
 **Status:** Implementation boundary for the pre-Pass-6 native shell scaffold
 **Authority:** subordinate to `M001-CORE-TERMINAL-REFERENCE-SCREEN.md`, its companion UI specs, M001 pass ordering, and accepted Runtime/TerminalExecution ownership
 
@@ -36,7 +41,10 @@ This scaffold must not implement or invent:
 - terminal-input keybinding behavior that forwards or transforms PTY/TUI input;
 - multiple-pane Runtime semantics.
 
-The normal application path remains the existing minimal Metal surface until the M001 dependency frontier authorizes live UI integration.
+The production application path is the Flow/Blocks shell. The permanent Metal
+surface is the same Pane's live terminal body and is shown full-area only during
+canonical full-screen TUI takeover. A fixture-only preview is not a production
+fallback and must not remain the default launch path.
 
 ## Frozen visual contract
 

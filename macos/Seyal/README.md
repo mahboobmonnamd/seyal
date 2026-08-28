@@ -2,17 +2,19 @@
 
 This directory owns the native macOS application boundary for Seyal.
 
-M001 Issue #10 establishes only a **Swift + AppKit + Metal** application skeleton:
+M001 Issue #10 establishes the permanent **Swift + AppKit + Metal** application direction:
 
 - `NSApplication` / `NSWindow` lifecycle;
-- one custom `NSView` backed directly by `CAMetalLayer`;
+- a custom terminal `NSView` backed directly by `CAMetalLayer`;
 - acquisition of the system `MTLDevice`;
 - native Xcode application target and `.app` bundle;
 - deterministic native smoke mode for CI.
 
-It intentionally does **not** implement terminal rendering, shaping/glyph caches, VT state, PTY/runtime ownership, Blocks, input handling, IME/accessibility behavior, or product UI.
+The pre-Pass-6 UI shell scaffold adds native presentation structure without changing terminal authority or starting live renderer/runtime integration. It includes design tokens, the Core Terminal shell regions, intrinsic Blocks, a Pane-owned transcript scroll surface, a Pane-scoped composer presentation seam, contextual panels, attention presentation, and a `TerminalSurfaceHostView` around the permanent Metal surface.
 
-No Objective-C or Objective-C++ source is justified for this boundary. If a future Issue finds a concrete API/interoperability requirement that Swift plus a coarse C-compatible Rust boundary cannot satisfy, that evidence must be reviewed before introducing another native language.
+The shell scaffold intentionally does **not** implement terminal rendering, shaping/glyph caches, VT state, PTY/runtime ownership, live Runtime attachment, native input, IME/accessibility behavior, shell integration, or final product actions. Those remain governed by M001 pass ordering and the accepted architecture.
+
+No Objective-C or Objective-C++ source is justified for this boundary. If a future issue finds a concrete API/interoperability requirement that Swift plus a coarse C-compatible Rust boundary cannot satisfy, that evidence must be reviewed before introducing another native language.
 
 Build through the canonical repository interface:
 
@@ -29,10 +31,20 @@ On macOS the built app is located at:
 target/macos-derived-data/Build/Products/Debug/Seyal.app
 ```
 
-Launch the non-terminal skeleton with:
+Launch the normal M001 app path with:
 
 ```sh
 open target/macos-derived-data/Build/Products/Debug/Seyal.app
 ```
 
-The CI smoke path runs the bundle executable with `--smoke-test`; it validates that the process launches and Metal can supply a device/layer without starting the AppKit event loop.
+The normal path remains the minimal Metal surface before Pass 6.
+
+For explicit design/decomposition review, the Debug bundle supports a fixture-only shell preview:
+
+```sh
+target/macos-derived-data/Build/Products/Debug/Seyal.app/Contents/MacOS/Seyal --ui-shell-preview
+```
+
+The preview data is deterministic and presentation-only. It is never Runtime, PTY, VT, grid, Block-history, or execution authority. The app stamps its Xcode build configuration into the bundle and honors the preview flag only when that configuration is `Debug`; Release builds ignore the preview flag and environment opt-in.
+
+The CI smoke path runs the bundle executable with `--smoke-test`; it validates Metal availability and deterministic construction of the native UI shell without starting the AppKit event loop.

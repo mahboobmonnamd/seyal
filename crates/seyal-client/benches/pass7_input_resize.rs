@@ -1,0 +1,697 @@
+use std::time::Instant;
+
+#[cfg(target_os = "macos")]
+use std::{
+    fs,
+    process::{self, Command},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        mpsc,
+    },
+    thread,
+    time::Duration,
+};
+
+#[cfg(target_os = "macos")]
+use seyal_client::pass7_benchmark::{
+    pass7_client_benchmark_marks, pass7_client_benchmark_now_ns, reset_pass7_client_benchmark_marks,
+};
+#[cfg(target_os = "macos")]
+use seyal_client::{GridGeometry, LocalDisplayClient};
+#[cfg(target_os = "macos")]
+use seyal_exec::{CommandSpec, WindowSize};
+#[cfg(target_os = "macos")]
+use seyal_runtime::local_ipc::framing::Role;
+#[cfg(target_os = "macos")]
+use seyal_runtime::pass7_benchmark::{
+    pass7_benchmark_now_ns, pass7_runtime_benchmark_marks, reset_pass7_runtime_benchmark_marks,
+};
+#[cfg(target_os = "macos")]
+use seyal_runtime::{ExecutionId, LocalIpcMode, Runtime, RuntimeConfig};
+
+const PERFORMANCE_CLAIM: &str = "performance_claim=false";
+#[cfg(target_os = "macos")]
+const REPETITIONS: usize = 120;
+#[cfg(target_os = "macos")]
+static HARNESS_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn main() {
+    // Required by the repository benchmark contract. `Instant::now()` remains
+    // the portable harness/deadline clock; benchmark timing marks use monotonic
+    // clocks inside the production boundaries being measured.
+    let _contract_clock = Instant::now();
+
+    #[cfg(not(target_os = "macos"))]
+    println!("pass7_input_resize PLATFORM_LIMITED target_os!=macos {PERFORMANCE_CLAIM}");
+
+    #[cfg(target_os = "macos")]
+    run_macos();
+}
+
+#[cfg(target_os = "macos")]
+fn run_macos() {
+    let mut args = std::env::args();
+    let _ = args.next();
+    if args.next().as_deref() == Some("--worker") {
+        let case = args.next().expect("Pass 7 benchmark worker case");
+        worker(&case);
+        return;
+    }
+
+    println!(
+        "pass7_input_resize architecture=production_client_UDS_Runtime_PTY {PERFORMANCE_CLAIM} percentile_method=nearest_rank repetitions={REPETITIONS} pass6_baseline_reference=docs/engineering/M001-PASS6-METAL-RENDERER.md"
+    );
+    print_host_metadata();
+
+    let executable = std::env::current_exe().expect("benchmark executable");
+    for case in ["input", "resize_120x40", "resize_512x256", "idle_resource"] {
+        let status = Command::new("/usr/bin/time")
+            .arg("-lp")
+            .arg(&executable)
+            .args(["--worker", case])
+            .status()
+            .expect("launch Pass 7 benchmark worker");
+        assert!(status.success(), "Pass 7 benchmark worker {case} failed");
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn worker(case: &str) {
+    match case {
+        "input" => measure_input_boundaries(),
+        "resize_120x40" => measure_resize_boundary(
+            "resize_120x40",
+            GridGeometry {
+                rows: 40,
+                columns: 120,
+            },
+            GridGeometry {
+                rows: 40,
+                columns: 121,
+            },
+        ),
+        "resize_512x256" => measure_resize_boundary(
+            "resize_512x256",
+            GridGeometry {
+                rows: 256,
+                columns: 512,
+            },
+            GridGeometry {
+                rows: 255,
+                columns: 511,
+            },
+        ),
+        "idle_resource" => measure_idle_resources(),
+        other => panic!("unknown Pass 7 benchmark worker {other}"),
+    }
+}
+
+#[cfg(target_os = "macos")]
+struct RuntimeHarness {
+    socket_path: std::path::PathBuf,
+    execution_id: ExecutionId,
+    stop: mpsc::Sender<()>,
+    join: thread::JoinHandle<()>,
+}
+
+#[cfg(target_os = "macos")]
+impl RuntimeHarness {
+    fn start() -> Self {
+        let suffix = HARNESS_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (stop_tx, stop_rx) = mpsc::channel();
+        let join = thread::spawn(move || {
+            let mut config = RuntimeConfig::m001().expect("M001 Runtime config");
+            config.singleton_path =
+                std::env::temp_dir().join(format!("s7b-{suffix:x}-{}.lock", process::id()));
+            let runtime_dir =
+                std::env::temp_dir().join(format!("s7bd-{suffix:x}-{}", process::id()));
+            config.local_ipc = LocalIpcMode::Enabled {
+                runtime_dir_override: Some(runtime_dir.clone()),
+            };
+            config.graceful_termination = Duration::from_millis(50);
+            config.forced_reap = Duration::from_millis(250);
+            config.final_drain = Duration::from_millis(100);
+
+            let mut runtime = Runtime::new(config).expect("Runtime");
+            let execution_id = runtime
+                .create_execution(
+                    CommandSpec::new("/bin/cat"),
+                    WindowSize::cells(80, 24).expect("initial geometry"),
+                )
+                .expect("execution");
+            let socket_path = runtime
+                .local_ipc_socket_path()
+                .expect("local IPC socket")
+                .to_path_buf();
+            ready_tx
+                .send((socket_path, execution_id, runtime_dir))
+                .expect("benchmark ready receiver");
+
+            while stop_rx.try_recv().is_err() {
+                runtime
+                    .poll_once(Some(Duration::from_secs(1)))
+                    .expect("Runtime poll");
+            }
+            runtime.begin_shutdown().expect("begin shutdown");
+            runtime
+                .run_until_empty(Instant::now() + Duration::from_secs(3))
+                .expect("Runtime shutdown");
+        });
+        let (socket_path, execution_id, _runtime_dir) = ready_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("Runtime ready");
+        Self {
+            socket_path,
+            execution_id,
+            stop: stop_tx,
+            join,
+        }
+    }
+
+    fn connect_controller(&self) -> LocalDisplayClient {
+        LocalDisplayClient::connect_execution(
+            &self.socket_path,
+            self.execution_id,
+            Role::Controller,
+        )
+        .expect("controller attach")
+    }
+
+    fn finish(self) {
+        let _ = self.stop.send(());
+        self.join.join().expect("Runtime benchmark thread");
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+struct Samples {
+    values_ns: Vec<u64>,
+}
+
+#[cfg(target_os = "macos")]
+impl Samples {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            values_ns: Vec::with_capacity(capacity),
+        }
+    }
+
+    fn push_delta(&mut self, end_ns: u64, start_ns: u64, label: &str) {
+        assert!(end_ns >= start_ns, "non-monotonic Pass 7 mark for {label}");
+        self.values_ns.push(end_ns - start_ns);
+    }
+
+    fn stats_us(&mut self) -> Stats {
+        self.values_ns.sort_unstable();
+        Stats {
+            count: self.values_ns.len(),
+            p50_us: percentile_ns(&self.values_ns, 50) as f64 / 1_000.0,
+            p95_us: percentile_ns(&self.values_ns, 95) as f64 / 1_000.0,
+            p99_us: percentile_ns(&self.values_ns, 99) as f64 / 1_000.0,
+            max_us: self.values_ns.last().copied().unwrap_or(0) as f64 / 1_000.0,
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy)]
+struct Stats {
+    count: usize,
+    p50_us: f64,
+    p95_us: f64,
+    p99_us: f64,
+    max_us: f64,
+}
+
+#[cfg(target_os = "macos")]
+fn measure_input_boundaries() {
+    let baseline = process_metrics();
+    let runtime = RuntimeHarness::start();
+    let mut client = runtime.connect_controller();
+    settle_client(&mut client);
+    let populated = process_metrics();
+
+    for _ in 0..16 {
+        run_input_sample(&mut client, false, None);
+    }
+
+    let mut native_to_client = Samples::with_capacity(REPETITIONS);
+    let mut admission_to_socket = Samples::with_capacity(REPETITIONS);
+    let mut runtime_to_pty = Samples::with_capacity(REPETITIONS);
+    let mut native_to_pty = Samples::with_capacity(REPETITIONS);
+    let mut client_queue_high_water = 0usize;
+    let mut runtime_queue_high_water = 0usize;
+
+    for _ in 0..REPETITIONS {
+        run_input_sample(
+            &mut client,
+            true,
+            Some((
+                &mut native_to_client,
+                &mut admission_to_socket,
+                &mut runtime_to_pty,
+                &mut native_to_pty,
+                &mut client_queue_high_water,
+                &mut runtime_queue_high_water,
+            )),
+        );
+    }
+
+    let native_client_stats = native_to_client.stats_us();
+    let client_socket_stats = admission_to_socket.stats_us();
+    let runtime_pty_stats = runtime_to_pty.stats_us();
+    let native_pty_stats = native_to_pty.stats_us();
+    let measured = process_metrics();
+
+    print_stats(
+        "controlled_native_callback_to_client_admission",
+        native_client_stats,
+    );
+    print_stats("client_admission_to_socket_complete", client_socket_stats);
+    print_stats("runtime_frame_admission_to_pty_write", runtime_pty_stats);
+    print_stats("controlled_native_callback_to_pty_write", native_pty_stats);
+    println!(
+        "pass7_input_resources classification=MEASURED measurement_phase=post_input_workload client_queue_high_water_bytes={} runtime_queue_high_water_bytes={} rss_baseline_kib={} rss_populated_kib={} rss_measured_kib={} incremental_post_workload_rss_kib={} cpu_percent_sample={} threads_baseline={} threads_populated={} threads_measured={} fds_baseline={} fds_populated={} fds_measured={} native_boundary_classification=CONTROLLED_FFI_EQUIVALENT_APPKIT_EVENT_NOT_CLAIMED {}",
+        client_queue_high_water,
+        runtime_queue_high_water,
+        baseline.rss_kib,
+        populated.rss_kib,
+        measured.rss_kib,
+        measured.rss_kib.saturating_sub(baseline.rss_kib),
+        measured.cpu_percent,
+        baseline.threads,
+        populated.threads,
+        measured.threads,
+        baseline.fds,
+        populated.fds,
+        measured.fds,
+        PERFORMANCE_CLAIM,
+    );
+
+    drop(client);
+    runtime.finish();
+}
+
+#[cfg(target_os = "macos")]
+type InputSampleSinks<'a> = (
+    &'a mut Samples,
+    &'a mut Samples,
+    &'a mut Samples,
+    &'a mut Samples,
+    &'a mut usize,
+    &'a mut usize,
+);
+
+#[cfg(target_os = "macos")]
+fn run_input_sample(
+    client: &mut LocalDisplayClient,
+    measured: bool,
+    sinks: Option<InputSampleSinks<'_>>,
+) {
+    settle_client(client);
+    reset_pass7_client_benchmark_marks();
+    reset_pass7_runtime_benchmark_marks();
+
+    let runtime_native_start = pass7_benchmark_now_ns();
+    let client_native_start = pass7_client_benchmark_now_ns();
+    client
+        .submit_committed_text("x")
+        .expect("Pass 7 committed input");
+    wait_for_input_completion(client);
+
+    if !measured {
+        return;
+    }
+    let client_marks = pass7_client_benchmark_marks();
+    let runtime_marks = pass7_runtime_benchmark_marks();
+    assert_eq!(
+        client_marks.admission_count, 1,
+        "one client admission per sample"
+    );
+    assert_eq!(
+        client_marks.socket_complete_count, 1,
+        "one client socket completion per sample"
+    );
+    assert_eq!(
+        runtime_marks.input_admission_count, 1,
+        "one Runtime input admission per sample"
+    );
+    assert!(runtime_marks.pty_write_count >= 1, "PTY write mark missing");
+
+    let Some((
+        native_to_client,
+        admission_to_socket,
+        runtime_to_pty,
+        native_to_pty,
+        client_high_water,
+        runtime_high_water,
+    )) = sinks
+    else {
+        return;
+    };
+    native_to_client.push_delta(
+        client_marks.admission_ns,
+        client_native_start,
+        "native->client",
+    );
+    admission_to_socket.push_delta(
+        client_marks.socket_complete_ns,
+        client_marks.admission_ns,
+        "client->socket",
+    );
+    runtime_to_pty.push_delta(
+        runtime_marks.pty_write_ns,
+        runtime_marks.input_admission_ns,
+        "Runtime->PTY",
+    );
+    native_to_pty.push_delta(
+        runtime_marks.pty_write_ns,
+        runtime_native_start,
+        "native->PTY",
+    );
+    *client_high_water = (*client_high_water).max(client_marks.queue_high_water_bytes);
+    *runtime_high_water = (*runtime_high_water).max(runtime_marks.runtime_queue_high_water_bytes);
+}
+
+#[cfg(target_os = "macos")]
+fn wait_for_input_completion(client: &mut LocalDisplayClient) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if client.wants_write() {
+            client.flush_control_write().expect("client writable flush");
+        }
+        match client.poll_prepare() {
+            Ok(_) => {}
+            Err(error) => panic!("client poll failed during Pass 7 input benchmark: {error:?}"),
+        }
+        let runtime_marks = pass7_runtime_benchmark_marks();
+        let client_marks = pass7_client_benchmark_marks();
+        if runtime_marks.pty_write_count > 0 && client_marks.socket_complete_count > 0 {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "Pass 7 input benchmark timed out"
+        );
+        thread::yield_now();
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn measure_resize_boundary(label: &str, target: GridGeometry, reset: GridGeometry) {
+    let baseline = process_metrics();
+    let runtime = RuntimeHarness::start();
+    let mut client = runtime.connect_controller();
+    converge_geometry(&mut client, reset);
+    let populated = process_metrics();
+
+    for _ in 0..8 {
+        run_resize_sample(&mut client, target, reset, false, None);
+    }
+
+    let mut receipt_to_commit = Samples::with_capacity(REPETITIONS);
+    let mut client_queue_high_water = 0usize;
+    let mut runtime_queue_high_water = 0usize;
+    for _ in 0..REPETITIONS {
+        run_resize_sample(
+            &mut client,
+            target,
+            reset,
+            true,
+            Some((
+                &mut receipt_to_commit,
+                &mut client_queue_high_water,
+                &mut runtime_queue_high_water,
+            )),
+        );
+    }
+    let stats = receipt_to_commit.stats_us();
+    let measured = process_metrics();
+    print_stats(label, stats);
+    println!(
+        "pass7_resize_resources case={} geometry={}x{} classification=MEASURED measurement_phase=post_resize_workload client_queue_high_water_bytes={} runtime_queue_high_water_bytes={} rss_baseline_kib={} rss_populated_kib={} rss_measured_kib={} incremental_post_resize_rss_kib={} cpu_percent_sample={} {}",
+        label,
+        target.columns,
+        target.rows,
+        client_queue_high_water,
+        runtime_queue_high_water,
+        baseline.rss_kib,
+        populated.rss_kib,
+        measured.rss_kib,
+        measured.rss_kib.saturating_sub(baseline.rss_kib),
+        measured.cpu_percent,
+        PERFORMANCE_CLAIM,
+    );
+
+    drop(client);
+    runtime.finish();
+}
+
+#[cfg(target_os = "macos")]
+fn run_resize_sample(
+    client: &mut LocalDisplayClient,
+    target: GridGeometry,
+    reset: GridGeometry,
+    measured: bool,
+    sinks: Option<(&mut Samples, &mut usize, &mut usize)>,
+) {
+    converge_geometry(client, reset);
+    reset_pass7_client_benchmark_marks();
+    reset_pass7_runtime_benchmark_marks();
+
+    client
+        .set_desired_geometry(target)
+        .expect("measured correlated resize admission");
+    wait_for_resize_commit(client, target);
+
+    if measured {
+        let runtime_marks = pass7_runtime_benchmark_marks();
+        let client_marks = pass7_client_benchmark_marks();
+        assert_eq!(runtime_marks.resize_receipt_count, 1);
+        assert_eq!(runtime_marks.resize_commit_count, 1);
+        if let Some((samples, client_high_water, runtime_high_water)) = sinks {
+            samples.push_delta(
+                runtime_marks.resize_commit_ns,
+                runtime_marks.resize_receipt_ns,
+                "resize receipt->canonical commit",
+            );
+            *client_high_water = (*client_high_water).max(client_marks.queue_high_water_bytes);
+            *runtime_high_water =
+                (*runtime_high_water).max(runtime_marks.runtime_queue_high_water_bytes);
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn converge_geometry(client: &mut LocalDisplayClient, geometry: GridGeometry) {
+    client
+        .set_desired_geometry(geometry)
+        .expect("correlated resize proposal");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if client.wants_write() {
+            client.flush_control_write().expect("resize writable flush");
+        }
+        match client.poll_prepare() {
+            Ok(_) => {}
+            Err(error) => panic!("client poll failed while converging geometry: {error:?}"),
+        }
+        if client.cache().rows == geometry.rows
+            && client.cache().columns == geometry.columns
+            && !client.wants_write()
+            && client.resize_failure().is_none()
+        {
+            return;
+        }
+        assert!(Instant::now() < deadline, "geometry convergence timed out");
+        thread::yield_now();
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn wait_for_resize_commit(client: &mut LocalDisplayClient, geometry: GridGeometry) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if client.wants_write() {
+            client.flush_control_write().expect("resize writable flush");
+        }
+        match client.poll_prepare() {
+            Ok(_) => {}
+            Err(error) => panic!("client poll failed during resize benchmark: {error:?}"),
+        }
+        let marks = pass7_runtime_benchmark_marks();
+        if marks.resize_commit_count > 0
+            && client.cache().rows == geometry.rows
+            && client.cache().columns == geometry.columns
+            && client.resize_failure().is_none()
+        {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "Pass 7 resize benchmark timed out"
+        );
+        thread::yield_now();
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn settle_client(client: &mut LocalDisplayClient) {
+    let deadline = Instant::now() + Duration::from_millis(250);
+    while Instant::now() < deadline {
+        if client.wants_write() {
+            client.flush_control_write().expect("settle writable flush");
+        }
+        let _ = client.poll_prepare();
+        if !client.wants_write() {
+            thread::sleep(Duration::from_micros(50));
+            let _ = client.poll_prepare();
+            return;
+        }
+    }
+    panic!("Pass 7 client did not settle");
+}
+
+#[cfg(target_os = "macos")]
+fn measure_idle_resources() {
+    let baseline = process_metrics();
+    let runtime = RuntimeHarness::start();
+    let mut client = runtime.connect_controller();
+    settle_client(&mut client);
+    let populated = process_metrics();
+
+    // There is deliberately no Pass 7 timer or busy-retry driver here. Leave
+    // the real Runtime reactor and client idle, then sample the same process.
+    thread::sleep(Duration::from_millis(500));
+    let idle = process_metrics();
+    println!(
+        "pass7_idle_resource classification=MEASURED idle_window_ms=500 rss_baseline_kib={} rss_populated_kib={} rss_idle_kib={} incremental_idle_rss_kib={} cpu_percent_sample={} threads_baseline={} threads_idle={} fds_baseline={} fds_idle={} client_wants_write={} {}",
+        baseline.rss_kib,
+        populated.rss_kib,
+        idle.rss_kib,
+        idle.rss_kib.saturating_sub(baseline.rss_kib),
+        idle.cpu_percent,
+        baseline.threads,
+        idle.threads,
+        baseline.fds,
+        idle.fds,
+        client.wants_write(),
+        PERFORMANCE_CLAIM,
+    );
+
+    drop(client);
+    runtime.finish();
+}
+
+#[cfg(target_os = "macos")]
+fn percentile_ns(sorted: &[u64], percentile: usize) -> u64 {
+    if sorted.is_empty() {
+        return 0;
+    }
+    let rank = (percentile * sorted.len()).div_ceil(100).max(1);
+    sorted[rank.saturating_sub(1).min(sorted.len() - 1)]
+}
+
+#[cfg(target_os = "macos")]
+fn print_stats(boundary: &str, stats: Stats) {
+    println!(
+        "pass7_latency boundary={} classification=MEASURED sample_count={} p50_us={:.3} p95_us={:.3} p99_us={:.3} max_us={:.3} {}",
+        boundary,
+        stats.count,
+        stats.p50_us,
+        stats.p95_us,
+        stats.p99_us,
+        stats.max_us,
+        PERFORMANCE_CLAIM,
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy)]
+struct Metrics {
+    rss_kib: usize,
+    cpu_percent: f32,
+    threads: usize,
+    fds: usize,
+}
+
+#[cfg(target_os = "macos")]
+fn process_metrics() -> Metrics {
+    let pid = process::id();
+    let output = Command::new("/bin/ps")
+        .args(["-o", "rss=,%cpu=,thcount=", "-p", &pid.to_string()])
+        .output()
+        .expect("ps metrics");
+    let line = String::from_utf8_lossy(&output.stdout);
+    let mut fields = line.split_whitespace();
+    let rss_kib = fields
+        .next()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
+    let cpu_percent = fields
+        .next()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0.0);
+    let parsed_threads = fields
+        .next()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
+    let threads = if parsed_threads == 0 {
+        Command::new("/bin/ps")
+            .args(["-M", "-p", &pid.to_string()])
+            .output()
+            .ok()
+            .map(|output| {
+                String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .skip(1)
+                    .count()
+            })
+            .unwrap_or(0)
+    } else {
+        parsed_threads
+    };
+    let fds = fs::read_dir("/dev/fd")
+        .map(|entries| entries.count())
+        .unwrap_or(0);
+    Metrics {
+        rss_kib,
+        cpu_percent,
+        threads,
+        fds,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn print_host_metadata() {
+    let product = command_text("/usr/bin/sw_vers", &["-productVersion"]);
+    let build = command_text("/usr/bin/sw_vers", &["-buildVersion"]);
+    let model = command_text("/usr/sbin/sysctl", &["-n", "hw.model"]);
+    let hardware = command_text("/usr/sbin/sysctl", &["-n", "machdep.cpu.brand_string"]);
+    let rust = command_text("rustc", &["--version"]);
+    let commit = command_text("git", &["rev-parse", "HEAD"]);
+    println!(
+        "pass7_host macos_version={} macos_build={} model={:?} hardware={:?} arch={} rust={:?} build_mode=release commit={} repetitions={} percentile_method=nearest_rank cpu_rss_sources=ps_and_usr_bin_time {}",
+        product,
+        build,
+        model,
+        hardware,
+        std::env::consts::ARCH,
+        rust,
+        commit,
+        REPETITIONS,
+        PERFORMANCE_CLAIM,
+    );
+}
+
+#[cfg(target_os = "macos")]
+fn command_text(program: &str, args: &[&str]) -> String {
+    Command::new(program)
+        .args(args)
+        .output()
+        .ok()
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        .unwrap_or_else(|| "unavailable".to_owned())
+}

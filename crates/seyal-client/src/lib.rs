@@ -13,9 +13,15 @@ extern crate seyal_protocol as seyal_runtime;
 
 #[cfg(target_os = "macos")]
 mod local;
+#[cfg(all(target_os = "macos", feature = "benchmark-instrumentation"))]
+#[doc(hidden)]
+pub mod pass7_benchmark;
 
 #[cfg(target_os = "macos")]
-pub use local::{ClientError, LocalDisplayClient};
+pub use local::{
+    ClientError, GridGeometry, InputAdmissionFailure, LocalDisplayClient, ResizeFailure,
+    derive_grid_geometry,
+};
 
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]

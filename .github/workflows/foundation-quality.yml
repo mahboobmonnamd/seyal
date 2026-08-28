@@ -20,6 +20,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
       - name: Shell syntax
         run: bash -n scripts/*.sh
       - name: Governance structure
@@ -39,6 +41,8 @@ jobs:
         run: python3 scripts/check-hot-path.py
       - name: Benchmark contract guardrails
         run: python3 scripts/check-benchmark-contract.py
+      - name: Native UI test policy
+        run: python3 scripts/check-ui-test-policy.py
       - name: Harness contracts
         run: python3 scripts/test-harnesses.py
       - name: Fuzz registry smoke
@@ -52,6 +56,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
       - name: Bootstrap pinned Rust toolchain
         run: make bootstrap
       - name: Build production Rust surface
@@ -64,15 +70,23 @@ jobs:
   native-macos-smoke:
     name: native-macos-smoke
     runs-on: macos-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Bootstrap pinned Rust and native toolchains
         run: make bootstrap
       - name: Build Rust plus Seyal.app
         run: make build
-      - name: Unit harness PTY integration and native launch smoke
+      - name: Unit, PTY, native smoke, XCTest and XCUIAutomation
         run: make test
+      - name: Preserve native UI rendered evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: seyal-macos-ui-xcresult
+          path: target/macos-ui-tests.xcresult
+          if-no-files-found: warn
+          retention-days: 7
       - name: Native PTY benchmark baseline
         env:
           # GitHub-hosted macOS runners may be headless and cannot deliver

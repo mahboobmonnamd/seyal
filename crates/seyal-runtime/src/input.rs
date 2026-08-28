@@ -26,6 +26,8 @@ impl AcceptedInput {
 
     pub(crate) fn consume(&mut self, count: usize) {
         self.offset += count;
+        #[cfg(all(target_os = "macos", feature = "benchmark-instrumentation"))]
+        crate::pass7_benchmark::mark_pass7_pty_write(count);
         self.reservation.consume(count);
     }
 
@@ -167,6 +169,8 @@ impl InputIngress {
                 return Err(RuntimeError::ControlQueueClosed);
             }
         }
+        #[cfg(all(target_os = "macos", feature = "benchmark-instrumentation"))]
+        crate::pass7_benchmark::mark_pass7_input_admission(self.global.load(Ordering::Acquire));
         self.waker
             .wake()
             .map_err(RuntimeError::AcceptedButWakeFailed)

@@ -13,6 +13,9 @@ mod platform;
 mod projection;
 mod reactor;
 mod readiness;
+#[cfg(all(target_os = "macos", feature = "test-fault-injection"))]
+#[doc(hidden)]
+pub mod test_fault;
 mod winsize;
 
 pub use child::{ChildExit, SignalDisposition, TerminationPolicy};

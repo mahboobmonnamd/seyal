@@ -3,7 +3,15 @@
 **Status:** Frozen design-reference index  
 **Authority:** Companion to `M001-CORE-TERMINAL-REFERENCE-SCREEN.md`
 
-This index maps the current Core Terminal design into implementation-oriented specifications. Only the frozen Core Terminal reference image is committed by this PR; the additional generated state mockups are intentionally represented by specification only.
+This index maps the current Core Terminal design into implementation-oriented specifications. Additional generated state mockups are represented by specification where appropriate.
+
+## Exact frozen visual source
+
+The visual explicitly selected and frozen during M001 design review is **`Seyal Developer Workspace Dashboard.png`**.
+
+Do not substitute an older neon/core-experience/generated concept merely because it is visually similar. The approved image itself is not added by this shell PR. When the approved asset is supplied manually to the repository, it must occupy the reference path declared by `M001-CORE-TERMINAL-REFERENCE-SCREEN.md` and become the source for pixel-level visual regression.
+
+Until that asset exists in the repository, the shell must be checked against the visual composition recorded in `M001-UI-SHELL-SCAFFOLD.md`, the XCTest geometry contract, the XCUI hierarchy/ordering assertions, and the rendered screenshot retained in the XCUI result bundle. Do not claim pixel-golden equivalence without the approved source asset.
 
 ## Reference specifications
 
@@ -20,6 +28,7 @@ This index maps the current Core Terminal design into implementation-oriented sp
 | Block details | `M001-BLOCK-DETAILS-INSPECTOR.md` | Selected Block metadata, enrichments and actions |
 | Composer history | `M001-COMPOSER-HISTORY-FUZZY-SEARCH.md` | Multiline Pane composer and contextual fuzzy history retrieval |
 | Live tail | `M001-LIVE-TAIL-BEHAVIOR.md` | Long-running output with growing Block + Pane-level follow/scroll-away/return-to-live |
+| Pre-Pass-6 shell scaffold | `M001-UI-SHELL-SCAFFOLD.md` | Native shell decomposition boundary that preserves M001 pass ordering and terminal ownership |
 
 ## Cross-screen invariants
 
@@ -39,6 +48,7 @@ This index maps the current Core Terminal design into implementation-oriented sp
 14. Runtime/connection status is surfaced when meaningful, especially remote/detached/reconnecting/degraded states.
 15. Design is optimized for power users on a 15-inch display: dense, contextual, minimal permanent chrome.
 16. These documents freeze design/information architecture only and do not authorize Pass 6+ implementation ahead of M001 ordering.
+17. Before Pass 6, any native shell preview is fixture-only and must not become an alternate live terminal/runtime path.
 
 ## Old-reference precedence
 
@@ -49,7 +59,8 @@ If an old screenshot or `M001-FIRST-UI-DESIGN.md` conflicts with current behavio
 1. accepted architecture / ADR / implementation spec / milestone authority;
 2. `M001-CORE-TERMINAL-REFERENCE-SCREEN.md` and companion state specs;
 3. `M001-FIRST-UI-DESIGN-AMENDMENT.md` for explicit older-document reconciliation;
-4. historical visual references only as non-binding inspiration.
+4. the frozen `Seyal Developer Workspace Dashboard.png` for visual composition, density, palette and hierarchy where it does not conflict with 1–3;
+5. historical visual references only as non-binding inspiration.
 
 Important superseded old details include:
 
@@ -62,4 +73,4 @@ Important superseded old details include:
 
 ## Mockup-vs-spec rule
 
-Generated mockups are visual references. If a mockup contains decorative, stale, or architecturally invalid behavior, the corresponding specification is authoritative.
+The frozen mockup is the visual reference. If it or an older generated mockup contains decorative, stale, or architecturally invalid behavior, the corresponding current specification is authoritative. The visual reference drives composition and presentation; it does not override terminal correctness or invent product behavior.

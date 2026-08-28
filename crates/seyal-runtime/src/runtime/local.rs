@@ -20,7 +20,8 @@ use crate::{
         framing::{
             self, Attach as WireAttach, Attached as WireAttached, ErrorCode, ExecutionList,
             ExecutionListEntry, Lifecycle as WireLifecycle, MessageType, Resize as WireResize,
-            Role,
+            ResizeRequest as WireResizeRequest, ResizeResult as WireResizeResult, ResizeResultCode,
+            Role, TerminalKey as WireTerminalKey, TerminalKeyKind,
         },
         recovery,
     },
@@ -35,6 +36,7 @@ const ACCEPT_BACKOFF_MAX: Duration = Duration::from_millis(250);
 pub(super) struct ConnectionMeta {
     attachment: Option<AttachmentId>,
     reactor_token: RegistrationToken,
+    last_resize_request_id: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -119,6 +121,42 @@ impl LocalIpcState {
 impl Drop for LocalIpcState {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.socket_path);
+    }
+}
+
+fn encode_terminal_key(key: WireTerminalKey) -> Vec<u8> {
+    match key.kind {
+        TerminalKeyKind::Enter => vec![0x0d],
+        TerminalKeyKind::Tab => vec![0x09],
+        TerminalKeyKind::Backspace => vec![0x7f],
+        TerminalKeyKind::Escape => vec![0x1b],
+        TerminalKeyKind::ArrowUp => b"\x1b[A".to_vec(),
+        TerminalKeyKind::ArrowDown => b"\x1b[B".to_vec(),
+        TerminalKeyKind::ArrowRight => b"\x1b[C".to_vec(),
+        TerminalKeyKind::ArrowLeft => b"\x1b[D".to_vec(),
+        TerminalKeyKind::ControlAscii => {
+            let scalar = key.scalar as u8;
+            vec![match scalar {
+                b' ' | b'@' => 0x00,
+                b'A'..=b'Z' => scalar - b'@',
+                b'[' => 0x1b,
+                b'\\' => 0x1c,
+                b']' => 0x1d,
+                b'^' => 0x1e,
+                b'_' => 0x1f,
+                b'?' => 0x7f,
+                _ => unreachable!("wire validation limits ControlAscii"),
+            }]
+        }
+    }
+}
+
+fn resize_error_code(error: &RuntimeError) -> ErrorCode {
+    match error {
+        RuntimeError::UnknownExecution => ErrorCode::InvalidExecution,
+        RuntimeError::ExecutionNotRunning => ErrorCode::InvalidState,
+        RuntimeError::CapacityExceeded => ErrorCode::CapacityExceeded,
+        _ => ErrorCode::InternalFailure,
     }
 }
 
@@ -223,12 +261,6 @@ impl Runtime {
             }
         };
 
-        // A level-triggered listener event that yields no admission/rejection
-        // progress is a pressure/spurious-readiness condition. Disarm the
-        // listener and retry through Runtime's deadline scheduler instead of
-        // immediately returning to the same readable knote. This bounds CPU
-        // under repeated accept resource failures without adding a thread or
-        // polling loop and also protects capacity-pressure cases.
         if events.is_empty() {
             self.backoff_local_listener()?;
             return Ok(());
@@ -260,6 +292,7 @@ impl Runtime {
                                     ConnectionMeta {
                                         attachment: None,
                                         reactor_token,
+                                        last_resize_request_id: 0,
                                     },
                                 );
                                 state.reactor_connections.insert(reactor_token, token);
@@ -397,12 +430,6 @@ impl Runtime {
         self.sync_local_writable(token)
     }
 
-    /// Records that a connection must converge from a fresh canonical
-    /// snapshot. Repeated continuity failures collapse to one token. If an
-    /// older snapshot is already pending/in-flight we retain the request but do
-    /// not wake-spin; the writable event that completes the older snapshot will
-    /// return through `publish_display_updates`, where the latest snapshot can
-    /// be materialized.
     fn schedule_snapshot_recovery(&mut self, token: u64) {
         let should_wake = if let Some(state) = self.local_ipc.as_mut() {
             if !state.connections.contains_key(&token) || !state.server.contains(token) {
@@ -436,6 +463,27 @@ impl Runtime {
         );
     }
 
+    fn send_resize_result(
+        &mut self,
+        token: u64,
+        attachment_id: AttachmentId,
+        request_id: u64,
+        result_code: ResizeResultCode,
+        applied_generation: u64,
+    ) {
+        let message = WireResizeResult {
+            attachment_id,
+            request_id,
+            result_code,
+            detail_code: 0,
+            applied_generation,
+        };
+        let _ = self.send_mandatory_frame(
+            token,
+            framing::encode_frame(MessageType::ResizeResult, &message.encode()),
+        );
+    }
+
     fn dispatch_local_ipc_frame(&mut self, token: u64, message_type: u16, payload: &[u8]) {
         let Some(current_state) = self
             .local_ipc
@@ -448,7 +496,9 @@ impl Runtime {
             self.send_error(token, ErrorCode::UnknownMessage, message_type);
             return;
         };
-        if current_state.validate_incoming(kind).is_err() {
+        let pass7_attached = current_state == LocalIpcConnState::Attached
+            && matches!(kind, MessageType::TerminalKey | MessageType::ResizeRequest);
+        if !pass7_attached && current_state.validate_incoming(kind).is_err() {
             self.send_error(token, ErrorCode::InvalidState, message_type);
             return;
         }
@@ -458,7 +508,9 @@ impl Runtime {
             MessageType::Attach => self.handle_attach(token, payload),
             MessageType::Detach => self.handle_detach(token, payload),
             MessageType::Input => self.handle_input(token, payload),
+            MessageType::TerminalKey => self.handle_terminal_key(token, payload),
             MessageType::Resize => self.handle_resize(token, payload),
+            MessageType::ResizeRequest => self.handle_resize_request(token, payload),
             MessageType::Resync => self.handle_resync(token, payload),
             MessageType::Goodbye => {
                 if payload.is_empty() {
@@ -490,7 +542,10 @@ impl Runtime {
         }
         let response = framing::ServerHello {
             runtime_id: u128::from_le_bytes(self.id.to_bytes()),
-            server_capabilities: framing::CAP_BINARY_DISPLAY | framing::CAP_OBSERVER,
+            server_capabilities: framing::CAP_BINARY_DISPLAY
+                | framing::CAP_OBSERVER
+                | framing::CAP_SEMANTIC_TERMINAL_KEY
+                | framing::CAP_CORRELATED_RESIZE,
             max_frame_payload: framing::MAX_FRAME_PAYLOAD,
             max_input_payload: framing::MAX_INPUT_BYTES,
         };
@@ -744,6 +799,57 @@ impl Runtime {
         }
     }
 
+    fn handle_terminal_key(&mut self, token: u64, payload: &[u8]) {
+        let Ok(key) = WireTerminalKey::decode(payload) else {
+            self.send_error(
+                token,
+                ErrorCode::MalformedPayload,
+                MessageType::TerminalKey as u16,
+            );
+            return;
+        };
+        let execution_id = match self.local_ipc.as_ref().map(|state| {
+            state
+                .attachments
+                .authorize_mutation(token, key.attachment_id)
+        }) {
+            Some(Ok(id)) => id,
+            Some(Err(AttachmentError::PermissionDenied)) => {
+                self.send_error(
+                    token,
+                    ErrorCode::PermissionDenied,
+                    MessageType::TerminalKey as u16,
+                );
+                return;
+            }
+            _ => {
+                self.send_error(
+                    token,
+                    ErrorCode::StaleIdentity,
+                    MessageType::TerminalKey as u16,
+                );
+                return;
+            }
+        };
+        let bytes = encode_terminal_key(key);
+        match self.input_ingress(execution_id) {
+            Ok(ingress) => {
+                if ingress.try_submit(bytes).is_err() {
+                    self.send_error(
+                        token,
+                        ErrorCode::Backpressure,
+                        MessageType::TerminalKey as u16,
+                    );
+                }
+            }
+            Err(_) => self.send_error(
+                token,
+                ErrorCode::InvalidExecution,
+                MessageType::TerminalKey as u16,
+            ),
+        }
+    }
+
     fn handle_resize(&mut self, token: u64, payload: &[u8]) {
         let Ok(resize) = WireResize::decode(payload) else {
             self.send_error(
@@ -801,6 +907,119 @@ impl Runtime {
         }
     }
 
+    fn handle_resize_request(&mut self, token: u64, payload: &[u8]) {
+        let Ok(request) = WireResizeRequest::decode(payload) else {
+            self.send_error(
+                token,
+                ErrorCode::MalformedPayload,
+                MessageType::ResizeRequest as u16,
+            );
+            return;
+        };
+        #[cfg(feature = "benchmark-instrumentation")]
+        crate::pass7_benchmark::mark_pass7_resize_receipt();
+
+        let execution_id = match self.local_ipc.as_ref().map(|state| {
+            state
+                .attachments
+                .authorize_mutation(token, request.attachment_id)
+        }) {
+            Some(Ok(id)) => id,
+            Some(Err(AttachmentError::PermissionDenied)) => {
+                self.send_resize_result(
+                    token,
+                    request.attachment_id,
+                    request.request_id,
+                    ResizeResultCode::Error(ErrorCode::PermissionDenied),
+                    0,
+                );
+                return;
+            }
+            _ => {
+                self.send_resize_result(
+                    token,
+                    request.attachment_id,
+                    request.request_id,
+                    ResizeResultCode::Error(ErrorCode::StaleIdentity),
+                    0,
+                );
+                return;
+            }
+        };
+
+        // Request ordering is connection bookkeeping, not an authorization
+        // boundary. Validate the attachment/controller first so an
+        // unauthorized or stale request cannot poison the request-ID sequence
+        // for a later valid attachment on this connection.
+        let monotonic = self.local_ipc.as_mut().is_some_and(|state| {
+            let Some(meta) = state.connections.get_mut(&token) else {
+                return false;
+            };
+            if request.request_id <= meta.last_resize_request_id {
+                false
+            } else {
+                meta.last_resize_request_id = request.request_id;
+                true
+            }
+        });
+        if !monotonic {
+            self.send_resize_result(
+                token,
+                request.attachment_id,
+                request.request_id,
+                ResizeResultCode::Error(ErrorCode::MalformedPayload),
+                0,
+            );
+            return;
+        }
+
+        let Ok(size) = WindowSize::cells(request.columns, request.rows) else {
+            self.send_resize_result(
+                token,
+                request.attachment_id,
+                request.request_id,
+                ResizeResultCode::Error(ErrorCode::InvalidGeometry),
+                0,
+            );
+            return;
+        };
+
+        match self.resize(execution_id, size) {
+            Ok(()) => {
+                #[cfg(feature = "benchmark-instrumentation")]
+                crate::pass7_benchmark::mark_pass7_resize_commit();
+                let generation = self
+                    .entries
+                    .get(&execution_id)
+                    .map_or(0, |entry| entry.execution.terminal().damage_generation());
+                if generation == 0 {
+                    self.send_resize_result(
+                        token,
+                        request.attachment_id,
+                        request.request_id,
+                        ResizeResultCode::Error(ErrorCode::InternalFailure),
+                        0,
+                    );
+                } else {
+                    self.send_resize_result(
+                        token,
+                        request.attachment_id,
+                        request.request_id,
+                        ResizeResultCode::Applied,
+                        generation,
+                    );
+                }
+            }
+            Err(error) => self.send_resize_result(
+                token,
+                request.attachment_id,
+                request.request_id,
+                ResizeResultCode::Error(resize_error_code(&error)),
+                0,
+            ),
+        }
+    }
+
     fn handle_resync(&mut self, token: u64, payload: &[u8]) {
         let Ok(resync) = framing::Resync::decode(payload) else {
             self.send_error(
@@ -833,10 +1052,6 @@ impl Runtime {
         self.schedule_snapshot_recovery(token);
     }
 
-    /// Performs bounded expensive recovery work after normal reactor events.
-    /// Explicit resync and continuity loss share the same deduplicated queue.
-    /// Snapshot materialization is budgeted per execution, not per viewer: all
-    /// ready viewers for one execution reuse one encoded immutable batch.
     pub(super) fn service_pending_resyncs(&mut self) {
         let scan_limit = self
             .local_ipc
@@ -942,9 +1157,6 @@ impl Runtime {
             let _ = self.send_snapshot_batch(token, batch);
         }
 
-        // If the materialization budget left ready work in the queue, schedule
-        // one more bounded turn. Tokens blocked on an in-flight snapshot rely
-        // on their socket writable event rather than causing a wake spin.
         let ready_pending = self.local_ipc.as_ref().is_some_and(|state| {
             state.pending_resync.iter().any(|token| {
                 state.pending_resync_set.contains(token)
@@ -994,8 +1206,6 @@ impl Runtime {
     }
 
     pub(super) fn publish_display_updates(&mut self) {
-        // Run expensive recovery at most once per Runtime poll, after all
-        // readiness frames for that turn have had a chance to coalesce.
         self.service_pending_resyncs();
 
         let execution_ids = self.local_ipc.as_ref().map_or_else(Vec::new, |state| {
@@ -1066,11 +1276,6 @@ impl Runtime {
                                     self.sync_local_writable(token);
                                 }
                                 Some(DeltaEnqueueResult::NeedSnapshot) => {
-                                    // Continuity loss is a state requirement,
-                                    // not a command to encode a full grid on
-                                    // every source generation. Defer and
-                                    // coalesce until this connection can accept
-                                    // one current snapshot.
                                     self.schedule_snapshot_recovery(token);
                                 }
                                 None => self.close_local_connection(token),

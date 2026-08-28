@@ -152,10 +152,12 @@ final class MetalDisplayLinkLease {
 }
 
 @MainActor
-final class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
+class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     private let metalDevice: any MTLDevice
     private let renderer: MetalTerminalRenderer
     private var bridge: RustDisplayBridge?
+    private var bridgeReconnectTimer: Timer?
+    private var bridgeReconnectGeneration: UInt64 = 0
     private var forceNextFrame = false
     private var hasPreparedState = false
     private var presentationState = PresentationRecoveryState()
@@ -168,6 +170,7 @@ final class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     private var preparationRetryGeneration: UInt64 = 0
     private var preparationRetryScheduled = false
     private var preparationState = PreparationRecoveryState()
+    private var lastAlternateScreen: Bool?
     private(set) var lastBridgeError: Int32?
     private(set) var lastRenderError: Error?
 
@@ -213,6 +216,14 @@ final class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
             },
             onError: { [weak self] code in
                 self?.lastBridgeError = code
+                DispatchQueue.main.async { [weak self] in
+                    self?.terminalBridgeDidFail(code)
+                }
+            },
+            onStatusChanged: { [weak self] in
+                DispatchQueue.main.async { [weak self] in
+                    self?.terminalBridgeStatusDidChange()
+                }
             }
         )
         self.bridge = bridge
@@ -226,6 +237,114 @@ final class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
 
     override func makeBackingLayer() -> CALayer {
         CAMetalLayer()
+    }
+
+    /// Narrow subclass hooks for Pass 7 presentation-only failure/focus state.
+    /// They never transfer PTY, VT, grid or renderer authority into AppKit.
+    func terminalBridgeDidFail(_ code: Int32) {
+        _ = code
+    }
+
+    func terminalBridgeStatusDidChange() {}
+
+    /// Presentation-only notification. Runtime/Metal remains authoritative;
+    /// AppKit uses this to switch the surrounding Pane chrome.
+    var onAlternateScreenChanged: ((Bool) -> Void)?
+    var onFrameChanged: ((NativePreparedFrame) -> Void)?
+
+    var terminalBridgeIsConnected: Bool {
+        bridge?.isConnected == true
+    }
+
+    /// Reconnects the pane's existing PTY bridge at the command boundary.
+    /// Block timeline updates may recreate presentation views, but a command
+    /// must never be rejected merely because that view has just re-entered the
+    /// window hierarchy.
+    @discardableResult
+    func ensureTerminalBridgeConnected() -> Bool {
+        guard bridge?.isConnected != true else { return true }
+        return bridge?.start() == true
+    }
+
+    @discardableResult
+    func terminalSubmitCommittedText(_ text: String) -> Int32 {
+        bridge?.submitCommittedText(text) ?? -10
+    }
+
+    @discardableResult
+    func terminalSubmitKey(kind: UInt16, scalar: UInt32) -> Int32 {
+        bridge?.submitKey(kind: kind, scalar: scalar) ?? -10
+    }
+
+    @discardableResult
+    func terminalProposeGeometry(
+        viewportWidth: Double,
+        viewportHeight: Double,
+        horizontalInsets: Double,
+        verticalInsets: Double,
+        cellWidth: Double,
+        cellHeight: Double,
+        meaningfulLayoutEpoch: Bool
+    ) -> Int32 {
+        bridge?.proposeGeometry(
+            viewportWidth: viewportWidth,
+            viewportHeight: viewportHeight,
+            horizontalInsets: horizontalInsets,
+            verticalInsets: verticalInsets,
+            cellWidth: cellWidth,
+            cellHeight: cellHeight,
+            meaningfulLayoutEpoch: meaningfulLayoutEpoch
+        ) ?? -10
+    }
+
+    @discardableResult
+    func terminalRetryResize() -> Int32 {
+        bridge?.retryResize() ?? -10
+    }
+
+    func terminalInputFailureCode() -> Int32 {
+        bridge?.inputFailureCode() ?? 4
+    }
+
+    func terminalResizeFailureCode() -> Int32 {
+        bridge?.resizeFailureCode() ?? 201
+    }
+
+    func terminalCurrentFrame() -> SeyalPreparedFrame? {
+        bridge?.currentFrame()
+    }
+
+    /// Republishes the latest committed frame after a presentation consumer
+    /// installs its callback. The bridge may publish once during initialization
+    /// before the surrounding Block body is attached.
+    func publishCurrentTerminalFrame() {
+        bridge?.publishCurrentFrame()
+    }
+
+    var terminalExecutionIdentity: String? {
+        guard terminalBridgeIsConnected else { return nil }
+        return String(
+            format: "%016llx%016llx",
+            seyal_bridge_execution_id_high(),
+            seyal_bridge_execution_id_low()
+        )
+    }
+
+    /// Logical cell metrics come from the permanent renderer's font/atlas metric
+    /// source. Resize code must not independently remeasure fonts.
+    func terminalLogicalCellSize() -> CGSize {
+        let pixels = renderer.cellPixelSize(backingScale: 1)
+        return CGSize(width: CGFloat(pixels.width), height: CGFloat(pixels.height))
+    }
+
+    /// Candidate-window anchoring needs logical points for the current screen.
+    func terminalPresentationCellSize() -> CGSize {
+        let scale = max(window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1, 1)
+        let pixels = renderer.cellPixelSize(backingScale: scale)
+        return CGSize(
+            width: CGFloat(pixels.width) / scale,
+            height: CGFloat(pixels.height) / scale
+        )
     }
 
     override func layout() {
@@ -272,6 +391,7 @@ final class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
             renderer.setVisible(false)
             invalidatePreparedPresentation()
             invalidateMetalDisplayLink()
+            cancelBridgeReconnect()
             bridge?.stop()
         }
         super.viewWillMove(toWindow: newWindow)
@@ -302,6 +422,28 @@ final class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
             && !isHiddenOrHasHiddenAncestor
     }
 
+    private func scheduleBridgeReconnect() {
+        guard shouldRender, bridge?.isConnected == false, bridgeReconnectTimer == nil else { return }
+        bridgeReconnectGeneration &+= 1
+        let generation = bridgeReconnectGeneration
+        bridgeReconnectTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: false) { [weak self] _ in
+            guard let self, generation == self.bridgeReconnectGeneration else { return }
+            self.bridgeReconnectTimer = nil
+            guard self.shouldRender, self.bridge?.isConnected == false else { return }
+            if self.bridge?.start() == true {
+                self.cancelBridgeReconnect()
+            } else {
+                self.scheduleBridgeReconnect()
+            }
+        }
+    }
+
+    private func cancelBridgeReconnect() {
+        bridgeReconnectTimer?.invalidate()
+        bridgeReconnectTimer = nil
+        bridgeReconnectGeneration &+= 1
+    }
+
     private func updateVisibility() {
         let renderable = shouldRender
         let becameRenderable = renderable && !self.renderable
@@ -312,7 +454,11 @@ final class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
             }
             forceNextFrame = true
             if bridge?.isConnected == false {
-                _ = bridge?.start()
+                if bridge?.start() == true {
+                    cancelBridgeReconnect()
+                } else {
+                    scheduleBridgeReconnect()
+                }
             }
         } else {
             invalidateMetalDisplayLink()
@@ -349,6 +495,11 @@ final class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
         }
         guard let frame = NativePreparedFrame(bridgeFrame: bridgeFrame) else {
             return
+        }
+        onFrameChanged?(frame)
+        if lastAlternateScreen != frame.alternateScreen {
+            lastAlternateScreen = frame.alternateScreen
+            onAlternateScreenChanged?(frame.alternateScreen)
         }
         let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
         do {

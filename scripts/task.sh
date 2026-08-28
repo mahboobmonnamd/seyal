@@ -66,7 +66,7 @@ case "$cmd" in
     python3 scripts/benchmark-smoke.py
     if find crates -type f -path '*/benches/*.rs' -print -quit 2>/dev/null | grep -q .; then
       # Darwin Unix-domain sockets have a 104-byte sun_path limit. The production
-      # benchmark deliberately uses temporary Runtime directories; keep the
+      # benchmarks deliberately use temporary Runtime directories; keep the
       # benchmark root deterministic and short instead of inheriting a potentially
       # long hosted-runner TMPDIR. Production runtime discovery is unchanged.
       if [[ "$(uname -s)" == "Darwin" ]]; then
@@ -81,6 +81,11 @@ case "$cmd" in
         rm -f "$pass5_log"
         trap - EXIT
 
+        # Pass 7 measures its own native-input/client/Runtime/PTY and correlated
+        # resize boundaries. It intentionally remains separate from Pass 5
+        # Candidate-D transport and Pass 6 Metal renderer evidence.
+        cargo_pinned bench -p seyal-client --bench pass7_input_resize --features benchmark-instrumentation --locked
+
         # Pass 5 ends at the committed client display cache. Measure the distinct
         # Pass-6 native boundary separately in a Release app and label GPU
         # completion as a presentation proxy rather than claiming display scanout.
@@ -91,6 +96,7 @@ case "$cmd" in
       else
         echo "[seyal Pass-5 benchmark coverage] measured Candidate-D validation skipped: production benchmark is macOS-only; validator self-test is enforced by make check."
         echo "[seyal Pass-6 renderer benchmark] native Metal measurement skipped: macOS-only."
+        echo "[seyal Pass-7 input/resize benchmark] native measurement skipped: macOS-only."
       fi
     else
       echo "[seyal task] bench: harness metadata recorder passed; no production benchmark target exists yet and no performance result is claimed."

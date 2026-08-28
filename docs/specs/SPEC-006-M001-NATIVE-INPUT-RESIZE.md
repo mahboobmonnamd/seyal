@@ -1,7 +1,11 @@
 # SPEC-006 — M001 native input, focus/IME seam and authoritative resize
 
-- **Status:** Proposed for M001 Pass 7
+- **Status:** Accepted for M001 Pass 7
 - **Date:** 2026-08-27
+- **Accepted:** 2026-08-27
+- **Authority:** PR #703
+- **Approved specification head:** `83d08f22419fc68594c4f5cbcc4cdc817bcb168f`
+- **Merged documentation commit:** `a9ad74d257ade9a0a4d3c3b85a1cce64bbe7cdb9`
 - **Issue:** #702
 - **Architecture authority:** Foundation Architecture + ADR-001 + ADR-004 + ADR-005 + ADR-006
 - **Depends on:** SPEC-001, SPEC-002, SPEC-003, SPEC-004, SPEC-005

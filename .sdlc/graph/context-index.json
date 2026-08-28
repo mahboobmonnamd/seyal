@@ -14,7 +14,7 @@
       "summary": "Owns one terminal endpoint/PTY, child lifecycle, authoritative terminal state, and attachment/projection state.",
       "tags": ["pty", "execution", "runtime", "ownership"],
       "sources": [
-        {"path": "docs/architecture/README.md", "fingerprint": "0b18ea1ffd2a4bcd21aa1f500107d51146217d0c"}
+        {"path": "docs/architecture/README.md", "fingerprint": "26ebefb1c0e5613bd743adc7e282e358e005b864"}
       ],
       "relationships": [
         {"type": "owns", "target": "COMP-TERMINAL-STATE"},
@@ -28,8 +28,8 @@
       "summary": "Canonical VT/grid state mutated by the incremental parser; renderer and GUI consume derived projection and never own a second authoritative grid.",
       "tags": ["vt", "grid", "parser", "damage", "terminal"],
       "sources": [
-        {"path": "docs/architecture/ADR-004-VT-STATE-OWNERSHIP.md", "fingerprint": "c7cd1a72cdd88ce78801b07f240fcb15a8e59e1d"},
-        {"path": "docs/specs/SPEC-001-M001-VT.md", "fingerprint": "fcd04b8ceb6c188d45239b8b04b5be285878c619"}
+        {"path": "docs/architecture/ADR-004-VT-STATE-OWNERSHIP.md", "fingerprint": "36ef6cf1ca4d0db954b1fd43e19871d9a39ffa53"},
+        {"path": "docs/specs/SPEC-001-M001-VT.md", "fingerprint": "6fb5364c4a0dffe6e97398a47f138e6262052d27"}
       ],
       "relationships": [
         {"type": "governed_by", "target": "DEC-ADR-004"},
@@ -43,7 +43,7 @@
       "summary": "Workspace metadata keyed by ExecutionId and logical history anchors. Blocks own no PTY, VT, grid, child, renderer, or copied terminal output.",
       "tags": ["blocks", "workspace", "history", "execution-id"],
       "sources": [
-        {"path": "docs/architecture/README.md", "fingerprint": "0b18ea1ffd2a4bcd21aa1f500107d51146217d0c"}
+        {"path": "docs/architecture/README.md", "fingerprint": "26ebefb1c0e5613bd743adc7e282e358e005b864"}
       ],
       "relationships": [
         {"type": "related_to", "target": "COMP-TERMINAL-EXECUTION"}
@@ -56,7 +56,7 @@
       "summary": "Establishes one authoritative TerminalState, incremental parser framing, parser/state separation, screen ownership, line identity, and generation-based damage.",
       "tags": ["adr", "vt", "ownership", "parser", "damage"],
       "sources": [
-        {"path": "docs/architecture/ADR-004-VT-STATE-OWNERSHIP.md", "fingerprint": "c7cd1a72cdd88ce78801b07f240fcb15a8e59e1d"}
+        {"path": "docs/architecture/ADR-004-VT-STATE-OWNERSHIP.md", "fingerprint": "36ef6cf1ca4d0db954b1fd43e19871d9a39ffa53"}
       ],
       "relationships": [
         {"type": "governs", "target": "COMP-TERMINAL-STATE"}
@@ -80,7 +80,7 @@
       "summary": "Portable terminal-semantics ownership boundary for VT parsing, canonical terminal state, history identity and damage semantics.",
       "tags": ["rust", "crate", "terminal", "vt"],
       "sources": [
-        {"path": "docs/engineering/REPOSITORY-STRUCTURE.md", "fingerprint": "4bcc9bf2120aaf83b0173ddb7209ff7d8a79360a"}
+        {"path": "docs/engineering/REPOSITORY-STRUCTURE.md", "fingerprint": "cc4a99223f29a7a75d2bd3565040e9cc51854038"}
       ],
       "relationships": [
         {"type": "implements", "target": "COMP-TERMINAL-STATE"}

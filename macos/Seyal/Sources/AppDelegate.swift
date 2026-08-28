@@ -94,7 +94,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #if DEBUG
         if useShellPreview, environment["SEYAL_UI_TEST_FORCE_SHORTCUT_HINTS"] == "1" {
             DispatchQueue.main.async { [weak previewShortcutController] in
-                previewShortcutController?.showShortcutHintsForTesting()
+                DispatchQueue.main.async {
+                    previewShortcutController?.showShortcutHintsForTesting()
+                }
             }
         }
         #endif

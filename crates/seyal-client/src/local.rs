@@ -751,7 +751,15 @@ impl LocalDisplayClient {
                         let payload = &frame[HEADER_LEN..];
                         let error =
                             ErrorMessage::decode(payload).map_err(|_| ClientError::Protocol)?;
-                        return Err(ClientError::Server(error.error_code));
+                        // Runtime backpressure is a per-action rejection, not
+                        // a broken transport. Consume the error and preserve
+                        // the connection so the native surface can expose the
+                        // bounded, retryable failure without dropping later
+                        // FIFO work. Other Error frames retain their fatal
+                        // protocol/authority semantics.
+                        if let Some(failure) = classify_server_error(error)? {
+                            self.input_failure = Some(failure);
+                        }
                     }
                     MessageType::Lifecycle => {}
                     _ => return Err(ClientError::Protocol),
@@ -1104,6 +1112,18 @@ impl LocalDisplayClient {
         }
         self.read_offset = 0;
     }
+}
+
+fn classify_server_error(
+    error: ErrorMessage,
+) -> Result<Option<InputAdmissionFailure>, ClientError> {
+    if error.error_code == ErrorCode::Backpressure as u16
+        && (error.offending_message_type == MessageType::Input as u16
+            || error.offending_message_type == MessageType::TerminalKey as u16)
+    {
+        return Ok(Some(InputAdmissionFailure::ClientBackpressure));
+    }
+    Err(ClientError::Server(error.error_code))
 }
 
 struct RuntimeCells<'a>(&'a [DisplayCell]);
@@ -1480,5 +1500,34 @@ mod tests {
             '?' as u32
         ));
         assert!(valid_terminal_key_request(TerminalKeyKind::ArrowUp, 0));
+    }
+
+    #[test]
+    fn runtime_input_backpressure_is_visible_without_fatal_disconnect() {
+        let error = ErrorMessage {
+            error_code: ErrorCode::Backpressure as u16,
+            offending_message_type: MessageType::Input as u16,
+            detail_code: 0,
+        };
+        assert_eq!(
+            classify_server_error(error).unwrap(),
+            Some(InputAdmissionFailure::ClientBackpressure)
+        );
+        let key_error = ErrorMessage {
+            offending_message_type: MessageType::TerminalKey as u16,
+            ..error
+        };
+        assert_eq!(
+            classify_server_error(key_error).unwrap(),
+            Some(InputAdmissionFailure::ClientBackpressure)
+        );
+        assert_eq!(
+            classify_server_error(ErrorMessage {
+                error_code: ErrorCode::InvalidExecution as u16,
+                offending_message_type: MessageType::Input as u16,
+                detail_code: 0,
+            }),
+            Err(ClientError::Server(ErrorCode::InvalidExecution as u16))
+        );
     }
 }

@@ -241,7 +241,7 @@ private enum TerminalNativeKeyClassifier {
             candidate = .enter
         case .tab:
             candidate = .tab
-        case .backspace, .delete:
+        case .backspace:
             candidate = .backspace
         case .upArrow:
             candidate = .arrowUp
@@ -853,6 +853,11 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @MainActor NSTextInpu
                 specialKey: .backTab,
                 charactersIgnoringModifiers: nil,
                 modifierFlags: [.shift]
+            ) == nil
+            && TerminalNativeKeyClassifier.semanticKey(
+                specialKey: .delete,
+                charactersIgnoringModifiers: nil,
+                modifierFlags: []
             ) == nil
     }
 }

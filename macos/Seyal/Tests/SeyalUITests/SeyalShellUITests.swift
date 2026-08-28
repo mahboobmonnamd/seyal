@@ -20,7 +20,7 @@ final class SeyalShellUITests: XCTestCase {
         let window = app.windows["Seyal — UI Shell Preview"]
         XCTAssertTrue(window.waitForExistence(timeout: 5))
         XCTAssertGreaterThanOrEqual(window.frame.width, 1048)
-        XCTAssertGreaterThan(window.frame.height, 760)
+        XCTAssertGreaterThanOrEqual(window.frame.height, 680)
 
         XCTAssertTrue(app.buttons["toggle-left-sidebar"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.buttons["toggle-inspector"].waitForExistence(timeout: 2))

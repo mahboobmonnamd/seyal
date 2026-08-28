@@ -69,7 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 frame: contentRect,
                 state: previewState
             )
-            window.minSize = NSSize(width: 1080, height: 680)
+            window.minSize = NSSize(width: 1050, height: 680)
 
             let shortcuts = SeyalPreviewShortcutController(window: window, state: previewState)
             shortcuts.installMenus()
@@ -93,7 +93,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         #if DEBUG
         if useShellPreview, environment["SEYAL_UI_TEST_FORCE_SHORTCUT_HINTS"] == "1" {
-            previewShortcutController?.showShortcutHintsForTesting()
+            DispatchQueue.main.async { [weak previewShortcutController] in
+                previewShortcutController?.showShortcutHintsForTesting()
+            }
         }
         #endif
     }

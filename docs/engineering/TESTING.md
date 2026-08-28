@@ -27,6 +27,17 @@ Use TDD for:
 
 Rendering may combine deterministic unit tests, projection fixtures, controlled golden/reference tests, native integration tests, and end-to-end validation.
 
+## Native UI rule
+
+Material macOS UI changes are incomplete without tests in the same PR.
+
+- Swift UI source changes require XCTest component/invariant coverage.
+- Visible or interactive `*View.swift`, `AppDelegate.swift`, or `Main.swift` changes also require XCUIAutomation coverage.
+- Native UI E2E must launch the real macOS app through the shared Xcode scheme; browser automation is not a substitute.
+- Stable accessibility semantics/identifiers should be used for interactive controls where appropriate.
+- `make test` runs the native XCTest/XCUIAutomation suite on macOS; `make ui-test` runs it directly.
+- CI enforces the same-PR coverage rule with `scripts/check-ui-test-policy.py` and executes the native tests on the macOS runner.
+
 ## Test classes
 
 - **Unit:** local state transitions/invariants.
@@ -42,6 +53,8 @@ Rendering may combine deterministic unit tests, projection fixtures, controlled 
 
 - retained VT/reference fixtures: `tests/fixtures/vt/`;
 - cross-boundary integration tests: `tests/integration/`;
+- native macOS component tests: `macos/Seyal/Tests/SeyalTests/`;
+- native macOS XCUI E2E: `macos/Seyal/Tests/SeyalUITests/`;
 - M001 fuzz registry/corpora: `fuzz/`;
 - benchmark definitions/environment contract: `benches/`.
 

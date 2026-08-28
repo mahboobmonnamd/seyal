@@ -87,6 +87,24 @@ pub extern "C" fn seyal_bridge_socket_fd() -> i32 {
     })
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_execution_id_low() -> u64 {
+    CLIENT.with(|slot| {
+        slot.borrow().as_ref().map_or(0, |client| {
+            u64::from_le_bytes(client.execution_id().to_bytes()[0..8].try_into().unwrap())
+        })
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_execution_id_high() -> u64 {
+    CLIENT.with(|slot| {
+        slot.borrow().as_ref().map_or(0, |client| {
+            u64::from_le_bytes(client.execution_id().to_bytes()[8..16].try_into().unwrap())
+        })
+    })
+}
+
 /// Drain ready Candidate-D work and prepare the latest committed state.
 ///
 /// Returns 1 when the prepared surface changed, 0 when there was no complete

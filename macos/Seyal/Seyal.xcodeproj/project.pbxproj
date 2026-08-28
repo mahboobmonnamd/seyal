@@ -13,15 +13,42 @@
 		A10000000000000000000004 /* AppKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* AppKit.framework */; };
 		A10000000000000000000005 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* Metal.framework */; };
 		A10000000000000000000006 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007 /* QuartzCore.framework */; };
-		A10000000000000000000007 /* RustDisplayBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* RustDisplayBridge.swift */; };
-		A10000000000000000000008 /* GlyphAtlas.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000A /* GlyphAtlas.swift */; };
-		A10000000000000000000009 /* MetalTerminalRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000B /* MetalTerminalRenderer.swift */; };
-		A1000000000000000000000A /* RendererValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000C /* RendererValidation.swift */; };
-		A1000000000000000000000B /* TerminalShaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000D /* TerminalShaders.metal */; };
-		A1000000000000000000000C /* CoreText.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000F /* CoreText.framework */; };
-		A1000000000000000000000D /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000010 /* CoreGraphics.framework */; };
-		A1000000000000000000000E /* TerminalInputSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000011 /* TerminalInputSurface.swift */; };
+		A10000000000000000000007 /* SeyalDesignTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* SeyalDesignTokens.swift */; };
+		A10000000000000000000008 /* SeyalShellModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000A /* SeyalShellModel.swift */; };
+		A10000000000000000000009 /* BlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000B /* BlockView.swift */; };
+		A1000000000000000000000A /* PaneComposerShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000C /* PaneComposerShellView.swift */; };
+		A1000000000000000000000B /* TerminalSurfaceHostView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000D /* TerminalSurfaceHostView.swift */; };
+		A1000000000000000000000C /* SeyalShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000E /* SeyalShellView.swift */; };
+		A1000000000000000000000D /* SeyalShellPreviewFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000F /* SeyalShellPreviewFactory.swift */; };
+		A10000000000000000000016 /* SeyalShellProductionFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000019 /* SeyalShellProductionFactory.swift */; };
+		C10000000000000000000001 /* SeyalShellComponentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000003 /* SeyalShellComponentTests.swift */; };
+		C10000000000000000000002 /* SeyalShellUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000004 /* SeyalShellUITests.swift */; };
+		A1000000000000000000000E /* RustDisplayBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000010 /* RustDisplayBridge.swift */; };
+		A1000000000000000000000F /* GlyphAtlas.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000011 /* GlyphAtlas.swift */; };
+		A10000000000000000000010 /* MetalTerminalRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000012 /* MetalTerminalRenderer.swift */; };
+		A10000000000000000000011 /* RendererValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000013 /* RendererValidation.swift */; };
+		A10000000000000000000012 /* TerminalShaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000014 /* TerminalShaders.metal */; };
+		A10000000000000000000013 /* CoreText.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000016 /* CoreText.framework */; };
+		A10000000000000000000014 /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000017 /* CoreGraphics.framework */; };
+		A10000000000000000000015 /* TerminalInputSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000018 /* TerminalInputSurface.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		D10000000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A80000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A50000000000000000000001;
+			remoteInfo = Seyal;
+		};
+		D10000000000000000000002 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A80000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A50000000000000000000001;
+			remoteInfo = Seyal;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		A20000000000000000000001 /* Main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Main.swift; sourceTree = "<group>"; };
@@ -32,15 +59,27 @@
 		A20000000000000000000006 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		A20000000000000000000007 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		A20000000000000000000008 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		A20000000000000000000009 /* RustDisplayBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustDisplayBridge.swift; sourceTree = "<group>"; };
-		A2000000000000000000000A /* GlyphAtlas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlyphAtlas.swift; sourceTree = "<group>"; };
-		A2000000000000000000000B /* MetalTerminalRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalTerminalRenderer.swift; sourceTree = "<group>"; };
-		A2000000000000000000000C /* RendererValidation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RendererValidation.swift; sourceTree = "<group>"; };
-		A2000000000000000000000D /* TerminalShaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = TerminalShaders.metal; sourceTree = "<group>"; };
-		A2000000000000000000000E /* SeyalBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SeyalBridge.h; sourceTree = "<group>"; };
-		A2000000000000000000000F /* CoreText.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreText.framework; path = System/Library/Frameworks/CoreText.framework; sourceTree = SDKROOT; };
-		A20000000000000000000010 /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
-		A20000000000000000000011 /* TerminalInputSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalInputSurface.swift; sourceTree = "<group>"; };
+		A20000000000000000000009 /* SeyalDesignTokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeyalDesignTokens.swift; sourceTree = "<group>"; };
+		A2000000000000000000000A /* SeyalShellModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeyalShellModel.swift; sourceTree = "<group>"; };
+		A2000000000000000000000B /* BlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockView.swift; sourceTree = "<group>"; };
+		A2000000000000000000000C /* PaneComposerShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaneComposerShellView.swift; sourceTree = "<group>"; };
+		A2000000000000000000000D /* TerminalSurfaceHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalSurfaceHostView.swift; sourceTree = "<group>"; };
+		A2000000000000000000000E /* SeyalShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeyalShellView.swift; sourceTree = "<group>"; };
+		A2000000000000000000000F /* SeyalShellPreviewFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeyalShellPreviewFactory.swift; sourceTree = "<group>"; };
+		C20000000000000000000001 /* SeyalTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SeyalTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		C20000000000000000000002 /* SeyalUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SeyalUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		C20000000000000000000003 /* SeyalShellComponentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeyalShellComponentTests.swift; sourceTree = "<group>"; };
+		C20000000000000000000004 /* SeyalShellUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeyalShellUITests.swift; sourceTree = "<group>"; };
+		A20000000000000000000010 /* RustDisplayBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustDisplayBridge.swift; sourceTree = "<group>"; };
+		A20000000000000000000011 /* GlyphAtlas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlyphAtlas.swift; sourceTree = "<group>"; };
+		A20000000000000000000012 /* MetalTerminalRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalTerminalRenderer.swift; sourceTree = "<group>"; };
+		A20000000000000000000013 /* RendererValidation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RendererValidation.swift; sourceTree = "<group>"; };
+		A20000000000000000000014 /* TerminalShaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = TerminalShaders.metal; sourceTree = "<group>"; };
+		A20000000000000000000015 /* SeyalBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SeyalBridge.h; sourceTree = "<group>"; };
+		A20000000000000000000016 /* CoreText.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreText.framework; path = System/Library/Frameworks/CoreText.framework; sourceTree = SDKROOT; };
+		A20000000000000000000017 /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
+		A20000000000000000000018 /* TerminalInputSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalInputSurface.swift; sourceTree = "<group>"; };
+		A20000000000000000000019 /* SeyalShellProductionFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeyalShellProductionFactory.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -51,8 +90,22 @@
 				A10000000000000000000004 /* AppKit.framework in Frameworks */,
 				A10000000000000000000005 /* Metal.framework in Frameworks */,
 				A10000000000000000000006 /* QuartzCore.framework in Frameworks */,
-				A1000000000000000000000C /* CoreText.framework in Frameworks */,
-				A1000000000000000000000D /* CoreGraphics.framework in Frameworks */,
+				A10000000000000000000013 /* CoreText.framework in Frameworks */,
+				A10000000000000000000014 /* CoreGraphics.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C30000000000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C30000000000000000000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -63,6 +116,7 @@
 			isa = PBXGroup;
 			children = (
 				A40000000000000000000002 /* Sources */,
+				C40000000000000000000001 /* Tests */,
 				A20000000000000000000008 /* Info.plist */,
 				A40000000000000000000003 /* Frameworks */,
 				A40000000000000000000004 /* Products */,
@@ -75,13 +129,21 @@
 				A20000000000000000000001 /* Main.swift */,
 				A20000000000000000000002 /* AppDelegate.swift */,
 				A20000000000000000000003 /* MetalSurfaceView.swift */,
-				A20000000000000000000011 /* TerminalInputSurface.swift */,
-				A20000000000000000000009 /* RustDisplayBridge.swift */,
-				A2000000000000000000000A /* GlyphAtlas.swift */,
-				A2000000000000000000000B /* MetalTerminalRenderer.swift */,
-				A2000000000000000000000C /* RendererValidation.swift */,
-				A2000000000000000000000D /* TerminalShaders.metal */,
-				A2000000000000000000000E /* SeyalBridge.h */,
+				A20000000000000000000009 /* SeyalDesignTokens.swift */,
+				A2000000000000000000000A /* SeyalShellModel.swift */,
+				A2000000000000000000000B /* BlockView.swift */,
+				A2000000000000000000000C /* PaneComposerShellView.swift */,
+				A2000000000000000000000D /* TerminalSurfaceHostView.swift */,
+				A2000000000000000000000E /* SeyalShellView.swift */,
+				A2000000000000000000000F /* SeyalShellPreviewFactory.swift */,
+				A20000000000000000000019 /* SeyalShellProductionFactory.swift */,
+				A20000000000000000000018 /* TerminalInputSurface.swift */,
+				A20000000000000000000010 /* RustDisplayBridge.swift */,
+				A20000000000000000000011 /* GlyphAtlas.swift */,
+				A20000000000000000000012 /* MetalTerminalRenderer.swift */,
+				A20000000000000000000013 /* RendererValidation.swift */,
+				A20000000000000000000014 /* TerminalShaders.metal */,
+				A20000000000000000000015 /* SeyalBridge.h */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -92,8 +154,8 @@
 				A20000000000000000000005 /* AppKit.framework */,
 				A20000000000000000000006 /* Metal.framework */,
 				A20000000000000000000007 /* QuartzCore.framework */,
-				A2000000000000000000000F /* CoreText.framework */,
-				A20000000000000000000010 /* CoreGraphics.framework */,
+				A20000000000000000000016 /* CoreText.framework */,
+				A20000000000000000000017 /* CoreGraphics.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -102,8 +164,35 @@
 			isa = PBXGroup;
 			children = (
 				A20000000000000000000004 /* Seyal.app */,
+				C20000000000000000000001 /* SeyalTests.xctest */,
+				C20000000000000000000002 /* SeyalUITests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		C40000000000000000000001 /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				C40000000000000000000002 /* SeyalTests */,
+				C40000000000000000000003 /* SeyalUITests */,
+			);
+			path = Tests;
+			sourceTree = "<group>";
+		};
+		C40000000000000000000002 /* SeyalTests */ = {
+			isa = PBXGroup;
+			children = (
+				C20000000000000000000003 /* SeyalShellComponentTests.swift */,
+			);
+			path = SeyalTests;
+			sourceTree = "<group>";
+		};
+		C40000000000000000000003 /* SeyalUITests */ = {
+			isa = PBXGroup;
+			children = (
+				C20000000000000000000004 /* SeyalShellUITests.swift */,
+			);
+			path = SeyalUITests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -126,6 +215,40 @@
 			productReference = A20000000000000000000004 /* Seyal.app */;
 			productType = "com.apple.product-type.application";
 		};
+		C50000000000000000000001 /* SeyalTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C90000000000000000000001 /* Build configuration list for PBXNativeTarget "SeyalTests" */;
+			buildPhases = (
+				C60000000000000000000001 /* Sources */,
+				C30000000000000000000001 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				D20000000000000000000001 /* PBXTargetDependency */,
+			);
+			name = SeyalTests;
+			productName = SeyalTests;
+			productReference = C20000000000000000000001 /* SeyalTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		C50000000000000000000002 /* SeyalUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C90000000000000000000002 /* Build configuration list for PBXNativeTarget "SeyalUITests" */;
+			buildPhases = (
+				C60000000000000000000002 /* Sources */,
+				C30000000000000000000002 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				D20000000000000000000002 /* PBXTargetDependency */,
+			);
+			name = SeyalUITests;
+			productName = SeyalUITests;
+			productReference = C20000000000000000000002 /* SeyalUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -133,11 +256,19 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 1600;
-				LastUpgradeCheck = 1600;
+				LastSwiftUpdateCheck = 1660;
+				LastUpgradeCheck = 1660;
 				TargetAttributes = {
 					A50000000000000000000001 = {
 						CreatedOnToolsVersion = 16.0;
+					};
+					C50000000000000000000001 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = A50000000000000000000001;
+					};
+					C50000000000000000000002 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = A50000000000000000000001;
 					};
 				};
 			};
@@ -155,6 +286,8 @@
 			projectRoot = "";
 			targets = (
 				A50000000000000000000001 /* Seyal */,
+				C50000000000000000000001 /* SeyalTests */,
+				C50000000000000000000002 /* SeyalUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -177,16 +310,53 @@
 				A10000000000000000000001 /* Main.swift in Sources */,
 				A10000000000000000000002 /* AppDelegate.swift in Sources */,
 				A10000000000000000000003 /* MetalSurfaceView.swift in Sources */,
-				A1000000000000000000000E /* TerminalInputSurface.swift in Sources */,
-				A10000000000000000000007 /* RustDisplayBridge.swift in Sources */,
-				A10000000000000000000008 /* GlyphAtlas.swift in Sources */,
-				A10000000000000000000009 /* MetalTerminalRenderer.swift in Sources */,
-				A1000000000000000000000A /* RendererValidation.swift in Sources */,
-				A1000000000000000000000B /* TerminalShaders.metal in Sources */,
+				A10000000000000000000007 /* SeyalDesignTokens.swift in Sources */,
+				A10000000000000000000008 /* SeyalShellModel.swift in Sources */,
+				A10000000000000000000009 /* BlockView.swift in Sources */,
+				A1000000000000000000000A /* PaneComposerShellView.swift in Sources */,
+				A1000000000000000000000B /* TerminalSurfaceHostView.swift in Sources */,
+				A1000000000000000000000C /* SeyalShellView.swift in Sources */,
+				A1000000000000000000000D /* SeyalShellPreviewFactory.swift in Sources */,
+				A10000000000000000000016 /* SeyalShellProductionFactory.swift in Sources */,
+				A10000000000000000000015 /* TerminalInputSurface.swift in Sources */,
+				A1000000000000000000000E /* RustDisplayBridge.swift in Sources */,
+				A1000000000000000000000F /* GlyphAtlas.swift in Sources */,
+				A10000000000000000000010 /* MetalTerminalRenderer.swift in Sources */,
+				A10000000000000000000011 /* RendererValidation.swift in Sources */,
+				A10000000000000000000012 /* TerminalShaders.metal in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C60000000000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C10000000000000000000001 /* SeyalShellComponentTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C60000000000000000000002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C10000000000000000000002 /* SeyalShellUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		D20000000000000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A50000000000000000000001 /* Seyal */;
+			targetProxy = D10000000000000000000001 /* PBXContainerItemProxy */;
+		};
+		D20000000000000000000002 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A50000000000000000000001 /* Seyal */;
+			targetProxy = D10000000000000000000002 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		B00000000000000000000001 /* Debug */ = {
@@ -217,12 +387,9 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_TESTABILITY = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-				);
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)/../../target/debug",
@@ -231,10 +398,14 @@
 					"$(inherited)",
 					"-lseyal_client",
 				);
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = dev.seyal.Seyal;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = Sources/SeyalBridge.h;
+				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 6.0;
 			};
 			name = Debug;
@@ -247,10 +418,6 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-				);
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)/../../target/release",
@@ -259,11 +426,65 @@
 					"$(inherited)",
 					"-lseyal_client",
 				);
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = dev.seyal.Seyal;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = Sources/SeyalBridge.h;
+				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		C80000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.seyal.SeyalTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Seyal.app/Contents/MacOS/Seyal";
+			};
+			name = Debug;
+		};
+		C80000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.seyal.SeyalTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Seyal.app/Contents/MacOS/Seyal";
+			};
+			name = Release;
+		};
+		C80000000000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.seyal.SeyalUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 6.0;
+				TEST_TARGET_NAME = Seyal;
+			};
+			name = Debug;
+		};
+		C80000000000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.seyal.SeyalUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 6.0;
+				TEST_TARGET_NAME = Seyal;
 			};
 			name = Release;
 		};
@@ -284,6 +505,24 @@
 			buildConfigurations = (
 				B00000000000000000000003 /* Debug */,
 				B00000000000000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C90000000000000000000001 /* Build configuration list for PBXNativeTarget "SeyalTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C80000000000000000000001 /* Debug */,
+				C80000000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C90000000000000000000002 /* Build configuration list for PBXNativeTarget "SeyalUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C80000000000000000000003 /* Debug */,
+				C80000000000000000000004 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

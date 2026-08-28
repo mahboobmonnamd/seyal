@@ -168,6 +168,7 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     private var preparationRetryGeneration: UInt64 = 0
     private var preparationRetryScheduled = false
     private var preparationState = PreparationRecoveryState()
+    private var lastAlternateScreen: Bool?
     private(set) var lastBridgeError: Int32?
     private(set) var lastRenderError: Error?
 
@@ -244,6 +245,10 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
 
     func terminalBridgeStatusDidChange() {}
 
+    /// Presentation-only notification. Runtime/Metal remains authoritative;
+    /// AppKit uses this to switch the surrounding Pane chrome.
+    var onAlternateScreenChanged: ((Bool) -> Void)?
+
     var terminalBridgeIsConnected: Bool {
         bridge?.isConnected == true
     }
@@ -294,6 +299,15 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
 
     func terminalCurrentFrame() -> SeyalPreparedFrame? {
         bridge?.currentFrame()
+    }
+
+    var terminalExecutionIdentity: String? {
+        guard terminalBridgeIsConnected else { return nil }
+        return String(
+            format: "%016llx%016llx",
+            seyal_bridge_execution_id_high(),
+            seyal_bridge_execution_id_low()
+        )
     }
 
     /// Logical cell metrics come from the permanent renderer's font/atlas metric
@@ -434,6 +448,10 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
         }
         guard let frame = NativePreparedFrame(bridgeFrame: bridgeFrame) else {
             return
+        }
+        if lastAlternateScreen != frame.alternateScreen {
+            lastAlternateScreen = frame.alternateScreen
+            onAlternateScreenChanged?(frame.alternateScreen)
         }
         let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
         do {

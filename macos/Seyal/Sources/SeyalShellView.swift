@@ -1,6 +1,11 @@
 import AppKit
 
 #if DEBUG
+private final class SeyalPreviewModeControl: NSSegmentedControl {
+    override func accessibilityRole() -> NSAccessibility.Role? { .radioGroup }
+    override func isAccessibilityElement() -> Bool { true }
+}
+
 @MainActor
 final class SeyalShellView: NSView {
     enum InspectorMode: String, CaseIterable {
@@ -363,7 +368,7 @@ final class SeyalShellView: NSView {
         panel.wantsLayer = true
         panel.layer?.backgroundColor = SeyalDesignTokens.Palette.panelBackground.cgColor
 
-        let modeControl = NSSegmentedControl(
+        let modeControl = SeyalPreviewModeControl(
             labels: ["Workspaces", "Tabs"],
             trackingMode: .selectOne,
             target: self,

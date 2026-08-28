@@ -10,6 +10,11 @@ final class SeyalShellUITests: XCTestCase {
             : app.radioGroups["left-mode"]
     }
 
+    private func leftModeSegment(_ label: String) -> XCUIElement {
+        let button = leftModeControl.buttons[label]
+        return button.exists ? button : leftModeControl.radioButtons[label]
+    }
+
     override func setUpWithError() throws {
         continueAfterFailure = false
         app = XCUIApplication()
@@ -69,7 +74,7 @@ final class SeyalShellUITests: XCTestCase {
         let mode = leftModeControl
         XCTAssertTrue(mode.waitForExistence(timeout: 5))
 
-        let tabsSegment = mode.buttons["Tabs"]
+        let tabsSegment = leftModeSegment("Tabs")
         XCTAssertTrue(tabsSegment.exists)
         tabsSegment.click()
 
@@ -79,7 +84,7 @@ final class SeyalShellUITests: XCTestCase {
         XCTAssertTrue(app.buttons["left-new-tab"].waitForExistence(timeout: 2))
         XCTAssertFalse(app.staticTexts["AGENTS · SEYAL OSS"].exists)
 
-        mode.buttons["Workspaces"].click()
+        leftModeSegment("Workspaces").click()
         XCTAssertTrue(app.staticTexts["WORKSPACES"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.staticTexts["AGENTS · SEYAL OSS"].waitForExistence(timeout: 2))
     }

@@ -4,7 +4,7 @@
 - **Date:** 2026-08-28
 - **Issue:** #708
 - **Architecture authority:** Foundation Architecture + Runtime/Workspace Continuity + ADR-001 + ADR-004 + ADR-005 + ADR-006 + ADR-007
-- **Depends on:** SPEC-001, SPEC-003, SPEC-004 and accepted SPEC-006; production implementation additionally requires Pass 7 implementation #706 / PR #707 to be merged and accepted
+- **Depends on:** SPEC-001, SPEC-003, SPEC-004, SPEC-005 and accepted SPEC-006; production implementation additionally requires Pass 7 implementation #706 / PR #707 to be merged and accepted
 
 ## 1. Purpose
 
@@ -38,6 +38,7 @@ This specification is subordinate to:
 - `docs/architecture/SEYAL-ARCH-FOUNDATION-RD-001.md`;
 - `docs/architecture/SEYAL-RUNTIME-WORKSPACE-CONTINUITY-RD-001.md`;
 - accepted ADRs;
+- `docs/specs/SPEC-005-M001-METAL-RENDERER.md` for permanent Metal presentation and renderer evidence that Pass 8 must preserve;
 - `docs/milestones/MILESTONE-001.md`;
 - the current frozen Core Terminal UI reference set.
 
@@ -88,7 +89,7 @@ The terminal remains fully usable when Block metadata is unavailable.
 12. Client Block state is disposable and rebuildable from Runtime/workspace metadata while that metadata remains available.
 13. Block metadata failure degrades presentation to raw terminal behavior; it never changes terminal execution correctness.
 14. M001 Block storage and delivery are bounded and create no persistent timer/poll loop.
-15. If a client receives `Lifecycle::Finalized`, all final terminal display state for that execution has already been ordered before it; if a negotiated M001 Block exists, its `BlockState::Completed` is also ordered before `Lifecycle::Finalized` on that connection.
+15. If a client receives `Lifecycle::Finalized`, all final terminal display state for that execution has already been ordered before it; if a negotiated M001 Block exists, its `BlockState::Completed` is also ordered before `Lifecycle::Finalized` on that connection. If Runtime cannot produce or admit trustworthy final `BlockState::Completed`, the affected Block-capable connection must be failed closed before `Lifecycle::Finalized` is admitted, so final lifecycle can never coexist with stale `BlockState::Current` on that connection.
 
 ## 5. Canonical M001 data model
 
@@ -264,7 +265,7 @@ The retirement rule is mandatory:
 
 1. while an execution is live or finalization is being emitted, at most one M001 Block record exists for that `ExecutionId`;
 2. after accepted final drain, Runtime performs the ordered finalization sequence in section 10;
-3. after each attached client's finalization frames are either admitted to its existing bounded output mechanism or that client is disconnected under existing backpressure policy, Runtime retires the execution registry record;
+3. after each attached client's finalization frames are either admitted to its existing bounded output mechanism or that client is disconnected under existing backpressure/fail-closed policy, Runtime retires the execution registry record;
 4. the M001 in-memory Block record for that execution is retired in the same bounded finalization/registry-retirement turn and **must not remain in `BlockTimeline` after the execution registry no longer contains that `ExecutionId`**;
 5. retirement never waits for a client acknowledgement/read;
 6. no timer, grace-period cache or optional completed-history list is allowed in M001.
@@ -404,7 +405,7 @@ Observable per-connection order when a Block exists and `CAP_BLOCK_METADATA` was
 
 ```text
 final DisplaySnapshot/DisplayDelta batch
-→ BlockState(Current? latest state already known, then Completed revision 2)
+→ BlockState(Completed, revision 2)
 → Lifecycle::Finalized
 ```
 
@@ -425,13 +426,34 @@ final display bytes
 < Lifecycle::Finalized
 ```
 
-Failure/backpressure rules:
+### 10.1 Fail-closed completion rule
 
-- Runtime never waits for a client read/acknowledgement;
-- if the final `BlockState::Completed` cannot be admitted within the existing bounded mandatory-output policy, that client is disconnected/failed under the existing connection policy rather than being allowed to observe `Lifecycle::Finalized` ahead of the missing completion metadata;
-- execution finalization and Block retirement continue independently after bounded client cleanup;
-- a client that actually receives `Lifecycle::Finalized` must therefore never observe an older Current Block state for the same negotiated admitted Block as its final authoritative metadata state;
-- Block encode/storage failure cannot suppress final terminal display or hold the execution open. If no trustworthy Completed metadata can be produced, the client follows section 12 recovery/fallback and terminal lifecycle still completes.
+Runtime never waits for a client read/acknowledgement, but a connection that has negotiated Block metadata must never observe final lifecycle while retaining stale `Current` metadata.
+
+Therefore:
+
+- if final `BlockState::Completed` cannot be admitted within the existing bounded mandatory-output policy for one connection, that connection is disconnected/failed under the existing bounded connection policy **before** `Lifecycle::Finalized` is admitted on that connection;
+- if the Workspace Block `Current→Completed` mutation fails, or Runtime cannot produce a trustworthy encoded `BlockState::Completed` for the execution at all, Runtime marks that Block record metadata-failed and disconnects **every currently attached Block-capable connection for that execution that could hold revision-1 `Current`** before any such connection can receive `Lifecycle::Finalized`;
+- if the failure is connection-local after trustworthy Completed metadata exists, only the affected Block-capable connection must fail closed; other connections may continue according to their own ordered streams;
+- Runtime must not enqueue `Lifecycle::Finalized` first and later discover that completion metadata failed; completion mutation/encoding/admission outcome is resolved before Finalized admission for each Block-capable connection;
+- disconnect invalidates that connection's disposable `BlockCache`; a reconnect starts from normal attachment state and must never reuse the stale cache as authority;
+- non-Block-capable connections retain the existing final-display-before-Finalized contract and need not be disconnected solely because Block metadata failed;
+- execution finalization, process cleanup, execution-registry retirement and mandatory Block-record retirement continue after bounded connection cleanup and never wait for acknowledgement;
+- no retry timer, busy loop, automatic capability re-enable loop or terminal-content reconstruction is permitted.
+
+Thus the only observable outcomes for an affected Block-capable connection are:
+
+```text
+final display < BlockState::Completed < Lifecycle::Finalized
+```
+
+or
+
+```text
+connection fails closed before Lifecycle::Finalized
+```
+
+There is no legal state in which that connection receives `Lifecycle::Finalized` while its latest accepted Block metadata remains `Current`.
 
 No synchronous renderer acknowledgement is added by this ordering.
 
@@ -449,6 +471,8 @@ Normal revision rules:
 - `Completed → Current`, anchor change, execution-id change or unknown kind/state is a semantic conflict, even if framing itself is valid.
 
 No conflicting update may partially mutate committed `BlockCache` or terminal `DisplayCache`.
+
+A connection close/detach invalidates its disposable `BlockCache`; stale metadata from a dead attachment is never carried forward as authority to a new attachment.
 
 ## 12. Malformed/conflicting metadata recovery
 
@@ -492,7 +516,14 @@ Allocation/admission/observation/encode failure:
 - must not create retry spin/timer work;
 - marks that execution's Block metadata unavailable for the current in-memory record lifecycle;
 - suppresses Block projection rather than fabricating replacement metadata;
-- terminal display/input/lifecycle continue normally.
+- terminal display/input/lifecycle continue normally subject to the fail-closed connection rule below.
+
+If Runtime-side metadata becomes unavailable **after any attached Block-capable client may already have accepted `Current`**, Runtime must not leave that stale cache authoritative:
+
+- for non-final runtime metadata failure, affected Block-capable attachments are disconnected with bounded cleanup and their disposable `BlockCache` is invalidated; execution continues and later attachment falls back to raw terminal if metadata remains unavailable;
+- for completion mutation/encode failure at finalization, section 10.1 is mandatory: every affected Block-capable connection is disconnected before `Lifecycle::Finalized` can be admitted on that connection;
+- clients without negotiated Block metadata are unaffected except by ordinary execution lifecycle;
+- no synthetic `Completed`, replacement `BlockId`, anchor rewrite, terminal scraping or automatic retry is allowed.
 
 If a partially trusted Runtime Block record violates its own invariant, it must be quarantined/removed from projection and treated as an internal metadata failure; it must never be repaired by changing its anchor or generating a replacement `BlockId` for the same live execution.
 
@@ -502,7 +533,7 @@ Pass 8 may expose minimal non-interactive Block identity/state treatment around 
 
 Requirements:
 
-- terminal rendering remains the permanent Metal path;
+- terminal rendering remains the permanent SPEC-005 Metal path;
 - no `NSTextView`, SwiftUI text renderer or copied transcript renders terminal output;
 - no client-generated BlockId;
 - no fake command header/status derived from scraping;
@@ -538,7 +569,7 @@ M001 bounds:
 - one 56-byte payload per state emission;
 - existing bounded connection output capacity is reused.
 
-Implementation evidence uses the final accepted Pass 7 exact-head measurements as comparison baseline on the same controlled Apple-Silicon methodology where applicable.
+Implementation evidence uses the final accepted Pass 7 exact-head measurements as comparison baseline on the same controlled Apple-Silicon methodology where applicable and must preserve the permanent renderer behavior/evidence contract from SPEC-005.
 
 Targets:
 
@@ -604,13 +635,18 @@ Rules:
 - BlockState::Completed is ordered before Lifecycle::Finalized for negotiated admitted Block;
 - client receiving Lifecycle::Finalized can already observe terminal final tail bytes and Completed Block state;
 - no-Block/no-capability path preserves existing final-display-before-Finalized contract;
-- inability to admit final BlockState causes bounded client failure/disconnect, not Lifecycle overtaking and not execution stall.
+- inability to admit final BlockState causes bounded client failure/disconnect, not Lifecycle overtaking and not execution stall;
+- injected completion-state mutation failure disconnects every affected Block-capable attachment before any can observe `Lifecycle::Finalized`;
+- injected global Completed encode failure disconnects every affected Block-capable attachment before Finalized while non-Block-capable connections retain normal final lifecycle ordering;
+- injected connection-local Completed encode/admission failure disconnects only the affected Block-capable connection and never leaks `Finalized` after stale `Current` on that stream;
+- no failure path can produce `Lifecycle::Finalized` plus stale `Current` on one Block-capable connection.
 
 ### 16.5 Mandatory retirement / bounded memory
 
 - completed Block is absent immediately after its execution registry record retires;
 - 10,000 sequential short executions do not accumulate completed Block records;
 - client stall during finalization cannot retain Block records indefinitely;
+- completion metadata failure/disconnect cannot retain Block records indefinitely;
 - execution retirement + Block retirement is idempotent under duplicate lifecycle observations;
 - 1/10/50/100/512 simultaneous populations stay within documented bounds.
 
@@ -619,7 +655,8 @@ Rules:
 - Controller and Observer receive latest metadata when negotiated;
 - client without capability receives none and remains correct;
 - detach/reattach to same live Runtime/execution preserves BlockId/start/revision;
-- reconnect rebuilds from Runtime/workspace state, not client persistence.
+- reconnect rebuilds from Runtime/workspace state, not client persistence;
+- connection loss invalidates disposable BlockCache before a new attachment becomes authoritative.
 
 ### 16.7 Protocol / malformed metadata / recovery
 
@@ -637,11 +674,12 @@ Rules:
 
 ### 16.8 Failure / performance
 
-Inject and prove allocation/admission/observation/encode/output-pressure/decode failures while terminal execution/input/output/rendering and cleanup remain correct.
+Inject and prove allocation/admission/observation/completion-mutation/encode/output-pressure/decode failures while terminal execution/input/output/rendering and cleanup remain correct and fail-closed finalization rules remain intact.
 
 Measure:
 
-- controlled same-host Pass 7 input/output/render comparison;
+- controlled same-host Pass 7 input/output comparison;
+- SPEC-005 renderer preparation/presentation regression evidence on the same controlled methodology where applicable;
 - idle CPU/wakes;
 - BlockState encode/client-apply latency;
 - repeated completion/retirement memory high-water and return;
@@ -658,6 +696,7 @@ Pass 8 implementation is complete only when all are evidenced on the final imple
 - [ ] viewport/projection/renderer coordinates are not durable anchors;
 - [ ] Current→Completed occurs only after accepted final drain;
 - [ ] final display < BlockState::Completed < Lifecycle::Finalized ordering is proven where Block capability applies;
+- [ ] completion mutation/encode/admission failure fails closed so no Block-capable connection can observe Lifecycle::Finalized while retaining stale Current;
 - [ ] no-Block path preserves final display < Lifecycle::Finalized;
 - [ ] completed M001 Block record is mandatorily retired with execution registry retirement;
 - [ ] repeated completed executions cannot grow retained Block memory;
@@ -668,6 +707,7 @@ Pass 8 implementation is complete only when all are evidenced on the final imple
 - [ ] capability-gated BlockState is bounded, read-only and exact-layout;
 - [ ] malformed/conflicting metadata has deterministic quarantine/raw-terminal recovery with no retry loop;
 - [ ] client Block metadata is disposable and stale/conflicting updates cannot partially mutate state;
+- [ ] SPEC-005 permanent Metal renderer behavior remains the production presentation path and required renderer regression evidence passes;
 - [ ] required deterministic/integration/fuzz/failure tests pass;
 - [ ] controlled performance/CPU/RSS targets pass or exception is independently re-reviewed;
 - [ ] `make bootstrap`, `make build`, `make test`, `make check`, `make bench` pass;
@@ -705,6 +745,8 @@ The roadmap places coherent raw/Block/composer presentation and trusted shell in
 
 SPEC-006 was accepted by refinement PR #703. Its source/index status must say Accepted before this Pass 8 refinement is eligible to merge; stale “Proposed” wording is an authority defect, not evidence that Pass 7 implementation is complete.
 
+SPEC-005 is a normative dependency of Pass 8 because the minimal Block presentation must preserve the permanent Metal terminal surface and renderer performance/resource evidence contract.
+
 Pass 7 production implementation remains independently incomplete while #706 / PR #707 is open/draft or lacks its required final evidence.
 
 ### 19.2 Separate Pass 8 implementation Issue
@@ -716,10 +758,11 @@ A separate Pass 8 production implementation Issue must exist before this refinem
 Pass 8 production development must not start and the implementation Issue must not move to Ready until all are true simultaneously:
 
 1. SPEC-006 source/index authority is Accepted with #703 provenance;
-2. Pass 7 implementation #706 / PR #707 is merged and every Pass 7 required exit/evidence has passed;
-3. this SPEC-007 refinement is independently re-reviewed after these blocker fixes, accepted and merged;
-4. current master is revalidated after Pass 7 for Runtime/client/native seam changes;
-5. the separate Pass 8 implementation Issue records the final accepted SPEC-007 revision and freezes the exact-head Pass 7 benchmark/evidence baseline.
+2. SPEC-005 remains the accepted permanent renderer authority consumed by Pass 8;
+3. Pass 7 implementation #706 / PR #707 is merged and every Pass 7 required exit/evidence has passed;
+4. this SPEC-007 refinement is independently re-reviewed after these blocker fixes, accepted and merged;
+5. current master is revalidated after Pass 7 for Runtime/client/native seam changes;
+6. the separate Pass 8 implementation Issue records the final accepted SPEC-007 revision and freezes the exact-head Pass 7 benchmark/evidence baseline.
 
 Until then:
 
@@ -737,6 +780,8 @@ Issue #708 / this refinement PR may close only when:
 - [ ] mandatory completed-record retirement makes the memory bound enforceable;
 - [ ] malformed/conflicting metadata recovery is deterministic and loop-free;
 - [ ] final display / Block Completed / Lifecycle Finalized ordering is exact;
+- [ ] Runtime completion metadata failure has a deterministic observable fail-closed transition and cannot leave Finalized + stale Current on any Block-capable connection;
+- [ ] SPEC-005 is present in the normative dependency/authority set and renderer evidence requirements;
 - [ ] SPEC-006 source/index stale Proposed status is corrected to Accepted with #703 provenance;
 - [ ] a separate blocked Pass 8 implementation Issue exists;
 - [ ] this revised contract receives independent review with no unresolved blocker;

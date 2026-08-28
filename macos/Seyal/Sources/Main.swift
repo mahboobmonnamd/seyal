@@ -130,10 +130,10 @@ enum SeyalMain {
         print(
             "pass7_native_input boundary=synthetic_NSEvent_to_production_keyDown_return "
                 + "classification=MEASURED sample_count=\(samples.count) "
-                + "p50_us=\(String(format: \"%.3f\", p50)) "
-                + "p95_us=\(String(format: \"%.3f\", p95)) "
-                + "p99_us=\(String(format: \"%.3f\", p99)) "
-                + "max_us=\(String(format: \"%.3f\", maximum)) "
+                + "p50_us=\(String(format: "%.3f", p50)) "
+                + "p95_us=\(String(format: "%.3f", p95)) "
+                + "p99_us=\(String(format: "%.3f", p99)) "
+                + "max_us=\(String(format: "%.3f", maximum)) "
                 + "appkit_event_boundary=true production_keyDown_route=true "
                 + "synthetic_event=true physical_keyboard=false performance_claim=false"
         )

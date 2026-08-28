@@ -22,6 +22,8 @@ xcodebuild \
   -destination 'platform=macOS' \
   -derivedDataPath "$DERIVED_DATA" \
   -resultBundlePath "$RESULT_BUNDLE" \
+  ARCHS=arm64 \
+  ONLY_ACTIVE_ARCH=YES \
   CODE_SIGNING_ALLOWED=NO \
   CODE_SIGNING_REQUIRED=NO \
   SWIFT_ACTIVE_COMPILATION_CONDITIONS='DEBUG $(inherited)' \

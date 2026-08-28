@@ -248,6 +248,7 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     /// Presentation-only notification. Runtime/Metal remains authoritative;
     /// AppKit uses this to switch the surrounding Pane chrome.
     var onAlternateScreenChanged: ((Bool) -> Void)?
+    var onFrameChanged: ((NativePreparedFrame) -> Void)?
 
     var terminalBridgeIsConnected: Bool {
         bridge?.isConnected == true
@@ -449,6 +450,7 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
         guard let frame = NativePreparedFrame(bridgeFrame: bridgeFrame) else {
             return
         }
+        onFrameChanged?(frame)
         if lastAlternateScreen != frame.alternateScreen {
             lastAlternateScreen = frame.alternateScreen
             onAlternateScreenChanged?(frame.alternateScreen)

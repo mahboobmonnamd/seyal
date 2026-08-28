@@ -13,6 +13,7 @@ final class PaneComposerShellView: NSView, NSTextViewDelegate {
     private let accessibilityID: String?
     private let onFocus: (() -> Void)?
     private let onDraftChange: ((String) -> Void)?
+    private let onSubmit: ((String) -> Void)?
     private weak var editor: NSTextView?
 
     init(
@@ -20,13 +21,15 @@ final class PaneComposerShellView: NSView, NSTextViewDelegate {
         draft: String,
         accessibilityID: String? = nil,
         onFocus: (() -> Void)? = nil,
-        onDraftChange: ((String) -> Void)? = nil
+        onDraftChange: ((String) -> Void)? = nil,
+        onSubmit: ((String) -> Void)? = nil
     ) {
         self.mode = mode
         self.draft = draft
         self.accessibilityID = accessibilityID
         self.onFocus = onFocus
         self.onDraftChange = onDraftChange
+        self.onSubmit = onSubmit
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         buildUI()
@@ -144,5 +147,17 @@ final class PaneComposerShellView: NSView, NSTextViewDelegate {
     func textDidChange(_ notification: Notification) {
         guard let editor else { return }
         onDraftChange?(editor.string)
+    }
+
+    func doCommand(by selector: Selector) -> Bool {
+        guard selector == #selector(NSResponder.insertNewline(_:)),
+              let editor,
+              let event = NSApp.currentEvent,
+              !event.modifierFlags.contains(.shift)
+        else { return false }
+        let command = editor.string.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !command.isEmpty else { return true }
+        onSubmit?(command)
+        return true
     }
 }

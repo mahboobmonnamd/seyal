@@ -73,6 +73,14 @@ struct BlockPresentation: Sendable, Identifiable {
     let actions: [String]
 }
 
+struct CommandBlock: Sendable, Identifiable {
+    let id: String
+    let command: String
+    var state: BlockPresentationState
+    var output: String
+    let startedAt: Date
+}
+
 /// UI navigation state for the Flow/Blocks shell.
 ///
 /// This state models navigation/focus/layout only. Runtime owns PTY, VT, grid,
@@ -99,11 +107,13 @@ final class SeyalShellState {
         let id: String
         let title: String
         var draft: String
+        var blocks: [CommandBlock]
 
         init(id: String, title: String, draft: String = "") {
             self.id = id
             self.title = title
             self.draft = draft
+            blocks = []
         }
     }
 
@@ -477,6 +487,22 @@ final class SeyalShellState {
     func updateDraft(_ draft: String, paneID: String) {
         guard let pane = activeTab.panes[paneID] else { return }
         pane.draft = draft
+    }
+
+    func appendCommand(_ command: String, paneID: String) -> String? {
+        guard let pane = activeTab.panes[paneID], !command.isEmpty else { return nil }
+        if let index = pane.blocks.indices.last, pane.blocks[index].state == .running {
+            pane.blocks[index].state = .completed
+        }
+        let id = "block-\(paneID)-\(pane.blocks.count + 1)"
+        pane.blocks.append(CommandBlock(id: id, command: command, state: .running, output: "", startedAt: Date()))
+        pane.draft = ""
+        return id
+    }
+
+    func updateCommandOutput(_ output: String, blockID: String, paneID: String) {
+        guard let pane = activeTab.panes[paneID], let index = pane.blocks.firstIndex(where: { $0.id == blockID }) else { return }
+        pane.blocks[index].output = output
     }
 
     func openAttentionItem(id: String) {

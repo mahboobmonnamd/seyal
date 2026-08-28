@@ -46,6 +46,8 @@ final class SeyalShellView: NSView {
     private var paneContainers: [String: NSView] = [:]
     private var composerViews: [String: PaneComposerShellView] = [:]
     private var tuiBlocks: [String: BlockView] = [:]
+    private var blockBodies: [String: CommandBlockBodyView] = [:]
+    private var surfaces: [String: InteractiveMetalSurfaceView] = [:]
     private var tuiPaneIDs: Set<String> = []
     private var paneFocusLabels: [String: NSTextField] = [:]
     private var isLeftContextVisible = true
@@ -85,6 +87,8 @@ final class SeyalShellView: NSView {
         composerViews.removeAll()
         paneFocusLabels.removeAll()
         tuiBlocks.removeAll()
+        blockBodies.removeAll()
+        surfaces.removeAll()
         tuiPaneIDs.removeAll()
         subviews.forEach { $0.removeFromSuperview() }
         buildUI()
@@ -756,6 +760,9 @@ final class SeyalShellView: NSView {
             },
             onDraftChange: { [weak self] draft in
                 self?.state.updateDraft(draft, paneID: paneID)
+            },
+            onSubmit: { [weak self] command in
+                self?.submitCommand(command, paneID: paneID)
             }
         )
         composerViews[paneID] = composer
@@ -795,6 +802,9 @@ final class SeyalShellView: NSView {
             tuiPaneIDs.remove(paneID)
         }
         tuiBlocks[paneID]?.setTUITakeover(active)
+        if let blockID = state.activeTab.panes[paneID]?.blocks.last?.id {
+            blockBodies[blockID]?.setTUI(active)
+        }
         composerViews[paneID]?.isHidden = active
     }
 
@@ -824,9 +834,17 @@ final class SeyalShellView: NSView {
         return button
     }
 
-    /// Each Pane owns one normal transcript scroll surface. Production uses one
-    /// real bridge-backed terminal body inside one Block presentation. The Block
-    /// is metadata/chrome only and never owns terminal state or copied output.
+    private func submitCommand(_ command: String, paneID: String) {
+        guard let surface = surfaces[paneID],
+              surface.terminalSubmitCommittedText(command + "\r") == 0,
+              state.appendCommand(command, paneID: paneID) != nil
+        else { return }
+        rebuildUI()
+    }
+
+    /// Each Pane owns one composer and a timeline of command Blocks. The
+    /// bridge surface remains the canonical PTY/VT source; its prepared frame
+    /// is projected into the current Block output body.
     private func makeTranscript(paneID: String) -> NSScrollView {
         let scroll = NSScrollView()
         scroll.drawsBackground = false
@@ -842,35 +860,60 @@ final class SeyalShellView: NSView {
         document.layer?.backgroundColor = SeyalDesignTokens.Palette.paneBackground.cgColor
 
         if productionShell {
+            let paneState = state.activeTab.panes[paneID]!
             let surface = InteractiveMetalSurfaceView(frame: .zero)
             surface.translatesAutoresizingMaskIntoConstraints = false
             surface.setAccessibilityIdentifier("terminal-surface.\(paneID)")
             surface.onAlternateScreenChanged = { [weak self] active in
                 self?.setPaneTUI(paneID: paneID, active: active)
             }
-            surface.heightAnchor.constraint(greaterThanOrEqualToConstant: 360).isActive = true
+            surfaces[paneID] = surface
 
-            let blockID = "block-\(surface.terminalExecutionIdentity ?? "pending")"
-            let block = BlockView(
-                presentation: BlockPresentation(
-                    id: blockID,
-                    command: "Interactive shell",
-                    state: .running,
-                    elapsed: "Live",
-                    timestamp: nil,
-                    isSelected: true,
-                    actions: []
-                ),
-                bodyView: surface
-            )
-            block.setAccessibilityIdentifier(blockID)
-            tuiBlocks[paneID] = block
-            document.addSubview(block)
+            var blocks = paneState.blocks
+            if blocks.isEmpty {
+                blocks = [CommandBlock(id: "block-live-\(paneID)", command: "Ready", state: .running, output: "Type a command below", startedAt: Date())]
+            }
+            let stack = NSStackView()
+            stack.orientation = .vertical
+            stack.alignment = .leading
+            stack.spacing = 8
+            stack.translatesAutoresizingMaskIntoConstraints = false
+            for (index, item) in blocks.enumerated() {
+                let body = CommandBlockBodyView(
+                    surface: index == blocks.count - 1 ? surface : nil,
+                    output: item.output.isEmpty ? (index == blocks.count - 1 ? "Type a command below" : "") : item.output
+                )
+                blockBodies[item.id] = body
+                let block = BlockView(
+                    presentation: BlockPresentation(
+                        id: item.id,
+                        command: item.command,
+                        state: item.state,
+                        elapsed: index == blocks.count - 1 ? "Live" : "Done",
+                        timestamp: nil,
+                        isSelected: index == blocks.count - 1,
+                        actions: []
+                    ),
+                    bodyView: body
+                )
+                block.setAccessibilityIdentifier(item.id)
+                if index == blocks.count - 1 { tuiBlocks[paneID] = block }
+                stack.addArrangedSubview(block)
+                block.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+            }
+            surface.onFrameChanged = { [weak self] frame in
+                guard let self else { return }
+                let blockID = paneState.blocks.last?.id ?? blocks.last!.id
+                let output = CommandBlockBodyView.text(from: frame)
+                self.blockBodies[blockID]?.setOutput(output)
+                self.state.updateCommandOutput(output, blockID: blockID, paneID: paneID)
+            }
+            document.addSubview(stack)
             NSLayoutConstraint.activate([
-                block.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 8),
-                block.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -8),
-                block.topAnchor.constraint(equalTo: document.topAnchor, constant: 8),
-                block.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -8),
+                stack.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 8),
+                stack.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -8),
+                stack.topAnchor.constraint(equalTo: document.topAnchor, constant: 8),
+                stack.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -8),
             ])
         } else {
             let host = TerminalSurfaceHostView(frame: .zero)

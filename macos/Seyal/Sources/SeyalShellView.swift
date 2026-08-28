@@ -373,6 +373,7 @@ final class SeyalShellView: NSView {
         modeControl.segmentStyle = .texturedRounded
         modeControl.setAccessibilityIdentifier("left-mode")
         modeControl.setAccessibilityLabel("Left panel mode")
+        modeControl.setAccessibilityRole(.radioGroup)
         modeControl.translatesAutoresizingMaskIntoConstraints = false
 
         let collapse = makeToolbarButton(

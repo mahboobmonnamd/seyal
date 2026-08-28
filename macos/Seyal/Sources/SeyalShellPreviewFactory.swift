@@ -82,6 +82,7 @@ final class SeyalShortcutHintOverlay: NSView {
         label.textColor = SeyalDesignTokens.Palette.textPrimary
         label.alignment = .center
         label.setAccessibilityIdentifier("shortcut-hint.\(hint.id)")
+        label.setAccessibilityLabel(hint.text)
         label.sizeToFit()
 
         let horizontalPadding: CGFloat = 5

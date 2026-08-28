@@ -273,13 +273,13 @@ fn measure_input_boundaries() {
     print_stats("runtime_frame_admission_to_pty_write", runtime_pty_stats);
     print_stats("controlled_native_callback_to_pty_write", native_pty_stats);
     println!(
-        "pass7_input_resources classification=MEASURED client_queue_high_water_bytes={} runtime_queue_high_water_bytes={} rss_baseline_kib={} rss_populated_kib={} rss_measured_kib={} incremental_idle_rss_kib={} cpu_percent_sample={} threads_baseline={} threads_populated={} threads_measured={} fds_baseline={} fds_populated={} fds_measured={} native_boundary_classification=CONTROLLED_FFI_EQUIVALENT_APPKIT_EVENT_NOT_CLAIMED {}",
+        "pass7_input_resources classification=MEASURED measurement_phase=post_input_workload client_queue_high_water_bytes={} runtime_queue_high_water_bytes={} rss_baseline_kib={} rss_populated_kib={} rss_measured_kib={} incremental_post_workload_rss_kib={} cpu_percent_sample={} threads_baseline={} threads_populated={} threads_measured={} fds_baseline={} fds_populated={} fds_measured={} native_boundary_classification=CONTROLLED_FFI_EQUIVALENT_APPKIT_EVENT_NOT_CLAIMED {}",
         client_queue_high_water,
         runtime_queue_high_water,
         baseline.rss_kib,
         populated.rss_kib,
         measured.rss_kib,
-        populated.rss_kib.saturating_sub(baseline.rss_kib),
+        measured.rss_kib.saturating_sub(baseline.rss_kib),
         measured.cpu_percent,
         baseline.threads,
         populated.threads,
@@ -431,7 +431,7 @@ fn measure_resize_boundary(label: &str, target: GridGeometry, reset: GridGeometr
     let measured = process_metrics();
     print_stats(label, stats);
     println!(
-        "pass7_resize_resources case={} geometry={}x{} classification=MEASURED client_queue_high_water_bytes={} runtime_queue_high_water_bytes={} rss_baseline_kib={} rss_populated_kib={} rss_measured_kib={} incremental_idle_rss_kib={} cpu_percent_sample={} {}",
+        "pass7_resize_resources case={} geometry={}x{} classification=MEASURED measurement_phase=post_resize_workload client_queue_high_water_bytes={} runtime_queue_high_water_bytes={} rss_baseline_kib={} rss_populated_kib={} rss_measured_kib={} incremental_post_resize_rss_kib={} cpu_percent_sample={} {}",
         label,
         target.columns,
         target.rows,
@@ -440,7 +440,7 @@ fn measure_resize_boundary(label: &str, target: GridGeometry, reset: GridGeometr
         baseline.rss_kib,
         populated.rss_kib,
         measured.rss_kib,
-        populated.rss_kib.saturating_sub(baseline.rss_kib),
+        measured.rss_kib.saturating_sub(baseline.rss_kib),
         measured.cpu_percent,
         PERFORMANCE_CLAIM,
     );

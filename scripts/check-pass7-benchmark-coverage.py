@@ -76,7 +76,8 @@ def validate(text: str) -> list[str]:
             "rss_baseline_kib=",
             "rss_populated_kib=",
             "rss_measured_kib=",
-            "incremental_idle_rss_kib=",
+            "measurement_phase=post_input_workload",
+            "incremental_post_workload_rss_kib=",
             "cpu_percent_sample=",
             "native_boundary_classification=CONTROLLED_FFI_EQUIVALENT_APPKIT_EVENT_NOT_CLAIMED",
             "performance_claim=false",
@@ -128,9 +129,9 @@ pass7_latency boundary=runtime_frame_admission_to_pty_write classification=MEASU
 pass7_latency boundary=controlled_native_callback_to_pty_write classification=MEASURED sample_count=120 p50_us=1.0 p95_us=2.0 p99_us=3.0 max_us=4.0 performance_claim=false
 pass7_latency boundary=resize_120x40 classification=MEASURED sample_count=120 p50_us=1.0 p95_us=2.0 p99_us=3.0 max_us=4.0 performance_claim=false
 pass7_latency boundary=resize_512x256 classification=MEASURED sample_count=120 p50_us=1.0 p95_us=2.0 p99_us=3.0 max_us=4.0 performance_claim=false
-pass7_input_resources classification=MEASURED client_queue_high_water_bytes=41 runtime_queue_high_water_bytes=1 rss_baseline_kib=100 rss_populated_kib=200 rss_measured_kib=210 incremental_idle_rss_kib=100 cpu_percent_sample=0.1 native_boundary_classification=CONTROLLED_FFI_EQUIVALENT_APPKIT_EVENT_NOT_CLAIMED performance_claim=false
-pass7_resize_resources case=resize_120x40 geometry=120x40 classification=MEASURED client_queue_high_water_bytes=56 runtime_queue_high_water_bytes=0 rss_baseline_kib=100 rss_populated_kib=200 rss_measured_kib=210 incremental_idle_rss_kib=100 cpu_percent_sample=0.1 performance_claim=false
-pass7_resize_resources case=resize_512x256 geometry=512x256 classification=MEASURED client_queue_high_water_bytes=56 runtime_queue_high_water_bytes=0 rss_baseline_kib=100 rss_populated_kib=200 rss_measured_kib=210 incremental_idle_rss_kib=100 cpu_percent_sample=0.1 performance_claim=false
+pass7_input_resources classification=MEASURED measurement_phase=post_input_workload client_queue_high_water_bytes=41 runtime_queue_high_water_bytes=1 rss_baseline_kib=100 rss_populated_kib=200 rss_measured_kib=210 incremental_post_workload_rss_kib=110 cpu_percent_sample=0.1 native_boundary_classification=CONTROLLED_FFI_EQUIVALENT_APPKIT_EVENT_NOT_CLAIMED performance_claim=false
+pass7_resize_resources case=resize_120x40 geometry=120x40 classification=MEASURED measurement_phase=post_resize_workload client_queue_high_water_bytes=56 runtime_queue_high_water_bytes=0 rss_baseline_kib=100 rss_populated_kib=200 rss_measured_kib=210 incremental_post_resize_rss_kib=110 cpu_percent_sample=0.1 performance_claim=false
+pass7_resize_resources case=resize_512x256 geometry=512x256 classification=MEASURED measurement_phase=post_resize_workload client_queue_high_water_bytes=56 runtime_queue_high_water_bytes=0 rss_baseline_kib=100 rss_populated_kib=200 rss_measured_kib=210 incremental_post_resize_rss_kib=110 cpu_percent_sample=0.1 performance_claim=false
 pass7_idle_resource classification=MEASURED idle_window_ms=500 rss_baseline_kib=100 rss_populated_kib=200 rss_idle_kib=205 incremental_idle_rss_kib=105 cpu_percent_sample=0.0 threads_baseline=1 threads_idle=2 fds_baseline=4 fds_idle=8 client_wants_write=false performance_claim=false
 """
     assert not validate(good), validate(good)

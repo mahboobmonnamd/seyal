@@ -762,7 +762,7 @@ final class SeyalShellView: NSView {
                 self?.state.updateDraft(draft, paneID: paneID)
             },
             onSubmit: { [weak self] command in
-                self?.submitCommand(command, paneID: paneID)
+                self?.submitCommand(command, paneID: paneID) == true
             }
         )
         composerViews[paneID] = composer
@@ -834,12 +834,16 @@ final class SeyalShellView: NSView {
         return button
     }
 
-    private func submitCommand(_ command: String, paneID: String) {
+    @discardableResult
+    private func submitCommand(_ command: String, paneID: String) -> Bool {
         guard let surface = surfaces[paneID],
+              surface.ensureTerminalBridgeConnected(),
               surface.terminalSubmitCommittedText(command + "\r") == 0,
               state.appendCommand(command, paneID: paneID) != nil
-        else { return }
+        else { return false }
         rebuildUI()
+        composerViews[paneID]?.focusEditor()
+        return true
     }
 
     /// Each Pane owns one composer and a timeline of command Blocks. The
@@ -908,6 +912,7 @@ final class SeyalShellView: NSView {
                 self.blockBodies[blockID]?.setOutput(output)
                 self.state.updateCommandOutput(output, blockID: blockID, paneID: paneID)
             }
+            surface.publishCurrentTerminalFrame()
             document.addSubview(stack)
             NSLayoutConstraint.activate([
                 stack.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 8),

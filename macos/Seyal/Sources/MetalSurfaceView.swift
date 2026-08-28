@@ -156,6 +156,8 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     private let metalDevice: any MTLDevice
     private let renderer: MetalTerminalRenderer
     private var bridge: RustDisplayBridge?
+    private var bridgeReconnectTimer: Timer?
+    private var bridgeReconnectGeneration: UInt64 = 0
     private var forceNextFrame = false
     private var hasPreparedState = false
     private var presentationState = PresentationRecoveryState()
@@ -254,6 +256,16 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
         bridge?.isConnected == true
     }
 
+    /// Reconnects the pane's existing PTY bridge at the command boundary.
+    /// Block timeline updates may recreate presentation views, but a command
+    /// must never be rejected merely because that view has just re-entered the
+    /// window hierarchy.
+    @discardableResult
+    func ensureTerminalBridgeConnected() -> Bool {
+        guard bridge?.isConnected != true else { return true }
+        return bridge?.start() == true
+    }
+
     @discardableResult
     func terminalSubmitCommittedText(_ text: String) -> Int32 {
         bridge?.submitCommittedText(text) ?? -10
@@ -300,6 +312,13 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
 
     func terminalCurrentFrame() -> SeyalPreparedFrame? {
         bridge?.currentFrame()
+    }
+
+    /// Republishes the latest committed frame after a presentation consumer
+    /// installs its callback. The bridge may publish once during initialization
+    /// before the surrounding Block body is attached.
+    func publishCurrentTerminalFrame() {
+        bridge?.publishCurrentFrame()
     }
 
     var terminalExecutionIdentity: String? {
@@ -372,6 +391,7 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
             renderer.setVisible(false)
             invalidatePreparedPresentation()
             invalidateMetalDisplayLink()
+            cancelBridgeReconnect()
             bridge?.stop()
         }
         super.viewWillMove(toWindow: newWindow)
@@ -402,6 +422,28 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
             && !isHiddenOrHasHiddenAncestor
     }
 
+    private func scheduleBridgeReconnect() {
+        guard shouldRender, bridge?.isConnected == false, bridgeReconnectTimer == nil else { return }
+        bridgeReconnectGeneration &+= 1
+        let generation = bridgeReconnectGeneration
+        bridgeReconnectTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: false) { [weak self] _ in
+            guard let self, generation == self.bridgeReconnectGeneration else { return }
+            self.bridgeReconnectTimer = nil
+            guard self.shouldRender, self.bridge?.isConnected == false else { return }
+            if self.bridge?.start() == true {
+                self.cancelBridgeReconnect()
+            } else {
+                self.scheduleBridgeReconnect()
+            }
+        }
+    }
+
+    private func cancelBridgeReconnect() {
+        bridgeReconnectTimer?.invalidate()
+        bridgeReconnectTimer = nil
+        bridgeReconnectGeneration &+= 1
+    }
+
     private func updateVisibility() {
         let renderable = shouldRender
         let becameRenderable = renderable && !self.renderable
@@ -412,7 +454,11 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
             }
             forceNextFrame = true
             if bridge?.isConnected == false {
-                _ = bridge?.start()
+                if bridge?.start() == true {
+                    cancelBridgeReconnect()
+                } else {
+                    scheduleBridgeReconnect()
+                }
             }
         } else {
             invalidateMetalDisplayLink()

@@ -67,7 +67,10 @@ final class SeyalShellComponentTests: XCTestCase {
         let composer = PaneComposerShellView(
             mode: .available,
             draft: "echo from composer",
-            onSubmit: { submitted = $0 }
+            onSubmit: {
+                submitted = $0
+                return true
+            }
         )
         let editor = try! XCTUnwrap(descendants(of: NSTextView.self, in: composer).first)
 
@@ -75,6 +78,84 @@ final class SeyalShellComponentTests: XCTestCase {
 
         XCTAssertEqual(submitted, "echo from composer")
         XCTAssertFalse(editor.string.contains("\n"))
+    }
+
+    @MainActor
+    func testComposerFieldEditorReturnSubmitsInsteadOfInsertingANewline() {
+        var submitted: String?
+        let composer = PaneComposerShellView(
+            mode: .available,
+            draft: "pwd",
+            onSubmit: {
+                submitted = $0
+                return true
+            }
+        )
+        let editor = try! XCTUnwrap(descendants(of: NSTextView.self, in: composer).first)
+
+        editor.doCommand(by: #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)))
+
+        XCTAssertEqual(submitted, "pwd")
+        XCTAssertEqual(editor.string, "")
+    }
+
+    @MainActor
+    func testComposerPreservesDraftWhenSubmissionIsRejected() {
+        let composer = PaneComposerShellView(
+            mode: .available,
+            draft: "echo while disconnected",
+            onSubmit: { _ in false }
+        )
+        let editor = try! XCTUnwrap(descendants(of: NSTextView.self, in: composer).first)
+
+        editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+
+        XCTAssertEqual(editor.string, "echo while disconnected")
+    }
+
+    @MainActor
+    func testComposerCanRestoreFirstResponderAfterBlockTimelineRebuild() throws {
+        let composer = PaneComposerShellView(mode: .available, draft: "")
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 120),
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: true
+        )
+        window.contentView = composer
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil) }
+
+        let editor = try XCTUnwrap(descendants(of: NSTextView.self, in: composer).first)
+        composer.focusEditor()
+
+        XCTAssertTrue(window.firstResponder === editor)
+    }
+
+    @MainActor
+    func testPreparedFrameProjectionProducesBlockOutputText() {
+        var cells = [
+            SeyalPreparedCell(scalar: 108, foreground: 0, background: 0, flags: 0, reserved: 0),
+            SeyalPreparedCell(scalar: 115, foreground: 0, background: 0, flags: 0, reserved: 0),
+            SeyalPreparedCell(scalar: 0, foreground: 0, background: 0, flags: 0, reserved: 0),
+            SeyalPreparedCell(scalar: 0, foreground: 0, background: 0, flags: 0, reserved: 0),
+        ]
+        let frame = cells.withUnsafeBufferPointer {
+            NativePreparedFrame(
+                cells: $0,
+                generation: 1,
+                rows: 2,
+                columns: 2,
+                cursorRow: 0,
+                cursorColumn: 0,
+                cursorVisible: false,
+                alternateScreen: false,
+                fullRebuild: true,
+                damage: DamageMask()
+            )
+        }
+
+        XCTAssertEqual(CommandBlockBodyView.text(from: frame), "ls")
     }
 
     @MainActor

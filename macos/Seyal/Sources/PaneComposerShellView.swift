@@ -2,17 +2,22 @@ import AppKit
 
 @MainActor
 private final class PaneComposerTextView: NSTextView {
-    var onSubmit: ((String) -> Void)?
+    var onSubmit: ((String) -> Bool)?
 
     override func doCommand(by selector: Selector) {
-        let isReturn = selector == #selector(NSResponder.insertNewline(_:))
+        let isReturn = Self.isReturnSelector(selector)
         let isShiftReturn = NSApp.currentEvent?.modifierFlags.contains(.shift) == true
         let command = string.trimmingCharacters(in: .whitespacesAndNewlines)
         if isReturn && !isShiftReturn && !command.isEmpty {
-            onSubmit?(command)
+            _ = onSubmit?(command)
             return
         }
         super.doCommand(by: selector)
+    }
+
+    static func isReturnSelector(_ selector: Selector) -> Bool {
+        selector == #selector(NSResponder.insertNewline(_:))
+            || selector == #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:))
     }
 }
 
@@ -29,7 +34,7 @@ final class PaneComposerShellView: NSView, NSTextViewDelegate {
     private let accessibilityID: String?
     private let onFocus: (() -> Void)?
     private let onDraftChange: ((String) -> Void)?
-    private let onSubmit: ((String) -> Void)?
+    private let onSubmit: ((String) -> Bool)?
     private weak var editor: NSTextView?
 
     init(
@@ -38,7 +43,7 @@ final class PaneComposerShellView: NSView, NSTextViewDelegate {
         accessibilityID: String? = nil,
         onFocus: (() -> Void)? = nil,
         onDraftChange: ((String) -> Void)? = nil,
-        onSubmit: ((String) -> Void)? = nil
+        onSubmit: ((String) -> Bool)? = nil
     ) {
         self.mode = mode
         self.draft = draft
@@ -91,8 +96,9 @@ final class PaneComposerShellView: NSView, NSTextViewDelegate {
         editor.string = draft
         editor.delegate = self
         editor.onSubmit = { [weak self, weak editor] command in
-            self?.onSubmit?(command)
+            guard self?.onSubmit?(command) == true else { return false }
             editor?.string = ""
+            return true
         }
         editor.isHorizontallyResizable = false
         editor.isVerticallyResizable = true
@@ -127,6 +133,14 @@ final class PaneComposerShellView: NSView, NSTextViewDelegate {
             heightAnchor.constraint(greaterThanOrEqualToConstant: SeyalDesignTokens.Layout.composerMinHeight),
             heightAnchor.constraint(lessThanOrEqualToConstant: SeyalDesignTokens.Layout.composerMaxPreviewHeight),
         ])
+    }
+
+    /// Restores keyboard focus after the shell rebuilds its block timeline.
+    /// The composer is pane-owned, so every accepted command must return
+    /// focus to this editor before the next command is typed.
+    func focusEditor() {
+        guard let editor, let window else { return }
+        window.makeFirstResponder(editor)
     }
 
     private func buildBusyState(process: String) {
@@ -170,13 +184,13 @@ final class PaneComposerShellView: NSView, NSTextViewDelegate {
     }
 
     func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
-        guard selector == #selector(NSResponder.insertNewline(_:)),
+        guard PaneComposerTextView.isReturnSelector(selector),
               let event = NSApp.currentEvent,
               !event.modifierFlags.contains(.shift)
         else { return false }
         let command = textView.string.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !command.isEmpty else { return true }
-        onSubmit?(command)
+        _ = onSubmit?(command)
         return true
     }
 }

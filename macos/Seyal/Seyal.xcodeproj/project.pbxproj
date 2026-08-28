@@ -206,6 +206,7 @@
 			buildConfigurationList = A90000000000000000000002 /* Build configuration list for PBXNativeTarget "Seyal" */;
 			buildPhases = (
 				A60000000000000000000001 /* Sources */,
+				A60000000000000000000002 /* Compile Metal shaders */,
 				A30000000000000000000001 /* Frameworks */,
 				A70000000000000000000001 /* Resources */,
 			);
@@ -327,9 +328,25 @@
 				A1000000000000000000000F /* GlyphAtlas.swift in Sources */,
 				A10000000000000000000010 /* MetalTerminalRenderer.swift in Sources */,
 				A10000000000000000000011 /* RendererValidation.swift in Sources */,
-				A10000000000000000000012 /* TerminalShaders.metal in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A60000000000000000000002 /* Compile Metal shaders */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 0;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/Sources/TerminalShaders.metal",
+			);
+			name = "Compile Metal shaders";
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/default.metallib",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "bash \"$SRCROOT/../../scripts/compile-metal.sh\"\n";
 		};
 		C60000000000000000000001 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;

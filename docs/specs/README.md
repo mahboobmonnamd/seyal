@@ -11,6 +11,15 @@ Specifications define **observable behavior and enforceable contracts** below ac
 - [`SPEC-005-M001-METAL-RENDERER.md`](SPEC-005-M001-METAL-RENDERER.md) — **Accepted for M001 Pass 6 via PR #657:** permanent Metal rendering from committed disposable client display state, damage-driven draw preparation, coarse Rust/native batching, shaping/font fallback, bounded glyph cache/atlas, GPU lifecycle, hidden-surface behavior and deterministic renderer acceptance. Implementation ownership and validation are documented in [`../engineering/M001-PASS6-METAL-RENDERER.md`](../engineering/M001-PASS6-METAL-RENDERER.md).
 - [`SPEC-006-M001-NATIVE-INPUT-RESIZE.md`](SPEC-006-M001-NATIVE-INPUT-RESIZE.md) — **Accepted for M001 Pass 7 via PR #703:** AppKit input classification, atomic committed-text vs semantic-key routing, Runtime-owned key encoding, Controller authority, bounded client queuing, capability-gated correlated `ResizeRequest`/`ResizeResult`, canonical-generation `appliedAwaitingProjection` fencing preventing result-before-projection duplicate resize, authoritative resize/retry semantics, bounded composition-only `NSTextInputClient` UTF-16 contract, focus/accessibility seam and latency/resource acceptance. Acceptance does not make implementation PR #707 merge-ready; implementation validation remains separate.
 
+SPEC-006 / the SPEC-004 Pass 7 additive extension acceptance provenance is:
+
+```text
+Accepted: 2026-08-27
+Authority: PR #703
+Approved specification head: 83d08f22419fc68594c4f5cbcc4cdc817bcb168f
+Merged documentation commit: a9ad74d257ade9a0a4d3c3b85a1cce64bbe7cdb9
+```
+
 ## When a specification is required
 
 Create or update a specification before implementation when work defines or changes a reusable behavioral contract whose correctness cannot safely be inferred from a single Issue. This includes, in particular:

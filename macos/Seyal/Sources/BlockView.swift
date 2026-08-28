@@ -4,6 +4,9 @@ import AppKit
 final class BlockView: NSView {
     private let presentation: BlockPresentation
     private let bodyView: NSView
+    private weak var chromeHeader: NSView?
+    private weak var chromeDivider: NSView?
+    private weak var contentStack: NSStackView?
 
     init(presentation: BlockPresentation, bodyView: NSView) {
         self.presentation = presentation
@@ -85,6 +88,9 @@ final class BlockView: NSView {
         stack.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 12, right: 12)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
+        chromeHeader = header
+        chromeDivider = divider
+        contentStack = stack
 
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -100,9 +106,25 @@ final class BlockView: NSView {
         ])
     }
 
-    /// Action labels remain a component seam only. The pre-Pass-6 shell preview
-    /// does not instantiate BlockView with fake command/output or pretend these
-    /// Runtime-dependent actions can execute before their real backing exists.
+    /// TUI takeover changes presentation chrome only. The body remains the
+    /// same bridge-backed surface and keeps native input/focus ownership.
+    func setTUITakeover(_ active: Bool) {
+        chromeHeader?.isHidden = active
+        chromeDivider?.isHidden = active
+        contentStack?.spacing = active ? 0 : SeyalDesignTokens.Layout.compactSpacing
+        contentStack?.edgeInsets = active
+            ? .zero
+            : NSEdgeInsets(top: 10, left: 12, bottom: 12, right: 12)
+        layer?.backgroundColor = active
+            ? NSColor.clear.cgColor
+            : (presentation.isSelected
+                ? SeyalDesignTokens.Palette.blockSelectedBackground
+                : SeyalDesignTokens.Palette.blockBackground).cgColor
+        layer?.borderWidth = active ? 0 : (presentation.isSelected ? 1.25 : 1)
+    }
+
+    /// Action labels remain a presentation seam. Runtime-dependent actions are
+    /// intentionally empty until their authoritative backing exists.
     private func makeActions() -> NSView {
         let actionViews = presentation.actions.map { action -> NSTextField in
             let field = NSTextField(labelWithString: action)

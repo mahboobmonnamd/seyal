@@ -5,9 +5,9 @@ import AppKit
 enum SeyalShellPreviewFactory {
     static func make(
         frame: NSRect,
-        state: SeyalShellPreviewState? = nil
+        state: SeyalShellState? = nil
     ) -> SeyalShellView {
-        let resolvedState = state ?? SeyalShellPreviewState.makeDefault(
+        let resolvedState = state ?? SeyalShellState.makePreview(
             includeTestAttention: ProcessInfo.processInfo.environment["SEYAL_UI_TEST_FIXTURES"] == "1"
         )
         let shell = SeyalShellView(frame: frame, state: resolvedState)
@@ -307,11 +307,11 @@ final class SeyalPreviewShortcutController: NSObject {
     }
 
     private weak var window: NSWindow?
-    private let state: SeyalShellPreviewState
+    private let state: SeyalShellState
     private let hintOverlay = SeyalShortcutHintOverlay(frame: .zero)
     private var hintMonitor: SeyalShortcutHintMonitor?
 
-    init(window: NSWindow, state: SeyalShellPreviewState) {
+    init(window: NSWindow, state: SeyalShellState) {
         self.window = window
         self.state = state
         super.init()
@@ -622,7 +622,7 @@ final class SeyalPreviewShortcutController: NSObject {
         selectWindow(index: sender.tag)
     }
 
-    static func closeTarget(for state: SeyalShellPreviewState) -> CloseTarget {
+    static func closeTarget(for state: SeyalShellState) -> CloseTarget {
         if state.activeTab.paneCount > 1 {
             return .pane(state.activeTab.focusedPaneID)
         }

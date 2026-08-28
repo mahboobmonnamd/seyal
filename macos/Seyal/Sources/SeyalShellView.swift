@@ -1,6 +1,5 @@
 import AppKit
 
-#if DEBUG
 private final class SeyalPreviewModeControl: NSSegmentedControl {
     override func accessibilityRole() -> NSAccessibility.Role? { .radioGroup }
     override func isAccessibilityElement() -> Bool { true }
@@ -41,10 +40,13 @@ final class SeyalShellView: NSView {
         let composer: NSRect
     }
 
-    private let state: SeyalShellPreviewState
+    private let state: SeyalShellState
+    private let productionShell: Bool
     private var attentionPopover: NSPopover?
     private var paneContainers: [String: NSView] = [:]
     private var composerViews: [String: PaneComposerShellView] = [:]
+    private var tuiBlocks: [String: BlockView] = [:]
+    private var tuiPaneIDs: Set<String> = []
     private var paneFocusLabels: [String: NSTextField] = [:]
     private var isLeftContextVisible = true
     private var isInspectorVisible = true
@@ -58,8 +60,13 @@ final class SeyalShellView: NSView {
 
     private var snapshot: SeyalShellSnapshot { state.snapshot }
 
-    init(frame frameRect: NSRect, state: SeyalShellPreviewState) {
+    init(
+        frame frameRect: NSRect,
+        state: SeyalShellState,
+        productionShell: Bool = false
+    ) {
         self.state = state
+        self.productionShell = productionShell
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.backgroundColor = SeyalDesignTokens.Palette.windowBackground.cgColor
@@ -77,6 +84,8 @@ final class SeyalShellView: NSView {
         paneContainers.removeAll()
         composerViews.removeAll()
         paneFocusLabels.removeAll()
+        tuiBlocks.removeAll()
+        tuiPaneIDs.removeAll()
         subviews.forEach { $0.removeFromSuperview() }
         buildUI()
         needsLayout = true
@@ -629,7 +638,7 @@ final class SeyalShellView: NSView {
         return container
     }
 
-    private func makePaneTree(_ node: SeyalShellPreviewState.PaneTree) -> NSView {
+    private func makePaneTree(_ node: SeyalShellState.PaneTree) -> NSView {
         switch node {
         case let .pane(paneID):
             return makePane(paneID: paneID)
@@ -750,6 +759,7 @@ final class SeyalShellView: NSView {
             }
         )
         composerViews[paneID] = composer
+        composer.isHidden = tuiPaneIDs.contains(paneID)
         if isFocused {
             composerView = composer
         }
@@ -778,6 +788,16 @@ final class SeyalShellView: NSView {
         return pane
     }
 
+    private func setPaneTUI(paneID: String, active: Bool) {
+        if active {
+            tuiPaneIDs.insert(paneID)
+        } else {
+            tuiPaneIDs.remove(paneID)
+        }
+        tuiBlocks[paneID]?.setTUITakeover(active)
+        composerViews[paneID]?.isHidden = active
+    }
+
     private func makePaneControlButton(
         paneID: String,
         symbol: String,
@@ -804,9 +824,9 @@ final class SeyalShellView: NSView {
         return button
     }
 
-    /// Each Pane owns one normal transcript scroll surface. The preview deliberately
-    /// contains no fabricated command/output. The permanent Metal host is visible,
-    /// but no TerminalExecution or display state is attached before Pass 6.
+    /// Each Pane owns one normal transcript scroll surface. Production uses one
+    /// real bridge-backed terminal body inside one Block presentation. The Block
+    /// is metadata/chrome only and never owns terminal state or copied output.
     private func makeTranscript(paneID: String) -> NSScrollView {
         let scroll = NSScrollView()
         scroll.drawsBackground = false
@@ -821,36 +841,72 @@ final class SeyalShellView: NSView {
         document.wantsLayer = true
         document.layer?.backgroundColor = SeyalDesignTokens.Palette.paneBackground.cgColor
 
-        let host = TerminalSurfaceHostView(frame: .zero)
-        host.translatesAutoresizingMaskIntoConstraints = false
-        document.addSubview(host)
+        if productionShell {
+            let surface = InteractiveMetalSurfaceView(frame: .zero)
+            surface.translatesAutoresizingMaskIntoConstraints = false
+            surface.setAccessibilityIdentifier("terminal-surface.\(paneID)")
+            surface.onAlternateScreenChanged = { [weak self] active in
+                self?.setPaneTUI(paneID: paneID, active: active)
+            }
+            surface.heightAnchor.constraint(greaterThanOrEqualToConstant: 360).isActive = true
 
-        let title = NSTextField(labelWithString: "No TerminalExecution attached")
-        title.font = SeyalDesignTokens.Typography.bodyEmphasized
-        title.textColor = SeyalDesignTokens.Palette.textSecondary
-        title.alignment = .center
+            let blockID = "block-\(surface.terminalExecutionIdentity ?? "pending")"
+            let block = BlockView(
+                presentation: BlockPresentation(
+                    id: blockID,
+                    command: "Interactive shell",
+                    state: .running,
+                    elapsed: "Live",
+                    timestamp: nil,
+                    isSelected: true,
+                    actions: []
+                ),
+                bodyView: surface
+            )
+            block.setAccessibilityIdentifier(blockID)
+            tuiBlocks[paneID] = block
+            document.addSubview(block)
+            NSLayoutConstraint.activate([
+                block.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 8),
+                block.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -8),
+                block.topAnchor.constraint(equalTo: document.topAnchor, constant: 8),
+                block.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -8),
+            ])
+        } else {
+            let host = TerminalSurfaceHostView(frame: .zero)
+            host.translatesAutoresizingMaskIntoConstraints = false
+            document.addSubview(host)
 
-        let detail = NSTextField(labelWithString: "UI preview only · terminal authority remains unwired until Pass 6")
-        detail.font = SeyalDesignTokens.Typography.metadata
-        detail.textColor = SeyalDesignTokens.Palette.textTertiary
-        detail.alignment = .center
+            let title = NSTextField(labelWithString: "No TerminalExecution attached")
+            title.font = SeyalDesignTokens.Typography.bodyEmphasized
+            title.textColor = SeyalDesignTokens.Palette.textSecondary
+            title.alignment = .center
 
-        let empty = NSStackView(views: [title, detail])
-        empty.orientation = .vertical
-        empty.alignment = .centerX
-        empty.spacing = 4
-        empty.translatesAutoresizingMaskIntoConstraints = false
-        document.addSubview(empty)
+            let detail = NSTextField(labelWithString: "UI preview only · terminal authority remains unwired until Pass 6")
+            detail.font = SeyalDesignTokens.Typography.metadata
+            detail.textColor = SeyalDesignTokens.Palette.textTertiary
+            detail.alignment = .center
+
+            let empty = NSStackView(views: [title, detail])
+            empty.orientation = .vertical
+            empty.alignment = .centerX
+            empty.spacing = 4
+            empty.translatesAutoresizingMaskIntoConstraints = false
+            document.addSubview(empty)
+
+            NSLayoutConstraint.activate([
+                host.leadingAnchor.constraint(equalTo: document.leadingAnchor),
+                host.trailingAnchor.constraint(equalTo: document.trailingAnchor),
+                host.topAnchor.constraint(equalTo: document.topAnchor),
+                host.bottomAnchor.constraint(equalTo: document.bottomAnchor),
+                empty.centerXAnchor.constraint(equalTo: document.centerXAnchor),
+                empty.centerYAnchor.constraint(equalTo: document.centerYAnchor),
+            ])
+        }
 
         scroll.documentView = document
 
         NSLayoutConstraint.activate([
-            host.leadingAnchor.constraint(equalTo: document.leadingAnchor),
-            host.trailingAnchor.constraint(equalTo: document.trailingAnchor),
-            host.topAnchor.constraint(equalTo: document.topAnchor),
-            host.bottomAnchor.constraint(equalTo: document.bottomAnchor),
-            empty.centerXAnchor.constraint(equalTo: document.centerXAnchor),
-            empty.centerYAnchor.constraint(equalTo: document.centerYAnchor),
             document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
             document.heightAnchor.constraint(greaterThanOrEqualTo: scroll.contentView.heightAnchor),
         ])
@@ -1326,7 +1382,7 @@ final class SeyalShellView: NSView {
     }
 
     static func smokeTest() -> Bool {
-        let shell = SeyalShellPreviewFactory.make(frame: NSRect(x: 0, y: 0, width: 1280, height: 800))
+        let shell = SeyalShellProductionFactory.make(frame: NSRect(x: 0, y: 0, width: 1280, height: 800))
         shell.layoutSubtreeIfNeeded()
         guard let contract = shell.debugLayoutContract() else { return false }
         return shell.subviews.count == 4
@@ -1338,4 +1394,3 @@ final class SeyalShellView: NSView {
             && contract.pane.width > 600
     }
 }
-#endif

@@ -49,6 +49,8 @@ enum SeyalTerminalKeyKind {
 
 int32_t seyal_bridge_connect_first(void);
 int32_t seyal_bridge_socket_fd(void);
+uint64_t seyal_bridge_execution_id_low(void);
+uint64_t seyal_bridge_execution_id_high(void);
 int32_t seyal_bridge_poll(void);
 int32_t seyal_bridge_wants_write(void);
 int32_t seyal_bridge_flush_writable(void);

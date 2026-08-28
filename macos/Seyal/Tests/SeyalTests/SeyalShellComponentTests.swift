@@ -25,6 +25,26 @@ final class SeyalShellComponentTests: XCTestCase {
     }
 
     @MainActor
+    func testBlockTUITakeoverHidesOnlyPresentationChrome() {
+        let body = NSView()
+        body.translatesAutoresizingMaskIntoConstraints = false
+        body.heightAnchor.constraint(equalToConstant: 120).isActive = true
+        let block = BlockView(
+            presentation: BlockPresentation(
+                id: "tui", command: "nvim", state: .running, elapsed: "Live",
+                timestamp: nil, isSelected: true, actions: []
+            ),
+            bodyView: body
+        )
+
+        block.setTUITakeover(true)
+
+        XCTAssertTrue(block.subviewsRecursively.contains { $0 === body })
+        XCTAssertEqual(block.layer?.borderWidth, 0)
+        XCTAssertFalse(body.isHidden)
+    }
+
+    @MainActor
     func testComposerModesRespectPaneOwnershipRules() {
         let available = PaneComposerShellView(mode: .available, draft: "git status")
         let busy = PaneComposerShellView(mode: .busy(process: "vite"), draft: "")
@@ -54,8 +74,24 @@ final class SeyalShellComponentTests: XCTestCase {
     }
 
     @MainActor
+    func testProductionShellUsesOneRealSurfaceAndOneBlock() {
+        let shell = SeyalShellProductionFactory.make(
+            frame: NSRect(x: 0, y: 0, width: 960, height: 600)
+        )
+        shell.layoutSubtreeIfNeeded()
+
+        XCTAssertEqual(descendants(of: InteractiveMetalSurfaceView.self, in: shell).count, 1)
+        XCTAssertEqual(descendants(of: BlockView.self, in: shell).count, 1)
+        XCTAssertTrue(
+            descendants(of: NSTextField.self, in: shell)
+                .contains { $0.stringValue == "Interactive shell" }
+        )
+        XCTAssertTrue(descendants(of: TerminalSurfaceHostView.self, in: shell).isEmpty)
+    }
+
+    @MainActor
     func testPreviewWorkspaceInventoryMatchesFrozenWorkspaceModel() {
-        let state = SeyalShellPreviewState.makeDefault()
+        let state = SeyalShellState.makePreview()
 
         XCTAssertEqual(
             state.snapshot.workspaces.map(\.name),
@@ -71,7 +107,7 @@ final class SeyalShellComponentTests: XCTestCase {
 
     @MainActor
     func testPreviewTabSelectionChangesCanonicalUISelection() {
-        let state = SeyalShellPreviewState.makeDefault()
+        let state = SeyalShellState.makePreview()
 
         state.selectTab(id: "tab-agent")
 
@@ -84,7 +120,7 @@ final class SeyalShellComponentTests: XCTestCase {
 
     @MainActor
     func testPreviewNewTabIsRealLocalNavigationState() {
-        let state = SeyalShellPreviewState.makeDefault()
+        let state = SeyalShellState.makePreview()
         let originalCount = state.snapshot.tabs.count
 
         let tab = state.createTab()
@@ -96,7 +132,7 @@ final class SeyalShellComponentTests: XCTestCase {
 
     @MainActor
     func testPreviewSplitAndCloseArePaneLocal() {
-        let state = SeyalShellPreviewState.makeDefault()
+        let state = SeyalShellState.makePreview()
         let firstPaneID = state.activeTab.focusedPaneID
         state.updateDraft("first draft", paneID: firstPaneID)
 
@@ -118,7 +154,7 @@ final class SeyalShellComponentTests: XCTestCase {
 
     @MainActor
     func testPreviewInspectorDoesNotFabricateRuntimeTelemetry() {
-        let state = SeyalShellPreviewState.makeDefault()
+        let state = SeyalShellState.makePreview()
         let rows = state.snapshot.inspectorRows
 
         XCTAssertFalse(rows.contains { $0.section == "Runtime" })
@@ -188,7 +224,7 @@ final class SeyalShellComponentTests: XCTestCase {
             NSApp.windowsMenu = oldWindowsMenu
         }
 
-        let state = SeyalShellPreviewState.makeDefault()
+        let state = SeyalShellState.makePreview()
         let shell = SeyalShellPreviewFactory.make(
             frame: NSRect(x: 0, y: 0, width: 1280, height: 800),
             state: state
@@ -238,7 +274,7 @@ final class SeyalShellComponentTests: XCTestCase {
 
     @MainActor
     func testCloseShortcutTargetCascadesPaneThenTabThenWindow() {
-        let state = SeyalShellPreviewState.makeDefault()
+        let state = SeyalShellState.makePreview()
         let originalTabID = state.activeTab.id
         let secondPane = state.splitPane(id: state.activeTab.focusedPaneID, axis: .right)
 
@@ -315,7 +351,7 @@ final class SeyalShellComponentTests: XCTestCase {
             NSApp.windowsMenu = oldWindowsMenu
         }
 
-        let state = SeyalShellPreviewState.makeDefault()
+        let state = SeyalShellState.makePreview()
         let shell = SeyalShellPreviewFactory.make(
             frame: NSRect(x: 0, y: 0, width: 1280, height: 800),
             state: state

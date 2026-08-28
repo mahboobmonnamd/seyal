@@ -345,6 +345,7 @@ pub struct LocalDisplayClient {
     pending_batch: PendingDisplayBatch,
     outbound: VecDeque<PendingControlWrite>,
     outbound_wire_bytes: usize,
+    execution_id: ExecutionId,
     attachment_id: AttachmentId,
     role: Role,
     cache: DisplayCache,
@@ -473,6 +474,7 @@ impl LocalDisplayClient {
             pending_batch: batch,
             outbound: VecDeque::new(),
             outbound_wire_bytes: 0,
+            execution_id,
             attachment_id: attached.attachment_id,
             role,
             cache,
@@ -492,6 +494,10 @@ impl LocalDisplayClient {
 
     pub fn socket_fd(&self) -> i32 {
         self.stream.as_raw_fd()
+    }
+
+    pub fn execution_id(&self) -> ExecutionId {
+        self.execution_id
     }
 
     pub fn cache(&self) -> &DisplayCache {

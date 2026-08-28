@@ -62,7 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.backgroundColor = SeyalDesignTokens.Palette.windowBackground
             window.title = "Seyal — UI Shell Preview"
 
-            let previewState = SeyalShellPreviewState.makeDefault(
+            let previewState = SeyalShellState.makePreview(
                 includeTestAttention: environment["SEYAL_UI_TEST_FIXTURES"] == "1"
             )
             window.contentView = SeyalShellPreviewFactory.make(
@@ -82,9 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             #endif
         } else {
             window.title = "Seyal"
-            let surface = InteractiveMetalSurfaceView(frame: contentRect)
-            window.contentView = surface
-            window.makeFirstResponder(surface)
+            window.contentView = SeyalShellProductionFactory.make(frame: contentRect)
         }
         window.center()
         window.makeKeyAndOrderFront(nil)

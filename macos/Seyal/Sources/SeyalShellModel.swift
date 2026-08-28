@@ -73,14 +73,13 @@ struct BlockPresentation: Sendable, Identifiable {
     let actions: [String]
 }
 
-#if DEBUG
-/// Interactive state used only by the explicit pre-Pass-6 UI preview.
+/// UI navigation state for the Flow/Blocks shell.
 ///
-/// This state intentionally models navigation/focus/layout/draft behavior only.
-/// It is not Runtime state and never represents a PTY, VT grid, process, shell,
-/// execution lifecycle, or resource telemetry.
+/// This state models navigation/focus/layout only. Runtime owns PTY, VT, grid,
+/// process, execution lifecycle and telemetry; a production instance is seeded
+/// from the one execution currently exposed by the native display bridge.
 @MainActor
-final class SeyalShellPreviewState {
+final class SeyalShellState {
     enum SplitAxis: String, Sendable {
         case right
         case down
@@ -179,13 +178,13 @@ final class SeyalShellPreviewState {
         activeWorkspaceID: String,
         attentionItems: [SeyalShellSnapshot.AttentionItem] = []
     ) {
-        precondition(!workspaces.isEmpty, "Preview requires at least one Workspace")
+        precondition(!workspaces.isEmpty, "Shell requires at least one Workspace")
         self.workspaces = workspaces
         self.activeWorkspaceID = activeWorkspaceID
         self.attentionItems = attentionItems
     }
 
-    static func makeDefault(includeTestAttention: Bool = false) -> SeyalShellPreviewState {
+    static func makePreview(includeTestAttention: Bool = false) -> SeyalShellState {
         func terminalTab(id: String, title: String, paneID: String, attention: Bool = false) -> Tab {
             Tab(
                 id: id,
@@ -266,16 +265,41 @@ final class SeyalShellPreviewState {
             ]
             : []
 
-        return SeyalShellPreviewState(
+        return SeyalShellState(
             workspaces: workspaces,
             activeWorkspaceID: "workspace-seyal",
             attentionItems: testAttention
         )
     }
 
+    /// The first production shell projection. It deliberately exposes one
+    /// local workspace/tab/pane until Runtime supplies durable workspace and
+    /// BlockTimeline metadata. The terminal body remains the real bridge-backed
+    /// surface; this method never fabricates command output or agent records.
+    static func makeProduction() -> SeyalShellState {
+        let path = FileManager.default.currentDirectoryPath
+        let workspace = Workspace(
+            id: "workspace-local",
+            name: "Local",
+            detail: path,
+            tabs: [
+                Tab(
+                    id: "tab-local",
+                    title: "Terminal",
+                    pane: Pane(id: "pane-local", title: "Pane 1")
+                ),
+            ],
+            activeTabID: "tab-local"
+        )
+        return SeyalShellState(
+            workspaces: [workspace],
+            activeWorkspaceID: workspace.id
+        )
+    }
+
     var activeWorkspace: Workspace {
         guard let workspace = workspaces.first(where: { $0.id == activeWorkspaceID }) else {
-            preconditionFailure("Active preview Workspace must exist")
+            preconditionFailure("Active shell Workspace must exist")
         }
         return workspace
     }
@@ -283,7 +307,7 @@ final class SeyalShellPreviewState {
     var activeTab: Tab {
         let workspace = activeWorkspace
         guard let tab = workspace.tabs.first(where: { $0.id == workspace.activeTabID }) else {
-            preconditionFailure("Active preview Tab must exist")
+            preconditionFailure("Active shell Tab must exist")
         }
         return tab
     }
@@ -291,7 +315,7 @@ final class SeyalShellPreviewState {
     var focusedPane: Pane {
         let tab = activeTab
         guard let pane = tab.panes[tab.focusedPaneID] else {
-            preconditionFailure("Focused preview Pane must exist")
+            preconditionFailure("Focused shell Pane must exist")
         }
         return pane
     }
@@ -409,7 +433,7 @@ final class SeyalShellPreviewState {
     func splitPane(id paneID: String, axis: SplitAxis) -> Pane {
         let tab = activeTab
         guard tab.panes[paneID] != nil else {
-            preconditionFailure("Cannot split a missing preview Pane")
+            preconditionFailure("Cannot split a missing shell Pane")
         }
 
         let pane = Pane(id: "pane-new-\(nextPaneOrdinal)", title: "Pane \(tab.paneCount + 1)")
@@ -516,4 +540,3 @@ final class SeyalShellPreviewState {
         }
     }
 }
-#endif

@@ -1,8 +1,13 @@
 # M001 Flow/Blocks default and full-screen TUI takeover
 
-**Status:** Proposed architecture amendment — implementation authority pending independent review
+**Status:** Decision adopted for the first production slice; implementation is partial pending native/manual acceptance
 **Parent:** `SEYAL-UI-ARCHITECTURE-001`, `M001-CORE-TERMINAL-REFERENCE-SCREEN.md`
 **Date:** 2026-08-28
+
+The first production slice now launches this shell by default with one real
+bridge-backed surface and one Block. Fixture workspaces remain restricted to
+the explicit debug preview. Runtime workspace/BlockTimeline metadata and
+physical AppKit acceptance remain follow-up gates.
 
 ## Decision
 
@@ -52,8 +57,9 @@ it does not create a new Block stream from alternate-screen frames.
 - `SeyalShellView` is the production default surface, not a debug fixture path.
 - Preview fixtures may remain only as isolated design-test data and must never
   be the normal application launch path or claim Runtime state.
-- The production shell needs a real Runtime-backed `Workspace`/`Tab`/`Pane` /
-  `Block` projection before this amendment is considered implemented.
+- The production shell needs Runtime workspace/BlockTimeline metadata before
+  the one-execution projection can grow beyond its honest single local
+  Workspace/Tab/Pane/Block shape.
 - Existing references to Raw mode mean the terminal surface used during TUI
   takeover or an explicit diagnostic fallback; Raw is not a peer default mode.
 - Warp behavior may be researched for observable takeover, scrollback, focus,
@@ -62,7 +68,7 @@ it does not create a new Block stream from alternate-screen frames.
 
 ## Required implementation evidence
 
-Before implementation is accepted, record:
+Before the full implementation is accepted, record:
 
 1. a real Runtime-backed default Flow/Blocks launch;
 2. one Pane retaining the same `ExecutionId` across normal and TUI states;

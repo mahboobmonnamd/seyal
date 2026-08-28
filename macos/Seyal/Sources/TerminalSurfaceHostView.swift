@@ -7,10 +7,10 @@ import AppKit
 /// the contained Metal surface without changing Block or shell ownership.
 @MainActor
 final class TerminalSurfaceHostView: NSView {
-    let metalSurface: InteractiveMetalSurfaceView
+    let metalSurface: MetalSurfaceView
 
     override init(frame frameRect: NSRect) {
-        metalSurface = InteractiveMetalSurfaceView(frame: frameRect)
+        metalSurface = MetalSurfaceView(frame: frameRect)
         super.init(frame: frameRect)
         translatesAutoresizingMaskIntoConstraints = false
         setAccessibilityIdentifier("terminal-surface")

@@ -44,7 +44,7 @@ final class SeyalShellUITests: XCTestCase {
         XCTAssertTrue(app.buttons["inspector-mode.workspace"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.buttons["inspector-mode.tab"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.buttons["inspector-mode.pane"].waitForExistence(timeout: 2))
-        XCTAssertTrue(app.otherElements["terminal-surface"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.staticTexts["No TerminalExecution attached"].waitForExistence(timeout: 2))
         XCTAssertTrue(app.textViews["composer.pane-1"].waitForExistence(timeout: 2))
 
         XCTAssertFalse(app.staticTexts["git status"].exists)

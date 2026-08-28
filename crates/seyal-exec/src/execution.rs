@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use seyal_terminal::TerminalState;
+use seyal_terminal::{LineId, TerminalState};
 
 use crate::{
     ChildExit, CommandSpec, ExecError, ProjectionDamage, ReadOutcome, Readiness, SignalDisposition,
@@ -11,13 +11,22 @@ use crate::{
 pub struct TerminalExecution {
     endpoint: TerminalEndpoint,
     terminal: TerminalState,
+    initial_primary_line_id: Option<LineId>,
 }
 
 impl TerminalExecution {
     pub fn spawn(command: &CommandSpec, size: WindowSize) -> Result<Self, ExecError> {
         let terminal = TerminalState::new(size.columns(), size.rows())?;
+        // Capture the canonical primary-screen identity before any child bytes
+        // can be admitted. This is a narrow read-only history-identity seam for
+        // Workspace metadata; it is not a copied grid/transcript authority.
+        let initial_primary_line_id = terminal.line_id(0);
         let endpoint = TerminalEndpoint::spawn(command, size)?;
-        Ok(Self { endpoint, terminal })
+        Ok(Self {
+            endpoint,
+            terminal,
+            initial_primary_line_id,
+        })
     }
 
     pub fn child_id(&self) -> u32 {
@@ -26,6 +35,13 @@ impl TerminalExecution {
 
     pub fn terminal(&self) -> &TerminalState {
         &self.terminal
+    }
+
+    /// Canonical primary-screen logical line that existed when this execution
+    /// was created. It is immutable across scroll, resize, alternate-screen
+    /// entry/exit, projection resync, and GUI detach/reattach.
+    pub fn initial_primary_line_id(&self) -> Option<LineId> {
+        self.initial_primary_line_id
     }
 
     /// Copies the complete current canonical visible terminal state into an

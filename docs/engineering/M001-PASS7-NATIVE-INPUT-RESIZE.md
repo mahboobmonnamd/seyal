@@ -1,7 +1,8 @@
 # M001 Pass 7 native input and resize evidence
 
 This record captures the reproducible automated Pass 7 benchmark run for
-implementation head `5a9b77a47aee58541f9267a40a168913648e1791` on 2026-08-28.
+benchmark source head `99df57b` (rebased onto current `master`) on 2026-08-28;
+the evidence record is committed in the following documentation commit.
 It is implementation evidence, not a release-readiness claim.
 
 ## Environment and commands
@@ -22,7 +23,7 @@ text, control bytes and terminal contents are not emitted by benchmark records.
 ## Machine-readable exact-head records
 
 ```text
-pass7_host macos_version=26.5.2 macos_build=25F84 model="Mac17,9" hardware="Apple M5 Pro" arch=aarch64 rust="rustc 1.98.0 (88d9e12ae 2026-08-18)" build_mode=release commit=5a9b77a47aee58541f9267a40a168913648e1791 repetitions=120 percentile_method=nearest_rank cpu_rss_sources=ps_and_usr_bin_time performance_claim=false
+pass7_host macos_version=26.5.2 macos_build=25F84 model="Mac17,9" hardware="Apple M5 Pro" arch=aarch64 rust="rustc 1.98.0 (88d9e12ae 2026-08-18)" build_mode=release commit=99df57bc577b349a182114b583cee279a8587594 repetitions=120 percentile_method=nearest_rank cpu_rss_sources=ps_and_usr_bin_time performance_claim=false
 pass7_latency boundary=controlled_native_callback_to_client_admission classification=MEASURED sample_count=120 p50_us=0.083 p95_us=0.167 p99_us=1.959 max_us=2.417 performance_claim=false
 pass7_latency boundary=client_admission_to_socket_complete classification=MEASURED sample_count=120 p50_us=0.917 p95_us=2.125 p99_us=2.666 max_us=3.250 performance_claim=false
 pass7_latency boundary=runtime_frame_admission_to_pty_write classification=MEASURED sample_count=120 p50_us=1.834 p95_us=2.541 p99_us=4.375 max_us=6.542 performance_claim=false

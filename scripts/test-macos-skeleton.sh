@@ -116,9 +116,9 @@ grep -q 'buildConfiguration == "Debug"' "$SOURCES/AppDelegate.swift" \
   || fail "UI shell preview must be runtime-gated to Debug builds before Pass 6"
 grep -q '#if DEBUG' "$SOURCES/SeyalShellPreviewFactory.swift" \
   || fail "preview fixtures must remain compiled only in Debug builds before Pass 6"
-grep -q "SWIFT_ACTIVE_COMPILATION_CONDITIONS='DEBUG \\$(inherited)'" scripts/build-macos.sh \
+grep -q 'SWIFT_ACTIVE_COMPILATION_CONDITIONS='"'"'DEBUG $(inherited)'"'"'' scripts/build-macos.sh \
   || fail "canonical Debug build must compile the preview-only shell fixtures"
-grep -q "SWIFT_ACTIVE_COMPILATION_CONDITIONS='DEBUG \\$(inherited)'" scripts/test-macos-ui.sh \
+grep -q 'SWIFT_ACTIVE_COMPILATION_CONDITIONS='"'"'DEBUG $(inherited)'"'"'' scripts/test-macos-ui.sh \
   || fail "native UI tests must exercise the same Debug preview compilation path"
 
 bash scripts/build-macos.sh

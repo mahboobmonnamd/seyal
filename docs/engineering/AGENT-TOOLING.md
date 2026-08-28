@@ -17,7 +17,8 @@ Codex and GitHub Copilot CLI both discover project skills directly from `.agents
 | Development readiness | thin `development-readiness` adapter → pinned AI-SDLC `development-readiness` + Seyal Ready gate |
 | Issue decomposition | `issue-refinement` facade → pinned AI-SDLC `work-item-design` + GitHub/Seyal deltas |
 | Implementation | `implement-issue` facade → pinned AI-SDLC `implementation` + Seyal branch/test/docs gates |
-| PR review | `pr-review` facade → pinned AI-SDLC `code-review` + Seyal architecture/terminal evidence gates |
+| Focused code review | thin `code-review` adapter → pinned AI-SDLC `code-review` + Seyal architecture/terminal diff-review gates |
+| PR merge-readiness review | `pr-review` facade → pinned AI-SDLC `pr-review` + Seyal architecture/terminal/evidence merge gates |
 | Change verification | thin `verification` adapter → pinned AI-SDLC `verification` + Seyal evidence gates |
 | Milestone validation | `milestone-validation` facade → pinned AI-SDLC `verification` + Seyal aggregate milestone rules |
 | Native macOS design | `macos-native-design` |
@@ -49,6 +50,7 @@ ai-sdlc
   implementation
   code-review
   verification
+  pr-review
         ↓ exact reviewed pin materialized by make bootstrap-agents
 Seyal/.sdlc/framework/
         ↓
@@ -59,14 +61,16 @@ Seyal-owned GitHub workflow + ADR/spec/milestone + terminal-domain gates
 
 Seyal owns project knowledge and project/domain policy. AI-SDLC owns the reusable SDLC mechanism.
 
-Two integration forms are used deliberately:
+The integration forms are deliberate:
 
-- **direct adapters** keep the generic capability name when Seyal only adds a narrow local gate (`project-context`, `development-readiness`, `verification`);
-- **Seyal facades** preserve an established Seyal workflow entrypoint while delegating the reusable procedure (`issue-refinement` → `work-item-design`, `implement-issue` → `implementation`, `pr-review` → `code-review`, `milestone-validation` → `verification`).
+- **direct adapters** keep the generic capability name when Seyal adds a narrow local gate (`project-context`, `development-readiness`, `code-review`, `verification`);
+- **Seyal facades** preserve an established project workflow entrypoint or add a larger project-domain acceptance layer while delegating the reusable procedure (`issue-refinement` → `work-item-design`, `implement-issue` → `implementation`, `pr-review` → `pr-review`, `milestone-validation` → `verification`).
 
-Do not also add local `work-item-design`, `implementation`, or `code-review` aliases merely to mirror AI-SDLC. That would create overlapping discovery surfaces with the Seyal facades. The generic source remains under `.sdlc/framework/` and the project facade contains only the Seyal-specific delta.
+`code-review` and `pr-review` are intentionally separate discovery surfaces. Use `code-review` for focused implementation/diff defects and regressions. Use `pr-review` when the user asks whether an exact merge candidate is genuinely ready to merge; generic `pr-review` orchestrates or consumes `code-review`, `verification`, and risk-based specialist review before issuing the final merge-readiness verdict.
 
-Terminal-specific skills such as `vt-tdd`, `terminal-conformance`, `metal-renderer`, native macOS rules, performance/security specialist gates, and Seyal architecture invariants remain in this repository.
+Do not also add local `work-item-design` or `implementation` aliases merely to mirror AI-SDLC. That would create overlapping discovery surfaces with the established Seyal facades. The generic source remains under `.sdlc/framework/` and the project facade/adapter contains only the Seyal-specific delta.
+
+Terminal-specific skills such as `vt-tdd`, `terminal-conformance`, `metal-renderer`, native macOS rules, performance/security specialist gates, and Seyal architecture invariants remain in this repository. The generic AI-SDLC `pr-review` must remain product/domain agnostic; Seyal's facade supplies terminal-specific acceptance rules.
 
 Do not migrate skills mechanically. A procedure belongs in AI-SDLC only when it is genuinely product-agnostic, has a stable generic contract/evaluation, and Seyal can retain required domain constraints through context or a thin adapter without weakening quality gates.
 

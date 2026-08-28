@@ -62,6 +62,22 @@ final class SeyalShellComponentTests: XCTestCase {
     }
 
     @MainActor
+    func testComposerReturnSubmitsInsteadOfInsertingANewline() {
+        var submitted: String?
+        let composer = PaneComposerShellView(
+            mode: .available,
+            draft: "echo from composer",
+            onSubmit: { submitted = $0 }
+        )
+        let editor = try! XCTUnwrap(descendants(of: NSTextView.self, in: composer).first)
+
+        editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+
+        XCTAssertEqual(submitted, "echo from composer")
+        XCTAssertFalse(editor.string.contains("\n"))
+    }
+
+    @MainActor
     func testShellHasExactlyOneVerticalTranscriptScrollOwnerInitially() {
         let shell = SeyalShellPreviewFactory.make(
             frame: NSRect(x: 0, y: 0, width: 1280, height: 800)

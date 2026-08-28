@@ -1,6 +1,22 @@
 import AppKit
 
 @MainActor
+private final class PaneComposerTextView: NSTextView {
+    var onSubmit: ((String) -> Void)?
+
+    override func doCommand(by selector: Selector) {
+        let isReturn = selector == #selector(NSResponder.insertNewline(_:))
+        let isShiftReturn = NSApp.currentEvent?.modifierFlags.contains(.shift) == true
+        let command = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        if isReturn && !isShiftReturn && !command.isEmpty {
+            onSubmit?(command)
+            return
+        }
+        super.doCommand(by: selector)
+    }
+}
+
+@MainActor
 final class PaneComposerShellView: NSView, NSTextViewDelegate {
     enum Mode {
         case available
@@ -64,7 +80,7 @@ final class PaneComposerShellView: NSView, NSTextViewDelegate {
         prompt.textColor = SeyalDesignTokens.Palette.focus
         prompt.setContentHuggingPriority(.required, for: .horizontal)
 
-        let editor = NSTextView(frame: .zero)
+        let editor = PaneComposerTextView(frame: .zero)
         editor.translatesAutoresizingMaskIntoConstraints = false
         editor.isRichText = false
         editor.importsGraphics = false
@@ -74,6 +90,10 @@ final class PaneComposerShellView: NSView, NSTextViewDelegate {
         editor.insertionPointColor = SeyalDesignTokens.Palette.focus
         editor.string = draft
         editor.delegate = self
+        editor.onSubmit = { [weak self, weak editor] command in
+            self?.onSubmit?(command)
+            editor?.string = ""
+        }
         editor.isHorizontallyResizable = false
         editor.isVerticallyResizable = true
         editor.textContainerInset = NSSize(width: 0, height: 5)

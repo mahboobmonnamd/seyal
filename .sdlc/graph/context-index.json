@@ -4,7 +4,7 @@
   "description": "Compact Seyal navigation index. Authoritative architecture, specs, milestones, code and tests always win on conflict.",
   "framework": {
     "name": "ai-sdlc",
-    "pinned_revision": "30fdbadfb16080094b42edf4e008e4ed4bef6b44"
+    "pinned_revision": "105e0cedc392a4468308d9bbfd6c273ad44924fe"
   },
   "nodes": [
     {

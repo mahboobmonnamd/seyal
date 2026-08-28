@@ -1,8 +1,8 @@
 # SPEC-004 — M001 local attachment and display-state transport
 
-- **Status:** Accepted for M001 Pass 5. Candidate-D production performance validation passed on controlled physical Apple Silicon at benchmark commit `c8c121380002c86a4e42b6737238289db10965af`; Issue #651 remains the closure authority for the complete Pass 5.1 acceptance set. The additive Pass 7 semantic-key and correlated-resize extensions below are **proposed** by #702 / SPEC-006 until that refinement is accepted.
+- **Status:** Accepted for M001 Pass 5. Candidate-D production performance validation passed on controlled physical Apple Silicon at benchmark commit `c8c121380002c86a4e42b6737238289db10965af`; Issue #651 remains the closure authority for the complete Pass 5.1 acceptance set. The additive Pass 7 semantic-key and correlated-resize extensions below are **accepted** by #702 / SPEC-006 via PR #703; Pass 7 production completion remains governed by #706 / PR #707.
 - **Date:** 2026-08-24
-- **Amended:** 2026-08-25, 2026-08-26; Pass 7 extensions proposed 2026-08-27
+- **Amended:** 2026-08-25, 2026-08-26; Pass 7 extensions accepted 2026-08-27 via PR #703
 - **Issue:** #105 (implementation), #651 (Pass 5.1 final acceptance), #702 (Pass 7 input/resize extension)
 - **Architecture authority:** `ADR-001-LOCAL-DISPLAY-PROJECTION.md`
 - **Depends on:** SPEC-001, SPEC-002, SPEC-003
@@ -43,7 +43,7 @@ Large future image/rich-graphics objects are a separate bulk-object concern. M00
 
 The protocol supports runtime discovery, version negotiation, execution enumeration, observer/controller attach, detach, input, legacy resize, explicit resync, initial/current-state snapshots, steady-state display deltas, lifecycle/error notification and graceful close.
 
-The Pass 7 additive extension defined by SPEC-006 adds:
+The accepted Pass 7 additive extension defined by SPEC-006 adds:
 
 - capability-gated semantic terminal-key intent while keeping mode-sensitive escape encoding inside Runtime;
 - capability-gated correlated `ResizeRequest` / `ResizeResult` messages for the native production resize path, including the canonical generation required to fence a successful resize until authoritative projection catches up.
@@ -151,8 +151,8 @@ M001 server capability bits are:
 
 - bit 0: binary display snapshot/delta transport;
 - bit 1: observer role;
-- bit 2: semantic terminal-key input (`CAP_SEMANTIC_TERMINAL_KEY`) — proposed by Pass 7 / SPEC-006;
-- bit 3: correlated native resize (`CAP_CORRELATED_RESIZE`) — proposed by Pass 7 / SPEC-006.
+- bit 2: semantic terminal-key input (`CAP_SEMANTIC_TERMINAL_KEY`) — accepted by Pass 7 / SPEC-006 / PR #703;
+- bit 3: correlated native resize (`CAP_CORRELATED_RESIZE`) — accepted by Pass 7 / SPEC-006 / PR #703.
 
 Existing Pass 5/6 clients must continue tolerating unknown server capability bits and requiring only the capabilities they understand.
 
@@ -447,7 +447,7 @@ Record p50/p95/p99 output-to-client-state latency, throughput, CPU, RSS, allocat
 
 ### 16.1 Pass 7 additive-extension validation
 
-Before the proposed Pass 7 extensions are accepted for production, SPEC-006 additionally requires:
+Accepted SPEC-006 requires the Pass 7 production implementation to prove:
 
 - capability negotiation proving older/non-advertising Runtime peers are never sent message types 17/18;
 - current Pass 5/6 client tolerates new capability bits 2 and 3;
@@ -474,6 +474,6 @@ Candidate D is the accepted architecture. The controlled physical-M5-Pro benchma
 
 Pass 5 may leave draft only when production code no longer uses per-attachment shared-memory text/grid projections, SPEC/ADR/code/tests agree, all required validation is green, production-equivalent Candidate-D evidence meets Seyal latency/resource goals, and independent architecture/security/performance review has no unresolved blocking finding.
 
-The Pass 7 semantic-key and correlated-resize extensions become accepted only when the SPEC-006 refinement is explicitly approved and merged. Until then, proposed types/capabilities/result semantics are reserved by the refinement branch and are not production authority.
+The Pass 7 semantic-key and correlated-resize extension contract is accepted via SPEC-006 / PR #703. Production Pass 7 is not complete until #706 / PR #707 satisfies SPEC-006's implementation Definition of Done and required independent review/evidence.
 
 Comparator/reference shared-projection code may remain only if isolated from production and clearly labelled non-production evidence. It must not be reachable as a hidden text-grid fallback.

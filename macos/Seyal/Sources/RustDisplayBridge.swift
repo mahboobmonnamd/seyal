@@ -130,14 +130,16 @@ struct NativeTranscriptFrame: Equatable {
 /// identical and must still settle independently.
 struct ComposerRequestCorrelation {
   private(set) var pendingRequestID: UInt64?
+  private var nextRequestID: UInt64 = 1
 
   var isSettled: Bool { pendingRequestID == nil }
 
   mutating func begin(command: String) -> UInt64 {
-    let requestID = (pendingRequestID ?? 0) &+ 1
-    pendingRequestID = requestID == 0 ? 1 : requestID
+    let requestID = nextRequestID
+    nextRequestID = requestID == UInt64.max ? 1 : requestID + 1
+    pendingRequestID = requestID
     _ = command
-    return pendingRequestID!
+    return requestID
   }
 
   mutating func accepts(requestID: UInt64) -> Bool {

@@ -467,6 +467,8 @@ fn measure_resize_boundary(label: &str, target: GridGeometry, reset: GridGeometr
 
 #[cfg(target_os = "macos")]
 fn measure_pass8_resize_attribution() {
+    const COHORTS: usize = 7;
+    const SAMPLES_PER_MODE: usize = 512;
     let target = GridGeometry {
         rows: 40,
         columns: 120,
@@ -475,70 +477,91 @@ fn measure_pass8_resize_attribution() {
         rows: 40,
         columns: 121,
     };
-    let mut disabled = Vec::with_capacity(3);
-    let mut enabled = Vec::with_capacity(3);
 
-    // Alternate modes so host drift cannot systematically favor one side.
-    for block_metadata_enabled in [false, true, true, false, false, true] {
-        let p99 = collect_resize_attribution_p99(block_metadata_enabled, target, reset);
-        if block_metadata_enabled {
-            enabled.push(p99);
-        } else {
-            disabled.push(p99);
+    let disabled_runtime = RuntimeHarness::start();
+    let enabled_runtime = RuntimeHarness::start();
+    let mut disabled_client = disabled_runtime.connect_controller_without_block_metadata();
+    let mut enabled_client = enabled_runtime.connect_controller();
+    converge_geometry(&mut disabled_client, reset);
+    converge_geometry(&mut enabled_client, reset);
+
+    for _ in 0..32 {
+        run_resize_sample(&mut disabled_client, target, reset, false, None);
+        run_resize_sample(&mut enabled_client, target, reset, false, None);
+    }
+
+    let mut cohort_deltas = Vec::with_capacity(COHORTS);
+    let mut disabled_p99s = Vec::with_capacity(COHORTS);
+    let mut enabled_p99s = Vec::with_capacity(COHORTS);
+
+    for cohort in 0..COHORTS {
+        let mut disabled = Samples::with_capacity(SAMPLES_PER_MODE);
+        let mut enabled = Samples::with_capacity(SAMPLES_PER_MODE);
+        let mut disabled_client_hwm = 0usize;
+        let mut disabled_runtime_hwm = 0usize;
+        let mut enabled_client_hwm = 0usize;
+        let mut enabled_runtime_hwm = 0usize;
+
+        for sample in 0..SAMPLES_PER_MODE {
+            let disabled_sink = Some((
+                &mut disabled,
+                &mut disabled_client_hwm,
+                &mut disabled_runtime_hwm,
+            ));
+            let enabled_sink = Some((
+                &mut enabled,
+                &mut enabled_client_hwm,
+                &mut enabled_runtime_hwm,
+            ));
+            if (cohort + sample) % 2 == 0 {
+                run_resize_sample(&mut disabled_client, target, reset, true, disabled_sink);
+                run_resize_sample(&mut enabled_client, target, reset, true, enabled_sink);
+            } else {
+                run_resize_sample(&mut enabled_client, target, reset, true, enabled_sink);
+                run_resize_sample(&mut disabled_client, target, reset, true, disabled_sink);
+            }
         }
-    }
-    disabled.sort_by(f64::total_cmp);
-    enabled.sort_by(f64::total_cmp);
-    let disabled_median = disabled[1];
-    let enabled_median = enabled[1];
-    let delta_percent = if disabled_median > 0.0 {
-        ((enabled_median / disabled_median) - 1.0) * 100.0
-    } else {
-        0.0
-    };
-    println!(
-        "pass8_attribution boundary=resize_120x40 classification=MEASURED method=same_head_alternating_3x120 pass8_disabled_p99_median_us={:.3} pass8_enabled_p99_median_us={:.3} delta_percent={:.2} {}",
-        disabled_median, enabled_median, delta_percent, PERFORMANCE_CLAIM,
-    );
-}
 
-#[cfg(target_os = "macos")]
-fn collect_resize_attribution_p99(
-    block_metadata_enabled: bool,
-    target: GridGeometry,
-    reset: GridGeometry,
-) -> f64 {
-    let runtime = RuntimeHarness::start();
-    let mut client = if block_metadata_enabled {
-        runtime.connect_controller()
-    } else {
-        runtime.connect_controller_without_block_metadata()
-    };
-    converge_geometry(&mut client, reset);
-    for _ in 0..8 {
-        run_resize_sample(&mut client, target, reset, false, None);
-    }
-
-    let mut samples = Samples::with_capacity(REPETITIONS);
-    let mut client_queue_high_water = 0usize;
-    let mut runtime_queue_high_water = 0usize;
-    for _ in 0..REPETITIONS {
-        run_resize_sample(
-            &mut client,
-            target,
-            reset,
-            true,
-            Some((
-                &mut samples,
-                &mut client_queue_high_water,
-                &mut runtime_queue_high_water,
-            )),
+        let disabled_p99 = disabled.stats_us().p99_us;
+        let enabled_p99 = enabled.stats_us().p99_us;
+        let delta_percent = if disabled_p99 > 0.0 {
+            ((enabled_p99 / disabled_p99) - 1.0) * 100.0
+        } else {
+            0.0
+        };
+        disabled_p99s.push(disabled_p99);
+        enabled_p99s.push(enabled_p99);
+        cohort_deltas.push(delta_percent);
+        println!(
+            "pass8_attribution_cohort boundary=resize_120x40 classification=MEASURED cohort={} samples_per_mode={} pass8_disabled_p99_us={:.3} pass8_enabled_p99_us={:.3} delta_percent={:.2} {}",
+            cohort + 1,
+            SAMPLES_PER_MODE,
+            disabled_p99,
+            enabled_p99,
+            delta_percent,
+            PERFORMANCE_CLAIM,
         );
     }
-    let p99 = samples.stats_us().p99_us;
-    drop(client);
-    runtime.finish();
-    p99
+
+    disabled_p99s.sort_by(f64::total_cmp);
+    enabled_p99s.sort_by(f64::total_cmp);
+    cohort_deltas.sort_by(f64::total_cmp);
+    let disabled_median = disabled_p99s[COHORTS / 2];
+    let enabled_median = enabled_p99s[COHORTS / 2];
+    let median_paired_delta = cohort_deltas[COHORTS / 2];
+    println!(
+        "pass8_attribution boundary=resize_120x40 classification=MEASURED method=paired_live_runtimes_interleaved_7x512 pass8_disabled_p99_median_us={:.3} pass8_enabled_p99_median_us={:.3} paired_delta_median_percent={:.2} blocking_threshold_percent=10.00 {}",
+        disabled_median, enabled_median, median_paired_delta, PERFORMANCE_CLAIM,
+    );
+    assert!(
+        median_paired_delta <= 10.0,
+        "Pass 8 attributable 120x40 resize p99 regression {median_paired_delta:.2}% exceeds 10% blocking threshold"
+    );
+
+    drop(disabled_client);
+    drop(enabled_client);
+    disabled_runtime.finish();
+    enabled_runtime.finish();
 }
 
 #[cfg(target_os = "macos")]

@@ -16,6 +16,9 @@ pub mod local_ipc;
 #[cfg(all(target_os = "macos", feature = "benchmark-instrumentation"))]
 #[doc(hidden)]
 pub mod pass7_benchmark;
+#[cfg(feature = "benchmark-instrumentation")]
+#[doc(hidden)]
+pub mod pass8_benchmark;
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 mod platform;

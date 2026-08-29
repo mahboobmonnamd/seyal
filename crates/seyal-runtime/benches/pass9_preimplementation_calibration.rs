@@ -171,13 +171,15 @@ fn measure_cohort(mode: LossMode, cohort: usize) -> CohortResult {
 
     let final_metrics = median_quiescent_metrics(&harness);
     assert_eq!(
-        baseline.fds, final_metrics.fds,
+        baseline.fds,
+        final_metrics.fds,
         "Pass 9 calibration detected FD growth in {} cohort {}",
         mode.label(),
         cohort
     );
     assert_eq!(
-        baseline.threads, final_metrics.threads,
+        baseline.threads,
+        final_metrics.threads,
         "Pass 9 calibration detected thread growth in {} cohort {}",
         mode.label(),
         cohort
@@ -280,7 +282,10 @@ fn open_attachment(harness: &RuntimeHarness) -> RawAttachment {
     );
     let hello_payload = read_until(&mut stream, MessageType::ServerHello as u16);
     let hello = ServerHello::decode(&hello_payload).expect("ServerHello decode");
-    assert_eq!(hello.runtime_id, harness.runtime_id.as_u128());
+    assert_eq!(
+        hello.runtime_id,
+        u128::from_le_bytes(harness.runtime_id.to_bytes())
+    );
 
     send_frame(
         &mut stream,
@@ -296,7 +301,10 @@ fn open_attachment(harness: &RuntimeHarness) -> RawAttachment {
     let mut snapshot_complete = false;
     let deadline = Instant::now() + Duration::from_secs(1);
     while attached.is_none() || !snapshot_complete {
-        assert!(Instant::now() < deadline, "initial authoritative snapshot timed out");
+        assert!(
+            Instant::now() < deadline,
+            "initial authoritative snapshot timed out"
+        );
         let (kind, payload) = read_frame(&mut stream);
         if kind == MessageType::Attached as u16 {
             attached = Some(Attached::decode(&payload).expect("Attached decode"));
@@ -408,14 +416,10 @@ impl RuntimeHarness {
 
         let join = thread::spawn(move || {
             let mut config = RuntimeConfig::m001().expect("M001 Runtime config");
-            config.singleton_path = std::env::temp_dir().join(format!(
-                "s9c-{}-{suffix:x}-{nonce:x}.lock",
-                process::id()
-            ));
-            let runtime_dir = std::env::temp_dir().join(format!(
-                "s9cd-{}-{suffix:x}-{nonce:x}",
-                process::id()
-            ));
+            config.singleton_path = std::env::temp_dir()
+                .join(format!("s9c-{}-{suffix:x}-{nonce:x}.lock", process::id()));
+            let runtime_dir =
+                std::env::temp_dir().join(format!("s9cd-{}-{suffix:x}-{nonce:x}", process::id()));
             config.local_ipc = LocalIpcMode::Enabled {
                 runtime_dir_override: Some(runtime_dir),
             };

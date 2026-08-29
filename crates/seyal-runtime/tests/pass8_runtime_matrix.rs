@@ -109,8 +109,14 @@ fn block_identity_is_not_reused_across_runtime_incarnations() {
 }
 
 #[test]
-fn real_runtime_population_lifecycle_covers_1_10_50_100_and_512_records() {
-    for population in [1usize, 10, 50, 100, 512] {
+fn real_runtime_population_lifecycle_covers_1_10_50_and_100_executions() {
+    // This test deliberately exercises real PTY-backed TerminalExecutions and
+    // their corresponding Runtime-owned Blocks. The separate Pass 8 benchmark
+    // owns the 512-live-Block retained-memory gate from #715 using the exact
+    // production BlockTimeline, because hosted macOS imposes a system PTY
+    // allocation ceiling below 512 and that OS resource must not redefine the
+    // Block metadata capacity contract.
+    for population in [1usize, 10, 50, 100] {
         let mut runtime =
             Runtime::new(config(&format!("population-{population}"))).expect("runtime");
         for _ in 0..population {

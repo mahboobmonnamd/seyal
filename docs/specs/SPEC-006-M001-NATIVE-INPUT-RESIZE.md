@@ -1,6 +1,6 @@
 # SPEC-006 — M001 native input, focus/IME seam and authoritative resize
 
-- **Status:** Accepted for M001 Pass 7 via PR #703; production implementation remains incomplete until #706 / PR #707 passes all required exits
+- **Status:** Accepted for M001 Pass 7 via PR #703; production implementation completed by PR #707, merged as `4490d89fd32f96fe5ff04393a5470944c592f546`
 - **Date:** 2026-08-27
 - **Issue:** #702
 - **Architecture authority:** Foundation Architecture + ADR-001 + ADR-004 + ADR-005 + ADR-006

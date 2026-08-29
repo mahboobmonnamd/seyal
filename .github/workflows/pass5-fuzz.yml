@@ -5,6 +5,7 @@ on:
     paths:
       - "crates/seyal-runtime/**"
       - "crates/seyal-exec/**"
+      - "crates/seyal-protocol/**"
       - "fuzz/**"
       - ".github/workflows/pass5-fuzz.yml"
   workflow_dispatch:
@@ -39,6 +40,11 @@ jobs:
         working-directory: fuzz
         run: |
           cargo +nightly-2026-08-20 fuzz run local_binary_protocol_decode corpus/local-binary-protocol-decode -- \
+            -max_total_time=30 -timeout=10 -rss_limit_mb=1024 -print_final_stats=1
+      - name: Fuzz Pass 8 BlockState decoder
+        working-directory: fuzz
+        run: |
+          cargo +nightly-2026-08-20 fuzz run pass8_block_state_decode corpus/block-state-decode -- \
             -max_total_time=30 -timeout=10 -rss_limit_mb=1024 -print_final_stats=1
 
   candidate-d-macos-state-fuzz:

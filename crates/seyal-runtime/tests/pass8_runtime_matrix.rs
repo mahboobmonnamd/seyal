@@ -113,14 +113,11 @@ fn real_runtime_population_lifecycle_probes_to_50_with_10_execution_floor() {
     const REQUIRED_REAL_PTY_FLOOR: usize = 10;
     const REAL_PTY_PROBE_TARGET: usize = 50;
 
-    // SPEC-007 section 16.5's 1/10/50/100/512 simultaneous-population matrix
-    // is a bounded BlockTimeline/metadata population contract. Issue #715 also
-    // explicitly separates the exact 512-live-Block retained-memory gate from
-    // operating-system PTY capacity. This test therefore exercises real
-    // PTY-backed TerminalExecutions with a mandatory useful floor, then probes
-    // higher until either the target is reached or macOS reports ENXIO from its
-    // PTY allocator. Only that exact platform-capacity error may end the probe;
-    // every other execution-admission failure remains a test failure.
+    // Real PTY-backed Runtime lifecycle validation has a mandatory floor of 10
+    // executions and probes up to 50. Above that floor only macOS ENXIO from the
+    // PTY allocator may end the probe early. The separate exact 512-live-record
+    // gate exercises the production BlockTimeline metadata capacity/RSS contract
+    // without turning operating-system PTY capacity into a correctness premise.
     let mut runtime = Runtime::new(config("pty-population-probe")).expect("runtime");
     let mut admitted = 0usize;
     let mut platform_limited = false;

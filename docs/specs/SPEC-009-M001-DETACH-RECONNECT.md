@@ -1,11 +1,12 @@
 # SPEC-009 — M001 detach, reconnect and GUI-crash survival
 
-- **Status:** Proposed for M001 Pass 9 / Issue #717; refinement dependency gates through Pass 8 are satisfied. Merge/acceptance still requires explicit owner confirmation.
+- **Status:** Accepted refinement authority for M001 Pass 9. Original acceptance merged through PR #718 as `465ee476124a6d6dd6f48b0485c834d550c684f9`; this amendment resolves the post-merge refinement review gaps. Production implementation remains `NOT_READY` until Issue #719 records the merged commit containing this amendment and satisfies every Ready gate below.
 - **Date:** 2026-08-28
 - **Reconciled:** 2026-08-29 against merged Pass 8 and current master
-- **Issue:** #717
+- **Issue:** #717 refinement authority; #719 production implementation
 - **Architecture authority:** accepted Seyal foundation architecture, ADR-001/004/005/006/007
 - **Depends on:** SPEC-002, SPEC-003, SPEC-004, SPEC-005, SPEC-006 and accepted SPEC-007
+- **Pass 7 authority:** PR #707 merged as `4490d89fd32f96fe5ff04393a5470944c592f546`
 - **Pass 8 authority:** reviewed head `54b3a1748effc7c47c409d1f7cfdcbd547e8d1cc`, merged by PR #721 as `d9d21187e8429bbd3dbeb3e1c7cc4d05c1d147e6`
 - **Numbering note:** SPEC-008 is already the active M003 command-Blocks/composer specification and is intentionally not a Pass 9 dependency.
 
@@ -24,11 +25,12 @@ live Seyal.app surface
 → reopen Seyal.app
 → discover same RuntimeId
 → attach to E with a fresh AttachmentId
-→ rebuild disposable client/display/renderer state from Runtime authority
+→ rebuild disposable client/display/renderer/native-input state from Runtime authority
+→ restore native focus/accessibility/IME seams
 → resume rendering + input + resize
 ```
 
-The proof uses the permanent Runtime, Candidate-D local transport, Pass 7 input/resize path, Pass 8 Block metadata seam and permanent Metal renderer. No temporary reconnect terminal engine or second VT/grid is permitted.
+The proof uses the permanent Runtime, Candidate-D local transport, Pass 7 input/resize/focus/IME seam, Pass 8 Block metadata seam and permanent Metal renderer. No temporary reconnect terminal engine or second VT/grid is permitted.
 
 Runtime-crash live-PTY survival is explicitly outside M001 Pass 9.
 
@@ -46,7 +48,8 @@ Runtime-crash live-PTY survival is explicitly outside M001 Pass 9.
 10. Detach/reconnect work never synchronously gates PTY → VT → canonical state → damage progress.
 11. Persistence/journaling is not responsible for keeping the M001 live PTY alive.
 12. Pass 8 Workspace association, Block identity, logical anchor and state remain continuous for the surviving execution; presentation loss/reappearance is not a Block lifecycle transition.
-13. Seyal OSS remains independent of commercial code.
+13. Native first-responder, accessibility and IME state are reconstructed as presentation state; they never become terminal authority.
+14. Seyal OSS remains independent of commercial code.
 
 ## 3. Scope
 
@@ -55,17 +58,18 @@ Pass 9 covers:
 - normal terminal-window close/detach;
 - GUI application termination;
 - abrupt GUI process death/crash;
+- Runtime endpoint discovery, startup arbitration and verified stale-endpoint handling;
 - Runtime connection-loss detection and idempotent cleanup;
 - Controller-lease release and safe reacquisition;
 - same-Runtime/same-execution identity proof;
 - current-state reconstruction through SPEC-004 Candidate D;
-- Pass 7 input/resize usability after reattach;
+- Pass 7 input/resize/focus/accessibility/IME usability after reattach;
 - Pass 8 Block identity/state continuity;
 - detached live output and detached execution-exit behavior;
 - stale-authority and failure-injection coverage;
 - repeated lifecycle/resource tests;
 - controlled reconnect performance/resource evidence;
-- native real-shell and minimal alternate-screen end-to-end proof.
+- native real-shell, accessibility/IME and minimal alternate-screen end-to-end proof.
 
 ## 4. Explicit non-goals
 
@@ -79,6 +83,8 @@ Pass 9 does not implement or claim:
 - remote/network reconnect or cross-device continuation;
 - M002 terminal-compatibility expansion;
 - tabs/splits/rich workspace navigation;
+- complete screen-reader transcript/text-range semantics beyond the accepted SPEC-006 accessibility seam;
+- rich inline IME preedit UI beyond the accepted SPEC-006 seam;
 - agent/cloud/mobile/commercial behavior.
 
 A future durable metadata store may remember records after Runtime death, but it must never claim those records resurrect the old live PTY.
@@ -98,6 +104,8 @@ If observed `RuntimeId` changes, the client must discard all old connection, att
 Disconnect or successful `Detach` revokes the old attachment and Controller lease. A later connection starts a fresh connection-local request-ID space as required by SPEC-004/006. Old `AttachmentId`, resize request IDs, applied-generation fences, IME state and accepted-but-unwritten local input are never transferred.
 
 The surviving execution retains its Pass 8 Workspace association and M001 `BlockId`/logical start anchor/state until ordinary Block/execution lifecycle changes it. Detach or reattach alone does not create, complete or replace a Block.
+
+Native accessibility object identity is presentation-local and may be recreated after process death. Logical continuity is represented by the same `ExecutionId` and terminal-surface semantics, not by preserving an old `NSView`/AX object instance.
 
 ## 6. Normal detach semantics
 
@@ -146,14 +154,53 @@ Disconnected
 → AwaitCurrentState
 → CommitDisposableDisplayState
 → RendererReady
+→ RestoreNativeInteractionState
 → Usable
 ```
 
 Failure at any stage returns to a bounded disconnected/recovery state. It must not create another VT/grid or replay PTY bytes.
 
-### 8.1 Runtime discovery
+### 8.1 Runtime discovery, endpoint ownership and startup races
 
-If the existing per-user Runtime is alive, the client connects to that singleton endpoint and applies SPEC-004 same-user/security rules. A new GUI must not launch a competing Runtime merely because the first connection races startup/discovery or stale-socket cleanup.
+The existing Candidate-D Darwin endpoint remains under the verified per-user Runtime directory. Runtime-side endpoint rules in SPEC-004 and `seyal_protocol::discovery` remain authoritative: owner-only runtime directory, socket ownership/type checks, same-user trust validation, and an active connectable endpoint is never removed as stale.
+
+Actor ownership is explicit:
+
+- the GUI/client may resolve the endpoint path, attempt connection and request/perform the product's one-shot Runtime launch action when no Runtime is discoverable;
+- the GUI/client must **never** unlink, replace, chmod, bind or otherwise repair `control.sock` itself;
+- only a Runtime process attempting to become the singleton endpoint owner may verify and remove a stale socket and bind `control.sock`;
+- a Runtime process must re-prove staleness immediately before removal: correct owner, actual socket, not symlink, and not connectable;
+- if an endpoint becomes connectable during cleanup, it is active and must not be removed;
+- a Runtime that loses singleton bind/startup arbitration exits/fails startup and never selects an alternate competing endpoint.
+
+Observable discovery outcomes are:
+
+| Observation | Required client/runtime behavior |
+|---|---|
+| endpoint connects | use that Runtime; validate `RuntimeId`/peer before continuity claim |
+| endpoint missing | client may perform/request one Runtime launch for that foreground recovery episode; continuity of an old Runtime is not claimed |
+| connection refused on an owned socket | treat as startup/stale ambiguity; use only the exact bounded discovery recovery below, never client-side unlink |
+| verified stale owned socket | only the Runtime singleton contender may remove it and bind the canonical endpoint |
+| symlink, non-socket, wrong owner or insecure runtime directory | fail closed with non-secret error; never repair by deletion |
+| simultaneous Runtime startup | exactly one process may bind the canonical endpoint; losers exit/fail startup and clients converge on the winner |
+| endpoint disappears during connect/cleanup | use only the exact bounded discovery recovery below; never create an alternate socket |
+
+A foreground discovery recovery episode is exact and independently measurable:
+
+- the episode starts with one immediate canonical-endpoint connect/discovery attempt at `t=0`;
+- an endpoint-missing result may trigger **at most one Runtime launch action** in that episode;
+- retryable `NotFound`, `ConnectionRefused`, or endpoint-disappearance outcomes permit **at most 6 connection retries**, for **7 total connection attempts** including the initial attempt;
+- retry delays are exactly `10, 20, 40, 80, 160, 250 ms`; this is the complete Pass 9 schedule, with at most `560 ms` intentional scheduler delay;
+- the entire automatic discovery/reconnect episode has a hard **1 s wall-clock ceiling** from the first failed connect/discovery attempt; reaching the ceiling cancels any remaining retry;
+- successful connection to the canonical endpoint cancels remaining retry work;
+- symlink, non-socket, wrong-owner, insecure-directory, peer-validation, or other fail-closed security outcomes stop immediately and do not consume/restart the startup-race retry schedule;
+- a Runtime process that loses simultaneous singleton startup arbitration does not authorize another launch or alternate endpoint; the client continues, if budget remains, only against the canonical endpoint;
+- exhaustion/ceiling stops automatic recovery with a bounded non-secret state and leaves no retry timer active;
+- a later explicit user retry starts a new foreground recovery episode; automatic exhaustion never recursively starts a new episode.
+
+A GUI must not launch multiple Runtime processes merely because the first connection races process startup. One launch action is permitted per foreground recovery episode; every automatic attempt remains within the exact schedule above.
+
+Required discovery tests include missing endpoint, verified stale socket, active endpoint, connection refusal, endpoint disappearance between metadata check/connect/remove, two simultaneous Runtime starters, exact initial-plus-six-retry timing/count, one-second exhaustion, cancellation on success, zero surviving retry timer, and proof that only Runtime-side code removes/binds the endpoint.
 
 ### 8.2 Target execution resolution
 
@@ -174,7 +221,17 @@ The client must:
 - never buffer unbounded user input;
 - retry only through bounded non-spinning recovery.
 
-M001 policy permits at most 6 automatic Controller-attach attempts with monotonic backoff delays of at least `10, 20, 40, 80, 160, 250 ms`. Success cancels remaining retries. Exhaustion stops automatic retry and exposes a recoverable non-secret state. A genuinely live existing Controller is never preempted.
+The attempt contract is unambiguous:
+
+- one immediate Controller attach is the **initial attempt**;
+- after `ControllerBusy`, at most **6 retries** are permitted, for at most **7 total attach attempts**;
+- retry delays are `10, 20, 40, 80, 160, 250 ms` respectively; these are the complete Pass 9 schedule, not lower bounds that implementations may extend arbitrarily;
+- the retry scheduler adds at most `560 ms` of intentional delay;
+- the entire automatic Controller-reacquisition episode has a hard `1 s` wall-clock ceiling from the first `ControllerBusy`; reaching the ceiling cancels any remaining retries;
+- success cancels remaining retries; exhaustion/ceiling stops automatic retry and exposes a recoverable non-secret state;
+- a genuinely live existing Controller is never preempted.
+
+No timer remains active after success, exhaustion, disconnect or surface teardown.
 
 ## 9. Current-state reconstruction
 
@@ -188,29 +245,62 @@ Reconnect must not reuse:
 - old `appliedAwaitingProjection` resize fences;
 - old IME composition;
 - old accepted-but-unwritten client input queue;
-- stale renderer/GPU state as terminal truth.
+- stale renderer/GPU state as terminal truth;
+- prior native first-responder or accessibility object state as authority.
 
 Renderer resources may be rebuilt from newly committed disposable display state. Generation continuity and resync thereafter follow SPEC-004.
 
 A reconnecting client may show bounded reconnect/loading chrome, but it must not display stale terminal content as if current.
 
-## 10. Detached execution behavior
+## 10. Native focus, accessibility and IME reconstruction
 
-### 10.1 Output while detached
+Reconnect must preserve the accepted SPEC-006 native seam by **recreating** presentation state, not by carrying old state across the dead connection/process.
+
+Before transition from `RendererReady` to `Usable`:
+
+1. create/attach the permanent Metal terminal surface to the recreated native window hierarchy;
+2. expose the same accepted terminal-surface accessibility role/label/description semantics used by SPEC-006;
+3. ensure the recreated surface is focusable and appears in the accessibility tree with finite geometry matching the visible terminal surface;
+4. when the terminal window is key/active and no modal application command owns focus, make the terminal surface first responder and report accessibility focused state consistently with that native focus;
+5. create/reactivate the native text-input context for the **new** surface; old marked/preedit text remains discarded;
+6. start with an empty bounded `CompositionDocument` and fresh composition selection/range state;
+7. after authoritative display commit supplies a valid cursor/cell anchor, `firstRect(forCharacterRange:)` must return finite screen-coordinate candidate geometry derived from the recreated surface, never from stale terminal/history text;
+8. ordinary committed text, dead-key input and one real IME commit must work through the existing SPEC-006 path after reconnect without duplicate event routing.
+
+Accessibility continuity means semantic continuity, not native object reuse. A new process may expose a new platform accessibility element instance, but it must represent the same logical terminal execution and must not silently disappear from accessibility traversal.
+
+Required deterministic/native evidence:
+
+- first-responder becomes the terminal surface after reconnect under the normal active-window condition;
+- focus loss/reacquisition remains correct and no hidden old view retains focus;
+- accessibility role/label/description before vs after reconnect are equivalent under the SPEC-006 contract;
+- accessibility focused-state tracks first-responder state;
+- accessibility geometry is finite and matches the recreated visible surface;
+- the input-admission/reconnect failure state is exposed non-secretly;
+- a VoiceOver smoke verifies the recreated terminal surface is discoverable/focusable and does not expose rejected input/marked text as transcript;
+- fresh IME context begins with no old marked text;
+- dead-key and one real IME path commit once after reconnect;
+- candidate-window anchor is finite and follows the current cursor/surface after authoritative snapshot commit.
+
+Pass 9 does not add a full accessibility terminal transcript API or a second editable text model.
+
+## 11. Detached execution behavior
+
+### 11.1 Output while detached
 
 A live execution continues consuming PTY output and mutating canonical `TerminalState` while no GUI is attached. Reattach observes current authoritative state within M001's bounded screen/history contract; Pass 9 does not promise durable capture of every detached line.
 
-### 10.2 Input while detached
+### 11.2 Input while detached
 
 With no GUI Controller, Runtime invents no input. Input that existed only in a dead client's local accepted-but-unwritten queue is lost with that client and must never be silently replayed after reconnect.
 
-### 10.3 Execution exit while detached
+### 11.3 Execution exit while detached
 
 If the child exits while detached, Runtime performs ordinary final drain and lifecycle completion. Pass 8 final display → Block Completed → Lifecycle Finalized ordering remains authoritative.
 
 Reopening must not resurrect the dead PTY or create a replacement under the old `ExecutionId`. A retired finalized execution is absent from live resolution.
 
-## 11. Runtime failure boundary
+## 12. Runtime failure boundary
 
 Pass 9 continuity requires the Runtime incarnation itself to survive GUI loss.
 
@@ -224,7 +314,7 @@ Runtime dies
 
 No journal, Block record, display snapshot or renderer cache may be presented as restoration of a live PTY. Runtime-crash survival requires a separately reviewed supervisor/keeper architecture.
 
-## 12. Security and privacy
+## 13. Security and privacy
 
 Required regressions include:
 
@@ -233,10 +323,13 @@ Required regressions include:
 - malformed reconnect/attach frames are bounded and cannot retain leaked authority;
 - old connection-local resize/request IDs cannot correlate against a new connection;
 - RuntimeId mismatch invalidates cached authority/reconciliation state before mutation;
+- GUI discovery cannot remove/replace an endpoint and insecure/symlink/non-socket paths fail closed;
+- simultaneous startup cannot create two accepted singleton endpoints;
 - reconnect/failure logs contain no terminal contents, input bytes, marked text, cwd, environment or secrets;
+- accessibility/IME recovery cannot expose rejected input, marked text or terminal history through the composition document;
 - crash cleanup does not weaken same-UID endpoint validation or attachment authorization.
 
-## 13. Resource and hot-path constraints
+## 14. Resource and hot-path constraints
 
 Detach/reconnect is lifecycle/control work, never terminal hot-path work.
 
@@ -244,14 +337,14 @@ Forbidden:
 
 - per-execution/per-client polling threads or timers that remain active while detached;
 - synchronous persistence, agent, cloud, licensing or telemetry work on reconnect;
-- unbounded retry/input/presentation queues;
+- unbounded discovery/controller retry, input or presentation queues;
 - copied transcript/grid retained solely for reconnect;
 - hidden renderer/GPU allocations retained after final surface detach contrary to SPEC-005;
 - terminal progress waiting for GUI reconnect or acknowledgement.
 
 Runtime retains only live execution state already required without a GUI plus bounded Runtime/workspace metadata.
 
-## 14. Required tests and failure injection
+## 15. Required tests and failure injection
 
 ### Identity/lifecycle
 
@@ -263,6 +356,19 @@ Runtime retains only live execution state already required without a GUI plus bo
 - same `ExecutionId` resumes input and resize after reattach;
 - same Pass 8 Workspace/Block identity/anchor/state survives detach/reconnect.
 
+### Discovery/startup
+
+- missing endpoint produces bounded Runtime-absent/start path, not competing endpoints;
+- client never unlinks the endpoint;
+- verified stale owned socket is removed only by Runtime-side singleton startup;
+- active endpoint is never removed as stale;
+- symlink/non-socket/wrong-owner/insecure path fails closed;
+- connection-refused and cleanup races follow exactly the section 8.1 attempt/schedule/one-second ceiling and converge without alternate endpoint creation;
+- simultaneous Runtime startup yields exactly one bound canonical endpoint and losing contenders exit/fail startup;
+- successful discovery cancels every remaining retry/timer;
+- exhaustion leaves no surviving retry timer and requires explicit user retry for a new episode;
+- RuntimeId validation prevents claiming old continuity after Runtime replacement.
+
 ### Current-state/recovery
 
 - output generated while detached is reflected after reconnect;
@@ -272,12 +378,23 @@ Runtime retains only live execution state already required without a GUI plus bo
 - client crash during attach or multi-chunk snapshot leaves Runtime/execution healthy;
 - snapshot decode failure recovers through a fresh bounded attach/resync, never PTY replay.
 
+### Focus/accessibility/IME
+
+- recreated surface becomes first responder when eligible;
+- accessibility role/label/focused state/geometry are valid after reconnect;
+- fresh IME context has empty composition state;
+- dead-key and real IME commit paths work once after reconnect;
+- candidate geometry is finite/current and no stale view/context is consulted;
+- VoiceOver smoke can discover/focus the recreated surface without secret composition/rejected-input exposure.
+
 ### Controller races
 
 - EOF cleanup releases Controller exactly once;
 - new attach before cleanup observes `ControllerBusy`, not preemption;
+- initial attempt + at most 6 retries follow exactly the declared schedule;
+- total automatic reacquisition stops at the 1-second ceiling;
 - bounded retry succeeds when cleanup completes;
-- genuine persistent Controller occupancy exhausts bounded retries without spin or hidden buffering.
+- genuine persistent Controller occupancy exhausts bounded recovery without spin, hidden buffering or a surviving timer.
 
 ### Detached outcomes
 
@@ -301,69 +418,112 @@ On the production macOS path demonstrate:
 1. launch a real shell and long-lived fixture that changes visible state;
 2. close the terminal window and verify Runtime, shell PID and PTY remain live;
 3. reopen and interact with the same execution;
-4. repeat with abrupt GUI process kill;
-5. verify normal input, Control-C and resize after reconnect;
-6. verify one accepted alternate-screen fixture can detach/reconnect without another PTY/VT authority.
+4. verify first-responder/accessibility/IME seams on the recreated surface;
+5. repeat with abrupt GUI process kill;
+6. verify normal input, Control-C and resize after reconnect;
+7. verify one accepted alternate-screen fixture can detach/reconnect without another PTY/VT authority.
 
-## 15. Performance and measurement contract
+## 16. Performance and measurement contract
 
-Pass 9 implementation must preserve the final Pass 8 controlled baseline retained by PR #721 and `docs/engineering/M001-PASS8-BLOCK-METADATA.md`. The production implementation Issue must record exact dependency SHAs and baseline values before implementation becomes Ready.
+Pass 9 implementation must preserve the final Pass 8 controlled baseline retained by PR #721 and `docs/engineering/M001-PASS8-BLOCK-METADATA.md`. The inherited Pass 8 regression policy remains normative: paired latency movement `>5%` requires root-cause explanation and `>10%` is blocking absent explicit re-review.
 
-Controlled Apple-Silicon measurements must report:
+The previously proposed absolute `10 ms`, `25 ms` and `4 MiB` values are **not accepted blocking gates** because the refinement did not record a reproducible derivation. They may be retained only as non-binding investigation/reference values in historical review discussion. Before Issue #719 may become Ready, a controlled pre-implementation calibration must derive and record the exact absolute cleanup/reconnect/RSS budgets, with independent review acceptance.
+
+### 16.1 Required controlled methodology
+
+The production implementation Issue must freeze all of the following before code starts:
+
+- exact master/dependency SHAs and Pass 8 baseline values;
+- exact Apple-Silicon hardware, macOS version, release-build configuration and benchmark commands;
+- fixed 120×40 reconnect geometry plus any additional representative geometry;
+- 20 warm-up lifecycle cycles excluded from measurement;
+- five independent measured cohorts of 100 cycles for graceful reconnect and five cohorts of 100 cycles for abrupt-client-loss reconnect;
+- per-cohort p50/p95/p99/max plus median-of-cohort p99;
+- the exact definition of each timestamp boundary;
+- exact RSS/fd/attachment/controller/GPU-resource sampling points;
+- the exact accepted absolute budgets derived from calibration and why those budgets are appropriate.
+
+For RSS/resource measurement, each cohort uses the same Runtime/execution across its 100 measured cycles. The pre-cohort baseline and post-cohort sample are taken only at a quiescent lifecycle point defined as:
+
+```text
+no GUI attachment/controller for the detached surface
++ client socket closed
++ surface renderer/GPU resources released
++ no pending reconnect/discovery/controller retry work
++ Runtime reactor has no queued lifecycle work attributable to that client
+```
+
+At each baseline/final point, take five RSS samples at fixed intervals and use the median. Repeat the cohort from a fresh Runtime process for the next independent cohort. Exact attachment/controller/fd/resource counters must return to baseline every cycle; any counter leak is blocking regardless of RSS noise.
+
+RSS acceptance must be based on the independently accepted calibrated budget and repeated-cohort behavior, not one post-run sample. Any consistent positive growth trend across cycles/cohorts requires root-cause analysis even if it is numerically below the accepted budget.
+
+### 16.2 Metrics that must be reported
+
+Controlled measurements must report:
 
 - Runtime disconnect-event dispatch → attachment/controller cleanup;
-- local connect/hello/resolve/attach → complete authoritative 120x40 current-state client commit;
+- local connect/hello/resolve/attach → complete authoritative 120×40 current-state client commit;
 - committed client state → first renderer-ready update;
-- repeated-cycle CPU/RSS/fd/attachment/resource counts;
+- renderer-ready → native interaction state ready where separately measurable;
+- repeated-cycle CPU/RSS/fd/attachment/controller/renderer-resource counts;
 - idle detached Runtime CPU with a live execution;
 - paired Pass 8 input/output/render/resize regression attribution after reconnect work lands.
 
-Targets on the controlled M5 Pro class:
+No benchmark may add a synchronous acknowledgement or logging dependency to the terminal hot path. Full macOS app process-launch time is measured separately because launch-services/cache state is noisy; it cannot substitute for deterministic Runtime/client reconnect measurement.
 
-- disconnect event dispatch → Controller/attachment cleanup p99 `<= 10 ms`;
-- warm local reconnect from socket-connect start → complete 120x40 current-state client commit p99 `<= 25 ms`;
-- no persistent timer/poll wake while detached or connected-idle;
-- zero leaked attachment/controller/fd/resource counters after deterministic lifecycle cycles;
-- after 100 reconnect/crash cycles, final steady-state same-process RSS increase above `4 MiB` is blocking unless allocator behavior is independently measured and explicitly accepted;
-- paired Pass 8 latency movement `>5%` requires root-cause explanation and `>10%` is blocking absent explicit re-review.
-
-Full macOS app process-launch time is measured separately because launch-services/cache state is noisy; it cannot substitute for deterministic Runtime/client reconnect measurement.
-
-## 16. Acceptance criteria
+## 17. Acceptance criteria
 
 Pass 9 production implementation is complete only when all are true:
 
 - graceful close leaves the same Runtime and live execution running;
 - abrupt Seyal.app death leaves the same Runtime and live execution running;
-- reopen observes same `RuntimeId`, same `ExecutionId`, fresh `AttachmentId`;
+- runtime discovery/startup races follow section 8.1 exact attempt/deadline rules and never create a competing accepted Runtime endpoint;
+- reopen observes same `RuntimeId`, same `ExecutionId`, fresh `AttachmentId` for the surviving-Runtime path;
 - stale controller/attachment/request identities are rejected;
 - current authoritative display is reconstructed without PTY replay or another VT/grid;
+- recreated native surface satisfies first-responder/accessibility/IME requirements before `Usable`;
 - input, Control-C and authoritative resize work after reconnect;
 - detached output advances canonical state and is reflected within M001 bounded-state limits;
 - detached child exit is handled without resurrection;
 - Pass 8 Workspace/Block continuity is preserved;
 - repeated graceful/crash cycles are leak-free and bounded;
 - security/privacy regressions pass;
-- controlled performance gates pass;
+- exact calibrated performance/resource gates recorded in #719 pass;
+- inherited Pass 8 `>5%` explanation / `>10%` blocking regression policy passes;
 - `make bootstrap`, `make build`, `make test`, `make check`, `make bench` are green on final head;
 - native clean-checkout proof succeeds on the permanent production path;
 - independent architecture/security/performance review has no unresolved blocker.
 
-## 17. Refinement acceptance and Pass 9 readiness
+## 18. Documentation impact
 
-The original refinement was authored before Pass 8 completion. Current authority has now been reconciled:
+For this refinement/corrective amendment:
 
-- Pass 7 implementation is merged and retained in current master;
+- **User Guide:** no shipped user behavior changes yet; no user-guide claim should be added before production Pass 9 exists.
+- **Developer Guide:** Pass 9 implementation must document Runtime-vs-GUI lifetime, endpoint discovery ownership and reconnect/native interaction lifecycle once production behavior lands.
+- **Authoritative engineering docs:** this SPEC, the specs index, Issue #719 readiness/evidence matrix, and stale SPEC-006 status are affected by the refinement review and must be reconciled.
+- **Media/screenshots/video:** none for refinement; production UI documentation may add media only after the reconnect UX exists and is stable.
+
+## 19. Refinement acceptance and Pass 9 readiness
+
+Refinement provenance is now explicit:
+
+- Pass 7 implementation is merged as `4490d89fd32f96fe5ff04393a5470944c592f546`;
 - SPEC-007 is accepted;
 - Pass 8 implementation PR #721 is independently review-green and merged;
 - Pass 8 reviewed head is `54b3a1748effc7c47c409d1f7cfdcbd547e8d1cc`;
 - Pass 8 merge commit is `d9d21187e8429bbd3dbeb3e1c7cc4d05c1d147e6`;
-- this specification is renumbered to SPEC-009 because SPEC-008 is already active M003 command-Blocks authority.
+- original SPEC-009 refinement PR #718 merged as `465ee476124a6d6dd6f48b0485c834d550c684f9`;
+- SPEC-008 remains the active M003 command-Blocks authority;
+- this amendment makes runtime-discovery failure semantics, native reconnect acceptance, retry bounds, measurement reproducibility and documentation impact explicit.
 
-Production Pass 9 remains `NOT_READY` until:
+Production Pass 9 remains `NOT_READY` until Issue #719 records and independently validates all of the following:
 
-1. this SPEC-009 exact head is reviewed and explicitly accepted/merged;
-2. current master post-Pass-8 validation has no unresolved blocker;
-3. a separate Pass 9 production implementation Issue records exact dependency SHAs, the final Pass 8 baseline, implementation scope and required evidence.
+1. the merged commit SHA containing this corrective SPEC-009 amendment;
+2. the final Pass 8 merge SHA and exact retained Pass 8 baseline values;
+3. current-master validation with no unresolved Runtime/client/native/Block lifecycle blocker;
+4. the final discovery, lifecycle, accessibility/IME, failure-injection, security and native-E2E test matrix from this SPEC, including section 8.1's exact discovery schedule;
+5. the controlled calibration methodology and independently accepted absolute cleanup/reconnect/RSS budgets required by section 16;
+6. documentation impact classification and exact production-document updates expected;
+7. no unresolved architecture/specification question.
 
-No Pass 9 production code belongs in this refinement PR.
+No Pass 9 production code belongs in the corrective refinement PR. Production implementation may begin only after Issue #719 is explicitly moved to `Ready` with the evidence above.

@@ -269,6 +269,7 @@ final class RustDisplayBridge {
   private var teardown: RustBridgeTeardownCoordinator!
   private(set) var clientHandle: UInt64 = 0
   private(set) var isConnected = false
+  private(set) var runtimeBlockMetadata: RuntimeBlockMetadata?
   private var reconnectRequested = false
   private var lastTimelineRevision: UInt64 = 0
   private let paneID: String
@@ -380,6 +381,7 @@ final class RustDisplayBridge {
 
     socketFileDescriptor = fileDescriptor
     isConnected = true
+    runtimeBlockMetadata = currentBlockMetadata()
     let source = DispatchSource.makeReadSource(fileDescriptor: fileDescriptor, queue: .main)
     source.setEventHandler { [weak self] in
       self?.drainReadyDisplayWork()
@@ -414,6 +416,7 @@ final class RustDisplayBridge {
     guard !teardown.disconnectPending else { return }
 
     isConnected = false
+    runtimeBlockMetadata = nil
     socketFileDescriptor = -1
     _ = seyal_bridge_select(clientHandle)
     teardown.requestDisconnect()
@@ -716,6 +719,7 @@ final class RustDisplayBridge {
     // unread socket data will immediately retrigger this dispatch source.
     for _ in 0..<8 {
       let result = seyal_bridge_poll()
+      runtimeBlockMetadata = currentBlockMetadata()
       publishHistoryRanges()
       publishComposerResult()
       if result == 1 {

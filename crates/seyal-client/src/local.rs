@@ -1525,17 +1525,21 @@ fn connect_stream(path: &Path) -> Result<UnixStream, ClientError> {
     Ok(stream)
 }
 
+fn requested_capabilities(request_block_metadata: bool) -> u32 {
+    CAP_COMMAND_BLOCKS
+        | if request_block_metadata {
+            CAP_BLOCK_METADATA
+        } else {
+            0
+        }
+}
+
 fn hello(
     stream: &mut UnixStream,
     interactive: bool,
     request_block_metadata: bool,
 ) -> Result<ServerHello, ClientError> {
-    let client_capabilities = CAP_COMMAND_BLOCKS
-        | if request_block_metadata {
-            CAP_BLOCK_METADATA
-        } else {
-            0
-        };
+    let client_capabilities = requested_capabilities(request_block_metadata);
     send_control(
         stream,
         MessageType::ClientHello,
@@ -1603,6 +1607,16 @@ mod tests {
 
     fn geometry(rows: u16, columns: u16) -> GridGeometry {
         GridGeometry { rows, columns }
+    }
+
+    #[test]
+    fn raw_metadata_fallback_keeps_pass71_but_drops_only_pass8_capability() {
+        let full = requested_capabilities(true);
+        let fallback = requested_capabilities(false);
+        assert_ne!(full & CAP_BLOCK_METADATA, 0);
+        assert_eq!(fallback & CAP_BLOCK_METADATA, 0);
+        assert_ne!(full & CAP_COMMAND_BLOCKS, 0);
+        assert_ne!(fallback & CAP_COMMAND_BLOCKS, 0);
     }
 
     fn display_cell() -> DisplayCell {

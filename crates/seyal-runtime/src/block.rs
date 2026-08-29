@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+#[cfg(target_os = "macos")]
 use seyal_protocol::pass8::{
     BlockKind as WireBlockKind, BlockLifecycle as WireBlockLifecycle, BlockState as WireBlockState,
 };
@@ -25,6 +26,7 @@ pub struct BlockSummary {
 }
 
 impl BlockSummary {
+    #[cfg(target_os = "macos")]
     pub(crate) fn to_wire(self) -> WireBlockState {
         WireBlockState {
             execution_id: self.execution_id,

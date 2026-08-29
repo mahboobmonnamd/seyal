@@ -1268,7 +1268,12 @@ impl Runtime {
         #[cfg(target_os = "macos")]
         self.notify_local_ipc_execution_finalized(id, block_completion);
         #[cfg(not(target_os = "macos"))]
-        let _ = block_completion;
+        match block_completion {
+            BlockCompletion::Completed(record) => {
+                let _ = record;
+            }
+            BlockCompletion::None | BlockCompletion::Failed => {}
+        }
 
         // M001 retains no completed execution-level Block history. Retirement
         // happens in this same bounded turn after per-connection finalization

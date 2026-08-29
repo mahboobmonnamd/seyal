@@ -9,6 +9,8 @@ use seyal_protocol::pass8::{
 use crate::test_fault::{self, FaultPoint};
 use crate::{BlockId, ExecutionId, WorkspaceId};
 
+const MAX_BLOCK_RECORDS: usize = 512;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BlockLifecycle {
     Current,
@@ -48,6 +50,7 @@ pub(crate) enum BlockTimelineError {
     InvalidAnchor,
     OwnershipMismatch,
     InvalidTransition,
+    CapacityExceeded,
     #[cfg(all(target_os = "macos", feature = "test-fault-injection"))]
     InjectedFailure,
 }
@@ -81,6 +84,9 @@ impl BlockTimeline {
         }
         if self.records.contains_key(&execution_id) {
             return Err(BlockTimelineError::DuplicateExecution);
+        }
+        if self.records.len() >= MAX_BLOCK_RECORDS {
+            return Err(BlockTimelineError::CapacityExceeded);
         }
         let record = BlockSummary {
             id: BlockId::new(),
@@ -176,6 +182,41 @@ mod tests {
             timeline.complete(wrong_workspace, execution),
             Err(BlockTimelineError::OwnershipMismatch)
         );
+    }
+
+    #[test]
+    fn timeline_is_bounded_at_the_pass8_capacity_and_recovers_after_retirement() {
+        let workspace = WorkspaceId::m001_default();
+        let mut timeline = BlockTimeline::default();
+        for ordinal in 1..=MAX_BLOCK_RECORDS {
+            timeline
+                .admit(workspace, execution(ordinal as u128), ordinal as u64)
+                .unwrap();
+        }
+        assert_eq!(timeline.len(), MAX_BLOCK_RECORDS);
+        assert_eq!(
+            timeline.admit(
+                workspace,
+                execution((MAX_BLOCK_RECORDS + 1) as u128),
+                (MAX_BLOCK_RECORDS + 1) as u64,
+            ),
+            Err(BlockTimelineError::CapacityExceeded)
+        );
+
+        let retired_execution = execution(1);
+        let completed = timeline
+            .complete(workspace, retired_execution)
+            .unwrap()
+            .unwrap();
+        assert_eq!(timeline.retire(retired_execution), Some(completed));
+        timeline
+            .admit(
+                workspace,
+                execution((MAX_BLOCK_RECORDS + 1) as u128),
+                (MAX_BLOCK_RECORDS + 1) as u64,
+            )
+            .unwrap();
+        assert_eq!(timeline.len(), MAX_BLOCK_RECORDS);
     }
 
     #[test]

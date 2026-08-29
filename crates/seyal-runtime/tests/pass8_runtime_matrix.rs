@@ -57,9 +57,7 @@ fn block_anchor_and_identity_survive_scroll_alt_screen_resize_and_detach_reattac
             .expect("poll output");
     }
 
-    runtime
-        .resize(execution_id, size(120, 40))
-        .expect("resize");
+    runtime.resize(execution_id, size(120, 40)).expect("resize");
     runtime
         .detach(execution_id, first_attachment)
         .expect("detach");
@@ -113,7 +111,8 @@ fn block_identity_is_not_reused_across_runtime_incarnations() {
 #[test]
 fn real_runtime_population_lifecycle_covers_1_10_50_100_and_512_records() {
     for population in [1usize, 10, 50, 100, 512] {
-        let mut runtime = Runtime::new(config(&format!("population-{population}"))).expect("runtime");
+        let mut runtime =
+            Runtime::new(config(&format!("population-{population}"))).expect("runtime");
         for _ in 0..population {
             runtime
                 .create_execution(

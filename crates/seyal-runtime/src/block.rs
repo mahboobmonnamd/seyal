@@ -4,7 +4,7 @@ use seyal_protocol::pass8::{
     BlockKind as WireBlockKind, BlockLifecycle as WireBlockLifecycle, BlockState as WireBlockState,
 };
 
-#[cfg(feature = "test-fault-injection")]
+#[cfg(all(target_os = "macos", feature = "test-fault-injection"))]
 use crate::test_fault::{self, FaultPoint};
 use crate::{BlockId, ExecutionId, WorkspaceId};
 
@@ -26,21 +26,10 @@ pub struct BlockSummary {
 
 impl BlockSummary {
     pub(crate) fn to_wire(self) -> WireBlockState {
-        #[cfg(feature = "test-fault-injection")]
-        let revision = if self.lifecycle == BlockLifecycle::Completed
-            && test_fault::take(FaultPoint::BlockCompletionEncode)
-        {
-            0
-        } else {
-            self.revision
-        };
-        #[cfg(not(feature = "test-fault-injection"))]
-        let revision = self.revision;
-
         WireBlockState {
             execution_id: self.execution_id,
             block_id: self.id,
-            revision,
+            revision: self.revision,
             start_line_id: self.start_line_id,
             kind: WireBlockKind::TerminalActivity,
             state: match self.lifecycle {
@@ -57,6 +46,7 @@ pub(crate) enum BlockTimelineError {
     InvalidAnchor,
     OwnershipMismatch,
     InvalidTransition,
+    #[cfg(all(target_os = "macos", feature = "test-fault-injection"))]
     InjectedFailure,
 }
 
@@ -80,7 +70,7 @@ impl BlockTimeline {
         execution_id: ExecutionId,
         start_line_id: u64,
     ) -> Result<BlockSummary, BlockTimelineError> {
-        #[cfg(feature = "test-fault-injection")]
+        #[cfg(all(target_os = "macos", feature = "test-fault-injection"))]
         if test_fault::take(FaultPoint::BlockAdmission) {
             return Err(BlockTimelineError::InjectedFailure);
         }
@@ -107,7 +97,7 @@ impl BlockTimeline {
         workspace_id: WorkspaceId,
         execution_id: ExecutionId,
     ) -> Result<Option<BlockSummary>, BlockTimelineError> {
-        #[cfg(feature = "test-fault-injection")]
+        #[cfg(all(target_os = "macos", feature = "test-fault-injection"))]
         if test_fault::take(FaultPoint::BlockCompletionMutation) {
             return Err(BlockTimelineError::InjectedFailure);
         }
@@ -197,5 +187,26 @@ mod tests {
         assert_eq!(timeline.retire(execution), Some(completed));
         assert_eq!(timeline.len(), 0);
         assert_eq!(timeline.get(execution), None);
+    }
+
+    #[test]
+    fn ten_thousand_execution_churn_retires_every_record_and_never_reuses_identity() {
+        use std::collections::HashSet;
+
+        let workspace = WorkspaceId::m001_default();
+        let mut timeline = BlockTimeline::default();
+        let mut ids = HashSet::with_capacity(10_000);
+        for ordinal in 1..=10_000_u128 {
+            let execution_id = execution(ordinal);
+            let current = timeline
+                .admit(workspace, execution_id, ordinal as u64)
+                .unwrap();
+            assert!(ids.insert(current.id));
+            let completed = timeline.complete(workspace, execution_id).unwrap().unwrap();
+            assert_eq!(completed.id, current.id);
+            assert_eq!(timeline.retire(execution_id), Some(completed));
+            assert_eq!(timeline.len(), 0);
+        }
+        assert_eq!(ids.len(), 10_000);
     }
 }

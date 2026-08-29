@@ -1,10 +1,11 @@
 # SPEC-007 — M001 minimal Block metadata and logical anchors
 
-- **Status:** Proposed for M001 Pass 8; refinement only, production implementation blocked
+- **Status:** Accepted for M001 Pass 8; production implementation authorized by #715; wire allocation reconciled with merged Pass 7.1 in PR #721
 - **Date:** 2026-08-28
-- **Issue:** #708
+- **Refinement issue:** #708
+- **Implementation issue:** #715
 - **Architecture authority:** Foundation Architecture + Runtime/Workspace Continuity + ADR-001 + ADR-004 + ADR-005 + ADR-006 + ADR-007
-- **Depends on:** SPEC-001, SPEC-003, SPEC-004, SPEC-005 and accepted SPEC-006; production implementation additionally requires Pass 7 implementation #706 / PR #707 to be merged and accepted
+- **Depends on:** SPEC-001, SPEC-003, SPEC-004, SPEC-005 and accepted SPEC-006; Pass 7/7.1 production behavior incorporated on master before PR #721
 
 ## 1. Purpose
 
@@ -231,7 +232,7 @@ The following do not create additional Blocks:
 - TUI entry/exit;
 - attach/detach/resync.
 
-Later trusted shell integration may introduce command Blocks through a later accepted contract.
+Merged Pass 7.1 may independently project trusted-shell per-command Blocks. Those command records do not create, replace, or amplify the one coarse Pass 8 execution metadata record defined here.
 
 ### 7.3 Completion truth
 
@@ -318,10 +319,10 @@ Pass 8 adds a narrow read-only extension to the existing SPEC-004 framing. It do
 
 ### 9.1 Capability
 
-Allocate capability bit 4:
+Allocate capability bit 5. Pass 7.1 owns bit 4 (`CAP_COMMAND_BLOCKS`), so the Pass 8 capability must remain independently negotiable and independently disableable during raw fallback:
 
 ```text
-CAP_BLOCK_METADATA = 1 << 4
+CAP_BLOCK_METADATA = 1 << 5
 ```
 
 The client advertises support in `ClientHello.client_capabilities`; Runtime advertises it only when the Pass 8 producer is available. `BlockState` is sent only when both sides negotiated the capability.
@@ -331,8 +332,10 @@ The client advertises support in `ClientHello.client_capabilities`; Runtime adve
 Allocate:
 
 ```text
-20  R→C  BlockState
+26  R→C  BlockState
 ```
+
+Message type 26 is intentionally not a `MessageType` control-enum member. Pass 7.1 already owns client→Runtime type 20 (`ComposerCommand`), and a Pass 8 metadata frame must therefore remain directionally R→C only.
 
 `BlockState` uses the existing 24-byte frame header and has exactly 56 payload bytes:
 

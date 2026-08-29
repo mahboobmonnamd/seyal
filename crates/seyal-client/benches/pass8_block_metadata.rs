@@ -123,7 +123,16 @@ fn measure_retained_metadata_resources() {
     // Holding Block metadata has no task/timer/FD owner. Leave the exact
     // production map untouched for an idle window and prove resource counts do
     // not grow while it remains live.
+    let idle_cpu_start = process_cpu_seconds();
+    let idle_started = Instant::now();
     thread::sleep(Duration::from_millis(500));
+    let idle_elapsed = idle_started.elapsed().as_secs_f64();
+    let idle_cpu_end = process_cpu_seconds();
+    let idle_cpu_percent = if idle_elapsed > 0.0 {
+        ((idle_cpu_end - idle_cpu_start).max(0.0) / idle_elapsed) * 100.0
+    } else {
+        0.0
+    };
     let idle = process_metrics();
     assert_eq!(
         populated.threads, idle.threads,
@@ -152,7 +161,7 @@ fn measure_retained_metadata_resources() {
         populated.rss_kib,
         incremental_rss_kib,
         RSS_GATE_KIB,
-        idle.cpu_percent,
+        idle_cpu_percent,
         populated.threads,
         idle.threads,
         populated.fds,
@@ -224,6 +233,32 @@ fn process_metrics() -> Metrics {
         cpu_percent,
         threads,
         fds,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn process_cpu_seconds() -> f64 {
+    let pid = process::id();
+    let output = Command::new("/bin/ps")
+        .args(["-o", "time=", "-p", &pid.to_string()])
+        .output()
+        .expect("ps cpu time");
+    parse_cpu_time(String::from_utf8_lossy(&output.stdout).trim())
+}
+
+#[cfg(target_os = "macos")]
+fn parse_cpu_time(value: &str) -> f64 {
+    let fields = value.split(':').collect::<Vec<_>>();
+    match fields.as_slice() {
+        [minutes, seconds] => {
+            minutes.parse::<f64>().unwrap_or(0.0) * 60.0 + seconds.parse::<f64>().unwrap_or(0.0)
+        }
+        [hours, minutes, seconds] => {
+            hours.parse::<f64>().unwrap_or(0.0) * 3600.0
+                + minutes.parse::<f64>().unwrap_or(0.0) * 60.0
+                + seconds.parse::<f64>().unwrap_or(0.0)
+        }
+        _ => 0.0,
     }
 }
 

@@ -9,9 +9,10 @@ use crate::{
 };
 
 /// SPEC-007 capability bit for the read-only Block metadata projection.
-pub const CAP_BLOCK_METADATA: u32 = 1 << 4;
-/// SPEC-007 R→C message type allocated to `BlockState`.
-pub const BLOCK_STATE_MESSAGE_TYPE: u16 = 20;
+pub const CAP_BLOCK_METADATA: u32 = 1 << 5;
+/// SPEC-007 R→C message type allocated to `BlockState`. This intentionally
+/// remains outside the bidirectional control `MessageType` enum.
+pub const BLOCK_STATE_MESSAGE_TYPE: u16 = 26;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -153,6 +154,22 @@ mod tests {
     }
 
     #[test]
+    fn pass8_allocation_is_disjoint_from_pass71_control_surface() {
+        assert_eq!(CAP_BLOCK_METADATA, 1 << 5);
+        assert_eq!(
+            CAP_BLOCK_METADATA & crate::framing::CAP_COMMAND_BLOCKS,
+            0,
+            "Pass 8 metadata capability must be independently disableable"
+        );
+        assert_eq!(BLOCK_STATE_MESSAGE_TYPE, 26);
+        assert_eq!(
+            crate::framing::MessageType::from_u16(BLOCK_STATE_MESSAGE_TYPE),
+            None,
+            "Pass 8 R→C metadata must not become a client→Runtime control message"
+        );
+    }
+
+    #[test]
     fn block_state_is_exactly_56_bytes_and_round_trips_little_endian() {
         let value = current();
         let encoded = value.encode().unwrap();
@@ -176,7 +193,7 @@ mod tests {
     }
 
     #[test]
-    fn dedicated_frame_uses_existing_header_and_type_twenty() {
+    fn dedicated_frame_uses_existing_header_and_type_twenty_six() {
         let frame = encode_block_state_frame(&current()).unwrap();
         assert_eq!(frame.len(), HEADER_LEN + BlockState::WIRE_LEN);
         let header = FrameHeader::decode(&frame[..HEADER_LEN]).unwrap();

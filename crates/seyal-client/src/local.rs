@@ -411,7 +411,7 @@ impl LocalDisplayClient {
             control_socket_path(&runtime_dir).map_err(|_| ClientError::RuntimeDiscovery)?;
 
         let mut stream = connect_stream(&socket_path)?;
-        let mut hello = hello(&mut stream, true, true)?;
+        let mut server_hello = hello(&mut stream, true, true)?;
         send_control(&mut stream, MessageType::ListExecutions, &[])?;
         let (kind, payload) = read_blocking_frame(&mut stream)?;
         if kind != MessageType::ExecutionList {
@@ -425,19 +425,19 @@ impl LocalDisplayClient {
             .map(|entry| entry.execution_id)
             .ok_or(ClientError::NoRunningExecution)?;
 
-        if is_epoch_quarantined(hello.runtime_id, execution_id) {
+        if is_epoch_quarantined(server_hello.runtime_id, execution_id) {
             drop(stream);
             stream = connect_stream(&socket_path)?;
-            hello = hello(&mut stream, true, false)?;
+            server_hello = hello(&mut stream, true, false)?;
         }
-        let block_metadata_negotiated = hello.server_capabilities & CAP_BLOCK_METADATA != 0
-            && !is_epoch_quarantined(hello.runtime_id, execution_id);
+        let block_metadata_negotiated = server_hello.server_capabilities & CAP_BLOCK_METADATA != 0
+            && !is_epoch_quarantined(server_hello.runtime_id, execution_id);
         Self::finish_attach(
             stream,
             execution_id,
             Role::Controller,
-            hello.server_capabilities & CAP_COMMAND_BLOCKS != 0,
-            hello.runtime_id,
+            server_hello.server_capabilities & CAP_COMMAND_BLOCKS != 0,
+            server_hello.runtime_id,
             block_metadata_negotiated,
         )
     }
@@ -448,20 +448,20 @@ impl LocalDisplayClient {
         role: Role,
     ) -> Result<Self, ClientError> {
         let mut stream = connect_stream(socket_path)?;
-        let mut hello = hello(&mut stream, role == Role::Controller, true)?;
-        if is_epoch_quarantined(hello.runtime_id, execution_id) {
+        let mut server_hello = hello(&mut stream, role == Role::Controller, true)?;
+        if is_epoch_quarantined(server_hello.runtime_id, execution_id) {
             drop(stream);
             stream = connect_stream(socket_path)?;
-            hello = hello(&mut stream, role == Role::Controller, false)?;
+            server_hello = hello(&mut stream, role == Role::Controller, false)?;
         }
-        let block_metadata_negotiated = hello.server_capabilities & CAP_BLOCK_METADATA != 0
-            && !is_epoch_quarantined(hello.runtime_id, execution_id);
+        let block_metadata_negotiated = server_hello.server_capabilities & CAP_BLOCK_METADATA != 0
+            && !is_epoch_quarantined(server_hello.runtime_id, execution_id);
         Self::finish_attach(
             stream,
             execution_id,
             role,
-            hello.server_capabilities & CAP_COMMAND_BLOCKS != 0,
-            hello.runtime_id,
+            server_hello.server_capabilities & CAP_COMMAND_BLOCKS != 0,
+            server_hello.runtime_id,
             block_metadata_negotiated,
         )
     }

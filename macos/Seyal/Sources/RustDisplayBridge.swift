@@ -408,8 +408,8 @@ final class RustDisplayBridge {
     return (low, high)
   }
 
-  func stop() {
-    reconnectRequested = false
+  func stop(reconnect: Bool = false) {
+    reconnectRequested = reconnect
     guard isConnected || socketFileDescriptor >= 0 else { return }
     guard !teardown.disconnectPending else { return }
 
@@ -694,7 +694,10 @@ final class RustDisplayBridge {
   private func finishMutation(_ result: Int32) -> Int32 {
     synchronizeWriteReadinessSource()
     onStatusChanged()
-    if result == -3 || result == -10 || result == -18 {
+    if result == -18 {
+      onError(result)
+      stop(reconnect: true)
+    } else if result == -3 || result == -10 {
       onError(result)
       stop()
     }
@@ -729,7 +732,7 @@ final class RustDisplayBridge {
       }
 
       onError(result)
-      stop()
+      stop(reconnect: result == -18)
       return
     }
   }
@@ -783,7 +786,7 @@ final class RustDisplayBridge {
     let result = seyal_bridge_flush_writable()
     guard result == 0 else {
       onError(result)
-      stop()
+      stop(reconnect: result == -18)
       return
     }
     synchronizeWriteReadinessSource()

@@ -54,7 +54,7 @@ impl Harness {
     fn spawn(&mut self) -> ExecutionId {
         self.runtime
             .create_execution(
-                CommandSpec::new("/bin/sh").args(["-c", "sleep 0.05; printf TAIL"]),
+                CommandSpec::new("/bin/sh").args(["-c", "sleep 0.25; printf TAIL"]),
                 WindowSize::new(40, 4, 0, 0).expect("valid geometry"),
             )
             .expect("execution")
@@ -224,6 +224,20 @@ fn completion_encode_failure_disconnects_before_finalized_and_retires_block() {
 
     test_fault::fail_next(FaultPoint::BlockCompletionEncode);
     harness.assert_fails_closed_before_finalized(&mut client);
+}
+
+#[test]
+fn completion_encode_failure_is_global_across_all_block_capable_clients() {
+    let mut harness = Harness::new("encode-multi");
+    let execution_id = harness.spawn();
+    let mut first = harness.connect();
+    let mut second = harness.connect();
+    harness.attach_until_current(&mut first, execution_id);
+    harness.attach_until_current(&mut second, execution_id);
+
+    test_fault::fail_next(FaultPoint::BlockCompletionEncode);
+    harness.assert_fails_closed_before_finalized(&mut first);
+    harness.assert_fails_closed_before_finalized(&mut second);
 }
 
 #[test]

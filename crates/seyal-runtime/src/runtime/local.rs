@@ -1539,28 +1539,45 @@ impl Runtime {
             notifications
         };
 
+        let completion_frame = match block_completion {
+            BlockCompletion::Completed(record) => {
+                #[cfg(feature = "test-fault-injection")]
+                if test_fault::take(FaultPoint::BlockCompletionEncode) {
+                    Err(())
+                } else {
+                    encode_block_state_frame(&record.to_wire())
+                        .map(Some)
+                        .map_err(|_| ())
+                }
+                #[cfg(not(feature = "test-fault-injection"))]
+                {
+                    encode_block_state_frame(&record.to_wire())
+                        .map(Some)
+                        .map_err(|_| ())
+                }
+            }
+            BlockCompletion::Failed => Err(()),
+            BlockCompletion::None => Ok(None),
+        };
+
         for (token, block_capable) in notifications {
             if block_capable {
-                match block_completion {
-                    BlockCompletion::Completed(record) => {
-                        let Ok(frame) = encode_block_state_frame(&record.to_wire()) else {
-                            self.close_local_connection(token);
-                            continue;
-                        };
+                match &completion_frame {
+                    Ok(Some(frame)) => {
                         #[cfg(feature = "test-fault-injection")]
                         if test_fault::take(FaultPoint::BlockCompletionAdmission) {
                             self.close_local_connection(token);
                             continue;
                         }
-                        if !self.send_after_display_frame(token, frame) {
+                        if !self.send_after_display_frame(token, frame.clone()) {
                             continue;
                         }
                     }
-                    BlockCompletion::Failed => {
+                    Err(()) => {
                         self.close_local_connection(token);
                         continue;
                     }
-                    BlockCompletion::None => {}
+                    Ok(None) => {}
                 }
             }
 

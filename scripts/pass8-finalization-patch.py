@@ -10,9 +10,15 @@ def replace(path: str, old: str, new: str) -> None:
     if new in text:
         return
     count = text.count(old)
-    if count != 1:
-        raise SystemExit(f"expected one patch anchor in {path}, found {count}")
-    target.write_text(text.replace(old, new, 1))
+    if count == 0:
+        raise SystemExit(f"missing patch anchor in {path}")
+    if count == 1:
+        target.write_text(text.replace(old, new, 1))
+        return
+    if path == "macos/Seyal/Sources/RustDisplayBridge.swift" and old.startswith("      onError(result)"):
+        target.write_text(text.replace(old, new))
+        return
+    raise SystemExit(f"expected one patch anchor in {path}, found {count}")
 
 
 def insert_before(path: str, marker: str, addition: str, sentinel: str) -> None:
@@ -21,9 +27,16 @@ def insert_before(path: str, marker: str, addition: str, sentinel: str) -> None:
     if sentinel in text:
         return
     count = text.count(marker)
-    if count != 1:
-        raise SystemExit(f"expected one insertion anchor in {path}, found {count}")
-    target.write_text(text.replace(marker, addition + marker, 1))
+    if count == 0:
+        raise SystemExit(f"missing insertion anchor in {path}")
+    if count == 1:
+        target.write_text(text.replace(marker, addition + marker, 1))
+        return
+    if marker == "}\n":
+        index = text.rfind(marker)
+        target.write_text(text[:index] + addition + text[index:])
+        return
+    raise SystemExit(f"expected one insertion anchor in {path}, found {count}")
 
 
 # ---------------------------------------------------------------------------

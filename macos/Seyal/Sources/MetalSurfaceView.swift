@@ -176,6 +176,7 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
   private var lastAlternateScreen: Bool?
   private(set) var lastBridgeError: Int32?
   private(set) var lastRenderError: Error?
+  private(set) var runtimeBlockMetadata: RuntimeBlockMetadata?
   private var historyRanges: [PaneBlockKey: NativeHistoryRange] = [:]
 
   override convenience init(frame frameRect: NSRect) {
@@ -622,6 +623,7 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     guard let frame = NativePreparedFrame(bridgeFrame: bridgeFrame) else {
       return
     }
+    runtimeBlockMetadata = bridge?.currentBlockMetadata()
     onFrameChanged?(frame)
     if lastAlternateScreen != frame.alternateScreen {
       lastAlternateScreen = frame.alternateScreen

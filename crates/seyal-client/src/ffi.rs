@@ -102,6 +102,25 @@ impl SeyalExecutionBlockMetadata {
     }
 }
 
+#[cfg(test)]
+mod pass8_execution_block_abi_tests {
+    use std::mem::{align_of, offset_of, size_of};
+
+    use super::SeyalExecutionBlockMetadata;
+
+    #[test]
+    fn execution_block_metadata_c_abi_is_exactly_40_bytes() {
+        assert_eq!(size_of::<SeyalExecutionBlockMetadata>(), 40);
+        assert_eq!(align_of::<SeyalExecutionBlockMetadata>(), 8);
+        assert_eq!(offset_of!(SeyalExecutionBlockMetadata, block_id_low), 0);
+        assert_eq!(offset_of!(SeyalExecutionBlockMetadata, block_id_high), 8);
+        assert_eq!(offset_of!(SeyalExecutionBlockMetadata, revision), 16);
+        assert_eq!(offset_of!(SeyalExecutionBlockMetadata, start_line_id), 24);
+        assert_eq!(offset_of!(SeyalExecutionBlockMetadata, state), 32);
+        assert_eq!(offset_of!(SeyalExecutionBlockMetadata, reserved), 33);
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct SeyalBlockRecord {

@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashSet, VecDeque},
     sync::{Mutex, OnceLock},
 };
 
@@ -41,6 +41,12 @@ impl BlockCache {
             return Err(BlockCacheError::Quarantined);
         }
         if incoming.execution_id != expected_execution {
+            return self.conflict();
+        }
+        if !matches!(
+            (incoming.state, incoming.revision),
+            (BlockLifecycle::Current, 1) | (BlockLifecycle::Completed, 2)
+        ) {
             return self.conflict();
         }
 
@@ -92,21 +98,37 @@ impl BlockCache {
     }
 }
 
-fn quarantine_set() -> &'static Mutex<HashSet<(u128, ExecutionId)>> {
-    static QUARANTINED: OnceLock<Mutex<HashSet<(u128, ExecutionId)>>> = OnceLock::new();
-    QUARANTINED.get_or_init(|| Mutex::new(HashSet::new()))
+const MAX_QUARANTINED_EPOCHS: usize = 1024;
+
+#[derive(Default)]
+struct QuarantineRegistry {
+    values: HashSet<(u128, ExecutionId)>,
+    order: VecDeque<(u128, ExecutionId)>,
+}
+
+fn quarantine_registry() -> &'static Mutex<QuarantineRegistry> {
+    static QUARANTINED: OnceLock<Mutex<QuarantineRegistry>> = OnceLock::new();
+    QUARANTINED.get_or_init(|| Mutex::new(QuarantineRegistry::default()))
 }
 
 pub(crate) fn quarantine_epoch(runtime_id: u128, execution_id: ExecutionId) {
-    if let Ok(mut values) = quarantine_set().lock() {
-        values.insert((runtime_id, execution_id));
+    if let Ok(mut registry) = quarantine_registry().lock() {
+        let epoch = (runtime_id, execution_id);
+        if registry.values.insert(epoch) {
+            registry.order.push_back(epoch);
+        }
+        while registry.order.len() > MAX_QUARANTINED_EPOCHS {
+            if let Some(retired) = registry.order.pop_front() {
+                registry.values.remove(&retired);
+            }
+        }
     }
 }
 
 pub(crate) fn is_epoch_quarantined(runtime_id: u128, execution_id: ExecutionId) -> bool {
-    quarantine_set()
+    quarantine_registry()
         .lock()
-        .is_ok_and(|values| values.contains(&(runtime_id, execution_id)))
+        .is_ok_and(|registry| registry.values.contains(&(runtime_id, execution_id)))
 }
 
 #[cfg(test)]
@@ -168,14 +190,17 @@ mod tests {
     }
 
     #[test]
-    fn stale_metadata_does_not_replace_committed_cache() {
+    fn invalid_completed_revision_pair_quarantines_instead_of_looking_stale() {
         let mut cache = BlockCache::default();
         cache.apply(execution(1), current()).unwrap();
         cache.apply(execution(1), completed()).unwrap();
-        let mut stale = completed();
-        stale.revision = 1;
-        assert_eq!(cache.apply(execution(1), stale), Ok(BlockApply::Stale));
-        assert_eq!(cache.visible(), Some(completed()));
+        let mut invalid = completed();
+        invalid.revision = 1;
+        assert_eq!(
+            cache.apply(execution(1), invalid),
+            Err(BlockCacheError::Conflict)
+        );
+        assert_eq!(cache.visible(), None);
     }
 
     #[test]
@@ -233,10 +258,23 @@ mod tests {
 
     #[test]
     fn quarantine_is_scoped_to_runtime_and_execution_epoch() {
-        let execution = execution(0xabc);
-        quarantine_epoch(10, execution);
-        assert!(is_epoch_quarantined(10, execution));
-        assert!(!is_epoch_quarantined(11, execution));
+        let execution_id = execution(0xabc);
+        quarantine_epoch(10, execution_id);
+        assert!(is_epoch_quarantined(10, execution_id));
+        assert!(!is_epoch_quarantined(11, execution_id));
         assert!(!is_epoch_quarantined(10, execution(0xdef)));
+    }
+
+    #[test]
+    fn quarantine_registry_is_strictly_bounded() {
+        let runtime_id = 0xfeed_u128;
+        for ordinal in 1..=(MAX_QUARANTINED_EPOCHS + 1) {
+            quarantine_epoch(runtime_id, execution(ordinal as u128));
+        }
+        assert!(!is_epoch_quarantined(runtime_id, execution(1)));
+        assert!(is_epoch_quarantined(
+            runtime_id,
+            execution((MAX_QUARANTINED_EPOCHS + 1) as u128)
+        ));
     }
 }

@@ -30,6 +30,12 @@ final class SeyalShellComponentTests: XCTestCase {
     XCTAssertEqual(completed.state, .completed)
     XCTAssertNotEqual(current, completed)
   }
+  func testExecutionBlockMetadataCABIIsStable() {
+    XCTAssertEqual(MemoryLayout<SeyalExecutionBlockMetadata>.size, 40)
+    XCTAssertEqual(MemoryLayout<SeyalExecutionBlockMetadata>.stride, 40)
+    XCTAssertEqual(MemoryLayout<SeyalExecutionBlockMetadata>.alignment, 8)
+  }
+
   func testPaneQualifiedIdentitiesDoNotCollideAcrossPanes() {
     let firstBlock = PaneBlockKey(paneID: "pane-left", blockID: 7)
     let secondBlock = PaneBlockKey(paneID: "pane-right", blockID: 7)

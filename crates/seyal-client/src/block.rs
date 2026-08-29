@@ -174,10 +174,7 @@ mod tests {
         cache.apply(execution(1), completed()).unwrap();
         let mut stale = completed();
         stale.revision = 1;
-        assert_eq!(
-            cache.apply(execution(1), stale),
-            Ok(BlockApply::Stale)
-        );
+        assert_eq!(cache.apply(execution(1), stale), Ok(BlockApply::Stale));
         assert_eq!(cache.visible(), Some(completed()));
     }
 

@@ -200,7 +200,11 @@ final class RustDisplayBridge {
     }
 
     func stop() {
-        reconnectRequested = false
+        stop(reconnect: false)
+    }
+
+    private func stop(reconnect: Bool) {
+        reconnectRequested = reconnect
         guard isConnected || socketFileDescriptor >= 0 else { return }
         guard !teardown.disconnectPending else { return }
 
@@ -335,7 +339,7 @@ final class RustDisplayBridge {
         onStatusChanged()
         if result == -3 || result == -10 || result == -18 {
             onError(result)
-            stop()
+            stop(reconnect: result == -18)
         }
         return result
     }
@@ -361,7 +365,7 @@ final class RustDisplayBridge {
             }
 
             onError(result)
-            stop()
+            stop(reconnect: result == -18)
             return
         }
     }
@@ -376,7 +380,7 @@ final class RustDisplayBridge {
         let wantsWrite = seyal_bridge_wants_write()
         if wantsWrite < 0 {
             onError(wantsWrite)
-            stop()
+            stop(reconnect: wantsWrite == -18)
             return
         }
         guard wantsWrite == 1 else {
@@ -415,7 +419,7 @@ final class RustDisplayBridge {
         let result = seyal_bridge_flush_writable()
         guard result == 0 else {
             onError(result)
-            stop()
+            stop(reconnect: result == -18)
             return
         }
         synchronizeWriteReadinessSource()

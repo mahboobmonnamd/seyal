@@ -19,7 +19,6 @@ benchmark-instrumentation = []
 seyal-core = { path = "../seyal-core" }
 seyal-exec = { path = "../seyal-exec" }
 seyal-protocol = { path = "../seyal-protocol" }
-seyal-terminal = { path = "../seyal-terminal" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "=0.2.189"

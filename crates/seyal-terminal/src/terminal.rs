@@ -48,7 +48,11 @@ impl ShellIntegrationToken {
             return None;
         }
         let mut token = [0u8; 16];
-        for (index, pair) in bytes.chunks_exact(2).enumerate() {
+        let (pairs, remainder) = bytes.as_chunks::<2>();
+        if !remainder.is_empty() {
+            return None;
+        }
+        for (index, pair) in pairs.iter().enumerate() {
             token[index] = (hex(pair[0])? << 4) | hex(pair[1])?;
         }
         Some(Self(token))

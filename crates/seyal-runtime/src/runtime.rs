@@ -11,9 +11,9 @@ use std::{
 
 use seyal_exec::{
     ChildExit, CommandSpec, ExecutionReactor, ReactorEvent, ReactorEventKind, ReadOutcome,
-    RegistrationToken, SignalDisposition, TerminalExecution, WindowSize, WriteOutcome,
+    RegistrationToken, ShellIntegrationEvent, ShellIntegrationToken, SignalDisposition,
+    TerminalExecution, WindowSize, WriteOutcome,
 };
-use seyal_terminal::{ShellIntegrationEvent, ShellIntegrationToken};
 
 use crate::blocks::{BlockId, BlockTimeline, MAX_COMMAND_BYTES};
 use crate::{

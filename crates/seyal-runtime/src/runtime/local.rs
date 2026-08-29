@@ -4,7 +4,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use seyal_exec::{ExecutionReactor, ReactorEventKind, RegistrationToken, WindowSize};
+use seyal_exec::{
+    Color, ExecutionReactor, LineId, ReactorEventKind, RegistrationToken, WindowSize,
+};
 
 #[cfg(feature = "test-fault-injection")]
 use crate::test_fault::{self, FaultPoint};
@@ -35,11 +37,11 @@ const RESYNC_SNAPSHOT_BUDGET_PER_POLL: usize = 2;
 const ACCEPT_BACKOFF_INITIAL: Duration = Duration::from_millis(10);
 const ACCEPT_BACKOFF_MAX: Duration = Duration::from_millis(250);
 
-fn pack_terminal_color(color: seyal_terminal::Color) -> u32 {
+fn pack_terminal_color(color: Color) -> u32 {
     match color {
-        seyal_terminal::Color::Default => 0,
-        seyal_terminal::Color::Indexed(index) => 0x0100_0000 | u32::from(index),
-        seyal_terminal::Color::Rgb { r, g, b } => {
+        Color::Default => 0,
+        Color::Indexed(index) => 0x0100_0000 | u32::from(index),
+        Color::Rgb { r, g, b } => {
             0x0200_0000 | (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b)
         }
     }
@@ -1047,8 +1049,8 @@ impl Runtime {
             return;
         };
         let rows = entry.execution.terminal().primary_history_range(
-            seyal_terminal::LineId(request.start_line),
-            seyal_terminal::LineId(request.end_line),
+            LineId(request.start_line),
+            LineId(request.end_line),
             usize::from(request.max_lines),
         );
         let mut cell_budget = usize::try_from(request.max_cells).unwrap_or(0);

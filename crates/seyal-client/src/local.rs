@@ -959,10 +959,10 @@ impl LocalDisplayClient {
                             .get(&key)
                             .is_none_or(|old| old.revision <= snapshot.revision)
                         {
-                            if self.history_ranges.len() >= 32 {
-                                if let Some(key) = self.history_ranges.keys().next().copied() {
-                                    self.history_ranges.remove(&key);
-                                }
+                            if self.history_ranges.len() >= 32
+                                && let Some(key) = self.history_ranges.keys().next().copied()
+                            {
+                                self.history_ranges.remove(&key);
                             }
                             self.history_ranges.insert(key, snapshot);
                         }

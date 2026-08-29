@@ -384,8 +384,12 @@ impl HistoryRangeSnapshot {
             if cells_end > bytes.len() {
                 return Err(FramingError::TruncatedPayload);
             }
-            let values = bytes[end..cells_end]
-                .chunks_exact(16)
+            let (cell_chunks, remainder) = bytes[end..cells_end].as_chunks::<16>();
+            if !remainder.is_empty() {
+                return Err(FramingError::MalformedPayload);
+            }
+            let values = cell_chunks
+                .iter()
                 .map(|chunk| HistoryCell {
                     scalar: u32::from_le_bytes(chunk[..4].try_into().unwrap()),
                     foreground: u32::from_le_bytes(chunk[4..8].try_into().unwrap()),

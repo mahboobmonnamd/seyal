@@ -1,0 +1,37 @@
+name: Pass 8 Integration Helper
+
+on:
+  push:
+    branches:
+      - integration/pass8-on-7-1
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: integration/pass8-on-7-1
+          fetch-depth: 0
+      - name: Apply asserted Pass 8 integration edits
+        run: python3 scripts/pass8-integrate-7-1.py
+      - name: Format Rust
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt
+          cargo +1.98.0 fmt --all
+      - name: Validate textual patch
+        run: git diff --check
+      - name: Commit integration result
+        run: |
+          if git diff --quiet; then
+            echo "Integration already applied"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/seyal-client/src/local.rs crates/seyal-client/src/ffi.rs macos/Seyal/Sources/SeyalBridge.h macos/Seyal/Sources/RustDisplayBridge.swift macos/Seyal/Tests/SeyalTests/SeyalShellComponentTests.swift crates/seyal-exec/src/execution.rs crates/seyal-runtime/src/runtime.rs crates/seyal-runtime/src/runtime/local.rs crates/seyal-runtime/src/block.rs
+          git commit -m "Pass 8: reconcile client and native seams with Pass 7.1"
+          git push origin HEAD:integration/pass8-on-7-1

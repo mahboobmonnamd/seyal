@@ -37,3 +37,7 @@ harness = false
 name = "pass5_production_transport"
 harness = false
 required-features = ["benchmark-instrumentation"]
+
+[[bench]]
+name = "pass9_preimplementation_calibration"
+harness = false

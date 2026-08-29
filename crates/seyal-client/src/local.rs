@@ -401,9 +401,8 @@ impl LocalDisplayClient {
             stream = connect_stream(&socket_path)?;
             server_hello = hello(&mut stream, true, false)?;
         }
-        let block_metadata_negotiated =
-            server_hello.server_capabilities & CAP_BLOCK_METADATA != 0
-                && !is_epoch_quarantined(server_hello.runtime_id, execution_id);
+        let block_metadata_negotiated = server_hello.server_capabilities & CAP_BLOCK_METADATA != 0
+            && !is_epoch_quarantined(server_hello.runtime_id, execution_id);
         Self::finish_attach(
             stream,
             execution_id,
@@ -425,9 +424,8 @@ impl LocalDisplayClient {
             stream = connect_stream(socket_path)?;
             server_hello = hello(&mut stream, role == Role::Controller, false)?;
         }
-        let block_metadata_negotiated =
-            server_hello.server_capabilities & CAP_BLOCK_METADATA != 0
-                && !is_epoch_quarantined(server_hello.runtime_id, execution_id);
+        let block_metadata_negotiated = server_hello.server_capabilities & CAP_BLOCK_METADATA != 0
+            && !is_epoch_quarantined(server_hello.runtime_id, execution_id);
         Self::finish_attach(
             stream,
             execution_id,
@@ -816,6 +814,12 @@ impl LocalDisplayClient {
                         let payload = &frame[HEADER_LEN..];
                         let error =
                             ErrorMessage::decode(payload).map_err(|_| ClientError::Protocol)?;
+                        // Runtime backpressure is a per-action rejection, not
+                        // a broken transport. Consume the error and preserve the
+                        // connection so the native surface can expose the
+                        // bounded, retryable failure without dropping later
+                        // FIFO work. Other Error frames retain their fatal
+                        // protocol/authority semantics.
                         if let Some(failure) = classify_server_error(error)? {
                             self.input_failure = Some(failure);
                         }
@@ -828,9 +832,10 @@ impl LocalDisplayClient {
                         }
                         if lifecycle.lifecycle == Lifecycle::Finalized
                             && self.block_metadata_negotiated
-                            && self.block_cache.visible().is_some_and(|block| {
-                                block.state == BlockLifecycle::Current
-                            })
+                            && self
+                                .block_cache
+                                .visible()
+                                .is_some_and(|block| block.state == BlockLifecycle::Current)
                         {
                             return Err(self.quarantine_block_metadata());
                         }
@@ -1505,13 +1510,73 @@ mod tests {
             newest_pending_geometry(&unresolved, Some(fence)),
             Some(geometry(30, 100))
         );
+
         unresolved.push_back(ResizeRecord {
             request_id: 3,
-            geometry: geometry(40, 120),
+            geometry: geometry(24, 80),
             phase: ResizePhase::QueuedNotStarted,
         });
         assert_eq!(
             newest_pending_geometry(&unresolved, Some(fence)),
+            Some(geometry(24, 80))
+        );
+    }
+
+    #[test]
+    fn committed_geometry_does_not_suppress_restore_when_newer_pending_resize_differs() {
+        let committed = geometry(24, 80);
+        let desired = geometry(24, 80);
+        assert!(resize_needs_mutation(
+            desired,
+            committed,
+            Some(geometry(30, 100))
+        ));
+        assert!(!resize_needs_mutation(desired, committed, None));
+        assert!(!resize_needs_mutation(
+            desired,
+            geometry(30, 100),
+            Some(desired)
+        ));
+    }
+
+    #[test]
+    fn applied_fence_is_pending_until_authoritative_generation_catches_up() {
+        let desired = geometry(30, 100);
+        let committed = geometry(24, 80);
+        let fence = AppliedFence {
+            request_id: 4,
+            geometry: desired,
+            applied_generation: 12,
+        };
+
+        // A successful result is still pending projection, so reconciliation
+        // must not admit another request for the same target.
+        assert!(!resize_needs_mutation(
+            desired,
+            committed,
+            Some(fence.geometry)
+        ));
+        assert_eq!(
+            newest_pending_geometry(&VecDeque::new(), Some(fence)),
+            Some(desired)
+        );
+    }
+
+    #[test]
+    fn newer_unresolved_resize_remains_authoritative_over_older_applied_fence() {
+        let older = AppliedFence {
+            request_id: 4,
+            geometry: geometry(30, 100),
+            applied_generation: 12,
+        };
+        let newer = ResizeRecord {
+            request_id: 5,
+            geometry: geometry(40, 120),
+            phase: ResizePhase::SentWaitingResult,
+        };
+
+        assert_eq!(
+            newest_pending_geometry(&VecDeque::from([newer]), Some(older)),
             Some(geometry(40, 120))
         );
     }
@@ -1523,5 +1588,48 @@ mod tests {
         assert!(!resize_needs_mutation(current, current, None));
         assert!(!resize_needs_mutation(desired, current, Some(desired)));
         assert!(resize_needs_mutation(desired, current, None));
+    }
+
+    #[test]
+    fn invalid_terminal_key_requests_fail_before_wire_encoding() {
+        assert!(!valid_terminal_key_request(
+            TerminalKeyKind::ControlAscii,
+            'é' as u32
+        ));
+        assert!(!valid_terminal_key_request(TerminalKeyKind::ArrowUp, 1));
+        assert!(valid_terminal_key_request(
+            TerminalKeyKind::ControlAscii,
+            '?' as u32
+        ));
+        assert!(valid_terminal_key_request(TerminalKeyKind::ArrowUp, 0));
+    }
+
+    #[test]
+    fn runtime_input_backpressure_is_visible_without_fatal_disconnect() {
+        let error = ErrorMessage {
+            error_code: ErrorCode::Backpressure as u16,
+            offending_message_type: MessageType::Input as u16,
+            detail_code: 0,
+        };
+        assert_eq!(
+            classify_server_error(error).unwrap(),
+            Some(InputAdmissionFailure::ClientBackpressure)
+        );
+        let key_error = ErrorMessage {
+            offending_message_type: MessageType::TerminalKey as u16,
+            ..error
+        };
+        assert_eq!(
+            classify_server_error(key_error).unwrap(),
+            Some(InputAdmissionFailure::ClientBackpressure)
+        );
+        assert_eq!(
+            classify_server_error(ErrorMessage {
+                error_code: ErrorCode::InvalidExecution as u16,
+                offending_message_type: MessageType::Input as u16,
+                detail_code: 0,
+            }),
+            Err(ClientError::Server(ErrorCode::InvalidExecution as u16))
+        );
     }
 }

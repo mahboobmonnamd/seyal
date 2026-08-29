@@ -10,6 +10,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 seyal-exec = { path = "../crates/seyal-exec" }
+seyal-protocol = { path = "../crates/seyal-protocol" }
 seyal-runtime = { path = "../crates/seyal-runtime" }
 
 [[bin]]
@@ -36,6 +37,13 @@ bench = false
 [[bin]]
 name = "reconnect_resync_state_machine"
 path = "fuzz_targets/reconnect_resync_state_machine.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pass8_block_state_decode"
+path = "fuzz_targets/pass8_block_state_decode.rs"
 test = false
 doc = false
 bench = false

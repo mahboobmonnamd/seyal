@@ -142,7 +142,11 @@ impl Harness {
         chunks
     }
 
-    fn attach(&mut self, client: &mut Client, execution_id: ExecutionId) -> (DisplayCache, BlockState) {
+    fn attach(
+        &mut self,
+        client: &mut Client,
+        execution_id: ExecutionId,
+    ) -> (DisplayCache, BlockState) {
         self.send(
             client,
             MessageType::ClientHello,
@@ -192,7 +196,10 @@ fn block_identity_anchor_completion_order_and_retirement_follow_spec007() {
     let execution_id = harness.spawn();
 
     let runtime_block = harness.runtime.block(execution_id).expect("Block admitted");
-    assert_eq!(runtime_block.workspace_id, harness.runtime.default_workspace_id());
+    assert_eq!(
+        runtime_block.workspace_id,
+        harness.runtime.default_workspace_id()
+    );
     assert_eq!(runtime_block.execution_id, execution_id);
     assert_eq!(runtime_block.lifecycle, BlockLifecycle::Current);
     assert_eq!(runtime_block.revision, 1);
@@ -215,7 +222,10 @@ fn block_identity_anchor_completion_order_and_retirement_follow_spec007() {
     loop {
         let (kind, payload) = harness.raw_frame(&mut client, deadline);
         if kind == MessageType::DisplaySnapshot as u16 || kind == MessageType::DisplayDelta as u16 {
-            assert!(completed.is_none(), "display arrived after Completed BlockState");
+            assert!(
+                completed.is_none(),
+                "display arrived after Completed BlockState"
+            );
             let chunks = harness.display_batch(&mut client, kind, payload, deadline);
             cache.apply_chunks(&chunks).expect("display apply");
         } else if kind == BLOCK_STATE_MESSAGE_TYPE {
@@ -231,7 +241,10 @@ fn block_identity_anchor_completion_order_and_retirement_follow_spec007() {
             let lifecycle = LifecycleMessage::decode(&payload).unwrap();
             assert_eq!(lifecycle.execution_id, execution_id);
             assert_eq!(lifecycle.lifecycle, Lifecycle::Finalized);
-            assert!(completed.is_some(), "Finalized arrived before Completed BlockState");
+            assert!(
+                completed.is_some(),
+                "Finalized arrived before Completed BlockState"
+            );
             break;
         } else {
             panic!("unexpected frame before finalization: {kind}");

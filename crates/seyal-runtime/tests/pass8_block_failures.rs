@@ -23,9 +23,7 @@ fn config(tag: &str) -> RuntimeConfig {
     let mut config = RuntimeConfig::m001().expect("bundled capability profile");
     config.singleton_path = std::env::temp_dir().join(format!("s8f-{tag}-{suffix:x}.lock"));
     config.local_ipc = LocalIpcMode::Enabled {
-        runtime_dir_override: Some(
-            std::env::temp_dir().join(format!("s8fd-{tag}-{suffix:x}")),
-        ),
+        runtime_dir_override: Some(std::env::temp_dir().join(format!("s8fd-{tag}-{suffix:x}"))),
     };
     config.final_drain = Duration::from_millis(30);
     config

@@ -179,15 +179,28 @@ Observable discovery outcomes are:
 |---|---|
 | endpoint connects | use that Runtime; validate `RuntimeId`/peer before continuity claim |
 | endpoint missing | client may perform/request one Runtime launch for that foreground recovery episode; continuity of an old Runtime is not claimed |
-| connection refused on an owned socket | treat as startup/stale ambiguity; bounded reconnect/start arbitration, never client-side unlink |
+| connection refused on an owned socket | treat as startup/stale ambiguity; use only the exact bounded discovery recovery below, never client-side unlink |
 | verified stale owned socket | only the Runtime singleton contender may remove it and bind the canonical endpoint |
 | symlink, non-socket, wrong owner or insecure runtime directory | fail closed with non-secret error; never repair by deletion |
 | simultaneous Runtime startup | exactly one process may bind the canonical endpoint; losers exit/fail startup and clients converge on the winner |
-| endpoint disappears during connect/cleanup | retry only through the bounded discovery state; never create an alternate socket |
+| endpoint disappears during connect/cleanup | use only the exact bounded discovery recovery below; never create an alternate socket |
 
-A GUI must not launch multiple Runtime processes merely because the first connection races process startup. One launch action is permitted per foreground recovery episode; subsequent attempts during that episode are connection/discovery retries against the canonical endpoint. A later explicit user retry may start a new recovery episode.
+A foreground discovery recovery episode is exact and independently measurable:
 
-Required discovery tests include missing endpoint, verified stale socket, active endpoint, connection refusal, endpoint disappearance between metadata check/connect/remove, two simultaneous Runtime starters, and proof that only Runtime-side code removes/binds the endpoint.
+- the episode starts with one immediate canonical-endpoint connect/discovery attempt at `t=0`;
+- an endpoint-missing result may trigger **at most one Runtime launch action** in that episode;
+- retryable `NotFound`, `ConnectionRefused`, or endpoint-disappearance outcomes permit **at most 6 connection retries**, for **7 total connection attempts** including the initial attempt;
+- retry delays are exactly `10, 20, 40, 80, 160, 250 ms`; this is the complete Pass 9 schedule, with at most `560 ms` intentional scheduler delay;
+- the entire automatic discovery/reconnect episode has a hard **1 s wall-clock ceiling** from the first failed connect/discovery attempt; reaching the ceiling cancels any remaining retry;
+- successful connection to the canonical endpoint cancels remaining retry work;
+- symlink, non-socket, wrong-owner, insecure-directory, peer-validation, or other fail-closed security outcomes stop immediately and do not consume/restart the startup-race retry schedule;
+- a Runtime process that loses simultaneous singleton startup arbitration does not authorize another launch or alternate endpoint; the client continues, if budget remains, only against the canonical endpoint;
+- exhaustion/ceiling stops automatic recovery with a bounded non-secret state and leaves no retry timer active;
+- a later explicit user retry starts a new foreground recovery episode; automatic exhaustion never recursively starts a new episode.
+
+A GUI must not launch multiple Runtime processes merely because the first connection races process startup. One launch action is permitted per foreground recovery episode; every automatic attempt remains within the exact schedule above.
+
+Required discovery tests include missing endpoint, verified stale socket, active endpoint, connection refusal, endpoint disappearance between metadata check/connect/remove, two simultaneous Runtime starters, exact initial-plus-six-retry timing/count, one-second exhaustion, cancellation on success, zero surviving retry timer, and proof that only Runtime-side code removes/binds the endpoint.
 
 ### 8.2 Target execution resolution
 
@@ -350,8 +363,10 @@ Runtime retains only live execution state already required without a GUI plus bo
 - verified stale owned socket is removed only by Runtime-side singleton startup;
 - active endpoint is never removed as stale;
 - symlink/non-socket/wrong-owner/insecure path fails closed;
-- connection-refused and cleanup races converge without alternate endpoint creation;
+- connection-refused and cleanup races follow exactly the section 8.1 attempt/schedule/one-second ceiling and converge without alternate endpoint creation;
 - simultaneous Runtime startup yields exactly one bound canonical endpoint and losing contenders exit/fail startup;
+- successful discovery cancels every remaining retry/timer;
+- exhaustion leaves no surviving retry timer and requires explicit user retry for a new episode;
 - RuntimeId validation prevents claiming old continuity after Runtime replacement.
 
 ### Current-state/recovery
@@ -462,7 +477,7 @@ Pass 9 production implementation is complete only when all are true:
 
 - graceful close leaves the same Runtime and live execution running;
 - abrupt Seyal.app death leaves the same Runtime and live execution running;
-- runtime discovery/startup races follow section 8.1 and never create a competing accepted Runtime endpoint;
+- runtime discovery/startup races follow section 8.1 exact attempt/deadline rules and never create a competing accepted Runtime endpoint;
 - reopen observes same `RuntimeId`, same `ExecutionId`, fresh `AttachmentId` for the surviving-Runtime path;
 - stale controller/attachment/request identities are rejected;
 - current authoritative display is reconstructed without PTY replay or another VT/grid;
@@ -506,7 +521,7 @@ Production Pass 9 remains `NOT_READY` until Issue #719 records and independently
 1. the merged commit SHA containing this corrective SPEC-009 amendment;
 2. the final Pass 8 merge SHA and exact retained Pass 8 baseline values;
 3. current-master validation with no unresolved Runtime/client/native/Block lifecycle blocker;
-4. the final discovery, lifecycle, accessibility/IME, failure-injection, security and native-E2E test matrix from this SPEC;
+4. the final discovery, lifecycle, accessibility/IME, failure-injection, security and native-E2E test matrix from this SPEC, including section 8.1's exact discovery schedule;
 5. the controlled calibration methodology and independently accepted absolute cleanup/reconnect/RSS budgets required by section 16;
 6. documentation impact classification and exact production-document updates expected;
 7. no unresolved architecture/specification question.

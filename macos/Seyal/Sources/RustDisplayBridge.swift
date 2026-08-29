@@ -1,5 +1,18 @@
 import Foundation
 
+struct RuntimeBlockMetadata: Equatable, Sendable {
+    enum State: UInt8, Sendable {
+        case current = 1
+        case completed = 2
+    }
+
+    let blockIDLow: UInt64
+    let blockIDHigh: UInt64
+    let revision: UInt64
+    let startLineID: UInt64
+    let state: State
+}
+
 // Cancellation handlers may outlive RustDisplayBridge and deinit is
 // nonisolated in Swift 6. The coordinator serializes its accounting and
 // schedules the thread-local Rust disconnect on the main queue.
@@ -220,6 +233,25 @@ final class RustDisplayBridge {
         return frame
     }
 
+    func currentBlockMetadata() -> RuntimeBlockMetadata? {
+        guard isConnected else { return nil }
+        let value = seyal_bridge_block_metadata()
+        guard value.available == 1,
+              let state = RuntimeBlockMetadata.State(rawValue: value.state),
+              value.revision > 0,
+              value.start_line_id > 0
+        else {
+            return nil
+        }
+        return RuntimeBlockMetadata(
+            blockIDLow: value.block_id_low,
+            blockIDHigh: value.block_id_high,
+            revision: value.revision,
+            startLineID: value.start_line_id,
+            state: state
+        )
+    }
+
     func publishCurrentFrame() {
         guard let frame = currentFrame() else { return }
         onFrame(frame)
@@ -301,7 +333,7 @@ final class RustDisplayBridge {
     private func finishMutation(_ result: Int32) -> Int32 {
         synchronizeWriteReadinessSource()
         onStatusChanged()
-        if result == -3 || result == -10 {
+        if result == -3 || result == -10 || result == -18 {
             onError(result)
             stop()
         }

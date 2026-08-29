@@ -41,6 +41,32 @@ final class SeyalShellComponentTests: XCTestCase {
         XCTAssertEqual(block.layer?.borderWidth ?? -1, CGFloat(0.5), accuracy: CGFloat(0.01))
     }
 
+    func testRuntimeBlockMetadataKeepsOpaqueIdentityAnchorRevisionAndStateOnly() {
+        let current = RuntimeBlockMetadata(
+            blockIDLow: 0x0123,
+            blockIDHigh: 0x4567,
+            revision: 1,
+            startLineID: 99,
+            state: .current
+        )
+        let completed = RuntimeBlockMetadata(
+            blockIDLow: current.blockIDLow,
+            blockIDHigh: current.blockIDHigh,
+            revision: 2,
+            startLineID: current.startLineID,
+            state: .completed
+        )
+
+        XCTAssertEqual(current.blockIDLow, completed.blockIDLow)
+        XCTAssertEqual(current.blockIDHigh, completed.blockIDHigh)
+        XCTAssertEqual(current.startLineID, completed.startLineID)
+        XCTAssertEqual(current.revision, 1)
+        XCTAssertEqual(completed.revision, 2)
+        XCTAssertEqual(current.state, .current)
+        XCTAssertEqual(completed.state, .completed)
+        XCTAssertNotEqual(current, completed)
+    }
+
     @MainActor
     func testBlockTUITakeoverHidesOnlyPresentationChrome() {
         let body = NSView()

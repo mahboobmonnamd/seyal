@@ -21,12 +21,32 @@ xcodebuild \
   -configuration Debug \
   -destination 'platform=macOS' \
   -derivedDataPath "$DERIVED_DATA" \
-  -resultBundlePath "$RESULT_BUNDLE" \
   ARCHS=arm64 \
   ONLY_ACTIVE_ARCH=YES \
   CODE_SIGNING_ALLOWED=NO \
   CODE_SIGNING_REQUIRED=NO \
   SWIFT_ACTIVE_COMPILATION_CONDITIONS='DEBUG $(inherited)' \
-  test
+  build-for-testing
+
+# Xcode's no-signing mode is required for reproducible local Rust linking, but
+# macOS will refuse to load its generated XCTest/XCUI runner as an unsigned
+# bundle. Sign only the disposable DerivedData products ad hoc, then execute
+# the already-built test plan. This does not alter production signing.
+PRODUCTS="$DERIVED_DATA/Build/Products/Debug"
+codesign --force --deep --sign - "$PRODUCTS/Seyal.app"
+codesign --force --deep --sign - "$PRODUCTS/SeyalUITests-Runner.app"
+codesign --verify --deep --strict "$PRODUCTS/Seyal.app"
+codesign --verify --deep --strict "$PRODUCTS/SeyalUITests-Runner.app"
+
+xcodebuild \
+  -project macos/Seyal/Seyal.xcodeproj \
+  -scheme Seyal \
+  -configuration Debug \
+  -destination 'platform=macOS' \
+  -derivedDataPath "$DERIVED_DATA" \
+  ARCHS=arm64 \
+  ONLY_ACTIVE_ARCH=YES \
+  -resultBundlePath "$RESULT_BUNDLE" \
+  test-without-building
 
 echo "[seyal macOS UI test] XCTest component + XCUIAutomation E2E passed."

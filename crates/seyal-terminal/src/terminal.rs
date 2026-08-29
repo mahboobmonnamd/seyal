@@ -5,12 +5,71 @@ use crate::{
     parser::{Actions, Parser},
     screen::Screen,
 };
+use std::collections::VecDeque;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Diagnostics {
     pub deferred_sequences: u64,
     pub unknown_sequences: u64,
     pub malformed_sequences: u64,
+}
+
+/// Bounded shell-integration metadata emitted by the canonical VT parser.
+/// Terminal cells and arbitrary OSC payloads are never exposed through this
+/// interface.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShellIntegrationEvent {
+    CommandStarted {
+        token: ShellIntegrationToken,
+    },
+    CommandFinished {
+        token: ShellIntegrationToken,
+        exit_status: i32,
+    },
+}
+
+/// Runtime-issued nonce carried by the shell integration marker. A marker is
+/// only meaningful when it matches a command currently pending in Runtime;
+/// arbitrary OSC 133 traffic is ignored by the block timeline.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShellIntegrationToken([u8; 16]);
+
+impl ShellIntegrationToken {
+    pub fn from_bytes(bytes: [u8; 16]) -> Self {
+        Self(bytes)
+    }
+
+    pub fn as_bytes(self) -> [u8; 16] {
+        self.0
+    }
+
+    pub(crate) fn from_hex(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() != 32 {
+            return None;
+        }
+        let mut token = [0u8; 16];
+        for (index, pair) in bytes.chunks_exact(2).enumerate() {
+            token[index] = (hex(pair[0])? << 4) | hex(pair[1])?;
+        }
+        Some(Self(token))
+    }
+
+    pub fn write_hex(self, out: &mut String) {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        for byte in self.0 {
+            out.push(HEX[(byte >> 4) as usize] as char);
+            out.push(HEX[(byte & 0xf) as usize] as char);
+        }
+    }
+}
+
+fn hex(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 pub struct TerminalState {
@@ -76,6 +135,32 @@ impl TerminalState {
         self.core.current().line_id(row)
     }
 
+    /// Returns a bounded primary-screen history range. The returned rows are
+    /// an explicit read-only projection; alternate-screen content is never
+    /// treated as command output history.
+    pub fn primary_history_range(
+        &self,
+        start: LineId,
+        end: LineId,
+        max_lines: usize,
+    ) -> Vec<(LineId, Vec<Cell>)> {
+        if self.core.modes.alternate_screen || max_lines == 0 || end < start {
+            return Vec::new();
+        }
+        let mut lines = Vec::new();
+        let mut id = start;
+        while id <= end && lines.len() < max_lines {
+            if let Some(cells) = self.core.primary.history_line(id) {
+                lines.push((id, cells.to_vec()));
+            }
+            let Some(next) = id.0.checked_add(1) else {
+                break;
+            };
+            id = LineId(next);
+        }
+        lines
+    }
+
     pub fn row_text(&self, row: u16) -> Option<String> {
         if row >= self.rows() {
             return None;
@@ -95,6 +180,10 @@ impl TerminalState {
     pub fn take_damage(&mut self) -> Option<Damage> {
         self.core.damage.take()
     }
+
+    pub fn take_shell_integration_event(&mut self) -> Option<ShellIntegrationEvent> {
+        self.core.shell_events.pop_front()
+    }
 }
 
 struct TerminalCore {
@@ -105,6 +194,7 @@ struct TerminalCore {
     damage: DamageTracker,
     diagnostics: Diagnostics,
     fault: Option<TerminalError>,
+    shell_events: VecDeque<ShellIntegrationEvent>,
 }
 
 impl TerminalCore {
@@ -122,6 +212,7 @@ impl TerminalCore {
             damage,
             diagnostics: Diagnostics::default(),
             fault: None,
+            shell_events: VecDeque::with_capacity(16),
         })
     }
 
@@ -359,6 +450,47 @@ impl Actions for TerminalCore {
         self.apply(mutation);
     }
 
+    fn osc(&mut self, bytes: &[u8], truncated: bool) {
+        if self.fault.is_some() {
+            return;
+        }
+        if truncated || self.modes.alternate_screen {
+            self.record_deferred();
+            return;
+        }
+        let event = match bytes.strip_prefix(b"133;") {
+            Some(payload) => {
+                let mut fields = payload.split(|byte| *byte == b';');
+                match (fields.next(), fields.next(), fields.next()) {
+                    (Some(b"C"), Some(token), None) => ShellIntegrationToken::from_hex(token)
+                        .map(|token| ShellIntegrationEvent::CommandStarted { token }),
+                    (Some(b"D"), Some(token), Some(status)) => {
+                        ShellIntegrationToken::from_hex(token).and_then(|token| {
+                            std::str::from_utf8(status)
+                                .ok()
+                                .and_then(|status| status.parse::<i32>().ok())
+                                .map(|exit_status| ShellIntegrationEvent::CommandFinished {
+                                    token,
+                                    exit_status,
+                                })
+                        })
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        let Some(event) = event else {
+            self.record_deferred();
+            return;
+        };
+        if self.shell_events.len() == self.shell_events.capacity() {
+            self.record_deferred();
+            return;
+        }
+        self.shell_events.push_back(event);
+    }
+
     fn deferred_string(&mut self) {
         if self.fault.is_none() {
             self.record_deferred();
@@ -428,5 +560,57 @@ mod tests {
             .feed(b"\x1b[?1049l")
             .expect("leaving alternate needs no new id");
         assert_eq!((terminal.cols(), terminal.rows()), (2, 1));
+    }
+
+    #[test]
+    fn exposes_bounded_trusted_shell_events_without_exposing_osc_payload() {
+        let mut terminal = TerminalState::new(80, 24).unwrap();
+        terminal
+            .feed(b"\x1b]133;C;00112233445566778899aabbccddeeff\x07\x1b]133;D;00112233445566778899aabbccddeeff;17\x1b\\")
+            .unwrap();
+        let token = ShellIntegrationToken::from_bytes([
+            0, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee,
+            0xff,
+        ]);
+
+        assert_eq!(
+            terminal.take_shell_integration_event(),
+            Some(ShellIntegrationEvent::CommandStarted { token })
+        );
+        assert_eq!(
+            terminal.take_shell_integration_event(),
+            Some(ShellIntegrationEvent::CommandFinished {
+                token,
+                exit_status: 17,
+            })
+        );
+        assert_eq!(terminal.take_shell_integration_event(), None);
+    }
+
+    #[test]
+    fn unbound_or_malformed_markers_are_not_lifecycle_events() {
+        let mut terminal = TerminalState::new(80, 24).unwrap();
+        terminal
+            .feed(b"\x1b]133;C\x07\x1b]133;C;short\x07\x1b]133;D;00112233445566778899aabbccddeeff;bad\x07")
+            .unwrap();
+        assert_eq!(terminal.take_shell_integration_event(), None);
+    }
+
+    #[test]
+    fn primary_history_range_returns_scrolled_rows_by_line_id() {
+        let mut terminal = TerminalState::new(4, 2).unwrap();
+        terminal.feed(b"one\r\ntwo\r\nthree").unwrap();
+        let first = terminal.line_id(0).unwrap();
+        let last = terminal.line_id(1).unwrap();
+        let rows = terminal.primary_history_range(LineId(1), last, 8);
+        assert_eq!(rows.first().map(|(id, _)| *id), Some(LineId(1)));
+        assert!(rows.iter().any(|(_, cells)| {
+            cells
+                .iter()
+                .map(|cell| cell.character)
+                .collect::<String>()
+                .starts_with("one")
+        }));
+        assert!(terminal.primary_history_range(first, last, 0).is_empty());
     }
 }

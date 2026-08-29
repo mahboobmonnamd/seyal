@@ -7,8 +7,11 @@
 use crate::{AttachmentId, ExecutionId};
 
 pub use crate::pass7::{
-    CAP_CORRELATED_RESIZE, CAP_SEMANTIC_TERMINAL_KEY, ResizeRequest, ResizeResult,
-    ResizeResultCode, TerminalKey, TerminalKeyKind, TerminalKeyModifiers,
+    BlockTimeline, CAP_CORRELATED_RESIZE, CAP_SEMANTIC_TERMINAL_KEY, CommandBlock,
+    CommandBlockState, ComposerCommandRef, ComposerEligibility, ComposerResult, ComposerResultCode,
+    ComposerStatus, HistoryCell, HistoryRangeRequest, HistoryRangeSnapshot, HistoryRangeStatus,
+    HistoryRow, ResizeRequest, ResizeResult, ResizeResultCode, TerminalKey, TerminalKeyKind,
+    TerminalKeyModifiers,
 };
 
 pub const MAGIC: [u8; 8] = *b"SEYALIPC";
@@ -20,6 +23,9 @@ pub const MAX_INPUT_BYTES: u32 = 65_536;
 pub const MAX_EXECUTION_LIST_ENTRIES: u16 = 512;
 pub const CAP_BINARY_DISPLAY: u32 = 1 << 0;
 pub const CAP_OBSERVER: u32 = 1 << 1;
+/// The peer can submit trusted composer commands and receive bounded command
+/// Block metadata. This capability never changes raw terminal input semantics.
+pub const CAP_COMMAND_BLOCKS: u32 = 1 << 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u16)]
@@ -556,6 +562,12 @@ pub enum MessageType {
     TerminalKey = 17,
     ResizeRequest = 18,
     ResizeResult = 19,
+    ComposerCommand = 20,
+    BlockTimeline = 21,
+    ComposerResult = 22,
+    ComposerStatus = 23,
+    HistoryRangeRequest = 24,
+    HistoryRangeSnapshot = 25,
 }
 impl MessageType {
     pub fn from_u16(value: u16) -> Option<Self> {
@@ -579,6 +591,12 @@ impl MessageType {
             17 => Self::TerminalKey,
             18 => Self::ResizeRequest,
             19 => Self::ResizeResult,
+            20 => Self::ComposerCommand,
+            21 => Self::BlockTimeline,
+            22 => Self::ComposerResult,
+            23 => Self::ComposerStatus,
+            24 => Self::HistoryRangeRequest,
+            25 => Self::HistoryRangeSnapshot,
             _ => return None,
         })
     }
@@ -605,6 +623,12 @@ pub enum Message<'a> {
     TerminalKey(TerminalKey),
     ResizeRequest(ResizeRequest),
     ResizeResult(ResizeResult),
+    ComposerCommand(ComposerCommandRef<'a>),
+    BlockTimeline(BlockTimeline),
+    ComposerResult(ComposerResult),
+    ComposerStatus(ComposerStatus),
+    HistoryRangeRequest(HistoryRangeRequest),
+    HistoryRangeSnapshot(HistoryRangeSnapshot),
 }
 
 pub fn decode_message<'a>(
@@ -646,6 +670,18 @@ pub fn decode_message<'a>(
         MessageType::TerminalKey => Message::TerminalKey(TerminalKey::decode(payload)?),
         MessageType::ResizeRequest => Message::ResizeRequest(ResizeRequest::decode(payload)?),
         MessageType::ResizeResult => Message::ResizeResult(ResizeResult::decode(payload)?),
+        MessageType::ComposerCommand => {
+            Message::ComposerCommand(ComposerCommandRef::decode(payload)?)
+        }
+        MessageType::BlockTimeline => Message::BlockTimeline(BlockTimeline::decode(payload)?),
+        MessageType::ComposerResult => Message::ComposerResult(ComposerResult::decode(payload)?),
+        MessageType::ComposerStatus => Message::ComposerStatus(ComposerStatus::decode(payload)?),
+        MessageType::HistoryRangeRequest => {
+            Message::HistoryRangeRequest(HistoryRangeRequest::decode(payload)?)
+        }
+        MessageType::HistoryRangeSnapshot => {
+            Message::HistoryRangeSnapshot(HistoryRangeSnapshot::decode(payload)?)
+        }
     })
 }
 

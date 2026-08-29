@@ -135,6 +135,12 @@ struct NativePreparedFrame {
     }
 }
 
+private struct HistoryRenderRegion {
+    let buffer: MTLBuffer
+    let instanceCount: Int
+    let clip: CGRect
+}
+
 enum MetalTerminalRendererError: Error {
     case unavailableCommandQueue
     case unavailableLibrary
@@ -214,6 +220,10 @@ final class MetalTerminalRenderer {
 
     private var instanceBuffer: MTLBuffer?
     private var instanceCount = 0
+    /// Completed Block projections are keyed by lifecycle ID. The authoritative
+    /// transcript frame replaces the order and membership atomically.
+    private var historyRegions: [UInt64: HistoryRenderRegion] = [:]
+    private var historyRegionOrder: [UInt64] = []
     private var currentRows = 0
     private var currentColumns = 0
     private var currentMetrics: TerminalFontMetrics?
@@ -482,6 +492,98 @@ final class MetalTerminalRenderer {
         return .updated
     }
 
+    /// Prepares a bounded canonical primary-history projection for the same
+    /// Pane surface as the live terminal. No text conversion or second
+    /// renderer is introduced; the range remains styled cells until the Metal
+    /// fragment stage consumes it.
+    func update(
+        historyRange: NativeHistoryRange,
+        region: NativeTranscriptRegion,
+        backingScale: CGFloat
+    ) throws {
+        guard historyRange.blockID != 0,
+              historyRange.requestID != 0,
+              region.id == historyRange.blockID,
+              historyRange.rows.count <= 512
+        else {
+            throw MetalTerminalRendererError.invalidFrame
+        }
+
+        let metrics = glyphAtlas.metrics(backingScale: max(backingScale, 1))
+        let cells = historyRange.rows.reduce(0) { $0 + min($1.count, 512) }
+        guard cells <= 131_072 else {
+            throw MetalTerminalRendererError.invalidFrame
+        }
+        guard cells > 0 else {
+            historyRegions.removeValue(forKey: historyRange.blockID)
+            needsPresent = instanceBuffer != nil
+            return
+        }
+        let byteCount = cells * MemoryLayout<TerminalInstance>.stride
+        guard let buffer = device.makeBuffer(length: byteCount, options: .storageModeShared) else {
+            throw MetalTerminalRendererError.unavailableBuffer
+        }
+        buffer.label = "Seyal Canonical History Instances"
+        let pointer = buffer.contents().bindMemory(to: TerminalInstance.self, capacity: cells)
+        var outputIndex = 0
+        for (rowIndex, row) in historyRange.rows.enumerated() {
+            for (columnIndex, cell) in row.prefix(512).enumerated() {
+                var flags: UInt32 = 0
+                var uvRect = SIMD4<Float>(repeating: 0)
+                var atlasSlice: UInt32 = 0
+                if cell.scalar != 0 && cell.scalar != 32 {
+                    let entry = try glyphAtlas.lookup(
+                        scalar: cell.scalar,
+                        bold: cell.flags & 1 != 0,
+                        backingScale: max(backingScale, 1),
+                        cellMetrics: metrics
+                    )
+                    flags |= instanceGlyphFlag
+                    uvRect = entry.uvRect
+                    atlasSlice = entry.slice
+                }
+                if cell.flags & 2 != 0 { flags |= instanceUnderlineFlag }
+                pointer[outputIndex] = TerminalInstance(
+                    origin: SIMD2<Float>(
+                        Float(region.origin.x) + Float(columnIndex * metrics.cellWidth),
+                        Float(region.origin.y) + Float(rowIndex * metrics.cellHeight)
+                    ),
+                    size: SIMD2<Float>(Float(metrics.cellWidth), Float(metrics.cellHeight)),
+                    uvRect: uvRect,
+                    foreground: resolveTerminalColor(cell.foreground, defaultRGBA: 0xffe9_e1d8),
+                    background: resolveTerminalColor(cell.background, defaultRGBA: 0xff10_0d0b),
+                    flags: flags,
+                    atlasSlice: atlasSlice
+                )
+                outputIndex += 1
+            }
+        }
+        historyRegions[historyRange.blockID] = HistoryRenderRegion(
+            buffer: buffer,
+            instanceCount: outputIndex,
+            clip: region.clip
+        )
+        needsPresent = instanceBuffer != nil
+    }
+
+    func setHistoryRegionOrder(_ ids: [UInt64]) {
+        guard Set(ids).count == ids.count, ids.allSatisfy({ $0 != 0 }) else { return }
+        let keep = Set(ids)
+        historyRegions = historyRegions.filter { keep.contains($0.key) }
+        historyRegionOrder = ids
+        needsPresent = instanceBuffer != nil
+    }
+
+    func removeHistoryRegions(except ids: Set<UInt64>) {
+        historyRegions = historyRegions.filter { ids.contains($0.key) }
+        historyRegionOrder.removeAll { !ids.contains($0) }
+        needsPresent = instanceBuffer != nil
+    }
+
+    private var orderedHistoryRegions: [HistoryRenderRegion] {
+        historyRegionOrder.compactMap { historyRegions[$0] }
+    }
+
     /// Submit a frame to a drawable supplied by the platform frame scheduler.
     /// Production presentation must not call `CAMetalLayer.nextDrawable()`
     /// here because that API can wait while all drawables are in use.
@@ -500,7 +602,8 @@ final class MetalTerminalRenderer {
         guard let commandBuffer = makeCommandBuffer(
             target: drawable.texture,
             instanceBuffer: instanceBuffer,
-            atlasTexture: atlasTexture
+            atlasTexture: atlasTexture,
+            historyRegions: orderedHistoryRegions
         ) else {
             deferredNeedsFullRebuild = true
             needsCurrentFrameWhenIdle = true
@@ -544,7 +647,8 @@ final class MetalTerminalRenderer {
               let commandBuffer = makeCommandBuffer(
                   target: texture,
                   instanceBuffer: instanceBuffer,
-                  atlasTexture: atlasTexture
+                  atlasTexture: atlasTexture,
+                  historyRegions: orderedHistoryRegions
               )
         else {
             return nil
@@ -581,7 +685,8 @@ final class MetalTerminalRenderer {
         guard let commandBuffer = makeCommandBuffer(
                   target: texture,
                   instanceBuffer: instanceBuffer,
-                  atlasTexture: atlasTexture
+                  atlasTexture: atlasTexture,
+                  historyRegions: orderedHistoryRegions
               )
         else {
             return nil
@@ -735,7 +840,8 @@ final class MetalTerminalRenderer {
     private func makeCommandBuffer(
         target: MTLTexture,
         instanceBuffer: MTLBuffer,
-        atlasTexture: MTLTexture
+        atlasTexture: MTLTexture,
+        historyRegions: [HistoryRenderRegion] = []
     ) -> MTLCommandBuffer? {
         guard let commandBuffer = commandQueue.makeCommandBuffer() else { return nil }
         commandBuffer.label = "Seyal Terminal Frame"
@@ -769,6 +875,27 @@ final class MetalTerminalRenderer {
             vertexCount: 6,
             instanceCount: instanceCount
         )
+        for region in historyRegions where region.instanceCount > 0 {
+            encoder.setVertexBuffer(region.buffer, offset: 0, index: 0)
+            let x = max(0, Int(region.clip.minX.rounded(.down)))
+            let y = max(0, Int(region.clip.minY.rounded(.down)))
+            let maxX = min(target.width, Int(region.clip.maxX.rounded(.up)))
+            let maxY = min(target.height, Int(region.clip.maxY.rounded(.up)))
+            guard maxX > x, maxY > y else { continue }
+            encoder.setScissorRect(MTLScissorRect(
+                x: x,
+                y: y,
+                width: maxX - x,
+                height: maxY - y
+            ))
+            encoder.drawPrimitives(
+                type: .triangle,
+                vertexStart: 0,
+                vertexCount: 6,
+                instanceCount: region.instanceCount
+            )
+        }
+        encoder.setScissorRect(MTLScissorRect(x: 0, y: 0, width: target.width, height: target.height))
         encoder.endEncoding()
         return commandBuffer
     }
@@ -835,6 +962,8 @@ final class MetalTerminalRenderer {
     private func releaseDedicatedResources() {
         instanceBuffer = nil
         instanceCount = 0
+        historyRegions.removeAll()
+        historyRegionOrder.removeAll()
         currentRows = 0
         currentColumns = 0
         currentMetrics = nil

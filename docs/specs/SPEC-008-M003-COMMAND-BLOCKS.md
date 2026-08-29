@@ -1,6 +1,6 @@
 # SPEC-008 — M003 command Blocks and Pane composer
 
-- **Status:** Proposed; implementation not authorized until ADR-009 is accepted
+- **Status:** Active implementation specification; ADR-009 accepted 2026-08-28
 - **Date:** 2026-08-28
 - **Architecture:** ADR-009 plus ADR-004/005/006/007/008
 - **Depends on:** accepted SPEC-001 through SPEC-007 and completed Pass 7

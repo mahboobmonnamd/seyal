@@ -1547,6 +1547,11 @@ impl Runtime {
                             self.close_local_connection(token);
                             continue;
                         };
+                        #[cfg(feature = "test-fault-injection")]
+                        if test_fault::take(FaultPoint::BlockCompletionAdmission) {
+                            self.close_local_connection(token);
+                            continue;
+                        }
                         if !self.send_after_display_frame(token, frame) {
                             continue;
                         }

@@ -100,7 +100,9 @@ fn run_latency_sample(ordinal: usize) {
         state: BlockLifecycle::Current,
     };
     let mut cache = BenchmarkBlockCache::default();
-    let encoded = black_box(state).encode().expect("benchmark BlockState encode");
+    let encoded = black_box(state)
+        .encode()
+        .expect("benchmark BlockState encode");
     let decoded = BlockState::decode(black_box(&encoded)).expect("benchmark BlockState decode");
     assert!(cache.apply(execution_id, decoded));
     black_box(cache.visible());

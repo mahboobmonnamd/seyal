@@ -225,3 +225,14 @@ fn completion_encode_failure_disconnects_before_finalized_and_retires_block() {
     test_fault::fail_next(FaultPoint::BlockCompletionEncode);
     harness.assert_fails_closed_before_finalized(&mut client);
 }
+
+#[test]
+fn completion_admission_failure_disconnects_before_finalized_and_retires_block() {
+    let mut harness = Harness::new("admission");
+    let execution_id = harness.spawn();
+    let mut client = harness.connect();
+    harness.attach_until_current(&mut client, execution_id);
+
+    test_fault::fail_next(FaultPoint::BlockCompletionAdmission);
+    harness.assert_fails_closed_before_finalized(&mut client);
+}

@@ -4,6 +4,8 @@
 //! authority. This crate owns only a local socket attachment, an atomically
 //! committed `DisplayCache`, and derived `seyal-render` presentation state.
 
+mod block;
+
 // Keep the existing internal import path mechanically stable while severing the
 // production dependency on the Runtime crate. `seyal_runtime` below is only an
 // alias for the authority-neutral protocol/value crate; integration tests still

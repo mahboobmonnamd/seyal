@@ -7,7 +7,9 @@ use std::{
 };
 
 use seyal_exec::{CommandSpec, WindowSize};
-use seyal_protocol::pass8::{BLOCK_STATE_MESSAGE_TYPE, BlockLifecycle, BlockState, CAP_BLOCK_METADATA};
+use seyal_protocol::pass8::{
+    BLOCK_STATE_MESSAGE_TYPE, BlockLifecycle, BlockState, CAP_BLOCK_METADATA,
+};
 use seyal_runtime::{
     LocalIpcMode, Runtime, RuntimeConfig,
     local_ipc::framing::{
@@ -26,10 +28,9 @@ fn config() -> RuntimeConfig {
         std::process::id()
     ));
     config.local_ipc = LocalIpcMode::Enabled {
-        runtime_dir_override: Some(std::env::temp_dir().join(format!(
-            "s8st-{:x}-{nonce:x}",
-            std::process::id()
-        ))),
+        runtime_dir_override: Some(
+            std::env::temp_dir().join(format!("s8st-{:x}-{nonce:x}", std::process::id())),
+        ),
     };
     config.final_drain = Duration::from_millis(100);
     config
@@ -41,7 +42,11 @@ fn pump(runtime: &mut Runtime) {
         .expect("Runtime poll");
 }
 
-fn read_raw(runtime: &mut Runtime, stream: &mut UnixStream, buffered: &mut Vec<u8>) -> (u16, Vec<u8>) {
+fn read_raw(
+    runtime: &mut Runtime,
+    stream: &mut UnixStream,
+    buffered: &mut Vec<u8>,
+) -> (u16, Vec<u8>) {
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
         if buffered.len() >= HEADER_LEN {

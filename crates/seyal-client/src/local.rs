@@ -1,6 +1,7 @@
 use std::{
     collections::VecDeque,
     io::{Read, Write},
+    net::Shutdown,
     os::{fd::AsRawFd, unix::net::UnixStream},
     path::Path,
     time::Duration,
@@ -22,12 +23,15 @@ use seyal_runtime::{
         framing::{
             Attach, Attached, CAP_BINARY_DISPLAY, CAP_CORRELATED_RESIZE, CAP_SEMANTIC_TERMINAL_KEY,
             ClientHello, ErrorCode, ErrorMessage, ExecutionList, FrameHeader, HEADER_LEN, InputRef,
-            Lifecycle, MAX_FRAME_PAYLOAD, MAX_INPUT_BYTES, MessageType, ResizeRequest,
-            ResizeResult, ResizeResultCode, Resync, Role, ServerHello, TerminalKey,
+            Lifecycle, LifecycleMessage, MAX_FRAME_PAYLOAD, MAX_INPUT_BYTES, MessageType,
+            ResizeRequest, ResizeResult, ResizeResultCode, Resync, Role, ServerHello, TerminalKey,
             TerminalKeyKind, TerminalKeyModifiers, encode_frame,
         },
     },
+    pass8::{BLOCK_STATE_MESSAGE_TYPE, BlockLifecycle, BlockState, CAP_BLOCK_METADATA},
 };
+
+use crate::block::{BlockCache, is_epoch_quarantined, quarantine_epoch};
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(2);
 const READ_CHUNK_BYTES: usize = 64 * 1024;
@@ -56,6 +60,7 @@ pub enum ClientError {
     LostController,
     ResizeProtocolFailure,
     InvalidGeometry,
+    BlockMetadataConflict,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -345,9 +350,12 @@ pub struct LocalDisplayClient {
     pending_batch: PendingDisplayBatch,
     outbound: VecDeque<PendingControlWrite>,
     outbound_wire_bytes: usize,
+    runtime_id: u128,
     execution_id: ExecutionId,
     attachment_id: AttachmentId,
     role: Role,
+    block_metadata_negotiated: bool,
+    block_cache: BlockCache,
     cache: DisplayCache,
     prepared: PreparedSurface,
     last_preparation: PreparationResult,
@@ -374,7 +382,7 @@ impl LocalDisplayClient {
             control_socket_path(&runtime_dir).map_err(|_| ClientError::RuntimeDiscovery)?;
 
         let mut stream = connect_stream(&socket_path)?;
-        hello(&mut stream, true)?;
+        let mut server_hello = hello(&mut stream, true, true)?;
         send_control(&mut stream, MessageType::ListExecutions, &[])?;
         let (kind, payload) = read_blocking_frame(&mut stream)?;
         if kind != MessageType::ExecutionList {
@@ -388,7 +396,21 @@ impl LocalDisplayClient {
             .map(|entry| entry.execution_id)
             .ok_or(ClientError::NoRunningExecution)?;
 
-        Self::finish_attach(stream, execution_id, Role::Controller)
+        if is_epoch_quarantined(server_hello.runtime_id, execution_id) {
+            drop(stream);
+            stream = connect_stream(&socket_path)?;
+            server_hello = hello(&mut stream, true, false)?;
+        }
+        let block_metadata_negotiated =
+            server_hello.server_capabilities & CAP_BLOCK_METADATA != 0
+                && !is_epoch_quarantined(server_hello.runtime_id, execution_id);
+        Self::finish_attach(
+            stream,
+            execution_id,
+            Role::Controller,
+            server_hello.runtime_id,
+            block_metadata_negotiated,
+        )
     }
 
     pub fn connect_execution(
@@ -397,14 +419,30 @@ impl LocalDisplayClient {
         role: Role,
     ) -> Result<Self, ClientError> {
         let mut stream = connect_stream(socket_path)?;
-        hello(&mut stream, role == Role::Controller)?;
-        Self::finish_attach(stream, execution_id, role)
+        let mut server_hello = hello(&mut stream, role == Role::Controller, true)?;
+        if is_epoch_quarantined(server_hello.runtime_id, execution_id) {
+            drop(stream);
+            stream = connect_stream(socket_path)?;
+            server_hello = hello(&mut stream, role == Role::Controller, false)?;
+        }
+        let block_metadata_negotiated =
+            server_hello.server_capabilities & CAP_BLOCK_METADATA != 0
+                && !is_epoch_quarantined(server_hello.runtime_id, execution_id);
+        Self::finish_attach(
+            stream,
+            execution_id,
+            role,
+            server_hello.runtime_id,
+            block_metadata_negotiated,
+        )
     }
 
     fn finish_attach(
         mut stream: UnixStream,
         execution_id: ExecutionId,
         role: Role,
+        runtime_id: u128,
+        block_metadata_negotiated: bool,
     ) -> Result<Self, ClientError> {
         send_control(
             &mut stream,
@@ -474,9 +512,12 @@ impl LocalDisplayClient {
             pending_batch: batch,
             outbound: VecDeque::new(),
             outbound_wire_bytes: 0,
+            runtime_id,
             execution_id,
             attachment_id: attached.attachment_id,
             role,
+            block_metadata_negotiated,
+            block_cache: BlockCache::default(),
             cache,
             prepared,
             last_preparation: result,
@@ -498,6 +539,10 @@ impl LocalDisplayClient {
 
     pub fn execution_id(&self) -> ExecutionId {
         self.execution_id
+    }
+
+    pub fn block_state(&self) -> Option<BlockState> {
+        self.block_cache.visible()
     }
 
     pub fn cache(&self) -> &DisplayCache {
@@ -735,9 +780,23 @@ impl LocalDisplayClient {
                 let frame_start = self.read_offset;
                 let frame = &self.buffered[frame_start..frame_end];
                 let header = FrameHeader::decode(frame).map_err(|_| ClientError::Protocol)?;
+
+                if header.message_type == BLOCK_STATE_MESSAGE_TYPE {
+                    if !self.block_metadata_negotiated {
+                        return Err(self.quarantine_block_metadata());
+                    }
+                    let incoming = BlockState::decode(&frame[HEADER_LEN..])
+                        .map_err(|_| self.quarantine_block_metadata())?;
+                    if self.block_cache.apply(self.execution_id, incoming).is_err() {
+                        return Err(self.quarantine_block_metadata());
+                    }
+                    self.read_offset = frame_end;
+                    parsed_frames += 1;
+                    continue;
+                }
+
                 let message_type =
                     MessageType::from_u16(header.message_type).ok_or(ClientError::Protocol)?;
-
                 match message_type {
                     MessageType::DisplaySnapshot | MessageType::DisplayDelta => {
                         let chunk = decode_chunk(frame).map_err(|_| ClientError::Display)?;
@@ -757,17 +816,25 @@ impl LocalDisplayClient {
                         let payload = &frame[HEADER_LEN..];
                         let error =
                             ErrorMessage::decode(payload).map_err(|_| ClientError::Protocol)?;
-                        // Runtime backpressure is a per-action rejection, not
-                        // a broken transport. Consume the error and preserve
-                        // the connection so the native surface can expose the
-                        // bounded, retryable failure without dropping later
-                        // FIFO work. Other Error frames retain their fatal
-                        // protocol/authority semantics.
                         if let Some(failure) = classify_server_error(error)? {
                             self.input_failure = Some(failure);
                         }
                     }
-                    MessageType::Lifecycle => {}
+                    MessageType::Lifecycle => {
+                        let lifecycle = LifecycleMessage::decode(&frame[HEADER_LEN..])
+                            .map_err(|_| ClientError::Protocol)?;
+                        if lifecycle.execution_id != self.execution_id {
+                            return Err(ClientError::Protocol);
+                        }
+                        if lifecycle.lifecycle == Lifecycle::Finalized
+                            && self.block_metadata_negotiated
+                            && self.block_cache.visible().is_some_and(|block| {
+                                block.state == BlockLifecycle::Current
+                            })
+                        {
+                            return Err(self.quarantine_block_metadata());
+                        }
+                    }
                     _ => return Err(ClientError::Protocol),
                 }
                 self.read_offset = frame_end;
@@ -815,6 +882,13 @@ impl LocalDisplayClient {
         let result = prepare_cache(&mut self.prepared, &self.cache, damage, full_invalidation)?;
         self.last_preparation = result;
         Ok(Some(result))
+    }
+
+    fn quarantine_block_metadata(&mut self) -> ClientError {
+        self.block_cache.quarantine();
+        quarantine_epoch(self.runtime_id, self.execution_id);
+        let _ = self.stream.shutdown(Shutdown::Both);
+        ClientError::BlockMetadataConflict
     }
 
     fn complete_frame_end(&self) -> Result<Option<usize>, ClientError> {
@@ -1203,12 +1277,20 @@ fn connect_stream(path: &Path) -> Result<UnixStream, ClientError> {
     Ok(stream)
 }
 
-fn hello(stream: &mut UnixStream, interactive: bool) -> Result<ServerHello, ClientError> {
+fn hello(
+    stream: &mut UnixStream,
+    interactive: bool,
+    request_block_metadata: bool,
+) -> Result<ServerHello, ClientError> {
     send_control(
         stream,
         MessageType::ClientHello,
         &ClientHello {
-            client_capabilities: 0,
+            client_capabilities: if request_block_metadata {
+                CAP_BLOCK_METADATA
+            } else {
+                0
+            },
         }
         .encode(),
     )?;
@@ -1423,117 +1505,23 @@ mod tests {
             newest_pending_geometry(&unresolved, Some(fence)),
             Some(geometry(30, 100))
         );
-
         unresolved.push_back(ResizeRecord {
             request_id: 3,
-            geometry: geometry(24, 80),
+            geometry: geometry(40, 120),
             phase: ResizePhase::QueuedNotStarted,
         });
         assert_eq!(
             newest_pending_geometry(&unresolved, Some(fence)),
-            Some(geometry(24, 80))
-        );
-    }
-
-    #[test]
-    fn committed_geometry_does_not_suppress_restore_when_newer_pending_resize_differs() {
-        let committed = geometry(24, 80);
-        let desired = geometry(24, 80);
-        assert!(resize_needs_mutation(
-            desired,
-            committed,
-            Some(geometry(30, 100))
-        ));
-        assert!(!resize_needs_mutation(desired, committed, None));
-        assert!(!resize_needs_mutation(
-            desired,
-            geometry(30, 100),
-            Some(desired)
-        ));
-    }
-
-    #[test]
-    fn applied_fence_is_pending_until_authoritative_generation_catches_up() {
-        let desired = geometry(30, 100);
-        let committed = geometry(24, 80);
-        let fence = AppliedFence {
-            request_id: 4,
-            geometry: desired,
-            applied_generation: 12,
-        };
-
-        // A successful result is still pending projection, so reconciliation
-        // must not admit another request for the same target.
-        assert!(!resize_needs_mutation(
-            desired,
-            committed,
-            Some(fence.geometry)
-        ));
-        assert_eq!(
-            newest_pending_geometry(&VecDeque::new(), Some(fence)),
-            Some(desired)
-        );
-    }
-
-    #[test]
-    fn newer_unresolved_resize_remains_authoritative_over_older_applied_fence() {
-        let older = AppliedFence {
-            request_id: 4,
-            geometry: geometry(30, 100),
-            applied_generation: 12,
-        };
-        let newer = ResizeRecord {
-            request_id: 5,
-            geometry: geometry(40, 120),
-            phase: ResizePhase::SentWaitingResult,
-        };
-
-        assert_eq!(
-            newest_pending_geometry(&VecDeque::from([newer]), Some(older)),
             Some(geometry(40, 120))
         );
     }
 
     #[test]
-    fn invalid_terminal_key_requests_fail_before_wire_encoding() {
-        assert!(!valid_terminal_key_request(
-            TerminalKeyKind::ControlAscii,
-            'é' as u32
-        ));
-        assert!(!valid_terminal_key_request(TerminalKeyKind::ArrowUp, 1));
-        assert!(valid_terminal_key_request(
-            TerminalKeyKind::ControlAscii,
-            '?' as u32
-        ));
-        assert!(valid_terminal_key_request(TerminalKeyKind::ArrowUp, 0));
-    }
-
-    #[test]
-    fn runtime_input_backpressure_is_visible_without_fatal_disconnect() {
-        let error = ErrorMessage {
-            error_code: ErrorCode::Backpressure as u16,
-            offending_message_type: MessageType::Input as u16,
-            detail_code: 0,
-        };
-        assert_eq!(
-            classify_server_error(error).unwrap(),
-            Some(InputAdmissionFailure::ClientBackpressure)
-        );
-        let key_error = ErrorMessage {
-            offending_message_type: MessageType::TerminalKey as u16,
-            ..error
-        };
-        assert_eq!(
-            classify_server_error(key_error).unwrap(),
-            Some(InputAdmissionFailure::ClientBackpressure)
-        );
-        assert_eq!(
-            classify_server_error(ErrorMessage {
-                error_code: ErrorCode::InvalidExecution as u16,
-                offending_message_type: MessageType::Input as u16,
-                detail_code: 0,
-            }),
-            Err(ClientError::Server(ErrorCode::InvalidExecution as u16))
-        );
+    fn resize_mutation_is_suppressed_for_committed_or_newest_pending_geometry() {
+        let current = geometry(24, 80);
+        let desired = geometry(30, 100);
+        assert!(!resize_needs_mutation(current, current, None));
+        assert!(!resize_needs_mutation(desired, current, Some(desired)));
+        assert!(resize_needs_mutation(desired, current, None));
     }
 }

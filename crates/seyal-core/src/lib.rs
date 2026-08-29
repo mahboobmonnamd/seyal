@@ -102,6 +102,7 @@ macro_rules! impl_id_wire_bytes {
 }
 
 impl_id_wire_bytes!(RuntimeId);
+impl_id_wire_bytes!(WorkspaceId);
 impl_id_wire_bytes!(ExecutionId);
 impl_id_wire_bytes!(AttachmentId);
 impl_id_wire_bytes!(ProjectionId);
@@ -228,11 +229,13 @@ mod tests {
     #[test]
     fn wire_ids_round_trip_through_raw_little_endian_bytes() {
         let runtime = RuntimeId::new();
+        let workspace = WorkspaceId::m001_default();
         let execution = ExecutionId::new();
         let attachment = AttachmentId::new();
         let projection = ProjectionId::from_bytes([0x5a; 16]);
         let block = BlockId::new();
         assert_eq!(RuntimeId::from_bytes(runtime.to_bytes()), runtime);
+        assert_eq!(WorkspaceId::from_bytes(workspace.to_bytes()), workspace);
         assert_eq!(ExecutionId::from_bytes(execution.to_bytes()), execution);
         assert_eq!(AttachmentId::from_bytes(attachment.to_bytes()), attachment);
         assert_eq!(ProjectionId::from_bytes(projection.to_bytes()), projection);

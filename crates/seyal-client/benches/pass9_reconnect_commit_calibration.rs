@@ -17,8 +17,7 @@ use seyal_client::LocalDisplayClient;
 use seyal_exec::{CommandSpec, WindowSize};
 #[cfg(target_os = "macos")]
 use seyal_runtime::{
-    ExecutionId, LocalIpcMode, Runtime, RuntimeConfig, RuntimeId,
-    local_ipc::framing::Role,
+    ExecutionId, LocalIpcMode, Runtime, RuntimeConfig, RuntimeId, local_ipc::framing::Role,
 };
 
 const PERFORMANCE_CLAIM: &str = "performance_claim=false";
@@ -53,12 +52,7 @@ fn main() {
 fn run_macos() {
     println!(
         "pass9_reconnect_commit_calibration architecture=production_LocalDisplayClient_Runtime_UDS_PTY geometry={}x{} warmup_cycles={} measured_cycles={} cohorts={} percentile_method=nearest_rank reconnect_boundary=connect_hello_attach_snapshot_cache_commit_prepare_surface_return {}",
-        COLUMNS,
-        ROWS,
-        WARMUP_CYCLES,
-        MEASURED_CYCLES,
-        COHORTS,
-        PERFORMANCE_CLAIM,
+        COLUMNS, ROWS, WARMUP_CYCLES, MEASURED_CYCLES, COHORTS, PERFORMANCE_CLAIM,
     );
     print_host_metadata();
 
@@ -108,7 +102,7 @@ fn measure_cohort(cohort: usize) -> Stats {
 
     let stats = stats(&mut samples);
     println!(
-        "pass9_reconnect_commit_cohort cohort={} runtime_id={} execution_id={} boundary=connect_hello_attach_snapshot_cache_commit_prepare_surface_return p50_us={:.3} p95_us={:.3} p99_us={:.3} max_us={:.3} sample_count={} {}",
+        "pass9_reconnect_commit_cohort cohort={} runtime_id={:?} execution_id={:?} boundary=connect_hello_attach_snapshot_cache_commit_prepare_surface_return p50_us={:.3} p95_us={:.3} p99_us={:.3} max_us={:.3} sample_count={} {}",
         cohort,
         harness.runtime_id,
         harness.execution_id,
@@ -199,8 +193,8 @@ impl RuntimeHarness {
             let mut config = RuntimeConfig::m001().expect("M001 Runtime config");
             config.singleton_path = std::env::temp_dir()
                 .join(format!("s9cc-{}-{suffix:x}-{nonce:x}.lock", process::id()));
-            let runtime_dir = std::env::temp_dir()
-                .join(format!("s9ccd-{}-{suffix:x}-{nonce:x}", process::id()));
+            let runtime_dir =
+                std::env::temp_dir().join(format!("s9ccd-{}-{suffix:x}-{nonce:x}", process::id()));
             config.local_ipc = LocalIpcMode::Enabled {
                 runtime_dir_override: Some(runtime_dir),
             };

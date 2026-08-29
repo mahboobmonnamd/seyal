@@ -73,6 +73,28 @@ If two tasks touch canonical `TerminalState`, PTY lifecycle, projection generati
 
 Each pass gets an independent validation Issue if its exit requires cross-task evidence. Pass 10 is the final milestone-validation Issue and must use `.agents/skills/milestone-validation/SKILL.md`.
 
+### Pass 10 final-validation semantics
+
+Pass 10 is an aggregate **validation** gate, not a catch-all production hardening pass and not a new behavioral specification pass.
+
+Its refinement may begin while Pass 9 is nearing completion so the evidence contract can be reviewed, but Pass 10 must remain `BLOCKED / NOT_READY` until Pass 9 is genuinely complete, its final budgets/evidence are accepted, the M001 candidate head is frozen and development readiness passes.
+
+Pass 10 must expand every mandatory `MILESTONE-001.md` acceptance criterion into direct evidence on the final accepted code. Historical CI, PR state, Issue checkboxes or implementation-agent claims are supporting provenance only; they are not automatic milestone proof.
+
+If Pass 10 exposes a production defect or missing required behavior:
+
+```text
+Pass 10 criterion = FAIL / INCONCLUSIVE
+→ create/refine a separate owning Issue in the responsible domain
+→ implement + independently verify that fix normally
+→ freeze a new exact head
+→ rerun affected and aggregate Pass 10 validation
+```
+
+Do not hide product fixes inside validation harnesses, weaken workloads/tests/thresholds to obtain a pass, or pull M002 compatibility into M001. Validation-only tooling may be corrected where a required evidence seam is missing, but it must not create a second terminal authority or alter production behavior merely to measure it.
+
+The detailed Pass 10 protocol is `docs/engineering/M001-PASS10-VALIDATION.md`; the owning validation Issue is #727.
+
 ## Future milestones
 
 Do not populate GitHub with detailed M002+ implementation tasks now. Create only minimal placeholders where needed to show a hard dependency or explicitly deferred behavior. Detailed Issues are generated from accepted specs when that milestone approaches activation.

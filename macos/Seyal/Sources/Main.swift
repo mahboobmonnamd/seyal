@@ -45,6 +45,15 @@ enum SeyalMain {
             return
         }
 
+        if CommandLine.arguments.contains("--pass8-native-metadata-self-test") {
+            guard pass8NativeMetadataSelfTest() else {
+                print("Seyal Pass 8 Runtime-to-Swift metadata self-test failed.")
+                exit(1)
+            }
+            print("Seyal Pass 8 Runtime-to-Swift metadata self-test passed.")
+            return
+        }
+
         if CommandLine.arguments.contains("--pass7-native-input-benchmark") {
             guard runPass7NativeInputBenchmark() else {
                 print("Seyal Pass 7 native input benchmark failed.")
@@ -67,6 +76,40 @@ enum SeyalMain {
         application.setActivationPolicy(.regular)
         application.run()
         withExtendedLifetime(delegate) {}
+    }
+
+    @MainActor
+    private static func pass8NativeMetadataSelfTest() -> Bool {
+        let application = NSApplication.shared
+        application.setActivationPolicy(.prohibited)
+
+        let bridge = RustDisplayBridge(
+            onFrame: { _ in },
+            onError: { _ in },
+            paneID: "pass8-native-self-test"
+        )
+        guard bridge.start() else { return false }
+        defer { bridge.stop() }
+
+        let deadline = Date().addingTimeInterval(2)
+        repeat {
+            guard bridge.clientHandle != 0,
+                  seyal_bridge_select(bridge.clientHandle) == 0
+            else { return false }
+
+            let pollResult = seyal_bridge_poll()
+            guard pollResult >= 0 else { return false }
+
+            if let metadata = bridge.currentBlockMetadata() {
+                return (metadata.blockIDLow != 0 || metadata.blockIDHigh != 0)
+                    && metadata.revision == 1
+                    && metadata.startLineID > 0
+                    && metadata.state == .current
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        } while Date() < deadline
+
+        return false
     }
 
     @MainActor

@@ -4,6 +4,7 @@
 //! attachments, bounded admission and scheduling. Every `TerminalExecution`
 //! continues to own its PTY, primary child and sole canonical TerminalState.
 
+mod block;
 mod capability;
 pub mod display;
 mod error;
@@ -26,6 +27,7 @@ mod singleton;
 #[doc(hidden)]
 pub mod test_fault;
 
+pub use block::{BlockLifecycle, BlockSummary};
 pub use capability::{CapabilityPolicy, m001_term_name};
 pub use error::RuntimeError;
 pub use ids::{AttachmentId, BlockId, ExecutionId, ProjectionId, RuntimeId, WorkspaceId};

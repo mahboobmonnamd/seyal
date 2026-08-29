@@ -15,8 +15,9 @@ use seyal_exec::{
 };
 
 use crate::{
-    AttachmentId, CapabilityPolicy, ExecutionId, InputIngress, RuntimeError, RuntimeId,
-    WorkspaceId,
+    AttachmentId, BlockSummary, CapabilityPolicy, ExecutionId, InputIngress, RuntimeError,
+    RuntimeId, WorkspaceId,
+    block::BlockTimeline,
     input::{AcceptedInput, ControlMessage},
     singleton::SingletonGuard,
 };
@@ -158,6 +159,13 @@ pub struct ExecutionSummary {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub(super) enum BlockCompletion {
+    None,
+    Completed(BlockSummary),
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug)]
 enum Lifecycle {
     Running,
     TerminatingGraceful {
@@ -248,6 +256,7 @@ pub struct Runtime {
     singleton: SingletonGuard,
     reactor: ExecutionReactor,
     entries: HashMap<ExecutionId, Entry>,
+    blocks: BlockTimeline,
     by_token: HashMap<RegistrationToken, ExecutionId>,
     control_tx: SyncSender<ControlMessage>,
     control_rx: Receiver<ControlMessage>,
@@ -286,6 +295,7 @@ impl Runtime {
             singleton,
             reactor,
             entries: HashMap::new(),
+            blocks: BlockTimeline::default(),
             by_token: HashMap::new(),
             control_tx,
             control_rx,
@@ -325,6 +335,14 @@ impl Runtime {
 
     pub fn execution_count(&self) -> usize {
         self.entries.len()
+    }
+
+    pub fn block_count(&self) -> usize {
+        self.blocks.len()
+    }
+
+    pub fn block(&self, id: ExecutionId) -> Option<BlockSummary> {
+        self.blocks.get(id)
     }
 
     pub fn aggregate_accepted_but_unwritten_bytes(&self) -> usize {
@@ -404,6 +422,7 @@ impl Runtime {
 
         let command = self.config.capability_policy.apply(command);
         let mut execution = TerminalExecution::spawn(&command, size)?;
+        let initial_primary_line_id = execution.initial_primary_line_id().map(|line| line.0);
         let token = match self.reactor.register(&execution) {
             Ok(token) => token,
             Err(error) => {
@@ -443,6 +462,15 @@ impl Runtime {
         debug_assert!(previous.is_none());
         let previous = self.entries.insert(id, entry);
         debug_assert!(previous.is_none());
+
+        // Block metadata is optional Workspace presentation metadata. Admission
+        // happens only after TerminalExecution publication and can never roll
+        // back or terminate an otherwise valid execution.
+        if let Some(start_line_id) = initial_primary_line_id {
+            let _ = self
+                .blocks
+                .admit(self.default_workspace, id, start_line_id);
+        }
         Ok(id)
     }
 
@@ -546,7 +574,10 @@ impl Runtime {
     }
 
     pub fn shutdown_complete(&self) -> bool {
-        self.shutting_down && self.entries.is_empty() && self.rollback_reap.is_empty()
+        self.shutting_down
+            && self.entries.is_empty()
+            && self.blocks.len() == 0
+            && self.rollback_reap.is_empty()
     }
 
     pub fn poll_once(&mut self, max_wait: Option<Duration>) -> Result<usize, RuntimeError> {
@@ -587,8 +618,7 @@ impl Runtime {
                         processed += 1;
                     }
                 }
-                ReactorEventKind::AuxiliaryReadable | ReactorEventKind::AuxiliaryWritable =>
-                {
+                ReactorEventKind::AuxiliaryReadable | ReactorEventKind::AuxiliaryWritable => {
                     #[cfg(target_os = "macos")]
                     if let Some(token) = event.token {
                         self.service_local_reactor_event(token, event.kind, event.hangup)?;
@@ -942,20 +972,39 @@ impl Runtime {
 
     fn finalize(&mut self, id: ExecutionId) -> Result<(), RuntimeError> {
         // The final PTY drain may have changed canonical state in this same
-        // scheduling turn. Publish that state before removing TerminalExecution.
+        // scheduling turn. Publish that state before completing Block metadata.
         #[cfg(target_os = "macos")]
         self.publish_display_updates();
 
+        let Some(workspace_id) = self.entries.get(&id).map(|entry| entry.workspace_id) else {
+            return Ok(());
+        };
+        let block_completion = match self.blocks.complete(workspace_id, id) {
+            Ok(Some(record)) => BlockCompletion::Completed(record),
+            Ok(None) => BlockCompletion::None,
+            Err(_) => BlockCompletion::Failed,
+        };
+
         let Some(mut entry) = self.entries.remove(&id) else {
+            self.blocks.retire(id);
             return Ok(());
         };
         entry.ingress_active.store(false, Ordering::Release);
         entry.pending_input.clear();
         self.by_token.remove(&entry.token);
-        self.reactor.deregister(entry.token)?;
+        let deregister_result = self.reactor.deregister(entry.token);
         drop(entry);
+
         #[cfg(target_os = "macos")]
-        self.notify_local_ipc_execution_finalized(id);
+        self.notify_local_ipc_execution_finalized(id, block_completion);
+        #[cfg(not(target_os = "macos"))]
+        let _ = block_completion;
+
+        // M001 retains no completed Block history. Retirement happens in this
+        // same bounded turn after per-connection finalization bytes were either
+        // admitted or the affected connection was failed closed.
+        self.blocks.retire(id);
+        deregister_result?;
         Ok(())
     }
 

@@ -4,6 +4,7 @@
 //! attachments, bounded admission and scheduling. Every `TerminalExecution`
 //! continues to own its PTY, primary child and sole canonical TerminalState.
 
+#[cfg(target_os = "macos")]
 mod blocks;
 mod capability;
 pub mod display;

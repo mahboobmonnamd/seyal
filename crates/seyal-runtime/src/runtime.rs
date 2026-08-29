@@ -11,10 +11,10 @@ use std::{
 
 use seyal_exec::{
     ChildExit, CommandSpec, ExecutionReactor, ReactorEvent, ReactorEventKind, ReadOutcome,
-    RegistrationToken, ShellIntegrationEvent, ShellIntegrationToken, SignalDisposition,
-    TerminalExecution, WindowSize, WriteOutcome,
+    RegistrationToken, SignalDisposition, TerminalExecution, WindowSize, WriteOutcome,
 };
 
+#[cfg(target_os = "macos")]
 use crate::blocks::{BlockId, BlockTimeline, MAX_COMMAND_BYTES};
 use crate::{
     AttachmentId, CapabilityPolicy, ExecutionId, InputIngress, RuntimeError, RuntimeId,
@@ -22,6 +22,8 @@ use crate::{
     input::{AcceptedInput, ControlMessage},
     singleton::SingletonGuard,
 };
+#[cfg(target_os = "macos")]
+use seyal_exec::{ShellIntegrationEvent, ShellIntegrationToken};
 
 #[cfg(target_os = "macos")]
 mod local;
@@ -47,6 +49,7 @@ const PTY_EOF_REAP_PROBE_INITIAL: Duration = Duration::from_millis(10);
 const PTY_EOF_REAP_PROBE_MAX: Duration = Duration::from_millis(320);
 const PTY_EOF_REAP_PROBE_LIMIT: u8 = 6;
 
+#[cfg(target_os = "macos")]
 fn issue_shell_integration_token() -> Result<ShellIntegrationToken, RuntimeError> {
     let mut token = [0u8; 16];
     let mut source = std::fs::File::open("/dev/urandom")?;
@@ -55,7 +58,7 @@ fn issue_shell_integration_token() -> Result<ShellIntegrationToken, RuntimeError
     Ok(ShellIntegrationToken::from_bytes(token))
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod composer_wrapper_tests {
     use super::*;
 
@@ -89,11 +92,13 @@ mod composer_wrapper_tests {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(target_os = "macos")]
 enum ShellIntegrationMode {
     ZshHook,
     Unsupported,
 }
 
+#[cfg(target_os = "macos")]
 fn shell_integration_mode(command: &CommandSpec) -> ShellIntegrationMode {
     match command.program().to_string_lossy().as_ref() {
         "/bin/zsh" | "zsh" => ShellIntegrationMode::ZshHook,
@@ -101,6 +106,7 @@ fn shell_integration_mode(command: &CommandSpec) -> ShellIntegrationMode {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn zsh_composer_command(command: &str, token: ShellIntegrationToken) -> String {
     let mut token_hex = String::with_capacity(32);
     token.write_hex(&mut token_hex);
@@ -272,6 +278,7 @@ impl Lifecycle {
 /// application result, not a transport failure, so the Pane keeps its draft
 /// and remains connected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(target_os = "macos")]
 pub(crate) enum ComposerAdmission {
     Accepted(BlockId),
     Busy,
@@ -290,19 +297,27 @@ struct Entry {
     ingress_active: Arc<AtomicBool>,
     /// Accepted composer commands awaiting trusted OSC-133 `CommandStarted`.
     /// This is metadata only; PTY input continues through `pending_input`.
+    #[cfg(target_os = "macos")]
     pending_composer_commands: VecDeque<PendingComposerCommand>,
+    #[cfg(target_os = "macos")]
     shell_integration_mode: ShellIntegrationMode,
+    #[cfg(target_os = "macos")]
     block_timeline: BlockTimeline,
+    #[cfg(target_os = "macos")]
     active_block: Option<BlockId>,
+    #[cfg(target_os = "macos")]
     active_block_token: Option<ShellIntegrationToken>,
+    #[cfg(target_os = "macos")]
     block_revision: u64,
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Clone, Copy, Debug)]
 struct PendingComposerCommand {
     token: ShellIntegrationToken,
 }
 
+#[cfg(target_os = "macos")]
 impl PendingComposerCommand {
     fn new(token: ShellIntegrationToken, _command: &str) -> Self {
         Self { token }
@@ -531,11 +546,17 @@ impl Runtime {
             pending_input: VecDeque::new(),
             reserved_input,
             ingress_active,
+            #[cfg(target_os = "macos")]
             pending_composer_commands: VecDeque::new(),
+            #[cfg(target_os = "macos")]
             shell_integration_mode: shell_integration_mode(&command),
+            #[cfg(target_os = "macos")]
             block_timeline: BlockTimeline::default(),
+            #[cfg(target_os = "macos")]
             active_block: None,
+            #[cfg(target_os = "macos")]
             active_block_token: None,
+            #[cfg(target_os = "macos")]
             block_revision: 0,
         };
         let previous = self.by_token.insert(token, id);
@@ -568,6 +589,7 @@ impl Runtime {
     /// Admit one complete Pane-composer command. This deliberately uses a
     /// distinct Runtime operation from raw terminal input: only a trusted
     /// OSC-133 start event can turn this pending metadata into a Block.
+    #[cfg(target_os = "macos")]
     pub(crate) fn submit_composer_command(
         &mut self,
         id: ExecutionId,
@@ -901,6 +923,7 @@ impl Runtime {
     /// Consume bounded canonical parser events after their bytes were applied
     /// to TerminalState. The Runtime records only trusted anchors; this path
     /// never reads a prompt, row text, or terminal cell payload.
+    #[cfg(target_os = "macos")]
     fn observe_shell_integration_events(&mut self, id: ExecutionId) -> Result<(), RuntimeError> {
         let mut changed = false;
         {
@@ -960,6 +983,19 @@ impl Runtime {
         if changed {
             self.publish_block_timeline(id);
         }
+        Ok(())
+    }
+
+    /// Non-macOS runtimes do not expose the local composer/block route, but
+    /// still drain parser events so a raw execution cannot retain a bounded
+    /// queue of shell-integration notifications indefinitely.
+    #[cfg(not(target_os = "macos"))]
+    fn observe_shell_integration_events(&mut self, id: ExecutionId) -> Result<(), RuntimeError> {
+        let entry = self
+            .entries
+            .get_mut(&id)
+            .ok_or(RuntimeError::UnknownExecution)?;
+        while entry.execution.take_shell_integration_event().is_some() {}
         Ok(())
     }
 

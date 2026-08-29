@@ -926,10 +926,11 @@ impl Runtime {
                     break;
                 }
                 ReadOutcome::Bytes(0) | ReadOutcome::WouldBlock => {
-                    drain_complete = matches!(
-                        self.entries.get(&id).map(|entry| entry.lifecycle),
-                        Some(Lifecycle::DrainingAfterPrimaryExit { .. })
-                    );
+                    // A temporary empty nonblocking PTY read is not end-of-file.
+                    // After the primary process exits, descendants or the PTY
+                    // discipline may still make final tail bytes readable during
+                    // the bounded final-drain window. Only EOF may finalize early;
+                    // otherwise keep the execution until the drain deadline.
                     break;
                 }
                 ReadOutcome::Bytes(count) => {
@@ -1228,7 +1229,16 @@ impl Runtime {
                 }
                 Some(Lifecycle::DrainingAfterPrimaryExit { exit, .. }) => {
                     let _ = exit;
-                    self.finalize(id)?;
+                    // Close the final-drain race: readiness and the deadline may
+                    // become observable in the same scheduling turn. Give the PTY
+                    // one last bounded production read before publishing the final
+                    // display and completing execution metadata. EOF may finalize
+                    // inside service_reads; otherwise the deadline remains the hard
+                    // upper bound and finalize retires the execution below.
+                    self.service_reads(id)?;
+                    if self.entries.contains_key(&id) {
+                        self.finalize(id)?;
+                    }
                 }
                 Some(Lifecycle::Running | Lifecycle::TerminationFailed) | None => {}
             }

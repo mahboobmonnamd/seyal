@@ -651,7 +651,10 @@ Rules:
 - client stall during finalization cannot retain Block records indefinitely;
 - completion metadata failure/disconnect cannot retain Block records indefinitely;
 - execution retirement + Block retirement is idempotent under duplicate lifecycle observations;
-- 1/10/50/100/512 simultaneous populations stay within documented bounds.
+- real PTY-backed Runtime lifecycle scaling must admit at least 10 concurrent executions and should probe up to 50;
+- above the mandatory floor of 10, an early stop is accepted only for the recognized macOS PTY allocation failure `ENXIO` / `Device not configured`; any unrelated admission error fails the gate, and fewer than 10 admitted PTY executions fails the gate;
+- separately, exactly 512 simultaneous M001 Block records must be admitted against the production `BlockTimeline` and satisfy the retained-memory bound; this is a metadata-capacity/RSS gate and is not a requirement to allocate 512 operating-system PTYs;
+- neither boundary may be silently skipped or replaced by a test-only logical population that bypasses the production path under test.
 
 ### 16.6 Attach/reconnect
 

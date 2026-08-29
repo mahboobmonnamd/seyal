@@ -1,8 +1,9 @@
-//! Test-only deterministic failure injection for Pass-5 rollback paths.
+//! Test-only deterministic failure injection for production rollback/fail-closed paths.
 //!
 //! This module is compiled only with `test-fault-injection`. Legacy shared-
 //! projection points remain solely for isolated comparator/reference tests;
-//! Candidate-D production faults exercise bounded attach admission/flush.
+//! Candidate-D production faults exercise bounded attach admission/flush and
+//! Pass-8 optional Block metadata isolation/finalization ordering.
 
 use std::cell::Cell;
 
@@ -16,6 +17,11 @@ pub enum FaultPoint {
     AcceptResourcePressure,
     ListenerReactorRegistration,
     ConnectionReactorRegistration,
+    // M001 Pass 8 optional Block metadata lifecycle/projection.
+    BlockAdmission,
+    BlockCompletionMutation,
+    BlockCompletionEncode,
+    BlockCompletionAdmission,
     // Legacy Candidate-B comparator/reference resource lifecycle.
     ShmOpenWriter,
     Truncate,

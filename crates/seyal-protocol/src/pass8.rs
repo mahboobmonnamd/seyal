@@ -3,7 +3,10 @@
 //! This module owns only fixed-size wire/value validation. It does not own
 //! Workspace Block lifecycle, terminal state, authorization, transport, or UI.
 
-use crate::{BlockId, ExecutionId};
+use crate::{
+    BlockId, ExecutionId,
+    framing::{FrameHeader, HEADER_LEN},
+};
 
 /// SPEC-007 capability bit for the read-only Block metadata projection.
 pub const CAP_BLOCK_METADATA: u32 = 1 << 4;
@@ -106,6 +109,18 @@ impl BlockState {
     }
 }
 
+/// Encode the dedicated R→C BlockState frame without widening the C→R control
+/// message enum. The established 24-byte Candidate-D envelope remains the only
+/// transport framing authority.
+pub fn encode_block_state_frame(value: &BlockState) -> Result<Vec<u8>, BlockStateError> {
+    let payload = value.encode()?;
+    let header = FrameHeader::new(BLOCK_STATE_MESSAGE_TYPE, BlockState::WIRE_LEN as u32);
+    let mut out = Vec::with_capacity(HEADER_LEN + BlockState::WIRE_LEN);
+    out.extend_from_slice(&header.encode());
+    out.extend_from_slice(&payload);
+    Ok(out)
+}
+
 fn validate_nonzero(value: &BlockState) -> Result<(), BlockStateError> {
     if value.execution_id.to_bytes() == [0u8; 16] {
         return Err(BlockStateError::ZeroExecutionId);
@@ -158,6 +173,16 @@ mod tests {
         value.revision = 2;
         value.state = BlockLifecycle::Completed;
         assert_eq!(BlockState::decode(&value.encode().unwrap()).unwrap(), value);
+    }
+
+    #[test]
+    fn dedicated_frame_uses_existing_header_and_type_twenty() {
+        let frame = encode_block_state_frame(&current()).unwrap();
+        assert_eq!(frame.len(), HEADER_LEN + BlockState::WIRE_LEN);
+        let header = FrameHeader::decode(&frame[..HEADER_LEN]).unwrap();
+        assert_eq!(header.message_type, BLOCK_STATE_MESSAGE_TYPE);
+        assert_eq!(header.payload_len as usize, BlockState::WIRE_LEN);
+        assert_eq!(BlockState::decode(&frame[HEADER_LEN..]).unwrap(), current());
     }
 
     #[test]

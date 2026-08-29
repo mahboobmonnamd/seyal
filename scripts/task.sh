@@ -40,6 +40,7 @@ case "$cmd" in
     cargo_pinned test --workspace --locked
     runtime_failure_matrix
     bash scripts/test-macos-skeleton.sh
+    bash scripts/test-macos-ui.sh
     ;;
   ui-test)
     bash scripts/test-macos-ui.sh

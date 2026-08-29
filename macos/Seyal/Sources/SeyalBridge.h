@@ -35,6 +35,17 @@ typedef struct SeyalPreparedFrame {
     uint64_t damage_word3;
 } SeyalPreparedFrame;
 
+typedef struct SeyalBlockMetadata {
+    uint8_t available;
+    uint8_t state;
+    uint16_t reserved0;
+    uint32_t reserved1;
+    uint64_t block_id_low;
+    uint64_t block_id_high;
+    uint64_t revision;
+    uint64_t start_line_id;
+} SeyalBlockMetadata;
+
 enum SeyalTerminalKeyKind {
     SEYAL_KEY_ENTER = 1,
     SEYAL_KEY_TAB = 2,
@@ -68,6 +79,7 @@ int32_t seyal_bridge_propose_geometry(
 int32_t seyal_bridge_retry_resize(void);
 int32_t seyal_bridge_input_failure(void);
 int32_t seyal_bridge_resize_failure(void);
+SeyalBlockMetadata seyal_bridge_block_metadata(void);
 SeyalPreparedFrame seyal_bridge_frame(void);
 void seyal_bridge_disconnect(void);
 

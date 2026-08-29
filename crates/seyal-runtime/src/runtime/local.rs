@@ -1632,7 +1632,20 @@ impl Runtime {
 
             let dimensions_changed = previous
                 .is_some_and(|value| value.rows != update.rows || value.columns != update.columns);
-            if previous.is_none() || dimensions_changed {
+            let final_draining = self.entries.get(&execution_id).is_some_and(|entry| {
+                matches!(
+                    entry.lifecycle,
+                    super::Lifecycle::DrainingAfterPrimaryExit { .. }
+                )
+            });
+            if previous.is_none() || dimensions_changed || final_draining {
+                // During the accepted final-drain window, completion/lifecycle
+                // control frames must never overtake a recovery snapshot that
+                // has only been scheduled. Queue an authoritative current
+                // snapshot directly into the bounded replaceable display slot.
+                // This remains non-blocking with respect to the client: the
+                // transport may replace pending display state, and the existing
+                // after-display queue preserves display -> Block -> Finalized.
                 let snapshot = self
                     .entries
                     .get(&execution_id)
@@ -1641,6 +1654,14 @@ impl Runtime {
                     Some(batch) => {
                         for (_, token) in viewers {
                             let _ = self.send_snapshot_batch(token, batch.clone());
+                        }
+                    }
+                    None if final_draining => {
+                        // Final lifecycle cannot coexist with stale client
+                        // display state. Fail the affected connection closed if
+                        // the authoritative final snapshot cannot be produced.
+                        for (_, token) in viewers {
+                            self.close_local_connection(token);
                         }
                     }
                     None => {

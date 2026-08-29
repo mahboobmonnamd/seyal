@@ -711,8 +711,7 @@ impl Runtime {
             {
                 return false;
             }
-            block_frame
-                .is_none_or(|frame| state.server.enqueue_after_display(token, frame).is_ok())
+            block_frame.is_none_or(|frame| state.server.enqueue_after_display(token, frame).is_ok())
         });
         if !admitted {
             self.close_local_connection(token);

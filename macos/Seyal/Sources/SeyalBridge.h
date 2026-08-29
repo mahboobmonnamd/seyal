@@ -35,6 +35,15 @@ typedef struct SeyalPreparedFrame {
     uint64_t damage_word3;
 } SeyalPreparedFrame;
 
+typedef struct SeyalExecutionBlockMetadata {
+    uint64_t block_id_low;
+    uint64_t block_id_high;
+    uint64_t revision;
+    uint64_t start_line_id;
+    uint8_t state;
+    uint8_t reserved[7];
+} SeyalExecutionBlockMetadata;
+
 typedef struct SeyalBlockRecord {
     uint64_t id;
     uint64_t start_line;
@@ -97,6 +106,7 @@ void seyal_bridge_disconnect_handle(uint64_t handle);
 int32_t seyal_bridge_socket_fd(void);
 uint64_t seyal_bridge_execution_id_low(void);
 uint64_t seyal_bridge_execution_id_high(void);
+SeyalExecutionBlockMetadata seyal_bridge_execution_block_metadata(void);
 int32_t seyal_bridge_poll(void);
 int32_t seyal_bridge_wants_write(void);
 int32_t seyal_bridge_flush_writable(void);

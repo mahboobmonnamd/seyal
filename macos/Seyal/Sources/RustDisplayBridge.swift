@@ -1,5 +1,18 @@
 import Foundation
 
+struct RuntimeBlockMetadata: Equatable, Sendable {
+  enum State: UInt8, Sendable {
+    case current = 1
+    case completed = 2
+  }
+
+  let blockIDLow: UInt64
+  let blockIDHigh: UInt64
+  let revision: UInt64
+  let startLineID: UInt64
+  let state: State
+}
+
 /// UI registries must include the Pane namespace because Runtime block and
 /// history request numbers are only unique within their owning execution.
 struct PaneBlockKey: Hashable, Sendable {
@@ -441,6 +454,24 @@ final class RustDisplayBridge {
     onFrame(frame)
   }
 
+  /// Minimal read-only Pass 8 presentation seam. The rich command transcript
+  /// remains the independent Pass 7.1 timeline above.
+  func currentBlockMetadata() -> RuntimeBlockMetadata? {
+    guard isConnected, selectClient() else { return nil }
+    let value = seyal_bridge_execution_block_metadata()
+    guard value.revision > 0,
+      value.start_line_id > 0,
+      let state = RuntimeBlockMetadata.State(rawValue: value.state)
+    else { return nil }
+    return RuntimeBlockMetadata(
+      blockIDLow: value.block_id_low,
+      blockIDHigh: value.block_id_high,
+      revision: value.revision,
+      startLineID: value.start_line_id,
+      state: state
+    )
+  }
+
   func currentTimeline() -> [NativeBlockRecord] {
     guard selectClient() else { return [] }
     let count = Int(seyal_bridge_block_count())
@@ -663,7 +694,7 @@ final class RustDisplayBridge {
   private func finishMutation(_ result: Int32) -> Int32 {
     synchronizeWriteReadinessSource()
     onStatusChanged()
-    if result == -3 || result == -10 {
+    if result == -3 || result == -10 || result == -18 {
       onError(result)
       stop()
     }

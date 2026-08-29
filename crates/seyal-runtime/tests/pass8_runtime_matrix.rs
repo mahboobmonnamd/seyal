@@ -2,8 +2,8 @@
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use seyal_exec::{CommandSpec, WindowSize};
-use seyal_runtime::{LocalIpcMode, Runtime, RuntimeConfig};
+use seyal_exec::{CommandSpec, ExecError, WindowSize};
+use seyal_runtime::{LocalIpcMode, Runtime, RuntimeConfig, RuntimeError};
 
 fn size(columns: u16, rows: u16) -> WindowSize {
     WindowSize::new(columns, rows, 0, 0).expect("valid terminal size")
@@ -109,26 +109,68 @@ fn block_identity_is_not_reused_across_runtime_incarnations() {
 }
 
 #[test]
-fn real_runtime_population_lifecycle_covers_1_10_and_50_executions() {
-    // This test deliberately exercises real PTY-backed TerminalExecutions and
-    // their corresponding Runtime-owned Blocks. The separate Pass 8 benchmark
-    // owns the 512-live-Block retained-memory gate from #715 using the exact
-    // production BlockTimeline. Real PTY capacity is intentionally capped
-    // at 50 here because macOS hosts can exhaust PTYs below 100; that unrelated
-    // OS ceiling must not redefine the Block metadata capacity contract.
-    for population in [1usize, 10, 50] {
-        let mut runtime =
-            Runtime::new(config(&format!("population-{population}"))).expect("runtime");
-        for _ in 0..population {
-            runtime
-                .create_execution(
-                    CommandSpec::new("/bin/sh").args(["-c", "sleep 5"]),
-                    size(80, 24),
-                )
-                .expect("execution admission");
+fn real_runtime_population_lifecycle_probes_to_50_with_10_execution_floor() {
+    const REQUIRED_REAL_PTY_FLOOR: usize = 10;
+    const REAL_PTY_PROBE_TARGET: usize = 50;
+
+    // SPEC-007 section 16.5's 1/10/50/100/512 simultaneous-population matrix
+    // is a bounded BlockTimeline/metadata population contract. Issue #715 also
+    // explicitly separates the exact 512-live-Block retained-memory gate from
+    // operating-system PTY capacity. This test therefore exercises real
+    // PTY-backed TerminalExecutions with a mandatory useful floor, then probes
+    // higher until either the target is reached or macOS reports ENXIO from its
+    // PTY allocator. Only that exact platform-capacity error may end the probe;
+    // every other execution-admission failure remains a test failure.
+    let mut runtime = Runtime::new(config("pty-population-probe")).expect("runtime");
+    let mut admitted = 0usize;
+    let mut platform_limited = false;
+
+    for _ in 0..REAL_PTY_PROBE_TARGET {
+        match runtime.create_execution(
+            CommandSpec::new("/bin/sh").args(["-c", "sleep 5"]),
+            size(80, 24),
+        ) {
+            Ok(_) => {
+                admitted += 1;
+                assert_eq!(runtime.execution_count(), admitted);
+                assert_eq!(runtime.block_count(), admitted);
+            }
+            Err(error) => {
+                let is_macos_pty_capacity = matches!(
+                    &error,
+                    RuntimeError::Exec(ExecError::Io(io_error))
+                        if io_error.raw_os_error() == Some(libc::ENXIO)
+                );
+                assert!(
+                    is_macos_pty_capacity,
+                    "unexpected execution admission failure after {admitted} real PTYs: {error}"
+                );
+                assert!(
+                    admitted >= REQUIRED_REAL_PTY_FLOOR,
+                    "macOS PTY capacity {admitted} is below required real-runtime validation floor {REQUIRED_REAL_PTY_FLOOR}: {error}"
+                );
+                platform_limited = true;
+                eprintln!(
+                    "pass8_pty_population classification=PLATFORM_LIMIT admitted={admitted} required_floor={REQUIRED_REAL_PTY_FLOOR} probe_target={REAL_PTY_PROBE_TARGET} raw_os_error={} error={error}",
+                    libc::ENXIO
+                );
+                break;
+            }
         }
-        assert_eq!(runtime.execution_count(), population);
-        assert_eq!(runtime.block_count(), population);
-        stop(&mut runtime);
     }
+
+    assert!(
+        admitted >= REQUIRED_REAL_PTY_FLOOR,
+        "real PTY validation admitted only {admitted} executions"
+    );
+    assert_eq!(runtime.execution_count(), admitted);
+    assert_eq!(runtime.block_count(), admitted);
+    if !platform_limited {
+        assert_eq!(admitted, REAL_PTY_PROBE_TARGET);
+        eprintln!(
+            "pass8_pty_population classification=MEASURED admitted={admitted} required_floor={REQUIRED_REAL_PTY_FLOOR} probe_target={REAL_PTY_PROBE_TARGET}"
+        );
+    }
+
+    stop(&mut runtime);
 }

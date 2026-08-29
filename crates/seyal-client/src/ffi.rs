@@ -58,6 +58,34 @@ impl SeyalPreparedFrame {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct SeyalBlockMetadata {
+    pub available: u8,
+    pub state: u8,
+    pub reserved0: u16,
+    pub reserved1: u32,
+    pub block_id_low: u64,
+    pub block_id_high: u64,
+    pub revision: u64,
+    pub start_line_id: u64,
+}
+
+impl SeyalBlockMetadata {
+    const fn empty() -> Self {
+        Self {
+            available: 0,
+            state: 0,
+            reserved0: 0,
+            reserved1: 0,
+            block_id_low: 0,
+            block_id_high: 0,
+            revision: 0,
+            start_line_id: 0,
+        }
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn seyal_bridge_connect_first() -> i32 {
     CLIENT.with(|slot| {
@@ -264,6 +292,34 @@ pub extern "C" fn seyal_bridge_resize_failure() -> i32 {
     })
 }
 
+/// Read-only disposable Block metadata for presentation chrome. It contains no
+/// terminal cells, transcript, command text, cwd, input or process data.
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_block_metadata() -> SeyalBlockMetadata {
+    CLIENT.with(|slot| {
+        let Ok(slot) = slot.try_borrow() else {
+            return SeyalBlockMetadata::empty();
+        };
+        let Some(client) = slot.as_ref() else {
+            return SeyalBlockMetadata::empty();
+        };
+        let Some(block) = client.block_state() else {
+            return SeyalBlockMetadata::empty();
+        };
+        let bytes = block.block_id.to_bytes();
+        SeyalBlockMetadata {
+            available: 1,
+            state: block.state as u8,
+            reserved0: 0,
+            reserved1: 0,
+            block_id_low: u64::from_le_bytes(bytes[0..8].try_into().unwrap()),
+            block_id_high: u64::from_le_bytes(bytes[8..16].try_into().unwrap()),
+            revision: block.revision,
+            start_line_id: block.start_line_id,
+        }
+    })
+}
+
 /// Borrow the current contiguous prepared surface.
 ///
 /// The returned cell pointer is owned by the Rust client and is valid until the
@@ -368,6 +424,7 @@ fn error_code(error: ClientError) -> i32 {
         ClientError::LostController => -15,
         ClientError::ResizeProtocolFailure => -16,
         ClientError::InvalidGeometry => -17,
+        ClientError::BlockMetadataConflict => -18,
         ClientError::Server(code) => -1000 - i32::from(code),
     }
 }

@@ -2,8 +2,11 @@ import AppKit
 
 @MainActor
 final class BlockView: NSView {
-    private let presentation: BlockPresentation
+    private var presentation: BlockPresentation
     private let bodyView: NSView
+    private var stateMark: NSTextField?
+    private var commandField: NSTextField?
+    private var elapsedField: NSTextField?
     private weak var chromeHeader: NSView?
     private weak var chromeDivider: NSView?
     private weak var contentStack: NSStackView?
@@ -21,6 +24,27 @@ final class BlockView: NSView {
         fatalError("BlockView is programmatic")
     }
 
+    var presentationState: BlockPresentationState { presentation.state }
+
+    /// Applies a Runtime-authoritative lifecycle snapshot in place. The Block
+    /// identity and body remain stable, so a completion cannot leave stale
+    /// running chrome behind or discard the canonical history projection.
+    func apply(presentation: BlockPresentation) {
+        guard presentation.id == self.presentation.id else { return }
+        self.presentation = presentation
+        stateMark?.textColor = stateColor(for: presentation.state)
+        stateMark?.toolTip = presentation.state.rawValue
+        commandField?.stringValue = presentation.command
+        elapsedField?.stringValue = presentation.elapsed
+        layer?.borderWidth = presentation.isSelected ? 0.75 : 0.5
+        layer?.borderColor = (presentation.isSelected
+            ? SeyalDesignTokens.Palette.focus
+            : SeyalDesignTokens.Palette.separator).cgColor
+        layer?.backgroundColor = (presentation.isSelected
+            ? SeyalDesignTokens.Palette.blockSelectedBackground
+            : SeyalDesignTokens.Palette.blockBackground).cgColor
+    }
+
     private func buildUI() {
         wantsLayer = true
         layer?.cornerRadius = SeyalDesignTokens.Layout.blockCornerRadius
@@ -36,12 +60,14 @@ final class BlockView: NSView {
         stateMark.font = NSFont.systemFont(ofSize: 9, weight: .bold)
         stateMark.textColor = stateColor(for: presentation.state)
         stateMark.toolTip = presentation.state.rawValue
+        self.stateMark = stateMark
 
         let commandField = NSTextField(labelWithString: presentation.command)
         commandField.font = SeyalDesignTokens.Typography.command
         commandField.textColor = SeyalDesignTokens.Palette.textPrimary
         commandField.lineBreakMode = .byTruncatingMiddle
         commandField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        self.commandField = commandField
 
         let commandStack = NSStackView(views: [stateMark, commandField])
         commandStack.orientation = .horizontal
@@ -51,6 +77,7 @@ final class BlockView: NSView {
 
         let actions = makeActions()
         let elapsedField = metadataField(presentation.elapsed, color: SeyalDesignTokens.Palette.textSecondary)
+        self.elapsedField = elapsedField
         var metadataViews: [NSView] = [elapsedField]
         if let timestamp = presentation.timestamp {
             metadataViews.append(metadataField(timestamp, color: SeyalDesignTokens.Palette.textTertiary))

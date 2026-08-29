@@ -2,6 +2,9 @@ use crate::{
     Cell, Color, CursorState, LineId, Style, TerminalError, cursor::Cursor, damage::Mutation,
     line::LineIdAllocator,
 };
+use std::collections::VecDeque;
+
+const MAX_HISTORY_LINES: usize = 8_192;
 
 #[derive(Clone, Copy, Debug)]
 struct SavedCursor {
@@ -17,6 +20,7 @@ pub(crate) struct Screen {
     cursor: Cursor,
     pen: Style,
     saved_cursor: Option<SavedCursor>,
+    history: VecDeque<(LineId, Vec<Cell>)>,
 }
 
 impl Screen {
@@ -45,6 +49,7 @@ impl Screen {
             cursor: Cursor::default(),
             pen: Style::default(),
             saved_cursor: None,
+            history: VecDeque::new(),
         })
     }
 
@@ -82,6 +87,19 @@ impl Screen {
 
     pub(crate) fn line_id(&self, row: u16) -> Option<LineId> {
         self.line_ids.get(usize::from(row)).copied()
+    }
+
+    pub(crate) fn history_line(&self, id: LineId) -> Option<&[Cell]> {
+        if let Some((_, cells)) = self.history.iter().find(|(line_id, _)| *line_id == id) {
+            return Some(cells);
+        }
+        self.line_ids
+            .iter()
+            .position(|line_id| *line_id == id)
+            .map(|row| {
+                let start = row * usize::from(self.cols);
+                &self.cells[start..start + usize::from(self.cols)]
+            })
     }
 
     pub(crate) fn resize(
@@ -377,6 +395,12 @@ impl Screen {
         }
 
         let new_line_id = line_ids.allocate()?;
+        let evicted_id = self.line_ids[0];
+        let evicted = self.cells[..usize::from(self.cols)].to_vec();
+        if self.history.len() == MAX_HISTORY_LINES {
+            self.history.pop_front();
+        }
+        self.history.push_back((evicted_id, evicted));
         self.cursor.pending_wrap = false;
         let row_width = usize::from(self.cols);
         self.cells.copy_within(row_width.., 0);

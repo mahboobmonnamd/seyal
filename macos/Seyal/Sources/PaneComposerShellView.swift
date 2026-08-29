@@ -143,6 +143,20 @@ final class PaneComposerShellView: NSView, NSTextViewDelegate {
         window.makeFirstResponder(editor)
     }
 
+    func setBusy(_ busy: Bool, process: String) {
+        guard let editor else { return }
+        editor.isEditable = !busy
+        editor.alphaValue = busy ? 0.55 : 1
+        editor.setAccessibilityValue(busy ? "Busy: \(process)" : "Available")
+    }
+
+    /// Clears the editor only after Runtime has projected the submitted command
+    /// into the authoritative Block timeline. Transport queueing alone is not
+    /// acceptance, so rejected commands retain their draft.
+    func clearAcceptedDraft() {
+        editor?.string = ""
+    }
+
     private func buildBusyState(process: String) {
         SeyalDesignTokens.configureRoundedPanel(
             self,

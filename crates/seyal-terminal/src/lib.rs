@@ -25,4 +25,4 @@ pub use error::TerminalError;
 pub use line::LineId;
 pub use modes::ModeState;
 pub use style::Style;
-pub use terminal::{Diagnostics, TerminalState};
+pub use terminal::{Diagnostics, ShellIntegrationEvent, ShellIntegrationToken, TerminalState};

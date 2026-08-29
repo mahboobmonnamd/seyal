@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use seyal_terminal::TerminalState;
+use seyal_terminal::{ShellIntegrationEvent, TerminalState};
 
 use crate::{
     ChildExit, CommandSpec, ExecError, ProjectionDamage, ReadOutcome, Readiness, SignalDisposition,
@@ -26,6 +26,12 @@ impl TerminalExecution {
 
     pub fn terminal(&self) -> &TerminalState {
         &self.terminal
+    }
+
+    /// Transfers one bounded trusted shell-integration event observed by the
+    /// canonical VT parser. No terminal cells or parser state leave here.
+    pub fn take_shell_integration_event(&mut self) -> Option<ShellIntegrationEvent> {
+        self.terminal.take_shell_integration_event()
     }
 
     /// Copies the complete current canonical visible terminal state into an

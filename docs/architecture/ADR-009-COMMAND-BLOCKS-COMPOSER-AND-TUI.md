@@ -1,6 +1,6 @@
 # ADR-009 — Command Blocks, Pane Composer, and TUI Takeover
 
-- **Status:** Proposed architecture change
+- **Status:** Accepted
 - **Date:** 2026-08-28
 - **Scope:** Post-Pass-7 command/Block presentation
 - **Supersedes for this behavior:** the Pass 8 minimal-only boundary in `SPEC-007`
@@ -100,5 +100,5 @@ if command boundaries require scraping, if Block metadata must carry copied
 terminal output, or if performance/security evidence shows that the projection
 blocks terminal progress.
 
-This ADR is not accepted until an independent architecture/security review
-approves the selected boundary and the affected specification is updated.
+Approved by product authority on 2026-08-28. Independent architecture and
+security review remains required before merge.

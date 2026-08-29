@@ -28,6 +28,32 @@ final class SeyalShellUITests: XCTestCase {
         app = nil
     }
 
+    func testProductionShellUsesOnePaneOwnedComposerAndMetalSurface() {
+        // The production launch intentionally has no preview flag or fixture
+        // environment. This exercises the real AppKit shell factory and its
+        // pane-owned surface/composer identity, while remaining independent of
+        // an optional Runtime process on the test host.
+        app.terminate()
+        app = XCUIApplication()
+        app.launchArguments = []
+        app.launchEnvironment = [:]
+        app.launch()
+
+        let window = app.windows["Seyal"]
+        XCTAssertTrue(window.waitForExistence(timeout: 5))
+
+        let composer = app.textViews["composer.pane-local"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 3))
+        let surfaces = app
+            .descendants(matching: .any)
+            .matching(identifier: "terminal-surface.pane-local")
+        XCTAssertEqual(surfaces.count, 1)
+
+        composer.click()
+        composer.typeText("printf 'pass7.1'")
+        XCTAssertEqual(composer.value as? String, "printf 'pass7.1'")
+    }
+
     func testShellLaunchesWithFrozenCoreHierarchyWithoutFabricatedRuntimeOutput() {
         let window = app.windows["Seyal — UI Shell Preview"]
         XCTAssertTrue(window.waitForExistence(timeout: 5))

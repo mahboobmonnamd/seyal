@@ -7,6 +7,7 @@ use std::{
 use seyal_exec::{
     Color, ExecutionReactor, LineId, ReactorEventKind, RegistrationToken, WindowSize,
 };
+use seyal_protocol::pass8::{CAP_BLOCK_METADATA, encode_block_state_frame};
 
 #[cfg(feature = "test-fault-injection")]
 use crate::test_fault::{self, FaultPoint};
@@ -31,7 +32,7 @@ use crate::{
     },
 };
 
-use super::{ComposerAdmission, ExecutionLifecycle, Runtime};
+use super::{BlockCompletion, ComposerAdmission, ExecutionLifecycle, Runtime};
 
 const RESYNC_SNAPSHOT_BUDGET_PER_POLL: usize = 2;
 const ACCEPT_BACKOFF_INITIAL: Duration = Duration::from_millis(10);
@@ -350,6 +351,13 @@ impl Runtime {
         })
     }
 
+    fn local_connection_supports_execution_blocks(&self, token: u64) -> bool {
+        self.local_ipc
+            .as_ref()
+            .and_then(|state| state.connections.get(&token))
+            .is_some_and(|meta| meta.client_capabilities & CAP_BLOCK_METADATA != 0)
+    }
+
     fn sync_local_writable(&mut self, token: u64) -> bool {
         let values = self.local_ipc.as_ref().and_then(|state| {
             let meta = state.connections.get(&token)?;
@@ -556,7 +564,7 @@ impl Runtime {
             );
             return;
         };
-        if hello.client_capabilities & !CAP_COMMAND_BLOCKS != 0 {
+        if hello.client_capabilities & !(CAP_COMMAND_BLOCKS | CAP_BLOCK_METADATA) != 0 {
             self.send_error(
                 token,
                 ErrorCode::MalformedPayload,
@@ -570,7 +578,8 @@ impl Runtime {
                 | framing::CAP_OBSERVER
                 | framing::CAP_SEMANTIC_TERMINAL_KEY
                 | framing::CAP_CORRELATED_RESIZE
-                | CAP_COMMAND_BLOCKS,
+                | CAP_COMMAND_BLOCKS
+                | CAP_BLOCK_METADATA,
             max_frame_payload: framing::MAX_FRAME_PAYLOAD,
             max_input_payload: framing::MAX_INPUT_BYTES,
         };
@@ -666,6 +675,7 @@ impl Runtime {
         }
 
         let snapshot = entry.execution.projection_snapshot();
+        let workspace_id = entry.workspace_id;
         let Ok(snapshot_batch) = display::encode_snapshot(&snapshot) else {
             self.send_error(
                 token,
@@ -673,6 +683,17 @@ impl Runtime {
                 MessageType::Attach as u16,
             );
             return;
+        };
+        let block_frame = if self.local_connection_supports_execution_blocks(token) {
+            self.execution_blocks
+                .get(attach.execution_id)
+                .filter(|record| {
+                    record.workspace_id == workspace_id
+                        && record.execution_id == attach.execution_id
+                })
+                .and_then(|record| encode_block_state_frame(&record.to_wire()).ok())
+        } else {
+            None
         };
         let attachment_id = AttachmentId::new();
         let attached = WireAttached {
@@ -683,10 +704,14 @@ impl Runtime {
         };
         let attached_frame = framing::encode_frame(MessageType::Attached, &attached.encode());
         let admitted = self.local_ipc.as_mut().is_some_and(|state| {
-            state
+            if state
                 .server
                 .enqueue_attach_transaction(token, attached_frame, snapshot_batch)
-                .is_ok()
+                .is_err()
+            {
+                return false;
+            }
+            block_frame.is_none_or(|frame| state.server.enqueue_after_display(token, frame).is_ok())
         });
         if !admitted {
             self.close_local_connection(token);
@@ -1481,7 +1506,11 @@ impl Runtime {
         }
     }
 
-    pub(super) fn notify_local_ipc_execution_finalized(&mut self, execution_id: ExecutionId) {
+    pub(super) fn notify_local_ipc_execution_finalized(
+        &mut self,
+        execution_id: ExecutionId,
+        block_completion: BlockCompletion,
+    ) {
         let notifications = {
             let Some(state) = self.local_ipc.as_mut() else {
                 return;
@@ -1489,6 +1518,16 @@ impl Runtime {
             let pairs = state
                 .attachments
                 .attachments_with_connections_for_execution(execution_id);
+            let notifications = pairs
+                .iter()
+                .map(|(_, token)| {
+                    let block_capable = state
+                        .connections
+                        .get(token)
+                        .is_some_and(|meta| meta.client_capabilities & CAP_BLOCK_METADATA != 0);
+                    (*token, block_capable)
+                })
+                .collect::<Vec<_>>();
             state.attachments.remove_all_for_execution(execution_id);
             state.published.remove(&execution_id);
             for (_, token) in &pairs {
@@ -1497,12 +1536,51 @@ impl Runtime {
                     meta.attachment = None;
                 }
             }
-            pairs
-                .into_iter()
-                .map(|(_, connection_token)| connection_token)
-                .collect::<Vec<_>>()
+            notifications
         };
-        for token in notifications {
+
+        let completion_frame = match block_completion {
+            BlockCompletion::Completed(record) => {
+                #[cfg(feature = "test-fault-injection")]
+                if test_fault::take(FaultPoint::BlockCompletionEncode) {
+                    Err(())
+                } else {
+                    encode_block_state_frame(&record.to_wire())
+                        .map(Some)
+                        .map_err(|_| ())
+                }
+                #[cfg(not(feature = "test-fault-injection"))]
+                {
+                    encode_block_state_frame(&record.to_wire())
+                        .map(Some)
+                        .map_err(|_| ())
+                }
+            }
+            BlockCompletion::Failed => Err(()),
+            BlockCompletion::None => Ok(None),
+        };
+
+        for (token, block_capable) in notifications {
+            if block_capable {
+                match &completion_frame {
+                    Ok(Some(frame)) => {
+                        #[cfg(feature = "test-fault-injection")]
+                        if test_fault::take(FaultPoint::BlockCompletionAdmission) {
+                            self.close_local_connection(token);
+                            continue;
+                        }
+                        if !self.send_after_display_frame(token, frame.clone()) {
+                            continue;
+                        }
+                    }
+                    Err(()) => {
+                        self.close_local_connection(token);
+                        continue;
+                    }
+                    Ok(None) => {}
+                }
+            }
+
             let message = framing::LifecycleMessage {
                 execution_id,
                 lifecycle: framing::Lifecycle::Finalized,
@@ -1513,6 +1591,46 @@ impl Runtime {
             ) && let Some(state) = self.local_ipc.as_mut()
             {
                 state.server.set_state(token, LocalIpcConnState::Ready);
+            }
+        }
+    }
+
+    /// Admit one authoritative final display snapshot for every attached client.
+    ///
+    /// Finalization cannot rely on asynchronous resync recovery: that queue is
+    /// deliberately budgeted per poll and is retired with the execution. This
+    /// bounded snapshot admission makes the established final-display ordering
+    /// explicit even when no new projection update exists in the final turn.
+    /// It never waits for a client read or acknowledgement; the existing
+    /// replaceable display slot and after-display queue preserve ordering.
+    pub(super) fn publish_final_display_snapshot(&mut self, execution_id: ExecutionId) {
+        let viewers = self.local_ipc.as_ref().map_or_else(Vec::new, |state| {
+            state
+                .attachments
+                .attachments_with_connections_for_execution(execution_id)
+        });
+        if viewers.is_empty() {
+            return;
+        }
+
+        let batch = self
+            .entries
+            .get(&execution_id)
+            .map(|entry| entry.execution.projection_snapshot())
+            .and_then(|snapshot| display::encode_snapshot(&snapshot).ok());
+        match batch {
+            Some(batch) => {
+                for (_, token) in viewers {
+                    let _ = self.send_snapshot_batch(token, batch.clone());
+                }
+            }
+            None => {
+                // A client must never receive Finalized behind stale display.
+                // If final display cannot be produced, fail that connection
+                // closed while Runtime execution cleanup continues normally.
+                for (_, token) in viewers {
+                    self.close_local_connection(token);
+                }
             }
         }
     }

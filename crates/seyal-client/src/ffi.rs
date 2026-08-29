@@ -80,6 +80,49 @@ pub struct SeyalPreparedFrame {
 
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
+pub struct SeyalExecutionBlockMetadata {
+    pub block_id_low: u64,
+    pub block_id_high: u64,
+    pub revision: u64,
+    pub start_line_id: u64,
+    pub state: u8,
+    pub reserved: [u8; 7],
+}
+
+impl SeyalExecutionBlockMetadata {
+    const fn empty() -> Self {
+        Self {
+            block_id_low: 0,
+            block_id_high: 0,
+            revision: 0,
+            start_line_id: 0,
+            state: 0,
+            reserved: [0; 7],
+        }
+    }
+}
+
+#[cfg(test)]
+mod pass8_execution_block_abi_tests {
+    use std::mem::{align_of, offset_of, size_of};
+
+    use super::SeyalExecutionBlockMetadata;
+
+    #[test]
+    fn execution_block_metadata_c_abi_is_exactly_40_bytes() {
+        assert_eq!(size_of::<SeyalExecutionBlockMetadata>(), 40);
+        assert_eq!(align_of::<SeyalExecutionBlockMetadata>(), 8);
+        assert_eq!(offset_of!(SeyalExecutionBlockMetadata, block_id_low), 0);
+        assert_eq!(offset_of!(SeyalExecutionBlockMetadata, block_id_high), 8);
+        assert_eq!(offset_of!(SeyalExecutionBlockMetadata, revision), 16);
+        assert_eq!(offset_of!(SeyalExecutionBlockMetadata, start_line_id), 24);
+        assert_eq!(offset_of!(SeyalExecutionBlockMetadata, state), 32);
+        assert_eq!(offset_of!(SeyalExecutionBlockMetadata, reserved), 33);
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
 pub struct SeyalBlockRecord {
     pub id: u64,
     pub start_line: u64,
@@ -446,6 +489,29 @@ pub extern "C" fn seyal_bridge_execution_id_high() -> u64 {
     .unwrap_or(0)
 }
 
+/// Read-only Pass 8 execution metadata for the active Pane client. No command
+/// text, terminal cells, history, cwd, or PTY bytes cross this seam.
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_execution_block_metadata() -> SeyalExecutionBlockMetadata {
+    with_active_client(|client| client.block_state())
+        .flatten()
+        .map(|block| {
+            let bytes = block.block_id.to_bytes();
+            SeyalExecutionBlockMetadata {
+                block_id_low: u64::from_le_bytes(bytes[..8].try_into().unwrap()),
+                block_id_high: u64::from_le_bytes(bytes[8..].try_into().unwrap()),
+                revision: block.revision,
+                start_line_id: block.start_line_id,
+                state: match block.state {
+                    seyal_runtime::pass8::BlockLifecycle::Current => 1,
+                    seyal_runtime::pass8::BlockLifecycle::Completed => 2,
+                },
+                reserved: [0; 7],
+            }
+        })
+        .unwrap_or_else(SeyalExecutionBlockMetadata::empty)
+}
+
 /// Drain ready Candidate-D work and prepare the latest committed state.
 ///
 /// Returns 1 when the prepared surface changed, 0 when there was no complete
@@ -694,6 +760,7 @@ fn error_code(error: ClientError) -> i32 {
         ClientError::LostController => -15,
         ClientError::ResizeProtocolFailure => -16,
         ClientError::InvalidGeometry => -17,
+        ClientError::BlockMetadataConflict => -18,
         ClientError::Server(code) => -1000 - i32::from(code),
     }
 }

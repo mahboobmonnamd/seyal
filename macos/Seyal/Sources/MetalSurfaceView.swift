@@ -550,16 +550,25 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     guard shouldRender, bridge?.isConnected == false, bridgeReconnectTimer == nil else { return }
     bridgeReconnectGeneration &+= 1
     let generation = bridgeReconnectGeneration
-    bridgeReconnectTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: false) {
-      [weak self] _ in
-      guard let self, generation == self.bridgeReconnectGeneration else { return }
-      self.bridgeReconnectTimer = nil
-      guard self.shouldRender, self.bridge?.isConnected == false else { return }
-      if self.bridge?.start() == true {
-        self.cancelBridgeReconnect()
-      } else {
-        self.scheduleBridgeReconnect()
-      }
+    bridgeReconnectTimer = Timer.scheduledTimer(
+      timeInterval: 0.1,
+      target: self,
+      selector: #selector(bridgeReconnectTimerFired(_:)),
+      userInfo: generation,
+      repeats: false
+    )
+  }
+
+  @objc private func bridgeReconnectTimerFired(_ timer: Timer) {
+    guard let generation = timer.userInfo as? UInt64,
+          generation == bridgeReconnectGeneration
+    else { return }
+    bridgeReconnectTimer = nil
+    guard shouldRender, bridge?.isConnected == false else { return }
+    if bridge?.start() == true {
+      cancelBridgeReconnect()
+    } else {
+      scheduleBridgeReconnect()
     }
   }
 

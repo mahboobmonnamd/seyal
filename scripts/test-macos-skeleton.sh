@@ -149,6 +149,26 @@ cleanup_runtime() {
 }
 trap cleanup_runtime EXIT
 
+run_pass8_native_metadata_case() {
+  cleanup_runtime
+  "$RUNTIME" /bin/sh -c "sleep 3" &
+  runtime_pid=$!
+
+  local passed=0
+  for _ in $(seq 1 20); do
+    if "$BINARY" --pass8-native-metadata-self-test; then
+      passed=1
+      break
+    fi
+    if ! kill -0 "$runtime_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.05
+  done
+  [[ "$passed" == "1" ]] || fail "Pass 8 real Runtime-to-Swift metadata seam failed"
+  cleanup_runtime
+}
+
 run_live_renderer_case() {
   local command="$1"
   shift
@@ -172,11 +192,13 @@ run_live_renderer_case() {
   runtime_pid=""
 }
 
+run_pass8_native_metadata_case
 run_live_renderer_case "printf 'SEYAL-LIVE'; sleep 1"
 run_live_renderer_case "printf '\033[?1049hALT-LIVE'; sleep 1" --expect-alternate
 
 trap - EXIT
 cleanup_runtime
 
+echo "[seyal macOS test] Pass 8 real Runtime-to-Swift metadata acceptance passed."
 echo "[seyal macOS test] AppKit + Candidate-D + permanent Metal renderer acceptance passed."
 echo "[seyal macOS test] Swift + AppKit + Metal + UI shell scaffold acceptance passed."

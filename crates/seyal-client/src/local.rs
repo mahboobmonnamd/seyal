@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     io::{Read, Write},
+    net::Shutdown,
     os::{fd::AsRawFd, unix::net::UnixStream},
     path::Path,
     time::Duration,
@@ -29,7 +30,10 @@ use seyal_runtime::{
             TerminalKeyKind, TerminalKeyModifiers, encode_frame,
         },
     },
+    pass8::{BLOCK_STATE_MESSAGE_TYPE, BlockLifecycle, BlockState, CAP_BLOCK_METADATA},
 };
+
+use crate::block::{BlockApply, BlockCache, is_epoch_quarantined, quarantine_epoch};
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(2);
 const READ_CHUNK_BYTES: usize = 64 * 1024;
@@ -58,6 +62,7 @@ pub enum ClientError {
     LostController,
     ResizeProtocolFailure,
     InvalidGeometry,
+    BlockMetadataConflict,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -349,9 +354,12 @@ pub struct LocalDisplayClient {
     pending_batch: PendingDisplayBatch,
     outbound: VecDeque<PendingControlWrite>,
     outbound_wire_bytes: usize,
+    runtime_id: u128,
     execution_id: ExecutionId,
     attachment_id: AttachmentId,
     role: Role,
+    block_metadata_negotiated: bool,
+    block_cache: BlockCache,
     cache: DisplayCache,
     prepared: PreparedSurface,
     last_preparation: PreparationResult,
@@ -403,7 +411,7 @@ impl LocalDisplayClient {
             control_socket_path(&runtime_dir).map_err(|_| ClientError::RuntimeDiscovery)?;
 
         let mut stream = connect_stream(&socket_path)?;
-        let hello = hello(&mut stream, true)?;
+        let mut server_hello = hello(&mut stream, true, true)?;
         send_control(&mut stream, MessageType::ListExecutions, &[])?;
         let (kind, payload) = read_blocking_frame(&mut stream)?;
         if kind != MessageType::ExecutionList {
@@ -417,11 +425,20 @@ impl LocalDisplayClient {
             .map(|entry| entry.execution_id)
             .ok_or(ClientError::NoRunningExecution)?;
 
+        if is_epoch_quarantined(server_hello.runtime_id, execution_id) {
+            drop(stream);
+            stream = connect_stream(&socket_path)?;
+            server_hello = hello(&mut stream, true, false)?;
+        }
+        let block_metadata_negotiated = server_hello.server_capabilities & CAP_BLOCK_METADATA != 0
+            && !is_epoch_quarantined(server_hello.runtime_id, execution_id);
         Self::finish_attach(
             stream,
             execution_id,
             Role::Controller,
-            hello.server_capabilities & CAP_COMMAND_BLOCKS != 0,
+            server_hello.server_capabilities & CAP_COMMAND_BLOCKS != 0,
+            server_hello.runtime_id,
+            block_metadata_negotiated,
         )
     }
 
@@ -431,12 +448,43 @@ impl LocalDisplayClient {
         role: Role,
     ) -> Result<Self, ClientError> {
         let mut stream = connect_stream(socket_path)?;
-        let hello = hello(&mut stream, role == Role::Controller)?;
+        let mut server_hello = hello(&mut stream, role == Role::Controller, true)?;
+        if is_epoch_quarantined(server_hello.runtime_id, execution_id) {
+            drop(stream);
+            stream = connect_stream(socket_path)?;
+            server_hello = hello(&mut stream, role == Role::Controller, false)?;
+        }
+        let block_metadata_negotiated = server_hello.server_capabilities & CAP_BLOCK_METADATA != 0
+            && !is_epoch_quarantined(server_hello.runtime_id, execution_id);
         Self::finish_attach(
             stream,
             execution_id,
             role,
-            hello.server_capabilities & CAP_COMMAND_BLOCKS != 0,
+            server_hello.server_capabilities & CAP_COMMAND_BLOCKS != 0,
+            server_hello.runtime_id,
+            block_metadata_negotiated,
+        )
+    }
+
+    /// Benchmark-only control connection that preserves the exact Pass 7
+    /// interactive path while deliberately omitting Pass 8 metadata negotiation.
+    /// This exists solely to attribute same-head latency movement; production
+    /// callers always use `connect_execution`, which requests Pass 8 normally.
+    #[cfg(feature = "benchmark-instrumentation")]
+    pub fn connect_execution_without_block_metadata(
+        socket_path: &Path,
+        execution_id: ExecutionId,
+        role: Role,
+    ) -> Result<Self, ClientError> {
+        let mut stream = connect_stream(socket_path)?;
+        let server_hello = hello(&mut stream, role == Role::Controller, false)?;
+        Self::finish_attach(
+            stream,
+            execution_id,
+            role,
+            server_hello.server_capabilities & CAP_COMMAND_BLOCKS != 0,
+            server_hello.runtime_id,
+            false,
         )
     }
 
@@ -445,6 +493,8 @@ impl LocalDisplayClient {
         execution_id: ExecutionId,
         role: Role,
         command_blocks_supported: bool,
+        runtime_id: u128,
+        block_metadata_negotiated: bool,
     ) -> Result<Self, ClientError> {
         send_control(
             &mut stream,
@@ -514,9 +564,12 @@ impl LocalDisplayClient {
             pending_batch: batch,
             outbound: VecDeque::new(),
             outbound_wire_bytes: 0,
+            runtime_id,
             execution_id,
             attachment_id: attached.attachment_id,
             role,
+            block_metadata_negotiated,
+            block_cache: BlockCache::default(),
             cache,
             prepared,
             last_preparation: result,
@@ -549,6 +602,12 @@ impl LocalDisplayClient {
 
     pub fn execution_id(&self) -> ExecutionId {
         self.execution_id
+    }
+
+    /// Disposable Pass 8 execution-level metadata. This never owns terminal
+    /// cells, PTY state, or the Pass 7.1 command transcript.
+    pub fn block_state(&self) -> Option<BlockState> {
+        self.block_cache.visible()
     }
 
     pub fn cache(&self) -> &DisplayCache {
@@ -898,6 +957,27 @@ impl LocalDisplayClient {
                 let frame_start = self.read_offset;
                 let frame = &self.buffered[frame_start..frame_end];
                 let header = FrameHeader::decode(frame).map_err(|_| ClientError::Protocol)?;
+
+                // SPEC-007 type 20 is Runtime→client metadata, not a C→Runtime
+                // control message. Parse it before the control MessageType enum.
+                if header.message_type == BLOCK_STATE_MESSAGE_TYPE {
+                    if !self.block_metadata_negotiated {
+                        return Err(self.quarantine_block_metadata());
+                    }
+                    let incoming = match BlockState::decode(&frame[HEADER_LEN..]) {
+                        Ok(value) => value,
+                        Err(_) => return Err(self.quarantine_block_metadata()),
+                    };
+                    match self.block_cache.apply(self.execution_id, incoming) {
+                        Ok(BlockApply::Applied) => metadata_changed = true,
+                        Ok(BlockApply::Duplicate | BlockApply::Stale) => {}
+                        Err(_) => return Err(self.quarantine_block_metadata()),
+                    }
+                    self.read_offset = frame_end;
+                    parsed_frames += 1;
+                    continue;
+                }
+
                 let message_type =
                     MessageType::from_u16(header.message_type).ok_or(ClientError::Protocol)?;
 
@@ -981,7 +1061,25 @@ impl LocalDisplayClient {
                             self.input_failure = Some(failure);
                         }
                     }
-                    MessageType::Lifecycle => {}
+                    MessageType::Lifecycle => {
+                        let lifecycle =
+                            seyal_runtime::local_ipc::framing::LifecycleMessage::decode(
+                                &frame[HEADER_LEN..],
+                            )
+                            .map_err(|_| ClientError::Protocol)?;
+                        if lifecycle.execution_id != self.execution_id {
+                            return Err(ClientError::Protocol);
+                        }
+                        if lifecycle.lifecycle == Lifecycle::Finalized
+                            && self.block_metadata_negotiated
+                            && self
+                                .block_cache
+                                .visible()
+                                .is_some_and(|block| block.state == BlockLifecycle::Current)
+                        {
+                            return Err(self.quarantine_block_metadata());
+                        }
+                    }
                     _ => return Err(ClientError::Protocol),
                 }
                 self.read_offset = frame_end;
@@ -1033,6 +1131,13 @@ impl LocalDisplayClient {
         let result = prepare_cache(&mut self.prepared, &self.cache, damage, full_invalidation)?;
         self.last_preparation = result;
         Ok(Some(result))
+    }
+
+    fn quarantine_block_metadata(&mut self) -> ClientError {
+        self.block_cache.quarantine();
+        quarantine_epoch(self.runtime_id, self.execution_id);
+        let _ = self.stream.shutdown(Shutdown::Both);
+        ClientError::BlockMetadataConflict
     }
 
     fn complete_frame_end(&self) -> Result<Option<usize>, ClientError> {
@@ -1442,12 +1547,26 @@ fn connect_stream(path: &Path) -> Result<UnixStream, ClientError> {
     Ok(stream)
 }
 
-fn hello(stream: &mut UnixStream, interactive: bool) -> Result<ServerHello, ClientError> {
+fn requested_capabilities(request_block_metadata: bool) -> u32 {
+    CAP_COMMAND_BLOCKS
+        | if request_block_metadata {
+            CAP_BLOCK_METADATA
+        } else {
+            0
+        }
+}
+
+fn hello(
+    stream: &mut UnixStream,
+    interactive: bool,
+    request_block_metadata: bool,
+) -> Result<ServerHello, ClientError> {
+    let client_capabilities = requested_capabilities(request_block_metadata);
     send_control(
         stream,
         MessageType::ClientHello,
         &ClientHello {
-            client_capabilities: CAP_COMMAND_BLOCKS,
+            client_capabilities,
         }
         .encode(),
     )?;
@@ -1510,6 +1629,16 @@ mod tests {
 
     fn geometry(rows: u16, columns: u16) -> GridGeometry {
         GridGeometry { rows, columns }
+    }
+
+    #[test]
+    fn raw_metadata_fallback_keeps_pass71_but_drops_only_pass8_capability() {
+        let full = requested_capabilities(true);
+        let fallback = requested_capabilities(false);
+        assert_ne!(full & CAP_BLOCK_METADATA, 0);
+        assert_eq!(fallback & CAP_BLOCK_METADATA, 0);
+        assert_ne!(full & CAP_COMMAND_BLOCKS, 0);
+        assert_ne!(fallback & CAP_COMMAND_BLOCKS, 0);
     }
 
     fn display_cell() -> DisplayCell {

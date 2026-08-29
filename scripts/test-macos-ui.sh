@@ -11,6 +11,13 @@ fi
 
 bash scripts/check-macos-toolchain.sh
 
+# The Pass 8 native application test starts the real, separately owned Runtime
+# binary and then executes Seyal.app against it. Build the fixture through the
+# pinned repository toolchain so `make ui-test` is self-contained.
+channel="$(sed -nE 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' rust-toolchain.toml | head -n1)"
+[[ -n "$channel" ]] || { echo "rust-toolchain.toml does not declare a Rust channel" >&2; exit 1; }
+rustup run "$channel" cargo build -p seyal-runtime --bin seyal-runtime --locked
+
 DERIVED_DATA="$ROOT/target/macos-ui-tests"
 RESULT_BUNDLE="$ROOT/target/macos-ui-tests.xcresult"
 rm -rf "$DERIVED_DATA" "$RESULT_BUNDLE"

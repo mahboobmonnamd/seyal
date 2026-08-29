@@ -64,7 +64,13 @@ fn run_macos() {
     print_host_metadata();
 
     let executable = std::env::current_exe().expect("benchmark executable");
-    for case in ["input", "resize_120x40", "resize_512x256", "idle_resource"] {
+    for case in [
+        "input",
+        "resize_120x40",
+        "resize_512x256",
+        "idle_resource",
+        "pass8_resize_attribution",
+    ] {
         let status = Command::new("/usr/bin/time")
             .arg("-lp")
             .arg(&executable)
@@ -102,6 +108,7 @@ fn worker(case: &str) {
             },
         ),
         "idle_resource" => measure_idle_resources(),
+        "pass8_resize_attribution" => measure_pass8_resize_attribution(),
         other => panic!("unknown Pass 7 benchmark worker {other}"),
     }
 }
@@ -181,6 +188,83 @@ impl RuntimeHarness {
     fn finish(self) {
         let _ = self.stop.send(());
         self.join.join().expect("Runtime benchmark thread");
+    }
+}
+
+#[cfg(target_os = "macos")]
+struct PairedRuntimeHarness {
+    socket_path: std::path::PathBuf,
+    disabled_execution_id: ExecutionId,
+    enabled_execution_id: ExecutionId,
+    stop: mpsc::Sender<()>,
+    join: thread::JoinHandle<()>,
+}
+
+#[cfg(target_os = "macos")]
+impl PairedRuntimeHarness {
+    fn start() -> Self {
+        let suffix = HARNESS_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (stop_tx, stop_rx) = mpsc::channel();
+        let join = thread::spawn(move || {
+            let mut config = RuntimeConfig::m001().expect("M001 Runtime config");
+            config.singleton_path =
+                std::env::temp_dir().join(format!("s7bp-{suffix:x}-{}.lock", process::id()));
+            let runtime_dir =
+                std::env::temp_dir().join(format!("s7bpd-{suffix:x}-{}", process::id()));
+            config.local_ipc = LocalIpcMode::Enabled {
+                runtime_dir_override: Some(runtime_dir),
+            };
+            config.graceful_termination = Duration::from_millis(50);
+            config.forced_reap = Duration::from_millis(250);
+            config.final_drain = Duration::from_millis(100);
+
+            let mut runtime = Runtime::new(config).expect("Runtime");
+            let disabled_execution_id = runtime
+                .create_execution(
+                    CommandSpec::new("/bin/cat"),
+                    WindowSize::cells(121, 40).expect("initial geometry"),
+                )
+                .expect("disabled execution");
+            let enabled_execution_id = runtime
+                .create_execution(
+                    CommandSpec::new("/bin/cat"),
+                    WindowSize::cells(121, 40).expect("initial geometry"),
+                )
+                .expect("enabled execution");
+            let socket_path = runtime
+                .local_ipc_socket_path()
+                .expect("local IPC socket")
+                .to_path_buf();
+            ready_tx
+                .send((socket_path, disabled_execution_id, enabled_execution_id))
+                .expect("paired benchmark ready receiver");
+
+            while stop_rx.try_recv().is_err() {
+                runtime
+                    .poll_once(Some(Duration::from_secs(1)))
+                    .expect("Runtime poll");
+            }
+            runtime.begin_shutdown().expect("begin shutdown");
+            runtime
+                .run_until_empty(Instant::now() + Duration::from_secs(3))
+                .expect("Runtime shutdown");
+        });
+        let (socket_path, disabled_execution_id, enabled_execution_id) = ready_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("paired Runtime ready");
+        Self {
+            socket_path,
+            disabled_execution_id,
+            enabled_execution_id,
+            stop: stop_tx,
+            join,
+        }
+    }
+
+    fn finish(self) {
+        let _ = self.stop.send(());
+        self.join.join().expect("paired Runtime benchmark thread");
     }
 }
 
@@ -446,6 +530,117 @@ fn measure_resize_boundary(label: &str, target: GridGeometry, reset: GridGeometr
     );
 
     drop(client);
+    runtime.finish();
+}
+
+#[cfg(target_os = "macos")]
+fn measure_pass8_resize_attribution() {
+    const COHORTS: usize = 7;
+    const SAMPLES_PER_MODE: usize = 512;
+    let target = GridGeometry {
+        rows: 40,
+        columns: 120,
+    };
+    let reset = GridGeometry {
+        rows: 40,
+        columns: 121,
+    };
+
+    // Keep both cohorts on the same Runtime reactor.  Separate Runtime
+    // threads can receive materially different scheduler/thermal treatment,
+    // which would make this an attribution experiment for Runtime placement
+    // rather than Pass 8 negotiation.
+    let runtime = PairedRuntimeHarness::start();
+    let mut disabled_client = LocalDisplayClient::connect_execution_without_block_metadata(
+        &runtime.socket_path,
+        runtime.disabled_execution_id,
+        Role::Controller,
+    )
+    .expect("controller attach without Pass 8 metadata");
+    let mut enabled_client = LocalDisplayClient::connect_execution(
+        &runtime.socket_path,
+        runtime.enabled_execution_id,
+        Role::Controller,
+    )
+    .expect("controller attach");
+    converge_geometry(&mut disabled_client, reset);
+    converge_geometry(&mut enabled_client, reset);
+
+    for _ in 0..32 {
+        run_resize_sample(&mut disabled_client, target, reset, false, None);
+        run_resize_sample(&mut enabled_client, target, reset, false, None);
+    }
+
+    let mut cohort_deltas = Vec::with_capacity(COHORTS);
+    let mut disabled_p99s = Vec::with_capacity(COHORTS);
+    let mut enabled_p99s = Vec::with_capacity(COHORTS);
+
+    for cohort in 0..COHORTS {
+        let mut disabled = Samples::with_capacity(SAMPLES_PER_MODE);
+        let mut enabled = Samples::with_capacity(SAMPLES_PER_MODE);
+        let mut disabled_client_hwm = 0usize;
+        let mut disabled_runtime_hwm = 0usize;
+        let mut enabled_client_hwm = 0usize;
+        let mut enabled_runtime_hwm = 0usize;
+
+        for sample in 0..SAMPLES_PER_MODE {
+            let disabled_sink = Some((
+                &mut disabled,
+                &mut disabled_client_hwm,
+                &mut disabled_runtime_hwm,
+            ));
+            let enabled_sink = Some((
+                &mut enabled,
+                &mut enabled_client_hwm,
+                &mut enabled_runtime_hwm,
+            ));
+            if (cohort + sample) % 2 == 0 {
+                run_resize_sample(&mut disabled_client, target, reset, true, disabled_sink);
+                run_resize_sample(&mut enabled_client, target, reset, true, enabled_sink);
+            } else {
+                run_resize_sample(&mut enabled_client, target, reset, true, enabled_sink);
+                run_resize_sample(&mut disabled_client, target, reset, true, disabled_sink);
+            }
+        }
+
+        let disabled_p99 = disabled.stats_us().p99_us;
+        let enabled_p99 = enabled.stats_us().p99_us;
+        let delta_percent = if disabled_p99 > 0.0 {
+            ((enabled_p99 / disabled_p99) - 1.0) * 100.0
+        } else {
+            0.0
+        };
+        disabled_p99s.push(disabled_p99);
+        enabled_p99s.push(enabled_p99);
+        cohort_deltas.push(delta_percent);
+        println!(
+            "pass8_attribution_cohort boundary=resize_120x40 classification=MEASURED cohort={} samples_per_mode={} pass8_disabled_p99_us={:.3} pass8_enabled_p99_us={:.3} delta_percent={:.2} {}",
+            cohort + 1,
+            SAMPLES_PER_MODE,
+            disabled_p99,
+            enabled_p99,
+            delta_percent,
+            PERFORMANCE_CLAIM,
+        );
+    }
+
+    disabled_p99s.sort_by(f64::total_cmp);
+    enabled_p99s.sort_by(f64::total_cmp);
+    cohort_deltas.sort_by(f64::total_cmp);
+    let disabled_median = disabled_p99s[COHORTS / 2];
+    let enabled_median = enabled_p99s[COHORTS / 2];
+    let median_paired_delta = cohort_deltas[COHORTS / 2];
+    println!(
+        "pass8_attribution boundary=resize_120x40 classification=MEASURED method=paired_live_runtimes_interleaved_7x512 pass8_disabled_p99_median_us={:.3} pass8_enabled_p99_median_us={:.3} paired_delta_median_percent={:.2} blocking_threshold_percent=10.00 {}",
+        disabled_median, enabled_median, median_paired_delta, PERFORMANCE_CLAIM,
+    );
+    assert!(
+        median_paired_delta <= 10.0,
+        "Pass 8 attributable 120x40 resize p99 regression {median_paired_delta:.2}% exceeds 10% blocking threshold"
+    );
+
+    drop(disabled_client);
+    drop(enabled_client);
     runtime.finish();
 }
 

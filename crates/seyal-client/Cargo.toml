@@ -35,3 +35,8 @@ required-features = ["benchmark-instrumentation"]
 name = "pass7_validation_matrix"
 harness = false
 required-features = ["benchmark-instrumentation"]
+
+[[bench]]
+name = "pass8_block_metadata"
+harness = false
+required-features = ["benchmark-instrumentation"]

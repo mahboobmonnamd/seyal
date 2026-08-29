@@ -70,13 +70,17 @@ jobs:
   native-macos-smoke:
     name: native-macos-smoke
     runs-on: macos-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
       - name: Bootstrap pinned Rust and native toolchains
         run: make bootstrap
       - name: Build Rust plus Seyal.app
         run: make build
+      - name: Native format lint unit and repository checks
+        run: make check
       - name: Unit, PTY, native smoke, XCTest and XCUIAutomation
         run: make test
       - name: Preserve native UI rendered evidence

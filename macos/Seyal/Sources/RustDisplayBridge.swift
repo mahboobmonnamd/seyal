@@ -1,5 +1,18 @@
 import Foundation
 
+struct RuntimeBlockMetadata: Equatable, Sendable {
+  enum State: UInt8, Sendable {
+    case current = 1
+    case completed = 2
+  }
+
+  let blockIDLow: UInt64
+  let blockIDHigh: UInt64
+  let revision: UInt64
+  let startLineID: UInt64
+  let state: State
+}
+
 /// UI registries must include the Pane namespace because Runtime block and
 /// history request numbers are only unique within their owning execution.
 struct PaneBlockKey: Hashable, Sendable {
@@ -117,14 +130,16 @@ struct NativeTranscriptFrame: Equatable {
 /// identical and must still settle independently.
 struct ComposerRequestCorrelation {
   private(set) var pendingRequestID: UInt64?
+  private var nextRequestID: UInt64 = 1
 
   var isSettled: Bool { pendingRequestID == nil }
 
   mutating func begin(command: String) -> UInt64 {
-    let requestID = (pendingRequestID ?? 0) &+ 1
-    pendingRequestID = requestID == 0 ? 1 : requestID
+    let requestID = nextRequestID
+    nextRequestID = requestID == UInt64.max ? 1 : requestID + 1
+    pendingRequestID = requestID
     _ = command
-    return pendingRequestID!
+    return requestID
   }
 
   mutating func accepts(requestID: UInt64) -> Bool {
@@ -256,6 +271,7 @@ final class RustDisplayBridge {
   private var teardown: RustBridgeTeardownCoordinator!
   private(set) var clientHandle: UInt64 = 0
   private(set) var isConnected = false
+  private(set) var runtimeBlockMetadata: RuntimeBlockMetadata?
   private var reconnectRequested = false
   private var lastTimelineRevision: UInt64 = 0
   private let paneID: String
@@ -367,6 +383,7 @@ final class RustDisplayBridge {
 
     socketFileDescriptor = fileDescriptor
     isConnected = true
+    runtimeBlockMetadata = currentBlockMetadata()
     let source = DispatchSource.makeReadSource(fileDescriptor: fileDescriptor, queue: .main)
     source.setEventHandler { [weak self] in
       self?.drainReadyDisplayWork()
@@ -395,12 +412,13 @@ final class RustDisplayBridge {
     return (low, high)
   }
 
-  func stop() {
-    reconnectRequested = false
+  func stop(reconnect: Bool = false) {
+    reconnectRequested = reconnect
     guard isConnected || socketFileDescriptor >= 0 else { return }
     guard !teardown.disconnectPending else { return }
 
     isConnected = false
+    runtimeBlockMetadata = nil
     socketFileDescriptor = -1
     _ = seyal_bridge_select(clientHandle)
     teardown.requestDisconnect()
@@ -439,6 +457,24 @@ final class RustDisplayBridge {
   func publishCurrentFrame() {
     guard let frame = currentFrame() else { return }
     onFrame(frame)
+  }
+
+  /// Minimal read-only Pass 8 presentation seam. The rich command transcript
+  /// remains the independent Pass 7.1 timeline above.
+  func currentBlockMetadata() -> RuntimeBlockMetadata? {
+    guard isConnected, selectClient() else { return nil }
+    let value = seyal_bridge_execution_block_metadata()
+    guard value.revision > 0,
+      value.start_line_id > 0,
+      let state = RuntimeBlockMetadata.State(rawValue: value.state)
+    else { return nil }
+    return RuntimeBlockMetadata(
+      blockIDLow: value.block_id_low,
+      blockIDHigh: value.block_id_high,
+      revision: value.revision,
+      startLineID: value.start_line_id,
+      state: state
+    )
   }
 
   func currentTimeline() -> [NativeBlockRecord] {
@@ -663,7 +699,10 @@ final class RustDisplayBridge {
   private func finishMutation(_ result: Int32) -> Int32 {
     synchronizeWriteReadinessSource()
     onStatusChanged()
-    if result == -3 || result == -10 {
+    if result == -18 {
+      onError(result)
+      stop(reconnect: true)
+    } else if result == -3 || result == -10 {
       onError(result)
       stop()
     }
@@ -682,6 +721,7 @@ final class RustDisplayBridge {
     // unread socket data will immediately retrigger this dispatch source.
     for _ in 0..<8 {
       let result = seyal_bridge_poll()
+      runtimeBlockMetadata = currentBlockMetadata()
       publishHistoryRanges()
       publishComposerResult()
       if result == 1 {
@@ -698,7 +738,7 @@ final class RustDisplayBridge {
       }
 
       onError(result)
-      stop()
+      stop(reconnect: result == -18)
       return
     }
   }
@@ -752,7 +792,7 @@ final class RustDisplayBridge {
     let result = seyal_bridge_flush_writable()
     guard result == 0 else {
       onError(result)
-      stop()
+      stop(reconnect: result == -18)
       return
     }
     synchronizeWriteReadinessSource()

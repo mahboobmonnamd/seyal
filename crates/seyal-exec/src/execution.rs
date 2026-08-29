@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use seyal_terminal::{ShellIntegrationEvent, TerminalState};
+use seyal_terminal::{LineId, ShellIntegrationEvent, TerminalState};
 
 use crate::{
     ChildExit, CommandSpec, ExecError, ProjectionDamage, ReadOutcome, Readiness, SignalDisposition,
@@ -11,13 +11,23 @@ use crate::{
 pub struct TerminalExecution {
     endpoint: TerminalEndpoint,
     terminal: TerminalState,
+    initial_primary_line_id: Option<LineId>,
 }
 
 impl TerminalExecution {
     pub fn spawn(command: &CommandSpec, size: WindowSize) -> Result<Self, ExecError> {
         let terminal = TerminalState::new(size.columns(), size.rows())?;
+        // Capture the canonical primary-screen logical anchor before the child
+        // can emit bytes, scroll, enter alternate screen, or otherwise mutate
+        // the projection. Pass 8 stores this immutable identity only; it does
+        // not expose mutable terminal/grid state or copy transcript content.
+        let initial_primary_line_id = terminal.line_id(0);
         let endpoint = TerminalEndpoint::spawn(command, size)?;
-        Ok(Self { endpoint, terminal })
+        Ok(Self {
+            endpoint,
+            terminal,
+            initial_primary_line_id,
+        })
     }
 
     pub fn child_id(&self) -> u32 {
@@ -26,6 +36,13 @@ impl TerminalExecution {
 
     pub fn terminal(&self) -> &TerminalState {
         &self.terminal
+    }
+
+    /// Stable canonical primary-screen logical line present when this
+    /// execution was created. It is immutable across scroll, resize,
+    /// alternate-screen transitions, projection resync, detach and reattach.
+    pub fn initial_primary_line_id(&self) -> Option<LineId> {
+        self.initial_primary_line_id
     }
 
     /// Transfers one bounded trusted shell-integration event observed by the

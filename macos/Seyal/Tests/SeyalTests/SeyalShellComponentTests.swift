@@ -4,6 +4,38 @@ import XCTest
 @testable import Seyal
 
 final class SeyalShellComponentTests: XCTestCase {
+
+  func testRuntimeBlockMetadataKeepsOpaqueExecutionIdentityAnchorAndState() {
+    let current = RuntimeBlockMetadata(
+      blockIDLow: 0x0123,
+      blockIDHigh: 0x4567,
+      revision: 1,
+      startLineID: 99,
+      state: .current
+    )
+    let completed = RuntimeBlockMetadata(
+      blockIDLow: current.blockIDLow,
+      blockIDHigh: current.blockIDHigh,
+      revision: 2,
+      startLineID: current.startLineID,
+      state: .completed
+    )
+
+    XCTAssertEqual(current.blockIDLow, completed.blockIDLow)
+    XCTAssertEqual(current.blockIDHigh, completed.blockIDHigh)
+    XCTAssertEqual(current.startLineID, completed.startLineID)
+    XCTAssertEqual(current.revision, 1)
+    XCTAssertEqual(completed.revision, 2)
+    XCTAssertEqual(current.state, .current)
+    XCTAssertEqual(completed.state, .completed)
+    XCTAssertNotEqual(current, completed)
+  }
+  func testExecutionBlockMetadataCABIIsStable() {
+    XCTAssertEqual(MemoryLayout<SeyalExecutionBlockMetadata>.size, 40)
+    XCTAssertEqual(MemoryLayout<SeyalExecutionBlockMetadata>.stride, 40)
+    XCTAssertEqual(MemoryLayout<SeyalExecutionBlockMetadata>.alignment, 8)
+  }
+
   func testPaneQualifiedIdentitiesDoNotCollideAcrossPanes() {
     let firstBlock = PaneBlockKey(paneID: "pane-left", blockID: 7)
     let secondBlock = PaneBlockKey(paneID: "pane-right", blockID: 7)
@@ -20,10 +52,12 @@ final class SeyalShellComponentTests: XCTestCase {
   @MainActor
   func testExplicitExecutionIdentityKeepsPaneHandlesIndependent() {
     let left = RustDisplayBridge.executionWords(from: "00112233445566778899aabbccddeeff")
-    let right = RustDisplayBridge.executionWords(from: "00112233445566770099aabbccddeeff")
+    let right = RustDisplayBridge.executionWords(from: "ffeeddccbbaa99880099aabbccddeeff")
 
-    XCTAssertEqual(left?.0, 0x0099_aabb_ccdd_eeff)
+    XCTAssertEqual(left?.0, 0x8899_aabb_ccdd_eeff)
     XCTAssertEqual(left?.1, 0x0011_2233_4455_6677)
+    XCTAssertEqual(right?.0, 0x0099_aabb_ccdd_eeff)
+    XCTAssertEqual(right?.1, 0xffee_ddcc_bbaa_9988)
     XCTAssertNotEqual(left?.0, right?.0)
     XCTAssertNotEqual(left?.1, right?.1)
     XCTAssertNil(RustDisplayBridge.executionWords(from: "not-an-execution"))

@@ -4,7 +4,7 @@
 //! remains the execution/attachment authority and clients own only disposable
 //! decoded display state.
 
-pub use seyal_core::{AttachmentId, ExecutionId};
+pub use seyal_core::{AttachmentId, BlockId, ExecutionId};
 
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
@@ -12,6 +12,7 @@ pub mod discovery;
 pub mod display;
 pub mod framing;
 mod pass7;
+pub mod pass8;
 
 /// Compatibility namespace matching the protocol modules' historical Runtime
 /// location while Runtime and clients migrate to the physical protocol crate.

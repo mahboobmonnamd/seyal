@@ -54,7 +54,7 @@ private final class DisplayLinkBenchmarkDriver: NSObject, @preconcurrency CAMeta
         self.startedAt = nil
     }
 
-    deinit {
+    func invalidate() {
         link.delegate = nil
         link.invalidate()
     }
@@ -441,6 +441,7 @@ enum RendererValidation {
                 renderer: renderer,
                 layer: presentationLayer
             )
+            defer { displayLinkDriver.invalidate() }
             var preparationSamples = [UInt64]()
             var preparedToCommitSamples = [UInt64]()
             var commitToCompletionSamples = [UInt64]()

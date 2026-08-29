@@ -4,6 +4,9 @@
 //! authority. This crate owns only a local socket attachment, an atomically
 //! committed `DisplayCache`, and derived `seyal-render` presentation state.
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod block;
+
 // Keep the existing internal import path mechanically stable while severing the
 // production dependency on the Runtime crate. `seyal_runtime` below is only an
 // alias for the authority-neutral protocol/value crate; integration tests still
@@ -16,6 +19,9 @@ mod local;
 #[cfg(all(target_os = "macos", feature = "benchmark-instrumentation"))]
 #[doc(hidden)]
 pub mod pass7_benchmark;
+#[cfg(feature = "benchmark-instrumentation")]
+#[doc(hidden)]
+pub mod pass8_benchmark;
 
 #[cfg(target_os = "macos")]
 pub use local::{

@@ -1595,6 +1595,46 @@ impl Runtime {
         }
     }
 
+    /// Admit one authoritative final display snapshot for every attached client.
+    ///
+    /// Finalization cannot rely on asynchronous resync recovery: that queue is
+    /// deliberately budgeted per poll and is retired with the execution. This
+    /// bounded snapshot admission makes the established final-display ordering
+    /// explicit even when no new projection update exists in the final turn.
+    /// It never waits for a client read or acknowledgement; the existing
+    /// replaceable display slot and after-display queue preserve ordering.
+    pub(super) fn publish_final_display_snapshot(&mut self, execution_id: ExecutionId) {
+        let viewers = self.local_ipc.as_ref().map_or_else(Vec::new, |state| {
+            state
+                .attachments
+                .attachments_with_connections_for_execution(execution_id)
+        });
+        if viewers.is_empty() {
+            return;
+        }
+
+        let batch = self
+            .entries
+            .get(&execution_id)
+            .map(|entry| entry.execution.projection_snapshot())
+            .and_then(|snapshot| display::encode_snapshot(&snapshot).ok());
+        match batch {
+            Some(batch) => {
+                for (_, token) in viewers {
+                    let _ = self.send_snapshot_batch(token, batch.clone());
+                }
+            }
+            None => {
+                // A client must never receive Finalized behind stale display.
+                // If final display cannot be produced, fail that connection
+                // closed while Runtime execution cleanup continues normally.
+                for (_, token) in viewers {
+                    self.close_local_connection(token);
+                }
+            }
+        }
+    }
+
     pub(super) fn publish_display_updates(&mut self) {
         self.service_pending_resyncs();
 
@@ -1632,20 +1672,7 @@ impl Runtime {
 
             let dimensions_changed = previous
                 .is_some_and(|value| value.rows != update.rows || value.columns != update.columns);
-            let final_draining = self.entries.get(&execution_id).is_some_and(|entry| {
-                matches!(
-                    entry.lifecycle,
-                    super::Lifecycle::DrainingAfterPrimaryExit { .. }
-                )
-            });
-            if previous.is_none() || dimensions_changed || final_draining {
-                // During the accepted final-drain window, completion/lifecycle
-                // control frames must never overtake a recovery snapshot that
-                // has only been scheduled. Queue an authoritative current
-                // snapshot directly into the bounded replaceable display slot.
-                // This remains non-blocking with respect to the client: the
-                // transport may replace pending display state, and the existing
-                // after-display queue preserves display -> Block -> Finalized.
+            if previous.is_none() || dimensions_changed {
                 let snapshot = self
                     .entries
                     .get(&execution_id)
@@ -1654,14 +1681,6 @@ impl Runtime {
                     Some(batch) => {
                         for (_, token) in viewers {
                             let _ = self.send_snapshot_batch(token, batch.clone());
-                        }
-                    }
-                    None if final_draining => {
-                        // Final lifecycle cannot coexist with stale client
-                        // display state. Fail the affected connection closed if
-                        // the authoritative final snapshot cannot be produced.
-                        for (_, token) in viewers {
-                            self.close_local_connection(token);
                         }
                     }
                     None => {

@@ -88,10 +88,13 @@ enum SeyalMain {
             onError: { _ in },
             paneID: "pass8-native-self-test"
         )
-        guard bridge.start() else { return false }
+        let deadline = Date().addingTimeInterval(2)
+        while !bridge.start() && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        guard bridge.isConnected else { return false }
         defer { bridge.stop() }
 
-        let deadline = Date().addingTimeInterval(2)
         repeat {
             guard bridge.clientHandle != 0,
                   seyal_bridge_select(bridge.clientHandle) == 0

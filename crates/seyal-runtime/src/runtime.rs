@@ -1254,7 +1254,14 @@ impl Runtime {
         // scheduling turn. Publish that state before completing Pass 8 Block
         // metadata and before any lifecycle-finalized notification.
         #[cfg(target_os = "macos")]
-        self.publish_display_updates();
+        {
+            self.publish_display_updates();
+            // Resync recovery is intentionally budgeted and may still be queued
+            // even when this final turn has no fresh projection update. Admit an
+            // authoritative current snapshot for every attached client before
+            // Block completion and Lifecycle::Finalized are queued.
+            self.publish_final_display_snapshot(id);
+        }
 
         let Some(workspace_id) = self.entries.get(&id).map(|entry| entry.workspace_id) else {
             return Ok(());

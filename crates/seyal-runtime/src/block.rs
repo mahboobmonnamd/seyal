@@ -4,6 +4,8 @@ use seyal_protocol::pass8::{
     BlockKind as WireBlockKind, BlockLifecycle as WireBlockLifecycle, BlockState as WireBlockState,
 };
 
+#[cfg(feature = "test-fault-injection")]
+use crate::test_fault::{self, FaultPoint};
 use crate::{BlockId, ExecutionId, WorkspaceId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,10 +26,21 @@ pub struct BlockSummary {
 
 impl BlockSummary {
     pub(crate) fn to_wire(self) -> WireBlockState {
+        #[cfg(feature = "test-fault-injection")]
+        let revision = if self.lifecycle == BlockLifecycle::Completed
+            && test_fault::take(FaultPoint::BlockCompletionEncode)
+        {
+            0
+        } else {
+            self.revision
+        };
+        #[cfg(not(feature = "test-fault-injection"))]
+        let revision = self.revision;
+
         WireBlockState {
             execution_id: self.execution_id,
             block_id: self.id,
-            revision: self.revision,
+            revision,
             start_line_id: self.start_line_id,
             kind: WireBlockKind::TerminalActivity,
             state: match self.lifecycle {
@@ -44,6 +57,7 @@ pub(crate) enum BlockTimelineError {
     InvalidAnchor,
     OwnershipMismatch,
     InvalidTransition,
+    InjectedFailure,
 }
 
 #[derive(Default)]
@@ -66,6 +80,10 @@ impl BlockTimeline {
         execution_id: ExecutionId,
         start_line_id: u64,
     ) -> Result<BlockSummary, BlockTimelineError> {
+        #[cfg(feature = "test-fault-injection")]
+        if test_fault::take(FaultPoint::BlockAdmission) {
+            return Err(BlockTimelineError::InjectedFailure);
+        }
         if start_line_id == 0 {
             return Err(BlockTimelineError::InvalidAnchor);
         }
@@ -89,6 +107,10 @@ impl BlockTimeline {
         workspace_id: WorkspaceId,
         execution_id: ExecutionId,
     ) -> Result<Option<BlockSummary>, BlockTimelineError> {
+        #[cfg(feature = "test-fault-injection")]
+        if test_fault::take(FaultPoint::BlockCompletionMutation) {
+            return Err(BlockTimelineError::InjectedFailure);
+        }
         let Some(record) = self.records.get_mut(&execution_id) else {
             return Ok(None);
         };

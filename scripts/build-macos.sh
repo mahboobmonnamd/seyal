@@ -63,6 +63,7 @@ xcodebuild \
   ARCHS="$MACOS_ARCH" \
   ONLY_ACTIVE_ARCH=YES \
   CODE_SIGNING_ALLOWED=NO \
+  SWIFT_ACTIVE_COMPILATION_CONDITIONS='DEBUG $(inherited)' \
   build
 
 printf '[seyal macOS build] built %s (%s)\n' "${DERIVED_DATA}/Build/Products/${CONFIGURATION}/Seyal.app" "$MACOS_ARCH"

@@ -4,7 +4,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use seyal_exec::{ExecutionReactor, ReactorEventKind, RegistrationToken, WindowSize};
+use seyal_exec::{
+    Color, ExecutionReactor, LineId, ReactorEventKind, RegistrationToken, WindowSize,
+};
+use seyal_protocol::pass8::{CAP_BLOCK_METADATA, encode_block_state_frame};
 
 #[cfg(feature = "test-fault-injection")]
 use crate::test_fault::{self, FaultPoint};
@@ -18,23 +21,38 @@ use crate::{
         },
         discovery,
         framing::{
-            self, Attach as WireAttach, Attached as WireAttached, ErrorCode, ExecutionList,
-            ExecutionListEntry, Lifecycle as WireLifecycle, MessageType, Resize as WireResize,
-            Role,
+            self, Attach as WireAttach, Attached as WireAttached, BlockTimeline,
+            CAP_COMMAND_BLOCKS, CommandBlock, CommandBlockState, ComposerCommandRef,
+            ComposerResult, ComposerResultCode, ErrorCode, ExecutionList, ExecutionListEntry,
+            Lifecycle as WireLifecycle, MessageType, Resize as WireResize,
+            ResizeRequest as WireResizeRequest, ResizeResult as WireResizeResult, ResizeResultCode,
+            Role, TerminalKey as WireTerminalKey, TerminalKeyKind,
         },
         recovery,
     },
 };
 
-use super::{ExecutionLifecycle, Runtime};
+use super::{BlockCompletion, ComposerAdmission, ExecutionLifecycle, Runtime};
 
 const RESYNC_SNAPSHOT_BUDGET_PER_POLL: usize = 2;
 const ACCEPT_BACKOFF_INITIAL: Duration = Duration::from_millis(10);
 const ACCEPT_BACKOFF_MAX: Duration = Duration::from_millis(250);
 
+fn pack_terminal_color(color: Color) -> u32 {
+    match color {
+        Color::Default => 0,
+        Color::Indexed(index) => 0x0100_0000 | u32::from(index),
+        Color::Rgb { r, g, b } => {
+            0x0200_0000 | (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b)
+        }
+    }
+}
+
 pub(super) struct ConnectionMeta {
     attachment: Option<AttachmentId>,
     reactor_token: RegistrationToken,
+    last_resize_request_id: u64,
+    client_capabilities: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -119,6 +137,42 @@ impl LocalIpcState {
 impl Drop for LocalIpcState {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.socket_path);
+    }
+}
+
+fn encode_terminal_key(key: WireTerminalKey) -> Vec<u8> {
+    match key.kind {
+        TerminalKeyKind::Enter => vec![0x0d],
+        TerminalKeyKind::Tab => vec![0x09],
+        TerminalKeyKind::Backspace => vec![0x7f],
+        TerminalKeyKind::Escape => vec![0x1b],
+        TerminalKeyKind::ArrowUp => b"\x1b[A".to_vec(),
+        TerminalKeyKind::ArrowDown => b"\x1b[B".to_vec(),
+        TerminalKeyKind::ArrowRight => b"\x1b[C".to_vec(),
+        TerminalKeyKind::ArrowLeft => b"\x1b[D".to_vec(),
+        TerminalKeyKind::ControlAscii => {
+            let scalar = key.scalar as u8;
+            vec![match scalar {
+                b' ' | b'@' => 0x00,
+                b'A'..=b'Z' => scalar - b'@',
+                b'[' => 0x1b,
+                b'\\' => 0x1c,
+                b']' => 0x1d,
+                b'^' => 0x1e,
+                b'_' => 0x1f,
+                b'?' => 0x7f,
+                _ => unreachable!("wire validation limits ControlAscii"),
+            }]
+        }
+    }
+}
+
+fn resize_error_code(error: &RuntimeError) -> ErrorCode {
+    match error {
+        RuntimeError::UnknownExecution => ErrorCode::InvalidExecution,
+        RuntimeError::ExecutionNotRunning => ErrorCode::InvalidState,
+        RuntimeError::CapacityExceeded => ErrorCode::CapacityExceeded,
+        _ => ErrorCode::InternalFailure,
     }
 }
 
@@ -223,12 +277,6 @@ impl Runtime {
             }
         };
 
-        // A level-triggered listener event that yields no admission/rejection
-        // progress is a pressure/spurious-readiness condition. Disarm the
-        // listener and retry through Runtime's deadline scheduler instead of
-        // immediately returning to the same readable knote. This bounds CPU
-        // under repeated accept resource failures without adding a thread or
-        // polling loop and also protects capacity-pressure cases.
         if events.is_empty() {
             self.backoff_local_listener()?;
             return Ok(());
@@ -260,6 +308,8 @@ impl Runtime {
                                     ConnectionMeta {
                                         attachment: None,
                                         reactor_token,
+                                        last_resize_request_id: 0,
+                                        client_capabilities: 0,
                                     },
                                 );
                                 state.reactor_connections.insert(reactor_token, token);
@@ -299,6 +349,13 @@ impl Runtime {
         self.local_ipc.as_ref().is_some_and(|state| {
             state.connections.contains_key(&token) && state.server.contains(token)
         })
+    }
+
+    fn local_connection_supports_execution_blocks(&self, token: u64) -> bool {
+        self.local_ipc
+            .as_ref()
+            .and_then(|state| state.connections.get(&token))
+            .is_some_and(|meta| meta.client_capabilities & CAP_BLOCK_METADATA != 0)
     }
 
     fn sync_local_writable(&mut self, token: u64) -> bool {
@@ -397,12 +454,6 @@ impl Runtime {
         self.sync_local_writable(token)
     }
 
-    /// Records that a connection must converge from a fresh canonical
-    /// snapshot. Repeated continuity failures collapse to one token. If an
-    /// older snapshot is already pending/in-flight we retain the request but do
-    /// not wake-spin; the writable event that completes the older snapshot will
-    /// return through `publish_display_updates`, where the latest snapshot can
-    /// be materialized.
     fn schedule_snapshot_recovery(&mut self, token: u64) {
         let should_wake = if let Some(state) = self.local_ipc.as_mut() {
             if !state.connections.contains_key(&token) || !state.server.contains(token) {
@@ -436,6 +487,27 @@ impl Runtime {
         );
     }
 
+    fn send_resize_result(
+        &mut self,
+        token: u64,
+        attachment_id: AttachmentId,
+        request_id: u64,
+        result_code: ResizeResultCode,
+        applied_generation: u64,
+    ) {
+        let message = WireResizeResult {
+            attachment_id,
+            request_id,
+            result_code,
+            detail_code: 0,
+            applied_generation,
+        };
+        let _ = self.send_mandatory_frame(
+            token,
+            framing::encode_frame(MessageType::ResizeResult, &message.encode()),
+        );
+    }
+
     fn dispatch_local_ipc_frame(&mut self, token: u64, message_type: u16, payload: &[u8]) {
         let Some(current_state) = self
             .local_ipc
@@ -448,7 +520,15 @@ impl Runtime {
             self.send_error(token, ErrorCode::UnknownMessage, message_type);
             return;
         };
-        if current_state.validate_incoming(kind).is_err() {
+        let pass7_attached = current_state == LocalIpcConnState::Attached
+            && matches!(
+                kind,
+                MessageType::TerminalKey
+                    | MessageType::ResizeRequest
+                    | MessageType::ComposerCommand
+                    | MessageType::HistoryRangeRequest
+            );
+        if !pass7_attached && current_state.validate_incoming(kind).is_err() {
             self.send_error(token, ErrorCode::InvalidState, message_type);
             return;
         }
@@ -458,7 +538,11 @@ impl Runtime {
             MessageType::Attach => self.handle_attach(token, payload),
             MessageType::Detach => self.handle_detach(token, payload),
             MessageType::Input => self.handle_input(token, payload),
+            MessageType::TerminalKey => self.handle_terminal_key(token, payload),
+            MessageType::ComposerCommand => self.handle_composer_command(token, payload),
+            MessageType::HistoryRangeRequest => self.handle_history_range_request(token, payload),
             MessageType::Resize => self.handle_resize(token, payload),
+            MessageType::ResizeRequest => self.handle_resize_request(token, payload),
             MessageType::Resync => self.handle_resync(token, payload),
             MessageType::Goodbye => {
                 if payload.is_empty() {
@@ -480,7 +564,7 @@ impl Runtime {
             );
             return;
         };
-        if hello.client_capabilities != 0 {
+        if hello.client_capabilities & !(CAP_COMMAND_BLOCKS | CAP_BLOCK_METADATA) != 0 {
             self.send_error(
                 token,
                 ErrorCode::MalformedPayload,
@@ -490,7 +574,12 @@ impl Runtime {
         }
         let response = framing::ServerHello {
             runtime_id: u128::from_le_bytes(self.id.to_bytes()),
-            server_capabilities: framing::CAP_BINARY_DISPLAY | framing::CAP_OBSERVER,
+            server_capabilities: framing::CAP_BINARY_DISPLAY
+                | framing::CAP_OBSERVER
+                | framing::CAP_SEMANTIC_TERMINAL_KEY
+                | framing::CAP_CORRELATED_RESIZE
+                | CAP_COMMAND_BLOCKS
+                | CAP_BLOCK_METADATA,
             max_frame_payload: framing::MAX_FRAME_PAYLOAD,
             max_input_payload: framing::MAX_INPUT_BYTES,
         };
@@ -499,6 +588,9 @@ impl Runtime {
             framing::encode_frame(MessageType::ServerHello, &response.encode()),
         ) && let Some(state) = self.local_ipc.as_mut()
         {
+            if let Some(meta) = state.connections.get_mut(&token) {
+                meta.client_capabilities = hello.client_capabilities;
+            }
             state.server.set_state(token, LocalIpcConnState::Ready);
         }
     }
@@ -583,6 +675,7 @@ impl Runtime {
         }
 
         let snapshot = entry.execution.projection_snapshot();
+        let workspace_id = entry.workspace_id;
         let Ok(snapshot_batch) = display::encode_snapshot(&snapshot) else {
             self.send_error(
                 token,
@@ -590,6 +683,17 @@ impl Runtime {
                 MessageType::Attach as u16,
             );
             return;
+        };
+        let block_frame = if self.local_connection_supports_execution_blocks(token) {
+            self.execution_blocks
+                .get(attach.execution_id)
+                .filter(|record| {
+                    record.workspace_id == workspace_id
+                        && record.execution_id == attach.execution_id
+                })
+                .and_then(|record| encode_block_state_frame(&record.to_wire()).ok())
+        } else {
+            None
         };
         let attachment_id = AttachmentId::new();
         let attached = WireAttached {
@@ -600,10 +704,14 @@ impl Runtime {
         };
         let attached_frame = framing::encode_frame(MessageType::Attached, &attached.encode());
         let admitted = self.local_ipc.as_mut().is_some_and(|state| {
-            state
+            if state
                 .server
                 .enqueue_attach_transaction(token, attached_frame, snapshot_batch)
-                .is_ok()
+                .is_err()
+            {
+                return false;
+            }
+            block_frame.is_none_or(|frame| state.server.enqueue_after_display(token, frame).is_ok())
         });
         if !admitted {
             self.close_local_connection(token);
@@ -648,6 +756,7 @@ impl Runtime {
         if let Some(entry) = self.entries.get_mut(&attach.execution_id) {
             entry.attachments.insert(attachment_id);
         }
+        self.publish_block_timeline(attach.execution_id);
     }
 
     fn handle_detach(&mut self, token: u64, payload: &[u8]) {
@@ -744,6 +853,340 @@ impl Runtime {
         }
     }
 
+    fn handle_terminal_key(&mut self, token: u64, payload: &[u8]) {
+        let Ok(key) = WireTerminalKey::decode(payload) else {
+            self.send_error(
+                token,
+                ErrorCode::MalformedPayload,
+                MessageType::TerminalKey as u16,
+            );
+            return;
+        };
+        let execution_id = match self.local_ipc.as_ref().map(|state| {
+            state
+                .attachments
+                .authorize_mutation(token, key.attachment_id)
+        }) {
+            Some(Ok(id)) => id,
+            Some(Err(AttachmentError::PermissionDenied)) => {
+                self.send_error(
+                    token,
+                    ErrorCode::PermissionDenied,
+                    MessageType::TerminalKey as u16,
+                );
+                return;
+            }
+            _ => {
+                self.send_error(
+                    token,
+                    ErrorCode::StaleIdentity,
+                    MessageType::TerminalKey as u16,
+                );
+                return;
+            }
+        };
+        let bytes = encode_terminal_key(key);
+        match self.input_ingress(execution_id) {
+            Ok(ingress) => {
+                if ingress.try_submit(bytes).is_err() {
+                    self.send_error(
+                        token,
+                        ErrorCode::Backpressure,
+                        MessageType::TerminalKey as u16,
+                    );
+                }
+            }
+            Err(_) => self.send_error(
+                token,
+                ErrorCode::InvalidExecution,
+                MessageType::TerminalKey as u16,
+            ),
+        }
+    }
+
+    fn handle_composer_command(&mut self, token: u64, payload: &[u8]) {
+        let Ok(request) = ComposerCommandRef::decode(payload) else {
+            self.send_error(
+                token,
+                ErrorCode::MalformedPayload,
+                MessageType::ComposerCommand as u16,
+            );
+            return;
+        };
+        let supports_blocks = self
+            .local_ipc
+            .as_ref()
+            .and_then(|state| {
+                state
+                    .connections
+                    .get(&token)
+                    .map(|meta| meta.client_capabilities & CAP_COMMAND_BLOCKS != 0)
+            })
+            .unwrap_or(false);
+        if !supports_blocks {
+            self.send_error(
+                token,
+                ErrorCode::PermissionDenied,
+                MessageType::ComposerCommand as u16,
+            );
+            return;
+        }
+        let execution_id = match self.local_ipc.as_ref().map(|state| {
+            state
+                .attachments
+                .authorize_mutation(token, request.attachment_id)
+        }) {
+            Some(Ok(id)) => id,
+            Some(Err(AttachmentError::PermissionDenied)) => {
+                self.send_error(
+                    token,
+                    ErrorCode::PermissionDenied,
+                    MessageType::ComposerCommand as u16,
+                );
+                return;
+            }
+            _ => {
+                self.send_error(
+                    token,
+                    ErrorCode::StaleIdentity,
+                    MessageType::ComposerCommand as u16,
+                );
+                return;
+            }
+        };
+        match self.submit_composer_command(execution_id, request.command.to_owned()) {
+            Ok(ComposerAdmission::Accepted(block_id)) => {
+                self.publish_block_timeline(execution_id);
+                let result = ComposerResult {
+                    attachment_id: request.attachment_id,
+                    code: ComposerResultCode::Accepted,
+                    block_id: block_id.raw(),
+                    request_id: request.request_id,
+                };
+                let _ = self.send_mandatory_frame(
+                    token,
+                    framing::encode_frame(MessageType::ComposerResult, &result.encode()),
+                );
+            }
+            Ok(ComposerAdmission::Unsupported) => {
+                let result = ComposerResult {
+                    attachment_id: request.attachment_id,
+                    code: ComposerResultCode::Unsupported,
+                    block_id: 0,
+                    request_id: request.request_id,
+                };
+                let _ = self.send_mandatory_frame(
+                    token,
+                    framing::encode_frame(MessageType::ComposerResult, &result.encode()),
+                );
+            }
+            Ok(ComposerAdmission::Busy) => {
+                let result = ComposerResult {
+                    attachment_id: request.attachment_id,
+                    code: ComposerResultCode::Busy,
+                    block_id: 0,
+                    request_id: request.request_id,
+                };
+                let _ = self.send_mandatory_frame(
+                    token,
+                    framing::encode_frame(MessageType::ComposerResult, &result.encode()),
+                );
+            }
+            Err(RuntimeError::InputBackpressure | RuntimeError::ControlQueueFull) => {
+                let result = ComposerResult {
+                    attachment_id: request.attachment_id,
+                    code: ComposerResultCode::Backpressure,
+                    block_id: 0,
+                    request_id: request.request_id,
+                };
+                let _ = self.send_mandatory_frame(
+                    token,
+                    framing::encode_frame(MessageType::ComposerResult, &result.encode()),
+                );
+            }
+            Err(RuntimeError::ExecutionNotRunning) => {
+                let result = ComposerResult {
+                    attachment_id: request.attachment_id,
+                    code: ComposerResultCode::Invalid,
+                    block_id: 0,
+                    request_id: request.request_id,
+                };
+                let _ = self.send_mandatory_frame(
+                    token,
+                    framing::encode_frame(MessageType::ComposerResult, &result.encode()),
+                );
+            }
+            Err(_) => {
+                let result = ComposerResult {
+                    attachment_id: request.attachment_id,
+                    code: ComposerResultCode::Invalid,
+                    block_id: 0,
+                    request_id: request.request_id,
+                };
+                let _ = self.send_mandatory_frame(
+                    token,
+                    framing::encode_frame(MessageType::ComposerResult, &result.encode()),
+                );
+            }
+        }
+    }
+
+    fn handle_history_range_request(&mut self, token: u64, payload: &[u8]) {
+        let Ok(request) = framing::HistoryRangeRequest::decode(payload) else {
+            self.send_error(
+                token,
+                ErrorCode::MalformedPayload,
+                MessageType::HistoryRangeRequest as u16,
+            );
+            return;
+        };
+        let execution_id = match self.local_ipc.as_ref().map(|state| {
+            state
+                .attachments
+                .execution_of(request.attachment_id)
+                .and_then(|id| {
+                    let attached = state
+                        .connections
+                        .get(&token)
+                        .and_then(|meta| meta.attachment)
+                        == Some(request.attachment_id);
+                    attached
+                        .then_some(id)
+                        .ok_or(AttachmentError::PermissionDenied)
+                })
+        }) {
+            Some(Ok(id)) => id,
+            _ => {
+                self.send_error(
+                    token,
+                    ErrorCode::StaleIdentity,
+                    MessageType::HistoryRangeRequest as u16,
+                );
+                return;
+            }
+        };
+        let Some(entry) = self.entries.get(&execution_id) else {
+            self.send_error(
+                token,
+                ErrorCode::InvalidExecution,
+                MessageType::HistoryRangeRequest as u16,
+            );
+            return;
+        };
+        let rows = entry.execution.terminal().primary_history_range(
+            LineId(request.start_line),
+            LineId(request.end_line),
+            usize::from(request.max_lines),
+        );
+        let mut cell_budget = usize::try_from(request.max_cells).unwrap_or(0);
+        let mut truncated = false;
+        let mut encoded_rows = Vec::with_capacity(rows.len());
+        for (line_id, cells) in rows {
+            if cells.len() > cell_budget {
+                truncated = true;
+                break;
+            }
+            cell_budget -= cells.len();
+            encoded_rows.push(framing::HistoryRow {
+                line_id: line_id.0,
+                cells: cells
+                    .into_iter()
+                    .map(|cell| framing::HistoryCell {
+                        scalar: cell.character as u32,
+                        foreground: pack_terminal_color(cell.style.fg),
+                        background: pack_terminal_color(cell.style.bg),
+                        flags: (u16::from(cell.style.bold))
+                            | (u16::from(cell.style.underline) << 1)
+                            | (u16::from(cell.style.inverse) << 2),
+                    })
+                    .collect(),
+            });
+        }
+        if encoded_rows.len() < usize::from(request.max_lines) {
+            truncated = truncated
+                || request.end_line.saturating_sub(request.start_line) >= encoded_rows.len() as u64;
+        }
+        let snapshot = framing::HistoryRangeSnapshot {
+            request_id: request.request_id,
+            block_id: request.block_id,
+            revision: entry.execution.terminal().damage_generation(),
+            status: if truncated {
+                framing::HistoryRangeStatus::Truncated
+            } else {
+                framing::HistoryRangeStatus::Complete
+            },
+            rows: encoded_rows,
+        };
+        let Ok(payload) = snapshot.try_encode() else {
+            self.send_error(
+                token,
+                ErrorCode::CapacityExceeded,
+                MessageType::HistoryRangeRequest as u16,
+            );
+            return;
+        };
+        let _ = self.send_mandatory_frame(
+            token,
+            framing::encode_frame(MessageType::HistoryRangeSnapshot, &payload),
+        );
+    }
+
+    /// Broadcast a bounded replacement cache after the Runtime has observed a
+    /// trusted OSC lifecycle transition. It is queued after display work so a
+    /// slow client cannot delay PTY/VT or terminal projection progress.
+    pub(super) fn publish_block_timeline(&mut self, execution_id: ExecutionId) {
+        let Some(entry) = self.entries.get(&execution_id) else {
+            return;
+        };
+        let records = entry
+            .block_timeline
+            .records()
+            .map(|record| CommandBlock {
+                id: record.id.raw(),
+                command: record.command.clone(),
+                start_line: record.start_line,
+                end_line: record.end_line,
+                state: match record.lifecycle {
+                    crate::blocks::BlockLifecycle::Running => CommandBlockState::Running,
+                    crate::blocks::BlockLifecycle::Completed { exit_status } => {
+                        CommandBlockState::Completed { exit_status }
+                    }
+                },
+            })
+            .collect();
+        let payload = BlockTimeline {
+            revision: entry.block_revision,
+            records,
+        }
+        .try_encode()
+        .unwrap_or_default();
+        if payload.is_empty() {
+            return;
+        }
+        let frame = framing::encode_frame(MessageType::BlockTimeline, &payload);
+        let tokens = self
+            .local_ipc
+            .as_ref()
+            .map(|state| {
+                state
+                    .connections
+                    .iter()
+                    .filter_map(|(&token, meta)| {
+                        let supports_blocks = meta.client_capabilities & CAP_COMMAND_BLOCKS != 0;
+                        let attached_here = meta
+                            .attachment
+                            .and_then(|attachment| state.attachments.execution_of(attachment).ok())
+                            == Some(execution_id);
+                        (supports_blocks && attached_here).then_some(token)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for token in tokens {
+            let _ = self.send_after_display_frame(token, frame.clone());
+        }
+    }
+
     fn handle_resize(&mut self, token: u64, payload: &[u8]) {
         let Ok(resize) = WireResize::decode(payload) else {
             self.send_error(
@@ -801,6 +1244,119 @@ impl Runtime {
         }
     }
 
+    fn handle_resize_request(&mut self, token: u64, payload: &[u8]) {
+        let Ok(request) = WireResizeRequest::decode(payload) else {
+            self.send_error(
+                token,
+                ErrorCode::MalformedPayload,
+                MessageType::ResizeRequest as u16,
+            );
+            return;
+        };
+        #[cfg(feature = "benchmark-instrumentation")]
+        crate::pass7_benchmark::mark_pass7_resize_receipt();
+
+        let execution_id = match self.local_ipc.as_ref().map(|state| {
+            state
+                .attachments
+                .authorize_mutation(token, request.attachment_id)
+        }) {
+            Some(Ok(id)) => id,
+            Some(Err(AttachmentError::PermissionDenied)) => {
+                self.send_resize_result(
+                    token,
+                    request.attachment_id,
+                    request.request_id,
+                    ResizeResultCode::Error(ErrorCode::PermissionDenied),
+                    0,
+                );
+                return;
+            }
+            _ => {
+                self.send_resize_result(
+                    token,
+                    request.attachment_id,
+                    request.request_id,
+                    ResizeResultCode::Error(ErrorCode::StaleIdentity),
+                    0,
+                );
+                return;
+            }
+        };
+
+        // Request ordering is connection bookkeeping, not an authorization
+        // boundary. Validate the attachment/controller first so an
+        // unauthorized or stale request cannot poison the request-ID sequence
+        // for a later valid attachment on this connection.
+        let monotonic = self.local_ipc.as_mut().is_some_and(|state| {
+            let Some(meta) = state.connections.get_mut(&token) else {
+                return false;
+            };
+            if request.request_id <= meta.last_resize_request_id {
+                false
+            } else {
+                meta.last_resize_request_id = request.request_id;
+                true
+            }
+        });
+        if !monotonic {
+            self.send_resize_result(
+                token,
+                request.attachment_id,
+                request.request_id,
+                ResizeResultCode::Error(ErrorCode::MalformedPayload),
+                0,
+            );
+            return;
+        }
+
+        let Ok(size) = WindowSize::cells(request.columns, request.rows) else {
+            self.send_resize_result(
+                token,
+                request.attachment_id,
+                request.request_id,
+                ResizeResultCode::Error(ErrorCode::InvalidGeometry),
+                0,
+            );
+            return;
+        };
+
+        match self.resize(execution_id, size) {
+            Ok(()) => {
+                #[cfg(feature = "benchmark-instrumentation")]
+                crate::pass7_benchmark::mark_pass7_resize_commit();
+                let generation = self
+                    .entries
+                    .get(&execution_id)
+                    .map_or(0, |entry| entry.execution.terminal().damage_generation());
+                if generation == 0 {
+                    self.send_resize_result(
+                        token,
+                        request.attachment_id,
+                        request.request_id,
+                        ResizeResultCode::Error(ErrorCode::InternalFailure),
+                        0,
+                    );
+                } else {
+                    self.send_resize_result(
+                        token,
+                        request.attachment_id,
+                        request.request_id,
+                        ResizeResultCode::Applied,
+                        generation,
+                    );
+                }
+            }
+            Err(error) => self.send_resize_result(
+                token,
+                request.attachment_id,
+                request.request_id,
+                ResizeResultCode::Error(resize_error_code(&error)),
+                0,
+            ),
+        }
+    }
+
     fn handle_resync(&mut self, token: u64, payload: &[u8]) {
         let Ok(resync) = framing::Resync::decode(payload) else {
             self.send_error(
@@ -833,10 +1389,6 @@ impl Runtime {
         self.schedule_snapshot_recovery(token);
     }
 
-    /// Performs bounded expensive recovery work after normal reactor events.
-    /// Explicit resync and continuity loss share the same deduplicated queue.
-    /// Snapshot materialization is budgeted per execution, not per viewer: all
-    /// ready viewers for one execution reuse one encoded immutable batch.
     pub(super) fn service_pending_resyncs(&mut self) {
         let scan_limit = self
             .local_ipc
@@ -942,9 +1494,6 @@ impl Runtime {
             let _ = self.send_snapshot_batch(token, batch);
         }
 
-        // If the materialization budget left ready work in the queue, schedule
-        // one more bounded turn. Tokens blocked on an in-flight snapshot rely
-        // on their socket writable event rather than causing a wake spin.
         let ready_pending = self.local_ipc.as_ref().is_some_and(|state| {
             state.pending_resync.iter().any(|token| {
                 state.pending_resync_set.contains(token)
@@ -957,7 +1506,11 @@ impl Runtime {
         }
     }
 
-    pub(super) fn notify_local_ipc_execution_finalized(&mut self, execution_id: ExecutionId) {
+    pub(super) fn notify_local_ipc_execution_finalized(
+        &mut self,
+        execution_id: ExecutionId,
+        block_completion: BlockCompletion,
+    ) {
         let notifications = {
             let Some(state) = self.local_ipc.as_mut() else {
                 return;
@@ -965,6 +1518,16 @@ impl Runtime {
             let pairs = state
                 .attachments
                 .attachments_with_connections_for_execution(execution_id);
+            let notifications = pairs
+                .iter()
+                .map(|(_, token)| {
+                    let block_capable = state
+                        .connections
+                        .get(token)
+                        .is_some_and(|meta| meta.client_capabilities & CAP_BLOCK_METADATA != 0);
+                    (*token, block_capable)
+                })
+                .collect::<Vec<_>>();
             state.attachments.remove_all_for_execution(execution_id);
             state.published.remove(&execution_id);
             for (_, token) in &pairs {
@@ -973,12 +1536,51 @@ impl Runtime {
                     meta.attachment = None;
                 }
             }
-            pairs
-                .into_iter()
-                .map(|(_, connection_token)| connection_token)
-                .collect::<Vec<_>>()
+            notifications
         };
-        for token in notifications {
+
+        let completion_frame = match block_completion {
+            BlockCompletion::Completed(record) => {
+                #[cfg(feature = "test-fault-injection")]
+                if test_fault::take(FaultPoint::BlockCompletionEncode) {
+                    Err(())
+                } else {
+                    encode_block_state_frame(&record.to_wire())
+                        .map(Some)
+                        .map_err(|_| ())
+                }
+                #[cfg(not(feature = "test-fault-injection"))]
+                {
+                    encode_block_state_frame(&record.to_wire())
+                        .map(Some)
+                        .map_err(|_| ())
+                }
+            }
+            BlockCompletion::Failed => Err(()),
+            BlockCompletion::None => Ok(None),
+        };
+
+        for (token, block_capable) in notifications {
+            if block_capable {
+                match &completion_frame {
+                    Ok(Some(frame)) => {
+                        #[cfg(feature = "test-fault-injection")]
+                        if test_fault::take(FaultPoint::BlockCompletionAdmission) {
+                            self.close_local_connection(token);
+                            continue;
+                        }
+                        if !self.send_after_display_frame(token, frame.clone()) {
+                            continue;
+                        }
+                    }
+                    Err(()) => {
+                        self.close_local_connection(token);
+                        continue;
+                    }
+                    Ok(None) => {}
+                }
+            }
+
             let message = framing::LifecycleMessage {
                 execution_id,
                 lifecycle: framing::Lifecycle::Finalized,
@@ -993,9 +1595,47 @@ impl Runtime {
         }
     }
 
+    /// Admit one authoritative final display snapshot for every attached client.
+    ///
+    /// Finalization cannot rely on asynchronous resync recovery: that queue is
+    /// deliberately budgeted per poll and is retired with the execution. This
+    /// bounded snapshot admission makes the established final-display ordering
+    /// explicit even when no new projection update exists in the final turn.
+    /// It never waits for a client read or acknowledgement; the existing
+    /// replaceable display slot and after-display queue preserve ordering.
+    pub(super) fn publish_final_display_snapshot(&mut self, execution_id: ExecutionId) {
+        let viewers = self.local_ipc.as_ref().map_or_else(Vec::new, |state| {
+            state
+                .attachments
+                .attachments_with_connections_for_execution(execution_id)
+        });
+        if viewers.is_empty() {
+            return;
+        }
+
+        let batch = self
+            .entries
+            .get(&execution_id)
+            .map(|entry| entry.execution.projection_snapshot())
+            .and_then(|snapshot| display::encode_snapshot(&snapshot).ok());
+        match batch {
+            Some(batch) => {
+                for (_, token) in viewers {
+                    let _ = self.send_snapshot_batch(token, batch.clone());
+                }
+            }
+            None => {
+                // A client must never receive Finalized behind stale display.
+                // If final display cannot be produced, fail that connection
+                // closed while Runtime execution cleanup continues normally.
+                for (_, token) in viewers {
+                    self.close_local_connection(token);
+                }
+            }
+        }
+    }
+
     pub(super) fn publish_display_updates(&mut self) {
-        // Run expensive recovery at most once per Runtime poll, after all
-        // readiness frames for that turn have had a chance to coalesce.
         self.service_pending_resyncs();
 
         let execution_ids = self.local_ipc.as_ref().map_or_else(Vec::new, |state| {
@@ -1066,11 +1706,6 @@ impl Runtime {
                                     self.sync_local_writable(token);
                                 }
                                 Some(DeltaEnqueueResult::NeedSnapshot) => {
-                                    // Continuity loss is a state requirement,
-                                    // not a command to encode a full grid on
-                                    // every source generation. Defer and
-                                    // coalesce until this connection can accept
-                                    // one current snapshot.
                                     self.schedule_snapshot_recovery(token);
                                 }
                                 None => self.close_local_connection(token),

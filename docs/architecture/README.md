@@ -13,6 +13,7 @@ This directory is the canonical entry point for Seyal foundation architecture.
 7. [`ADR-006-RUNTIME-REACTOR.md`](ADR-006-RUNTIME-REACTOR.md) — accepted M001 macOS multi-execution reactor, bounded fairness, child-exit and nonblocking Runtime-termination decision.
 8. [`ADR-007-WORKSPACE-PERSISTENCE-AGENT-CONTINUITY.md`](ADR-007-WORKSPACE-PERSISTENCE-AGENT-CONTINUITY.md) — accepted pre-Pass-4 decision separating Workspace/domain ownership, persistence classes, resource tiers and agent work from presentation/provider-chat lifetime.
 9. [`ADR-008-TERMINFO-CAPABILITY-OWNERSHIP.md`](ADR-008-TERMINFO-CAPABILITY-OWNERSHIP.md) — M001 local `TERM`/terminfo capability-advertisement ownership and honesty contract.
+10. [`ADR-009-COMMAND-BLOCKS-COMPOSER-AND-TUI.md`](ADR-009-COMMAND-BLOCKS-COMPOSER-AND-TUI.md) — **Accepted:** one command per Pane Block, one Pane composer, trusted shell integration, and same-execution TUI takeover.
 10. [`SEYAL-RUNTIME-WORKSPACE-CONTINUITY-RD-001.md`](SEYAL-RUNTIME-WORKSPACE-CONTINUITY-RD-001.md) — focused evidence/alternatives/memory-accounting research behind ADR-007.
 11. [`../milestones/MILESTONE-001.md`](../milestones/MILESTONE-001.md) — authoritative M001 implementation scope, passes, tests, security gates, benchmarks, acceptance criteria, and demo procedure.
 12. [`ui/SEYAL-UI-ARCHITECTURE-001.md`](ui/SEYAL-UI-ARCHITECTURE-001.md) — presentation architecture for Flow/Raw/TUI, history, Blocks, workspace chrome, inspectors, attention/approvals, desktop/mobile continuity, and render priority.

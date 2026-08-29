@@ -4,12 +4,21 @@
 //! attachments, bounded admission and scheduling. Every `TerminalExecution`
 //! continues to own its PTY, primary child and sole canonical TerminalState.
 
+mod block;
+#[cfg(target_os = "macos")]
+mod blocks;
 mod capability;
 pub mod display;
 mod error;
 mod ids;
 mod input;
 pub mod local_ipc;
+#[cfg(all(target_os = "macos", feature = "benchmark-instrumentation"))]
+#[doc(hidden)]
+pub mod pass7_benchmark;
+#[cfg(feature = "benchmark-instrumentation")]
+#[doc(hidden)]
+pub mod pass8_benchmark;
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 mod platform;
@@ -23,8 +32,9 @@ mod singleton;
 #[doc(hidden)]
 pub mod test_fault;
 
+pub use block::{BlockLifecycle, BlockSummary};
 pub use capability::{CapabilityPolicy, m001_term_name};
 pub use error::RuntimeError;
-pub use ids::{AttachmentId, ExecutionId, ProjectionId, RuntimeId, WorkspaceId};
+pub use ids::{AttachmentId, BlockId, ExecutionId, ProjectionId, RuntimeId, WorkspaceId};
 pub use input::InputIngress;
 pub use runtime::{ExecutionLifecycle, ExecutionSummary, LocalIpcMode, Runtime, RuntimeConfig};

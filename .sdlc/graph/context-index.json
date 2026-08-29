@@ -14,7 +14,7 @@
       "summary": "Owns one terminal endpoint/PTY, child lifecycle, authoritative terminal state, and attachment/projection state.",
       "tags": ["pty", "execution", "runtime", "ownership"],
       "sources": [
-        {"path": "docs/architecture/README.md", "fingerprint": "26ebefb1c0e5613bd743adc7e282e358e005b864"}
+        {"path": "docs/architecture/README.md", "fingerprint": "5d15598b26866578391805231a35f41131fcd9ff"}
       ],
       "relationships": [
         {"type": "owns", "target": "COMP-TERMINAL-STATE"},
@@ -43,7 +43,7 @@
       "summary": "Workspace metadata keyed by ExecutionId and logical history anchors. Blocks own no PTY, VT, grid, child, renderer, or copied terminal output.",
       "tags": ["blocks", "workspace", "history", "execution-id"],
       "sources": [
-        {"path": "docs/architecture/README.md", "fingerprint": "26ebefb1c0e5613bd743adc7e282e358e005b864"}
+        {"path": "docs/architecture/README.md", "fingerprint": "5d15598b26866578391805231a35f41131fcd9ff"}
       ],
       "relationships": [
         {"type": "related_to", "target": "COMP-TERMINAL-EXECUTION"}

@@ -11,7 +11,7 @@ build = "build.rs"
 
 [features]
 default = []
-test-fault-injection = []
+test-fault-injection = ["seyal-exec/test-fault-injection"]
 benchmark-shared-projection = []
 benchmark-instrumentation = []
 

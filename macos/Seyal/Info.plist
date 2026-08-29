@@ -20,5 +20,7 @@
 	<string>1</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>SeyalBuildConfiguration</key>
+	<string>$(CONFIGURATION)</string>
 </dict>
 </plist>

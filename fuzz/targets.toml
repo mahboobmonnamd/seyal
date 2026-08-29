@@ -41,3 +41,10 @@ owner_pass = 5
 status = "active"
 corpus = "fuzz/corpus/reconnect-resync-state-machine"
 adapter = "fuzz/targets/reconnect-resync-state-machine"
+
+[[target]]
+name = "block-state-decode"
+owner_pass = 8
+status = "active"
+corpus = "fuzz/corpus/block-state-decode"
+adapter = "fuzz/targets/block-state-decode"

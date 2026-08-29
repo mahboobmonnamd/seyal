@@ -116,6 +116,10 @@ pub(crate) fn wait(
 }
 
 pub(crate) fn set_winsize(master: &File, size: WindowSize) -> Result<(), ExecError> {
+    #[cfg(feature = "test-fault-injection")]
+    if crate::test_fault::take(crate::test_fault::FaultPoint::ResizeWinsize) {
+        return Err(io::Error::other("injected Pass-7 PTY winsize failure").into());
+    }
     let winsize = to_native_winsize(size);
     // SAFETY: master is an owned live PTY descriptor and winsize points to a
     // fully initialized libc::winsize value.

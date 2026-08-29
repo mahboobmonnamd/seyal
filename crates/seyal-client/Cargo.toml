@@ -40,3 +40,8 @@ required-features = ["benchmark-instrumentation"]
 name = "pass8_block_metadata"
 harness = false
 required-features = ["benchmark-instrumentation"]
+
+# R&D-only prerequisite evidence for SPEC-009 section 16.
+[[bench]]
+name = "pass9_reconnect_commit_calibration"
+harness = false

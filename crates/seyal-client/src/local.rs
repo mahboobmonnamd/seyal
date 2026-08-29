@@ -466,6 +466,28 @@ impl LocalDisplayClient {
         )
     }
 
+    /// Benchmark-only control connection that preserves the exact Pass 7
+    /// interactive path while deliberately omitting Pass 8 metadata negotiation.
+    /// This exists solely to attribute same-head latency movement; production
+    /// callers always use `connect_execution`, which requests Pass 8 normally.
+    #[cfg(feature = "benchmark-instrumentation")]
+    pub fn connect_execution_without_block_metadata(
+        socket_path: &Path,
+        execution_id: ExecutionId,
+        role: Role,
+    ) -> Result<Self, ClientError> {
+        let mut stream = connect_stream(socket_path)?;
+        let server_hello = hello(&mut stream, role == Role::Controller, false)?;
+        Self::finish_attach(
+            stream,
+            execution_id,
+            role,
+            server_hello.server_capabilities & CAP_COMMAND_BLOCKS != 0,
+            server_hello.runtime_id,
+            false,
+        )
+    }
+
     fn finish_attach(
         mut stream: UnixStream,
         execution_id: ExecutionId,

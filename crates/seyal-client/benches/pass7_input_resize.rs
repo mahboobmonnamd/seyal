@@ -64,7 +64,13 @@ fn run_macos() {
     print_host_metadata();
 
     let executable = std::env::current_exe().expect("benchmark executable");
-    for case in ["input", "resize_120x40", "resize_512x256", "idle_resource"] {
+    for case in [
+        "input",
+        "resize_120x40",
+        "resize_512x256",
+        "idle_resource",
+        "pass8_resize_attribution",
+    ] {
         let status = Command::new("/usr/bin/time")
             .arg("-lp")
             .arg(&executable)
@@ -102,6 +108,7 @@ fn worker(case: &str) {
             },
         ),
         "idle_resource" => measure_idle_resources(),
+        "pass8_resize_attribution" => measure_pass8_resize_attribution(),
         other => panic!("unknown Pass 7 benchmark worker {other}"),
     }
 }
@@ -176,6 +183,15 @@ impl RuntimeHarness {
             Role::Controller,
         )
         .expect("controller attach")
+    }
+
+    fn connect_controller_without_block_metadata(&self) -> LocalDisplayClient {
+        LocalDisplayClient::connect_execution_without_block_metadata(
+            &self.socket_path,
+            self.execution_id,
+            Role::Controller,
+        )
+        .expect("controller attach without Pass 8 metadata")
     }
 
     fn finish(self) {
@@ -447,6 +463,82 @@ fn measure_resize_boundary(label: &str, target: GridGeometry, reset: GridGeometr
 
     drop(client);
     runtime.finish();
+}
+
+#[cfg(target_os = "macos")]
+fn measure_pass8_resize_attribution() {
+    let target = GridGeometry {
+        rows: 40,
+        columns: 120,
+    };
+    let reset = GridGeometry {
+        rows: 40,
+        columns: 121,
+    };
+    let mut disabled = Vec::with_capacity(3);
+    let mut enabled = Vec::with_capacity(3);
+
+    // Alternate modes so host drift cannot systematically favor one side.
+    for block_metadata_enabled in [false, true, true, false, false, true] {
+        let p99 = collect_resize_attribution_p99(block_metadata_enabled, target, reset);
+        if block_metadata_enabled {
+            enabled.push(p99);
+        } else {
+            disabled.push(p99);
+        }
+    }
+    disabled.sort_by(f64::total_cmp);
+    enabled.sort_by(f64::total_cmp);
+    let disabled_median = disabled[1];
+    let enabled_median = enabled[1];
+    let delta_percent = if disabled_median > 0.0 {
+        ((enabled_median / disabled_median) - 1.0) * 100.0
+    } else {
+        0.0
+    };
+    println!(
+        "pass8_attribution boundary=resize_120x40 classification=MEASURED method=same_head_alternating_3x120 pass8_disabled_p99_median_us={:.3} pass8_enabled_p99_median_us={:.3} delta_percent={:.2} {}",
+        disabled_median, enabled_median, delta_percent, PERFORMANCE_CLAIM,
+    );
+}
+
+#[cfg(target_os = "macos")]
+fn collect_resize_attribution_p99(
+    block_metadata_enabled: bool,
+    target: GridGeometry,
+    reset: GridGeometry,
+) -> f64 {
+    let runtime = RuntimeHarness::start();
+    let mut client = if block_metadata_enabled {
+        runtime.connect_controller()
+    } else {
+        runtime.connect_controller_without_block_metadata()
+    };
+    converge_geometry(&mut client, reset);
+    for _ in 0..8 {
+        run_resize_sample(&mut client, target, reset, false, None);
+    }
+
+    let mut samples = Samples::with_capacity(REPETITIONS);
+    let mut client_queue_high_water = 0usize;
+    let mut runtime_queue_high_water = 0usize;
+    for _ in 0..REPETITIONS {
+        run_resize_sample(
+            &mut client,
+            target,
+            reset,
+            true,
+            Some((
+                &mut samples,
+                &mut client_queue_high_water,
+                &mut runtime_queue_high_water,
+            )),
+        );
+    }
+    let p99 = samples.stats_us().p99_us;
+    drop(client);
+    runtime.finish();
+    p99
 }
 
 #[cfg(target_os = "macos")]

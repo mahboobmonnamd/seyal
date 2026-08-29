@@ -15,6 +15,18 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: issue/715-pass8-block-metadata
+      - name: Make final-module insertion deterministic
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("scripts/pass8-finalization-patch.py")
+          text = path.read_text()
+          old = '''    count = text.count(marker)\n    if count != 1:\n        raise SystemExit(f"expected one insertion anchor in {path}, found {count}")\n    target.write_text(text.replace(marker, addition + marker, 1))\n'''
+          new = '''    count = text.count(marker)\n    if count == 0:\n        raise SystemExit(f"missing insertion anchor in {path}")\n    if count == 1:\n        target.write_text(text.replace(marker, addition + marker, 1))\n        return\n    if marker == "}\\n":\n        index = text.rfind(marker)\n        target.write_text(text[:index] + addition + text[index:])\n        return\n    raise SystemExit(f"expected one insertion anchor in {path}, found {count}")\n'''
+          if old not in text:
+              raise SystemExit("insert_before helper anchor changed")
+          path.write_text(text.replace(old, new, 1))
+          PY
       - run: python3 scripts/pass8-finalization-patch.py
       - run: |
           rustup toolchain install 1.98.0 --profile minimal --component rustfmt

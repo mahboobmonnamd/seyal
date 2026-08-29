@@ -41,6 +41,9 @@ case "$cmd" in
     runtime_failure_matrix
     bash scripts/test-macos-skeleton.sh
     ;;
+  ui-test)
+    bash scripts/test-macos-ui.sh
+    ;;
   check)
     bash scripts/check-toolchain.sh
     bash -n scripts/*.sh
@@ -131,7 +134,7 @@ case "$cmd" in
     fi
     ;;
   *)
-    echo "usage: $0 {bootstrap|bootstrap-agents|build|test|check|bench}" >&2
+    echo "usage: $0 {bootstrap|bootstrap-agents|build|test|ui-test|check|bench}" >&2
     exit 64
     ;;
 esac

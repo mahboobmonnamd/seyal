@@ -42,7 +42,7 @@ fn block_anchor_and_identity_survive_scroll_alt_screen_resize_and_detach_reattac
         .create_execution(
             CommandSpec::new("/bin/sh").args([
                 "-c",
-                "printf '\033[?1049hALT\033[?1049l'; i=0; while [ $i -lt 256 ]; do printf 'line-%s\\n' \"$i\"; i=$((i+1)); done; sleep 5",
+                r#"printf '\033[?1049hALT\033[?1049l'; i=0; while [ $i -lt 256 ]; do printf 'line-%s\n' "$i"; i=$((i+1)); done; sleep 5"#,
             ]),
             size(16, 4),
         )

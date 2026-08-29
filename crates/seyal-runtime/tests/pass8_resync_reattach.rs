@@ -101,7 +101,7 @@ fn resync_and_detach_reattach_preserve_execution_block_identity_and_anchor() {
         .create_execution(
             CommandSpec::new("/bin/sh").args([
                 "-c",
-                "printf '\033[?1049hTUI\033[?1049l'; i=0; while [ $i -lt 256 ]; do printf 'line-%s\\n' \"$i\"; i=$((i+1)); done; sleep 5",
+                r#"printf '\033[?1049hTUI\033[?1049l'; i=0; while [ $i -lt 256 ]; do printf 'line-%s\n' "$i"; i=$((i+1)); done; sleep 5"#,
             ]),
             WindowSize::new(16, 4, 0, 0).expect("size"),
         )

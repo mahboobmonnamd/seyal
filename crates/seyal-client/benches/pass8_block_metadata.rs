@@ -184,7 +184,6 @@ fn percentile_ns(sorted: &[u64], percentile: usize) -> u64 {
 #[derive(Clone, Copy)]
 struct Metrics {
     rss_kib: usize,
-    cpu_percent: f32,
     threads: usize,
     fds: usize,
 }
@@ -193,7 +192,7 @@ struct Metrics {
 fn process_metrics() -> Metrics {
     let pid = process::id();
     let output = Command::new("/bin/ps")
-        .args(["-o", "rss=,%cpu=,thcount=", "-p", &pid.to_string()])
+        .args(["-o", "rss=,thcount=", "-p", &pid.to_string()])
         .output()
         .expect("ps metrics");
     let line = String::from_utf8_lossy(&output.stdout);
@@ -202,10 +201,6 @@ fn process_metrics() -> Metrics {
         .next()
         .and_then(|value| value.parse().ok())
         .unwrap_or(0);
-    let cpu_percent = fields
-        .next()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(0.0);
     let parsed_threads = fields
         .next()
         .and_then(|value| value.parse().ok())
@@ -230,7 +225,6 @@ fn process_metrics() -> Metrics {
         .unwrap_or(0);
     Metrics {
         rss_kib,
-        cpu_percent,
         threads,
         fds,
     }

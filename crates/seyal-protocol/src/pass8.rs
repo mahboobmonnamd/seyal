@@ -262,7 +262,7 @@ mod tests {
 
     #[test]
     fn capability_and_message_allocations_match_spec007() {
-        assert_eq!(CAP_BLOCK_METADATA, 1 << 4);
-        assert_eq!(BLOCK_STATE_MESSAGE_TYPE, 20);
+        assert_eq!(CAP_BLOCK_METADATA, 1 << 5);
+        assert_eq!(BLOCK_STATE_MESSAGE_TYPE, 26);
     }
 }

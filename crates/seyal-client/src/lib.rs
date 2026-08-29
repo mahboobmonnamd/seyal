@@ -4,6 +4,7 @@
 //! authority. This crate owns only a local socket attachment, an atomically
 //! committed `DisplayCache`, and derived `seyal-render` presentation state.
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod block;
 
 // Keep the existing internal import path mechanically stable while severing the

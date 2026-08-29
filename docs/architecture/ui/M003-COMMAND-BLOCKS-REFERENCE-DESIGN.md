@@ -1,11 +1,11 @@
 # M003 Command Blocks and Pane Composer — Reference Design
 
-**Status:** Proposed design authority for ADR-009 / SPEC-008
+**Status:** Accepted design authority for ADR-009 / SPEC-008
 
 ## Source visual
 
 Approved user reference: `docs/architecture/ui/references/1-full view terminal.png`.
-Original dimensions: 1448×1085 pixels. Scale factor, native window size,
+Original dimensions: 1448×1086 pixels. Scale factor, native window size,
 appearance, font rasterization and source implementation are unknown; the image
 is treated as a product-behavior and composition reference, not byte-identical
 rendering authority.

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use seyal_terminal::{LineId, TerminalState};
+use seyal_terminal::{LineId, ShellIntegrationEvent, TerminalState};
 
 use crate::{
     ChildExit, CommandSpec, ExecError, ProjectionDamage, ReadOutcome, Readiness, SignalDisposition,
@@ -17,9 +17,10 @@ pub struct TerminalExecution {
 impl TerminalExecution {
     pub fn spawn(command: &CommandSpec, size: WindowSize) -> Result<Self, ExecError> {
         let terminal = TerminalState::new(size.columns(), size.rows())?;
-        // Capture the canonical primary-screen identity before any child bytes
-        // can be admitted. This is a narrow read-only history-identity seam for
-        // Workspace metadata; it is not a copied grid/transcript authority.
+        // Capture the canonical primary-screen logical anchor before the child
+        // can emit bytes, scroll, enter alternate screen, or otherwise mutate
+        // the projection. Pass 8 stores this immutable identity only; it does
+        // not expose mutable terminal/grid state or copy transcript content.
         let initial_primary_line_id = terminal.line_id(0);
         let endpoint = TerminalEndpoint::spawn(command, size)?;
         Ok(Self {
@@ -37,11 +38,17 @@ impl TerminalExecution {
         &self.terminal
     }
 
-    /// Canonical primary-screen logical line that existed when this execution
-    /// was created. It is immutable across scroll, resize, alternate-screen
-    /// entry/exit, projection resync, and GUI detach/reattach.
+    /// Stable canonical primary-screen logical line present when this
+    /// execution was created. It is immutable across scroll, resize,
+    /// alternate-screen transitions, projection resync, detach and reattach.
     pub fn initial_primary_line_id(&self) -> Option<LineId> {
         self.initial_primary_line_id
+    }
+
+    /// Transfers one bounded trusted shell-integration event observed by the
+    /// canonical VT parser. No terminal cells or parser state leave here.
+    pub fn take_shell_integration_event(&mut self) -> Option<ShellIntegrationEvent> {
+        self.terminal.take_shell_integration_event()
     }
 
     /// Copies the complete current canonical visible terminal state into an

@@ -76,8 +76,9 @@ struct BlockPresentation: Sendable, Identifiable {
 struct CommandBlock: Sendable, Identifiable {
     let id: String
     let command: String
+    let startLine: UInt64
+    let endLine: UInt64?
     var state: BlockPresentationState
-    var output: String
     let startedAt: Date
 }
 
@@ -106,14 +107,32 @@ final class SeyalShellState {
     final class Pane {
         let id: String
         let title: String
+        /// Runtime identity selected for this Pane's bridge. A production
+        /// split must provide this explicitly; only the initial shell
+        /// bootstrap may use the legacy first-running lookup.
+        private(set) var executionIdentity: String?
+        let allowsImplicitExecutionBootstrap: Bool
         var draft: String
         var blocks: [CommandBlock]
 
-        init(id: String, title: String, draft: String = "") {
+        init(
+            id: String,
+            title: String,
+            draft: String = "",
+            executionIdentity: String? = nil,
+            allowsImplicitExecutionBootstrap: Bool = true
+        ) {
             self.id = id
             self.title = title
+            self.executionIdentity = executionIdentity
+            self.allowsImplicitExecutionBootstrap = allowsImplicitExecutionBootstrap
             self.draft = draft
             blocks = []
+        }
+
+        func bindExecutionIdentity(_ identity: String) {
+            guard !identity.isEmpty else { return }
+            executionIdentity = identity
         }
     }
 
@@ -179,6 +198,12 @@ final class SeyalShellState {
     private(set) var attentionItems: [SeyalShellSnapshot.AttentionItem]
     private(set) var selectedAgentID: String?
     private(set) var leftPanelMode: LeftPanelMode = .workspaces
+    /// The most recent user-visible action failure. Production callers consume
+    /// this after a rejected action so the view can expose it through an
+    /// accessible native alert; it is never used to fabricate shell state.
+    private(set) var lastActionError: String?
+    private let allowsPaneSplitting: Bool
+    private let allowsTabCreation: Bool
 
     private var nextTabOrdinal = 5
     private var nextPaneOrdinal = 2
@@ -186,12 +211,16 @@ final class SeyalShellState {
     init(
         workspaces: [Workspace],
         activeWorkspaceID: String,
-        attentionItems: [SeyalShellSnapshot.AttentionItem] = []
+        attentionItems: [SeyalShellSnapshot.AttentionItem] = [],
+        allowsPaneSplitting: Bool = true,
+        allowsTabCreation: Bool = true
     ) {
         precondition(!workspaces.isEmpty, "Shell requires at least one Workspace")
         self.workspaces = workspaces
         self.activeWorkspaceID = activeWorkspaceID
         self.attentionItems = attentionItems
+        self.allowsPaneSplitting = allowsPaneSplitting
+        self.allowsTabCreation = allowsTabCreation
     }
 
     static func makePreview(includeTestAttention: Bool = false) -> SeyalShellState {
@@ -296,14 +325,20 @@ final class SeyalShellState {
                 Tab(
                     id: "tab-local",
                     title: "Terminal",
-                    pane: Pane(id: "pane-local", title: "Pane 1")
+                    pane: Pane(
+                        id: "pane-local",
+                        title: "Pane 1",
+                        allowsImplicitExecutionBootstrap: true
+                    )
                 ),
             ],
             activeTabID: "tab-local"
         )
         return SeyalShellState(
             workspaces: [workspace],
-            activeWorkspaceID: workspace.id
+            activeWorkspaceID: workspace.id,
+            allowsPaneSplitting: false,
+            allowsTabCreation: false
         )
     }
 
@@ -404,8 +439,19 @@ final class SeyalShellState {
     }
 
     @discardableResult
-    func createTab() -> Tab {
-        let pane = Pane(id: "pane-new-\(nextPaneOrdinal)", title: "Pane 1")
+    func createTab() -> Tab? {
+        guard allowsTabCreation else {
+            lastActionError =
+                "Creating tabs is unavailable until a distinct execution route is available."
+            return nil
+        }
+
+        lastActionError = nil
+        let pane = Pane(
+            id: "pane-new-\(nextPaneOrdinal)",
+            title: "Pane 1",
+            allowsImplicitExecutionBootstrap: false
+        )
         nextPaneOrdinal += 1
         let tab = Tab(
             id: "tab-new-\(nextTabOrdinal)",
@@ -435,18 +481,28 @@ final class SeyalShellState {
     }
 
     @discardableResult
-    func splitFocusedPane(axis: SplitAxis) -> Pane {
+    func splitFocusedPane(axis: SplitAxis) -> Pane? {
         splitPane(id: activeTab.focusedPaneID, axis: axis)
     }
 
     @discardableResult
-    func splitPane(id paneID: String, axis: SplitAxis) -> Pane {
+    func splitPane(id paneID: String, axis: SplitAxis) -> Pane? {
         let tab = activeTab
         guard tab.panes[paneID] != nil else {
             preconditionFailure("Cannot split a missing shell Pane")
         }
+        guard allowsPaneSplitting else {
+            lastActionError =
+                "Splitting panes is unavailable until a distinct execution route is available."
+            return nil
+        }
+        lastActionError = nil
 
-        let pane = Pane(id: "pane-new-\(nextPaneOrdinal)", title: "Pane \(tab.paneCount + 1)")
+        let pane = Pane(
+            id: "pane-new-\(nextPaneOrdinal)",
+            title: "Pane \(tab.paneCount + 1)",
+            allowsImplicitExecutionBootstrap: false
+        )
         nextPaneOrdinal += 1
         tab.panes[pane.id] = pane
         tab.root = replacingPane(
@@ -489,20 +545,41 @@ final class SeyalShellState {
         pane.draft = draft
     }
 
-    func appendCommand(_ command: String, paneID: String) -> String? {
-        guard let pane = activeTab.panes[paneID], !command.isEmpty else { return nil }
-        if let index = pane.blocks.indices.last, pane.blocks[index].state == .running {
-            pane.blocks[index].state = .completed
-        }
-        let id = "block-\(paneID)-\(pane.blocks.count + 1)"
-        pane.blocks.append(CommandBlock(id: id, command: command, state: .running, output: "", startedAt: Date()))
-        pane.draft = ""
-        return id
+    func bindExecutionIdentity(_ identity: String, paneID: String) {
+        guard let pane = activeTab.panes[paneID], pane.executionIdentity == nil else { return }
+        pane.bindExecutionIdentity(identity)
     }
 
-    func updateCommandOutput(_ output: String, blockID: String, paneID: String) {
-        guard let pane = activeTab.panes[paneID], let index = pane.blocks.firstIndex(where: { $0.id == blockID }) else { return }
-        pane.blocks[index].output = output
+    func applyRuntimeBlocks(_ records: [NativeBlockRecord], paneID: String) {
+        guard let pane = activeTab.panes[paneID] else { return }
+        let existing = Dictionary(uniqueKeysWithValues: pane.blocks.map { ($0.id, $0.startedAt) })
+        pane.blocks = records.map { record in
+            CommandBlock(
+                id: String(record.id),
+                command: record.command,
+                startLine: record.startLine,
+                endLine: record.endLine,
+                state: record.state == .running
+                    ? .running
+                    : (record.exitStatus == 0 ? .completed : .failed),
+                startedAt: existing[String(record.id)] ?? Date()
+            )
+        }
+    }
+
+    func appendCommand(_ command: String, paneID: String) -> String? {
+        guard let pane = activeTab.panes[paneID], !command.isEmpty else { return nil }
+        let id = "block-\(paneID)-\(pane.blocks.count + 1)"
+        pane.blocks.append(CommandBlock(
+            id: id,
+            command: command,
+            startLine: 0,
+            endLine: nil,
+            state: .running,
+            startedAt: Date()
+        ))
+        pane.draft = ""
+        return id
     }
 
     func openAttentionItem(id: String) {

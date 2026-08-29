@@ -1,11 +1,13 @@
 const MAX_PARAMS: usize = 32;
 const MAX_UTF8: usize = 4;
+const MAX_OSC_BYTES: usize = 4096;
 
 pub(crate) trait Actions {
     fn print(&mut self, character: char);
     fn execute(&mut self, byte: u8);
     fn csi(&mut self, params: &[u16], private: Option<u8>, ignored: bool, final_byte: u8);
     fn esc(&mut self, final_byte: u8, had_intermediate: bool);
+    fn osc(&mut self, bytes: &[u8], truncated: bool);
     fn deferred_string(&mut self);
     fn malformed(&mut self);
 }
@@ -34,6 +36,9 @@ pub(crate) struct Parser {
     utf8_len: u8,
     utf8_needed: u8,
     putback: Option<u8>,
+    osc: [u8; MAX_OSC_BYTES],
+    osc_len: usize,
+    osc_truncated: bool,
 }
 
 impl Default for Parser {
@@ -56,6 +61,9 @@ impl Parser {
             utf8_len: 0,
             utf8_needed: 0,
             putback: None,
+            osc: [0; MAX_OSC_BYTES],
+            osc_len: 0,
+            osc_truncated: false,
         }
     }
 
@@ -144,6 +152,7 @@ impl Parser {
             }
             b']' => {
                 self.reset_sequence();
+                self.reset_osc();
                 self.state = State::Osc;
             }
             b'P' | b'X' | b'^' | b'_' => {
@@ -229,22 +238,24 @@ impl Parser {
     fn osc(&mut self, byte: u8, actions: &mut impl Actions) {
         match byte {
             0x07 => {
-                actions.deferred_string();
+                actions.osc(&self.osc[..self.osc_len], self.osc_truncated);
                 self.state = State::Ground;
+                self.reset_osc();
             }
             0x18 | 0x1a => {
                 self.state = State::Ground;
                 actions.execute(byte);
             }
             0x1b => self.state = State::OscEscape,
-            _ => {}
+            _ => self.push_osc(byte),
         }
     }
 
     fn osc_escape(&mut self, byte: u8, actions: &mut impl Actions) {
         if byte == b'\\' {
-            actions.deferred_string();
+            actions.osc(&self.osc[..self.osc_len], self.osc_truncated);
             self.state = State::Ground;
+            self.reset_osc();
         } else {
             self.state = State::Escape;
             self.reset_sequence();
@@ -279,6 +290,20 @@ impl Parser {
         self.utf8[0] = lead;
         self.utf8_len = 1;
         self.utf8_needed = needed;
+    }
+
+    fn reset_osc(&mut self) {
+        self.osc_len = 0;
+        self.osc_truncated = false;
+    }
+
+    fn push_osc(&mut self, byte: u8) {
+        if self.osc_len < MAX_OSC_BYTES {
+            self.osc[self.osc_len] = byte;
+            self.osc_len += 1;
+        } else {
+            self.osc_truncated = true;
+        }
     }
 
     fn finish_utf8(&mut self, actions: &mut impl Actions) {

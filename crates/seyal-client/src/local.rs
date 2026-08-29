@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     io::{Read, Write},
     net::Shutdown,
     os::{fd::AsRawFd, unix::net::UnixStream},
@@ -21,17 +21,19 @@ use seyal_runtime::{
     local_ipc::{
         discovery::{control_socket_path, darwin_user_runtime_dir, ensure_verified_runtime_dir},
         framing::{
-            Attach, Attached, CAP_BINARY_DISPLAY, CAP_CORRELATED_RESIZE, CAP_SEMANTIC_TERMINAL_KEY,
-            ClientHello, ErrorCode, ErrorMessage, ExecutionList, FrameHeader, HEADER_LEN, InputRef,
-            Lifecycle, LifecycleMessage, MAX_FRAME_PAYLOAD, MAX_INPUT_BYTES, MessageType,
-            ResizeRequest, ResizeResult, ResizeResultCode, Resync, Role, ServerHello, TerminalKey,
+            Attach, Attached, BlockTimeline, CAP_BINARY_DISPLAY, CAP_COMMAND_BLOCKS,
+            CAP_CORRELATED_RESIZE, CAP_SEMANTIC_TERMINAL_KEY, ClientHello, ComposerCommandRef,
+            ComposerResult, ComposerResultCode, ErrorCode, ErrorMessage, ExecutionList,
+            FrameHeader, HEADER_LEN, HistoryRangeRequest, HistoryRangeSnapshot, InputRef,
+            Lifecycle, MAX_FRAME_PAYLOAD, MAX_INPUT_BYTES, MessageType, ResizeRequest,
+            ResizeResult, ResizeResultCode, Resync, Role, ServerHello, TerminalKey,
             TerminalKeyKind, TerminalKeyModifiers, encode_frame,
         },
     },
     pass8::{BLOCK_STATE_MESSAGE_TYPE, BlockLifecycle, BlockState, CAP_BLOCK_METADATA},
 };
 
-use crate::block::{BlockCache, is_epoch_quarantined, quarantine_epoch};
+use crate::block::{BlockApply, BlockCache, is_epoch_quarantined, quarantine_epoch};
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(2);
 const READ_CHUNK_BYTES: usize = 64 * 1024;
@@ -262,6 +264,8 @@ enum OutboundKind {
         geometry: GridGeometry,
     },
     Resync,
+    ComposerCommand,
+    HistoryRangeRequest,
 }
 
 #[derive(Debug)]
@@ -368,9 +372,34 @@ pub struct LocalDisplayClient {
     resync_needed: bool,
     input_failure: Option<InputAdmissionFailure>,
     resize_failure: Option<ResizeFailure>,
+    block_timeline: BlockTimeline,
+    command_blocks_supported: bool,
+    last_composer_result: Option<ComposerResult>,
+    pending_composer_requests: std::collections::HashSet<u64>,
+    next_composer_request_id: u64,
+    /// Responses are correlated by both the Runtime Block and request fence;
+    /// anchor coordinates are retained only in the outstanding request value
+    /// for validation and never used as a response lookup key.
+    history_ranges: HashMap<(u64, u64), HistoryRangeSnapshot>,
+    history_requests: HashMap<u64, (u64, u64, u64)>,
+    next_history_request_id: u64,
 }
 
 impl LocalDisplayClient {
+    /// Attach to one explicitly selected execution. Native panes must use
+    /// this entry point so two panes cannot accidentally share the first
+    /// running execution or a process-global client.
+    pub fn connect_execution_id(
+        execution_id: ExecutionId,
+        role: Role,
+    ) -> Result<Self, ClientError> {
+        let runtime_dir = darwin_user_runtime_dir().map_err(|_| ClientError::RuntimeDiscovery)?;
+        ensure_verified_runtime_dir(&runtime_dir).map_err(|_| ClientError::RuntimeDiscovery)?;
+        let socket_path =
+            control_socket_path(&runtime_dir).map_err(|_| ClientError::RuntimeDiscovery)?;
+        Self::connect_execution(&socket_path, execution_id, role)
+    }
+
     /// Connect to the verified per-user Runtime and attach as Controller to the
     /// first running execution. Pass 7 makes the permanent native surface the
     /// interactive production terminal; an existing controller is surfaced as
@@ -382,7 +411,7 @@ impl LocalDisplayClient {
             control_socket_path(&runtime_dir).map_err(|_| ClientError::RuntimeDiscovery)?;
 
         let mut stream = connect_stream(&socket_path)?;
-        let mut server_hello = hello(&mut stream, true, true)?;
+        let mut hello = hello(&mut stream, true, true)?;
         send_control(&mut stream, MessageType::ListExecutions, &[])?;
         let (kind, payload) = read_blocking_frame(&mut stream)?;
         if kind != MessageType::ExecutionList {
@@ -396,18 +425,19 @@ impl LocalDisplayClient {
             .map(|entry| entry.execution_id)
             .ok_or(ClientError::NoRunningExecution)?;
 
-        if is_epoch_quarantined(server_hello.runtime_id, execution_id) {
+        if is_epoch_quarantined(hello.runtime_id, execution_id) {
             drop(stream);
             stream = connect_stream(&socket_path)?;
-            server_hello = hello(&mut stream, true, false)?;
+            hello = hello(&mut stream, true, false)?;
         }
-        let block_metadata_negotiated = server_hello.server_capabilities & CAP_BLOCK_METADATA != 0
-            && !is_epoch_quarantined(server_hello.runtime_id, execution_id);
+        let block_metadata_negotiated = hello.server_capabilities & CAP_BLOCK_METADATA != 0
+            && !is_epoch_quarantined(hello.runtime_id, execution_id);
         Self::finish_attach(
             stream,
             execution_id,
             Role::Controller,
-            server_hello.runtime_id,
+            hello.server_capabilities & CAP_COMMAND_BLOCKS != 0,
+            hello.runtime_id,
             block_metadata_negotiated,
         )
     }
@@ -418,19 +448,20 @@ impl LocalDisplayClient {
         role: Role,
     ) -> Result<Self, ClientError> {
         let mut stream = connect_stream(socket_path)?;
-        let mut server_hello = hello(&mut stream, role == Role::Controller, true)?;
-        if is_epoch_quarantined(server_hello.runtime_id, execution_id) {
+        let mut hello = hello(&mut stream, role == Role::Controller, true)?;
+        if is_epoch_quarantined(hello.runtime_id, execution_id) {
             drop(stream);
             stream = connect_stream(socket_path)?;
-            server_hello = hello(&mut stream, role == Role::Controller, false)?;
+            hello = hello(&mut stream, role == Role::Controller, false)?;
         }
-        let block_metadata_negotiated = server_hello.server_capabilities & CAP_BLOCK_METADATA != 0
-            && !is_epoch_quarantined(server_hello.runtime_id, execution_id);
+        let block_metadata_negotiated = hello.server_capabilities & CAP_BLOCK_METADATA != 0
+            && !is_epoch_quarantined(hello.runtime_id, execution_id);
         Self::finish_attach(
             stream,
             execution_id,
             role,
-            server_hello.runtime_id,
+            hello.server_capabilities & CAP_COMMAND_BLOCKS != 0,
+            hello.runtime_id,
             block_metadata_negotiated,
         )
     }
@@ -439,6 +470,7 @@ impl LocalDisplayClient {
         mut stream: UnixStream,
         execution_id: ExecutionId,
         role: Role,
+        command_blocks_supported: bool,
         runtime_id: u128,
         block_metadata_negotiated: bool,
     ) -> Result<Self, ClientError> {
@@ -528,6 +560,17 @@ impl LocalDisplayClient {
             resync_needed: false,
             input_failure: None,
             resize_failure: None,
+            block_timeline: BlockTimeline {
+                revision: 0,
+                records: Vec::new(),
+            },
+            command_blocks_supported,
+            last_composer_result: None,
+            pending_composer_requests: std::collections::HashSet::new(),
+            next_composer_request_id: 1,
+            history_ranges: HashMap::new(),
+            history_requests: HashMap::new(),
+            next_history_request_id: 1,
         })
     }
 
@@ -539,6 +582,8 @@ impl LocalDisplayClient {
         self.execution_id
     }
 
+    /// Disposable Pass 8 execution-level metadata. This never owns terminal
+    /// cells, PTY state, or the Pass 7.1 command transcript.
     pub fn block_state(&self) -> Option<BlockState> {
         self.block_cache.visible()
     }
@@ -565,6 +610,117 @@ impl LocalDisplayClient {
 
     pub fn resize_failure(&self) -> Option<ResizeFailure> {
         self.resize_failure
+    }
+
+    /// Read-only, bounded Runtime metadata. The terminal display cache remains
+    /// independent and authoritative for cells/pixels.
+    pub fn block_timeline(&self) -> &BlockTimeline {
+        &self.block_timeline
+    }
+
+    pub fn last_composer_result(&self) -> Option<ComposerResult> {
+        self.last_composer_result
+    }
+
+    pub fn next_composer_request_id(&self) -> u64 {
+        self.next_composer_request_id
+    }
+
+    pub fn history_range_for(
+        &self,
+        block_id: u64,
+        request_id: u64,
+    ) -> Option<&HistoryRangeSnapshot> {
+        self.history_ranges.get(&(block_id, request_id))
+    }
+
+    /// Drops one copied history response after the native consumer has
+    /// materialized its rows. The block/request pair is required so an older
+    /// overlapping range can never consume a newer response.
+    pub fn consume_history_range(&mut self, block_id: u64, request_id: u64) -> bool {
+        let removed = self
+            .history_ranges
+            .remove(&(block_id, request_id))
+            .is_some();
+        if removed {
+            self.history_requests.remove(&request_id);
+        }
+        removed
+    }
+
+    pub fn request_history_range(
+        &mut self,
+        block_id: u64,
+        start_line: u64,
+        end_line: u64,
+        max_lines: u16,
+        max_cells: u32,
+    ) -> Result<(), ClientError> {
+        self.require_controller()?;
+        if block_id == 0 || start_line == 0 || end_line < start_line {
+            return Err(ClientError::Protocol);
+        }
+        let request_id = self.next_history_request_id;
+        self.next_history_request_id = request_id.checked_add(1).unwrap_or(1);
+        let payload = HistoryRangeRequest {
+            attachment_id: self.attachment_id,
+            request_id,
+            block_id,
+            start_line,
+            end_line,
+            max_lines,
+            max_cells,
+        }
+        .encode();
+        let frame = encode_frame(MessageType::HistoryRangeRequest, &payload);
+        self.admit_frame(frame, OutboundKind::HistoryRangeRequest)?;
+        self.history_requests
+            .insert(request_id, (block_id, start_line, end_line));
+        self.flush_control_write()
+    }
+
+    pub fn next_history_request_id(&self) -> u64 {
+        self.next_history_request_id
+    }
+
+    /// An authoritative timeline replacement evicts history projections for
+    /// blocks no longer visible. Late responses for those request IDs are
+    /// ignored by the request table and cannot repopulate the cache.
+    pub fn purge_history_for_blocks(
+        &mut self,
+        retained_block_ids: &std::collections::HashSet<u64>,
+    ) {
+        self.history_ranges
+            .retain(|(block_id, _), _| retained_block_ids.contains(block_id));
+        self.history_requests
+            .retain(|_, (block_id, _, _)| retained_block_ids.contains(block_id));
+    }
+
+    pub fn submit_composer_command(&mut self, command: &str) -> Result<(), ClientError> {
+        self.require_controller()?;
+        if !self.command_blocks_supported {
+            return Err(ClientError::UnsupportedInteractiveCapability);
+        }
+        let request_id = self.next_composer_request_id;
+        self.next_composer_request_id = request_id.checked_add(1).unwrap_or(1);
+        let payload = ComposerCommandRef {
+            attachment_id: self.attachment_id,
+            request_id,
+            command,
+        }
+        .encode();
+        let frame = encode_frame(MessageType::ComposerCommand, &payload);
+        if let Err(error) = self.admit_frame(frame, OutboundKind::ComposerCommand) {
+            self.input_failure = Some(InputAdmissionFailure::ClientBackpressure);
+            return Err(error);
+        }
+        self.pending_composer_requests.insert(request_id);
+        self.input_failure = None;
+        let result = self.flush_control_write();
+        if result.is_err() {
+            self.pending_composer_requests.remove(&request_id);
+        }
+        result
     }
 
     pub fn outbound_wire_bytes(&self) -> usize {
@@ -765,6 +921,7 @@ impl LocalDisplayClient {
 
     pub fn poll_prepare(&mut self) -> Result<Option<PreparationResult>, ClientError> {
         let mut committed_any = false;
+        let mut metadata_changed = false;
         let mut damage = RowDamage::none();
         let mut full_invalidation = false;
         let mut parsed_frames = 0usize;
@@ -779,14 +936,20 @@ impl LocalDisplayClient {
                 let frame = &self.buffered[frame_start..frame_end];
                 let header = FrameHeader::decode(frame).map_err(|_| ClientError::Protocol)?;
 
+                // SPEC-007 type 20 is Runtime→client metadata, not a C→Runtime
+                // control message. Parse it before the control MessageType enum.
                 if header.message_type == BLOCK_STATE_MESSAGE_TYPE {
                     if !self.block_metadata_negotiated {
                         return Err(self.quarantine_block_metadata());
                     }
-                    let incoming = BlockState::decode(&frame[HEADER_LEN..])
-                        .map_err(|_| self.quarantine_block_metadata())?;
-                    if self.block_cache.apply(self.execution_id, incoming).is_err() {
-                        return Err(self.quarantine_block_metadata());
+                    let incoming = match BlockState::decode(&frame[HEADER_LEN..]) {
+                        Ok(value) => value,
+                        Err(_) => return Err(self.quarantine_block_metadata()),
+                    };
+                    match self.block_cache.apply(self.execution_id, incoming) {
+                        Ok(BlockApply::Applied) => metadata_changed = true,
+                        Ok(BlockApply::Duplicate | BlockApply::Stale) => {}
+                        Err(_) => return Err(self.quarantine_block_metadata()),
                     }
                     self.read_offset = frame_end;
                     parsed_frames += 1;
@@ -795,6 +958,7 @@ impl LocalDisplayClient {
 
                 let message_type =
                     MessageType::from_u16(header.message_type).ok_or(ClientError::Protocol)?;
+
                 match message_type {
                     MessageType::DisplaySnapshot | MessageType::DisplayDelta => {
                         let chunk = decode_chunk(frame).map_err(|_| ClientError::Display)?;
@@ -810,13 +974,64 @@ impl LocalDisplayClient {
                         })?;
                         self.accept_resize_result(result)?;
                     }
+                    MessageType::BlockTimeline => {
+                        let timeline = BlockTimeline::decode(&frame[HEADER_LEN..])
+                            .map_err(|_| ClientError::Protocol)?;
+                        if timeline.revision >= self.block_timeline.revision {
+                            metadata_changed = timeline.revision > self.block_timeline.revision;
+                            let retained =
+                                timeline.records.iter().map(|record| record.id).collect();
+                            self.purge_history_for_blocks(&retained);
+                            self.block_timeline = timeline;
+                        }
+                    }
+                    MessageType::ComposerResult => {
+                        let result = ComposerResult::decode(&frame[HEADER_LEN..])
+                            .map_err(|_| ClientError::Protocol)?;
+                        if validate_composer_result(
+                            result,
+                            self.attachment_id,
+                            &self.pending_composer_requests,
+                        ) {
+                            self.pending_composer_requests.remove(&result.request_id);
+                            self.last_composer_result = Some(result);
+                        }
+                    }
+                    MessageType::HistoryRangeSnapshot => {
+                        let snapshot = HistoryRangeSnapshot::decode(&frame[HEADER_LEN..])
+                            .map_err(|_| ClientError::Protocol)?;
+                        let Some((expected_block, _start, _end)) =
+                            self.history_requests.get(&snapshot.request_id).copied()
+                        else {
+                            continue;
+                        };
+                        if snapshot.block_id == 0 || snapshot.request_id == 0 {
+                            continue;
+                        }
+                        if snapshot.block_id != expected_block {
+                            continue;
+                        }
+                        let key = (snapshot.block_id, snapshot.request_id);
+                        if self
+                            .history_ranges
+                            .get(&key)
+                            .is_none_or(|old| old.revision <= snapshot.revision)
+                        {
+                            if self.history_ranges.len() >= 32
+                                && let Some(key) = self.history_ranges.keys().next().copied()
+                            {
+                                self.history_ranges.remove(&key);
+                            }
+                            self.history_ranges.insert(key, snapshot);
+                        }
+                    }
                     MessageType::Error => {
                         let payload = &frame[HEADER_LEN..];
                         let error =
                             ErrorMessage::decode(payload).map_err(|_| ClientError::Protocol)?;
                         // Runtime backpressure is a per-action rejection, not
-                        // a broken transport. Consume the error and preserve the
-                        // connection so the native surface can expose the
+                        // a broken transport. Consume the error and preserve
+                        // the connection so the native surface can expose the
                         // bounded, retryable failure without dropping later
                         // FIFO work. Other Error frames retain their fatal
                         // protocol/authority semantics.
@@ -825,7 +1040,10 @@ impl LocalDisplayClient {
                         }
                     }
                     MessageType::Lifecycle => {
-                        let lifecycle = LifecycleMessage::decode(&frame[HEADER_LEN..])
+                        let lifecycle =
+                            seyal_runtime::local_ipc::framing::LifecycleMessage::decode(
+                                &frame[HEADER_LEN..],
+                            )
                             .map_err(|_| ClientError::Protocol)?;
                         if lifecycle.execution_id != self.execution_id {
                             return Err(ClientError::Protocol);
@@ -880,8 +1098,12 @@ impl LocalDisplayClient {
         }
 
         self.compact_buffer();
-        if !committed_any {
+        if !committed_any && !metadata_changed {
             return Ok(None);
+        }
+
+        if !committed_any {
+            return Ok(Some(self.last_preparation));
         }
 
         let result = prepare_cache(&mut self.prepared, &self.cache, damage, full_invalidation)?;
@@ -1211,6 +1433,27 @@ fn classify_server_error(
     Err(ClientError::Server(error.error_code))
 }
 
+/// Accepts a ComposerResult only when it belongs to this attachment and to a
+/// command submitted by this client. Invalid results are quarantined at the
+/// transport boundary so an observer/cross-attachment frame cannot settle a
+/// native draft or manufacture a Block in the UI.
+fn validate_composer_result(
+    result: ComposerResult,
+    attachment_id: AttachmentId,
+    pending_requests: &std::collections::HashSet<u64>,
+) -> bool {
+    result.attachment_id == attachment_id
+        && result.request_id != 0
+        && pending_requests.contains(&result.request_id)
+        && match result.code {
+            ComposerResultCode::Accepted => result.block_id != 0,
+            ComposerResultCode::Busy
+            | ComposerResultCode::Unsupported
+            | ComposerResultCode::Backpressure
+            | ComposerResultCode::Invalid => result.block_id == 0,
+        }
+}
+
 struct RuntimeCells<'a>(&'a [DisplayCell]);
 
 impl CellSource for RuntimeCells<'_> {
@@ -1287,15 +1530,17 @@ fn hello(
     interactive: bool,
     request_block_metadata: bool,
 ) -> Result<ServerHello, ClientError> {
+    let client_capabilities = CAP_COMMAND_BLOCKS
+        | if request_block_metadata {
+            CAP_BLOCK_METADATA
+        } else {
+            0
+        };
     send_control(
         stream,
         MessageType::ClientHello,
         &ClientHello {
-            client_capabilities: if request_block_metadata {
-                CAP_BLOCK_METADATA
-            } else {
-                0
-            },
+            client_capabilities,
         }
         .encode(),
     )?;
@@ -1582,15 +1827,6 @@ mod tests {
     }
 
     #[test]
-    fn resize_mutation_is_suppressed_for_committed_or_newest_pending_geometry() {
-        let current = geometry(24, 80);
-        let desired = geometry(30, 100);
-        assert!(!resize_needs_mutation(current, current, None));
-        assert!(!resize_needs_mutation(desired, current, Some(desired)));
-        assert!(resize_needs_mutation(desired, current, None));
-    }
-
-    #[test]
     fn invalid_terminal_key_requests_fail_before_wire_encoding() {
         assert!(!valid_terminal_key_request(
             TerminalKeyKind::ControlAscii,
@@ -1631,5 +1867,70 @@ mod tests {
             }),
             Err(ClientError::Server(ErrorCode::InvalidExecution as u16))
         );
+    }
+
+    #[test]
+    fn composer_result_quarantines_cross_attachment_and_unknown_requests() {
+        let attachment = AttachmentId::from_bytes([7; 16]);
+        let other_attachment = AttachmentId::from_bytes([8; 16]);
+        let mut pending = std::collections::HashSet::new();
+        pending.insert(41);
+
+        let accepted = ComposerResult {
+            attachment_id: attachment,
+            code: ComposerResultCode::Accepted,
+            block_id: 99,
+            request_id: 41,
+        };
+        assert!(validate_composer_result(accepted, attachment, &pending));
+        assert!(!validate_composer_result(
+            accepted,
+            other_attachment,
+            &pending
+        ));
+        assert!(!validate_composer_result(
+            ComposerResult {
+                request_id: 42,
+                ..accepted
+            },
+            attachment,
+            &pending
+        ));
+    }
+
+    #[test]
+    fn composer_result_requires_code_specific_block_identity() {
+        let attachment = AttachmentId::from_bytes([9; 16]);
+        let pending = std::collections::HashSet::from([5]);
+        assert!(!validate_composer_result(
+            ComposerResult {
+                attachment_id: attachment,
+                code: ComposerResultCode::Accepted,
+                block_id: 0,
+                request_id: 5,
+            },
+            attachment,
+            &pending
+        ));
+        assert!(!validate_composer_result(
+            ComposerResult {
+                attachment_id: attachment,
+                code: ComposerResultCode::Busy,
+                block_id: 77,
+                request_id: 5,
+            },
+            attachment,
+            &pending
+        ));
+        assert!(validate_composer_result(
+            ComposerResult {
+                attachment_id: attachment,
+                code: ComposerResultCode::Busy,
+                block_id: 0,
+                request_id: 5,
+            },
+            attachment,
+            &pending
+        ));
     }
 }

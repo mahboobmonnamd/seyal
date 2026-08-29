@@ -5,6 +5,8 @@
 //! continues to own its PTY, primary child and sole canonical TerminalState.
 
 mod block;
+#[cfg(target_os = "macos")]
+mod blocks;
 mod capability;
 pub mod display;
 mod error;

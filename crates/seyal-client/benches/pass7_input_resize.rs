@@ -185,18 +185,86 @@ impl RuntimeHarness {
         .expect("controller attach")
     }
 
-    fn connect_controller_without_block_metadata(&self) -> LocalDisplayClient {
-        LocalDisplayClient::connect_execution_without_block_metadata(
-            &self.socket_path,
-            self.execution_id,
-            Role::Controller,
-        )
-        .expect("controller attach without Pass 8 metadata")
+    fn finish(self) {
+        let _ = self.stop.send(());
+        self.join.join().expect("Runtime benchmark thread");
+    }
+}
+
+#[cfg(target_os = "macos")]
+struct PairedRuntimeHarness {
+    socket_path: std::path::PathBuf,
+    disabled_execution_id: ExecutionId,
+    enabled_execution_id: ExecutionId,
+    stop: mpsc::Sender<()>,
+    join: thread::JoinHandle<()>,
+}
+
+#[cfg(target_os = "macos")]
+impl PairedRuntimeHarness {
+    fn start() -> Self {
+        let suffix = HARNESS_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (stop_tx, stop_rx) = mpsc::channel();
+        let join = thread::spawn(move || {
+            let mut config = RuntimeConfig::m001().expect("M001 Runtime config");
+            config.singleton_path =
+                std::env::temp_dir().join(format!("s7bp-{suffix:x}-{}.lock", process::id()));
+            let runtime_dir =
+                std::env::temp_dir().join(format!("s7bpd-{suffix:x}-{}", process::id()));
+            config.local_ipc = LocalIpcMode::Enabled {
+                runtime_dir_override: Some(runtime_dir),
+            };
+            config.graceful_termination = Duration::from_millis(50);
+            config.forced_reap = Duration::from_millis(250);
+            config.final_drain = Duration::from_millis(100);
+
+            let mut runtime = Runtime::new(config).expect("Runtime");
+            let disabled_execution_id = runtime
+                .create_execution(
+                    CommandSpec::new("/bin/cat"),
+                    WindowSize::cells(121, 40).expect("initial geometry"),
+                )
+                .expect("disabled execution");
+            let enabled_execution_id = runtime
+                .create_execution(
+                    CommandSpec::new("/bin/cat"),
+                    WindowSize::cells(121, 40).expect("initial geometry"),
+                )
+                .expect("enabled execution");
+            let socket_path = runtime
+                .local_ipc_socket_path()
+                .expect("local IPC socket")
+                .to_path_buf();
+            ready_tx
+                .send((socket_path, disabled_execution_id, enabled_execution_id))
+                .expect("paired benchmark ready receiver");
+
+            while stop_rx.try_recv().is_err() {
+                runtime
+                    .poll_once(Some(Duration::from_secs(1)))
+                    .expect("Runtime poll");
+            }
+            runtime.begin_shutdown().expect("begin shutdown");
+            runtime
+                .run_until_empty(Instant::now() + Duration::from_secs(3))
+                .expect("Runtime shutdown");
+        });
+        let (socket_path, disabled_execution_id, enabled_execution_id) = ready_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("paired Runtime ready");
+        Self {
+            socket_path,
+            disabled_execution_id,
+            enabled_execution_id,
+            stop: stop_tx,
+            join,
+        }
     }
 
     fn finish(self) {
         let _ = self.stop.send(());
-        self.join.join().expect("Runtime benchmark thread");
+        self.join.join().expect("paired Runtime benchmark thread");
     }
 }
 
@@ -478,10 +546,23 @@ fn measure_pass8_resize_attribution() {
         columns: 121,
     };
 
-    let disabled_runtime = RuntimeHarness::start();
-    let enabled_runtime = RuntimeHarness::start();
-    let mut disabled_client = disabled_runtime.connect_controller_without_block_metadata();
-    let mut enabled_client = enabled_runtime.connect_controller();
+    // Keep both cohorts on the same Runtime reactor.  Separate Runtime
+    // threads can receive materially different scheduler/thermal treatment,
+    // which would make this an attribution experiment for Runtime placement
+    // rather than Pass 8 negotiation.
+    let runtime = PairedRuntimeHarness::start();
+    let mut disabled_client = LocalDisplayClient::connect_execution_without_block_metadata(
+        &runtime.socket_path,
+        runtime.disabled_execution_id,
+        Role::Controller,
+    )
+    .expect("controller attach without Pass 8 metadata");
+    let mut enabled_client = LocalDisplayClient::connect_execution(
+        &runtime.socket_path,
+        runtime.enabled_execution_id,
+        Role::Controller,
+    )
+    .expect("controller attach");
     converge_geometry(&mut disabled_client, reset);
     converge_geometry(&mut enabled_client, reset);
 
@@ -560,8 +641,7 @@ fn measure_pass8_resize_attribution() {
 
     drop(disabled_client);
     drop(enabled_client);
-    disabled_runtime.finish();
-    enabled_runtime.finish();
+    runtime.finish();
 }
 
 #[cfg(target_os = "macos")]

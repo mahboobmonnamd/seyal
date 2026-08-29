@@ -1,0 +1,30 @@
+name: Pass 8 Finalization Helper
+
+on:
+  push:
+    branches:
+      - issue/715-pass8-block-metadata
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: issue/715-pass8-block-metadata
+      - run: python3 scripts/pass8-finalization-patch.py
+      - run: |
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt
+          cargo +1.98.0 fmt --all
+      - run: git diff --check
+      - name: Commit finalization coverage
+        run: |
+          if git diff --quiet; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/seyal-runtime/src/runtime/local.rs crates/seyal-runtime/tests/pass8_block_failures.rs crates/seyal-client/src/pass8_benchmark.rs crates/seyal-runtime/src/pass8_benchmark.rs crates/seyal-client/benches/pass8_block_metadata.rs crates/seyal-protocol/tests/pass8_fuzz_smoke.rs fuzz/fuzz_targets/pass8_block_state_decode.rs
+          git commit -m "Pass 8: complete fail-closed finalization coverage and format"
+          git push origin HEAD:issue/715-pass8-block-metadata

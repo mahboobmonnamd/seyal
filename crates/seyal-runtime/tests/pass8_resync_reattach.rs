@@ -27,10 +27,9 @@ fn config() -> RuntimeConfig {
         std::process::id()
     ));
     config.local_ipc = LocalIpcMode::Enabled {
-        runtime_dir_override: Some(std::env::temp_dir().join(format!(
-            "s8rs-{:x}-{nonce:x}",
-            std::process::id()
-        ))),
+        runtime_dir_override: Some(
+            std::env::temp_dir().join(format!("s8rs-{:x}-{nonce:x}", std::process::id())),
+        ),
     };
     config
 }

@@ -80,11 +80,11 @@ Reference-consumer evidence for this integration is recorded in `docs/engineerin
 
 ## Approved MCP/tool matrix
 
-| Tool | Claude Code | Codex | GitHub Copilot CLI | Seyal use |
-| --- | --- | --- | --- | --- |
-| GitHub MCP | Seyal wrapper around official server | Seyal wrapper around official server | Built into Copilot CLI; do not add a duplicate | Issues, PRs, repository and CI workflow. Credentials remain user-local/runtime-only. |
-| Apple Xcode MCP (`xcrun mcpbridge`) | Configure when available | Configure when available | Configure when available | First-party Xcode project/build/tool integration. |
-| XcodeBuildMCP | Configure pinned version when `npx` exists | Configure pinned version when `npx` exists | Configure pinned version when `npx` exists | Native macOS build/test/run, screenshots, UI hierarchy and debugging needed by Seyal UI implementation and validation. |
+| Tool | Claude Code | Codex | GitHub Copilot CLI | Cursor | Seyal use |
+| --- | --- | --- | --- | --- | --- |
+| GitHub MCP | Seyal wrapper around official server | Seyal wrapper around official server | Built into Copilot CLI; do not add a duplicate | Seyal wrapper around official server | Issues, PRs, repository and CI workflow. Credentials remain user-local/runtime-only. |
+| Apple Xcode MCP (`xcrun mcpbridge`) | Configure when available | Configure when available | Configure when available | Configure when available | First-party Xcode project/build/tool integration. |
+| XcodeBuildMCP | Configure pinned version when `npx` exists | Configure pinned version when `npx` exists | Configure pinned version when `npx` exists | Configure pinned version when `npx` exists | Native macOS build/test/run, screenshots, UI hierarchy and debugging needed by Seyal UI implementation and validation. |
 
 Browser automation, generic web/front-end design helpers and third-party Apple documentation indexes are not part of Seyal's development bootstrap.
 
@@ -104,7 +104,7 @@ Then, when local coding-agent/MCP provisioning is wanted, run:
 make bootstrap-agents
 ```
 
-The agent bootstrap materializes the reviewed AI-SDLC pin and configures the approved project-required MCPs for each supported coding-agent CLI that is already installed. It does not install Claude Code, Codex or GitHub Copilot CLI themselves.
+The agent bootstrap materializes the reviewed AI-SDLC pin and configures the approved project-required MCPs for each supported coding-agent CLI that is already installed. Cursor entries are written to its user-level `~/.cursor/mcp.json`. It does not install Claude Code, Codex, GitHub Copilot CLI or Cursor themselves.
 
 The agent bootstrap may provision only the approved project-required tooling above and may mutate supported coding-agent configuration. It must not be required for `make build`, `make test`, `make check`, `make bench`, CI, or terminal/runtime operation. It must not write credentials to the repository.
 

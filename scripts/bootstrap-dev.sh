@@ -166,6 +166,54 @@ configure_copilot() {
   configure_mcp_client copilot "GitHub Copilot CLI" builtin
 }
 
+configure_cursor() {
+  has cursor-agent || { warn "Cursor Agent CLI not found; skipping Cursor MCP setup"; return 0; }
+
+  local config_path="${HOME}/.cursor/mcp.json"
+  SEYAL_CURSOR_MCP_CONFIG="${config_path}" \
+    SEYAL_GITHUB_WRAPPER="${GITHUB_WRAPPER}" \
+    python3 - <<'PY'
+import json
+import os
+import tempfile
+from pathlib import Path
+
+config_path = Path(os.environ["SEYAL_CURSOR_MCP_CONFIG"])
+config_path.parent.mkdir(parents=True, exist_ok=True)
+try:
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+except FileNotFoundError:
+    config = {}
+except json.JSONDecodeError as exc:
+    raise SystemExit(f"Cursor MCP config is not valid JSON: {exc}")
+if not isinstance(config, dict):
+    raise SystemExit("Cursor MCP config root must be an object")
+servers = config.setdefault("mcpServers", {})
+if not isinstance(servers, dict):
+    raise SystemExit("Cursor MCP config mcpServers must be an object")
+servers["xcode"] = {"command": "xcrun", "args": ["mcpbridge"]}
+wrapper = Path(os.environ["SEYAL_GITHUB_WRAPPER"])
+if wrapper.is_file():
+    servers["github"] = {"command": str(wrapper), "args": []}
+servers["xcodebuild"] = {
+    "command": "npx",
+    "args": ["-y", "xcodebuildmcp@2.7.0", "mcp"],
+}
+fd, temporary = tempfile.mkstemp(prefix="mcp.json.", dir=config_path.parent)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(config, handle, indent=2)
+        handle.write("\n")
+    os.replace(temporary, config_path)
+finally:
+    try:
+        os.unlink(temporary)
+    except FileNotFoundError:
+        pass
+PY
+  info "Cursor MCP configuration written to ${config_path}"
+}
+
 verify_repo_skills() {
   local required=(
     architecture-change implement-issue issue-refinement milestone-validation
@@ -194,7 +242,7 @@ main() {
 
   # Claude Code and Codex need Seyal's local GitHub MCP wrapper. Copilot CLI
   # already provides GitHub MCP, so do not install a duplicate solely for it.
-  if has claude || has codex; then
+  if has claude || has codex || has cursor; then
     if ensure_github_mcp_binary; then
       install_github_wrapper
     fi
@@ -203,6 +251,7 @@ main() {
   configure_claude
   configure_codex
   configure_copilot
+  configure_cursor
 
   info "complete"
   info "Seyal-specific skills stay in-repo; generic project-context and core development loop are pinned from AI-SDLC; no credentials were written"

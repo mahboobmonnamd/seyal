@@ -50,6 +50,7 @@ dependencies = [
  "seyal-core",
  "seyal-exec",
  "seyal-protocol",
+ "seyal-render",
  "stats_alloc",
 ]
 

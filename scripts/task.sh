@@ -127,6 +127,12 @@ case "$cmd" in
         SEYAL_MACOS_CONFIGURATION=Release bash scripts/build-macos.sh
         renderer_binary="${ROOT}/target/macos-derived-data/Build/Products/Release/Seyal.app/Contents/MacOS/Seyal"
         [[ -x "$renderer_binary" ]] || { echo "Pass-6 renderer benchmark binary missing" >&2; exit 1; }
+
+        # Pass 9 additionally verifies that the production Metal renderer's
+        # dedicated surface/GPU resources return to zero on every detached
+        # lifecycle cycle at both calibration geometries. It does not claim
+        # display scanout or physical interaction latency.
+        /usr/bin/time -lp "$renderer_binary" --pass9-renderer-calibration
         /usr/bin/time -lp "$renderer_binary" --renderer-benchmark
       else
         echo "[seyal Pass-5 benchmark coverage] measured Candidate-D validation skipped: production benchmark is macOS-only; validator self-test is enforced by make check."
@@ -134,7 +140,7 @@ case "$cmd" in
         echo "[seyal Pass-7 input/resize benchmark] native measurement skipped: macOS-only."
         echo "[seyal Pass-7 validation matrix] native measurement skipped: macOS-only."
         echo "[seyal Pass-8 Block metadata benchmark] native measurement skipped: macOS-only."
-        echo "[seyal Pass-9 pre-implementation calibration] controlled lifecycle calibration skipped: macOS-only."
+        echo "[seyal Pass-9 pre-implementation calibration] controlled lifecycle and native renderer calibration skipped: macOS-only."
       fi
     else
       echo "[seyal task] bench: harness metadata recorder passed; no production benchmark target exists yet and no performance result is claimed."

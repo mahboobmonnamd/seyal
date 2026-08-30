@@ -142,7 +142,7 @@ fn run_macos() {
 #[cfg(target_os = "macos")]
 fn run_orchestrator() {
     println!(
-        "pass9_preimplementation_calibration_v2 architecture=separate_client_cohort_process_plus_fresh_Runtime_worker_process production_Runtime_local_IPC_PTY warmup_cycles={} measured_cycles={} cohorts={} geometries=120x40,80x24 percentile_method=nearest_rank rss_samples={} rss_interval_ms={} cleanup_measurement=runtime_poll_dispatch_window_upper_bound exact_dispatch_timer=false {}",
+        "pass9_preimplementation_calibration_v2 architecture=separate_client_cohort_process_plus_fresh_Runtime_worker_process production_Runtime_local_IPC_PTY warmup_cycles={} measured_cycles={} cohorts={} geometries=120x40,80x24 percentile_method=nearest_rank rss_samples={} rss_interval_ms={} cleanup_measurement=Runtime_disconnect_or_Detach_dispatch_to_attachment_controller_cleanup exact_dispatch_timer=true {}",
         WARMUP_CYCLES,
         MEASURED_CYCLES,
         COHORTS,
@@ -156,7 +156,7 @@ fn run_orchestrator() {
         for mode in [LossMode::Graceful, LossMode::Abrupt] {
             let mut reconnect_p99 = Vec::with_capacity(COHORTS);
             let mut renderer_ready_p99 = Vec::with_capacity(COHORTS);
-            let mut cleanup_window_p99 = Vec::with_capacity(COHORTS);
+            let mut cleanup_p99 = Vec::with_capacity(COHORTS);
             let mut runtime_rss_delta = Vec::with_capacity(COHORTS);
             let mut client_rss_delta = Vec::with_capacity(COHORTS);
 
@@ -179,23 +179,23 @@ fn run_orchestrator() {
                 let result = parse_result_line(&String::from_utf8_lossy(&output.stdout));
                 reconnect_p99.push(result.reconnect_p99_us);
                 renderer_ready_p99.push(result.renderer_ready_p99_us);
-                cleanup_window_p99.push(result.cleanup_window_p99_us);
+                cleanup_p99.push(result.cleanup_p99_us);
                 runtime_rss_delta.push(result.runtime_rss_delta_kib);
                 client_rss_delta.push(result.client_rss_delta_kib);
             }
 
             reconnect_p99.sort_by(|a, b| a.total_cmp(b));
             renderer_ready_p99.sort_by(|a, b| a.total_cmp(b));
-            cleanup_window_p99.sort_by(|a, b| a.total_cmp(b));
+            cleanup_p99.sort_by(|a, b| a.total_cmp(b));
             runtime_rss_delta.sort_unstable();
             client_rss_delta.sort_unstable();
             println!(
-                "pass9_calibration_summary mode={} geometry={} reconnect_boundary=local_connect_hello_resolve_attach_to_complete_authoritative_client_commit median_cohort_p99_us={:.3} renderer_ready_boundary=committed_client_state_to_PreparedSurface_ready median_renderer_cohort_p99_us={:.3} cleanup_boundary=runtime_poll_dispatch_window_containing_loss_to_attachment_cleanup median_cleanup_window_cohort_p99_us={:.3} cleanup_classification=UPPER_BOUND_NOT_EXACT_DISPATCH runtime_median_cohort_rss_delta_kib={} client_median_cohort_rss_delta_kib={} cohorts={} cycles_per_cohort={} {}",
+                "pass9_calibration_summary mode={} geometry={} reconnect_boundary=local_connect_hello_resolve_attach_to_complete_authoritative_client_commit median_cohort_p99_us={:.3} renderer_ready_boundary=committed_client_state_to_PreparedSurface_ready median_renderer_cohort_p99_us={:.3} cleanup_boundary=Runtime_disconnect_or_Detach_dispatch_to_attachment_controller_cleanup median_cleanup_cohort_p99_us={:.3} cleanup_classification=MEASURED_EXACT_RUNTIME_DISPATCH runtime_median_cohort_rss_delta_kib={} client_median_cohort_rss_delta_kib={} cohorts={} cycles_per_cohort={} {}",
                 mode.label(),
                 geometry.label(),
                 reconnect_p99[COHORTS / 2],
                 renderer_ready_p99[COHORTS / 2],
-                cleanup_window_p99[COHORTS / 2],
+                cleanup_p99[COHORTS / 2],
                 runtime_rss_delta[COHORTS / 2],
                 client_rss_delta[COHORTS / 2],
                 COHORTS,
@@ -211,7 +211,7 @@ fn run_orchestrator() {
 struct CohortResult {
     reconnect_p99_us: f64,
     renderer_ready_p99_us: f64,
-    cleanup_window_p99_us: f64,
+    cleanup_p99_us: f64,
     runtime_rss_delta_kib: i64,
     client_rss_delta_kib: i64,
 }
@@ -232,7 +232,7 @@ fn parse_result_line(output: &str) -> CohortResult {
         renderer_ready_p99_us: field("renderer_ready_p99_us")
             .parse()
             .expect("renderer p99"),
-        cleanup_window_p99_us: field("cleanup_window_p99_us").parse().expect("cleanup p99"),
+        cleanup_p99_us: field("cleanup_p99_us").parse().expect("cleanup p99"),
         runtime_rss_delta_kib: field("runtime_rss_delta_kib")
             .parse()
             .expect("runtime RSS delta"),
@@ -254,6 +254,7 @@ fn run_cohort(mode: LossMode, geometry: Geometry, cohort: usize) {
         let attachment = open_attachment(&worker, geometry);
         assert_fresh_attachment(&mut previous_attachment, attachment.attachment_id);
         cleanup_attachment(mode, &mut worker, attachment);
+        let _ = worker.read_cleanup_sample();
         assert_quiescent(&mut worker, runtime_baseline, client_baseline);
     }
 
@@ -261,7 +262,7 @@ fn run_cohort(mode: LossMode, geometry: Geometry, cohort: usize) {
     let client_rss_baseline = median_self_metrics().rss_kib;
     let mut reconnect_samples = Vec::with_capacity(MEASURED_CYCLES);
     let mut renderer_ready_samples = Vec::with_capacity(MEASURED_CYCLES);
-    let mut cleanup_window_samples = Vec::with_capacity(MEASURED_CYCLES);
+    let mut cleanup_samples = Vec::with_capacity(MEASURED_CYCLES);
     let mut runtime_rss_cycles = Vec::with_capacity(MEASURED_CYCLES);
     let mut client_rss_cycles = Vec::with_capacity(MEASURED_CYCLES);
 
@@ -276,8 +277,7 @@ fn run_cohort(mode: LossMode, geometry: Geometry, cohort: usize) {
         assert!(attached.has_controller);
 
         cleanup_attachment(mode, &mut worker, attachment);
-        let cleanup_window = worker.read_cleanup_window();
-        cleanup_window_samples.push(cleanup_window);
+        cleanup_samples.push(worker.read_cleanup_sample());
         assert_quiescent(&mut worker, runtime_baseline, client_baseline);
         runtime_rss_cycles.push(worker.metrics().rss_kib);
         client_rss_cycles.push(self_metrics().rss_kib);
@@ -288,14 +288,14 @@ fn run_cohort(mode: LossMode, geometry: Geometry, cohort: usize) {
     let idle_cpu = worker.measure_idle_cpu();
     let reconnect = stats(&mut reconnect_samples);
     let renderer_ready = stats(&mut renderer_ready_samples);
-    let cleanup_window = stats(&mut cleanup_window_samples);
+    let cleanup = stats(&mut cleanup_samples);
     let runtime_rss_delta_kib = runtime_final.rss_kib as i64 - runtime_rss_baseline as i64;
     let client_rss_delta_kib = client_final.rss_kib as i64 - client_rss_baseline as i64;
     let runtime_cycle_growth = signed_growth(&runtime_rss_cycles);
     let client_cycle_growth = signed_growth(&client_rss_cycles);
 
     println!(
-        "pass9_calibration_cohort mode={} geometry={} cohort={} runtime_pid={} runtime_id={} execution_id={} reconnect_boundary=local_connect_hello_resolve_attach_to_complete_authoritative_client_commit reconnect_p50_us={:.3} reconnect_p95_us={:.3} reconnect_p99_us={:.3} reconnect_max_us={:.3} renderer_ready_boundary=committed_client_state_to_PreparedSurface_ready renderer_p50_us={:.3} renderer_p95_us={:.3} renderer_p99_us={:.3} renderer_max_us={:.3} cleanup_boundary=runtime_poll_dispatch_window_containing_loss_to_attachment_cleanup cleanup_classification=UPPER_BOUND_NOT_EXACT_DISPATCH cleanup_p50_us={:.3} cleanup_p95_us={:.3} cleanup_p99_us={:.3} cleanup_max_us={:.3} runtime_rss_baseline_kib={} runtime_rss_final_kib={} runtime_rss_delta_kib={} runtime_cycle_rss_growth_kib={} client_rss_baseline_kib={} client_rss_final_kib={} client_rss_delta_kib={} client_cycle_rss_growth_kib={} runtime_fds_baseline={} runtime_fds_final={} runtime_threads_baseline={} runtime_threads_final={} client_fds_baseline={} client_fds_final={} client_threads_baseline={} client_threads_final={} idle_runtime_cpu_percent={:.3} attachment_controller_fd_thread_return_each_cycle=true client_socket_closed_each_cycle=true retry_work=NOT_IMPLEMENTED_IN_PRE_PASS9_BASELINE sample_count={} {}",
+        "pass9_calibration_cohort mode={} geometry={} cohort={} runtime_pid={} runtime_id={} execution_id={} reconnect_boundary=local_connect_hello_resolve_attach_to_complete_authoritative_client_commit reconnect_p50_us={:.3} reconnect_p95_us={:.3} reconnect_p99_us={:.3} reconnect_max_us={:.3} renderer_ready_boundary=committed_client_state_to_PreparedSurface_ready renderer_p50_us={:.3} renderer_p95_us={:.3} renderer_p99_us={:.3} renderer_max_us={:.3} cleanup_boundary=Runtime_disconnect_or_Detach_dispatch_to_attachment_controller_cleanup cleanup_classification=MEASURED_EXACT_RUNTIME_DISPATCH cleanup_p50_us={:.3} cleanup_p95_us={:.3} cleanup_p99_us={:.3} cleanup_max_us={:.3} runtime_rss_baseline_kib={} runtime_rss_final_kib={} runtime_rss_delta_kib={} runtime_cycle_rss_growth_kib={} client_rss_baseline_kib={} client_rss_final_kib={} client_rss_delta_kib={} client_cycle_rss_growth_kib={} runtime_fds_baseline={} runtime_fds_final={} runtime_threads_baseline={} runtime_threads_final={} client_fds_baseline={} client_fds_final={} client_threads_baseline={} client_threads_final={} idle_runtime_cpu_percent={:.3} attachment_controller_fd_thread_return_each_cycle=true client_socket_closed_each_cycle=true pending_resync_work=NONE_BY_CONSTRUCTION retry_work=NOT_IMPLEMENTED_IN_PRE_PASS9_BASELINE runtime_lifecycle_quiescence=two_stable_baseline_resource_samples_after_authority_zero sample_count={} {}",
         mode.label(),
         geometry.label(),
         cohort,
@@ -310,10 +310,10 @@ fn run_cohort(mode: LossMode, geometry: Geometry, cohort: usize) {
         renderer_ready.p95_us,
         renderer_ready.p99_us,
         renderer_ready.max_us,
-        cleanup_window.p50_us,
-        cleanup_window.p95_us,
-        cleanup_window.p99_us,
-        cleanup_window.max_us,
+        cleanup.p50_us,
+        cleanup.p95_us,
+        cleanup.p99_us,
+        cleanup.max_us,
         runtime_rss_baseline,
         runtime_final.rss_kib,
         runtime_rss_delta_kib,
@@ -335,10 +335,10 @@ fn run_cohort(mode: LossMode, geometry: Geometry, cohort: usize) {
         PERFORMANCE_CLAIM,
     );
     println!(
-        "PASS9_RESULT reconnect_p99_us={:.3} renderer_ready_p99_us={:.3} cleanup_window_p99_us={:.3} runtime_rss_delta_kib={} client_rss_delta_kib={}",
+        "PASS9_RESULT reconnect_p99_us={:.3} renderer_ready_p99_us={:.3} cleanup_p99_us={:.3} runtime_rss_delta_kib={} client_rss_delta_kib={}",
         reconnect.p99_us,
         renderer_ready.p99_us,
-        cleanup_window.p99_us,
+        cleanup.p99_us,
         runtime_rss_delta_kib,
         client_rss_delta_kib,
     );
@@ -508,6 +508,7 @@ fn open_attachment(worker: &RuntimeWorker, geometry: Geometry) -> RawAttachment 
 
 #[cfg(target_os = "macos")]
 fn cleanup_attachment(mode: LossMode, worker: &mut RuntimeWorker, mut attachment: RawAttachment) {
+    worker.expect_cleanup_transition = true;
     match mode {
         LossMode::Graceful => {
             send_frame(
@@ -528,7 +529,6 @@ fn cleanup_attachment(mode: LossMode, worker: &mut RuntimeWorker, mut attachment
         }
     }
     drop(attachment);
-    worker.expect_cleanup_transition = true;
 }
 
 #[cfg(target_os = "macos")]
@@ -655,6 +655,7 @@ fn read_until(stream: &mut UnixStream, wanted: u16) -> Vec<u8> {
                 || kind == MessageType::DisplayDelta as u16
                 || kind == MessageType::Attached as u16
                 || kind == MessageType::ServerHello as u16
+                || kind == MessageType::BlockTimeline as u16
                 || kind == BLOCK_STATE_MESSAGE_TYPE,
             "unexpected local IPC frame type {kind} while waiting for {wanted}"
         );
@@ -786,7 +787,7 @@ impl RuntimeWorker {
         }
     }
 
-    fn read_cleanup_window(&mut self) -> u64 {
+    fn read_cleanup_sample(&mut self) -> u64 {
         let line = self.read_line_with_prefix("CLEANUP\t");
         self.expect_cleanup_transition = false;
         line.split('\t')
@@ -882,23 +883,9 @@ fn run_runtime_worker(geometry: Geometry) {
 
     let mut stop = false;
     while !stop {
-        let before = runtime
-            .lookup(execution_id)
-            .expect("live execution")
-            .attachment_count;
-        let poll_started = Instant::now();
         runtime
             .poll_once(Some(Duration::from_millis(2)))
             .expect("Runtime poll");
-        let poll_ns = elapsed_ns(poll_started);
-        let after = runtime
-            .lookup(execution_id)
-            .expect("live execution")
-            .attachment_count;
-        if before > 0 && after == 0 {
-            println!("CLEANUP\t{poll_ns}");
-            std::io::stdout().flush().expect("cleanup flush");
-        }
 
         while let Ok(command) = command_rx.try_recv() {
             match command.as_str() {

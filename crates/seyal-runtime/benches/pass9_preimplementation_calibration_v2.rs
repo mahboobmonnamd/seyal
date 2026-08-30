@@ -25,7 +25,10 @@ use seyal_render::{
 #[cfg(target_os = "macos")]
 use seyal_runtime::{
     AttachmentId, ExecutionId, LocalIpcMode, Runtime, RuntimeConfig,
-    display::{DecodedDisplayChunk, DisplayAttributes, DisplayCache, DisplayCell, DisplayColor, decode_chunk, empty_cache},
+    display::{
+        DecodedDisplayChunk, DisplayAttributes, DisplayCache, DisplayCell, DisplayColor,
+        decode_chunk, empty_cache,
+    },
     local_ipc::framing::{
         Attach, Attached, CAP_COMMAND_BLOCKS, ClientHello, Detach, Detached, ErrorMessage,
         ExecutionList, FrameHeader, HEADER_LEN, MessageType, Role, ServerHello, encode_frame,
@@ -229,9 +232,7 @@ fn parse_result_line(output: &str) -> CohortResult {
         renderer_ready_p99_us: field("renderer_ready_p99_us")
             .parse()
             .expect("renderer p99"),
-        cleanup_window_p99_us: field("cleanup_window_p99_us")
-            .parse()
-            .expect("cleanup p99"),
+        cleanup_window_p99_us: field("cleanup_window_p99_us").parse().expect("cleanup p99"),
         runtime_rss_delta_kib: field("runtime_rss_delta_kib")
             .parse()
             .expect("runtime RSS delta"),
@@ -389,7 +390,10 @@ fn assert_quiescent(
                 }
             }
         }
-        assert!(Instant::now() < deadline, "Pass 9 lifecycle failed to quiesce");
+        assert!(
+            Instant::now() < deadline,
+            "Pass 9 lifecycle failed to quiesce"
+        );
         thread::yield_now();
     }
 }
@@ -449,7 +453,10 @@ fn open_attachment(worker: &RuntimeWorker, geometry: Geometry) -> RawAttachment 
     let mut chunks = Vec::<DecodedDisplayChunk>::new();
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
-        assert!(Instant::now() < deadline, "authoritative snapshot timed out");
+        assert!(
+            Instant::now() < deadline,
+            "authoritative snapshot timed out"
+        );
         let (kind, payload) = read_frame(&mut stream);
         if kind == MessageType::Attached as u16 {
             attached = Some(Attached::decode(&payload).expect("Attached decode"));
@@ -795,7 +802,11 @@ impl RuntimeWorker {
         thread::sleep(Duration::from_millis(250));
         let elapsed = started.elapsed().as_secs_f64();
         let cpu = (process_cpu_seconds(self.pid) - started_cpu).max(0.0);
-        if elapsed == 0.0 { 0.0 } else { cpu / elapsed * 100.0 }
+        if elapsed == 0.0 {
+            0.0
+        } else {
+            cpu / elapsed * 100.0
+        }
     }
 
     fn finish(mut self) {
@@ -971,9 +982,7 @@ fn self_metrics() -> ProcessMetrics {
         .next()
         .and_then(|value| value.parse().ok())
         .expect("thread metric");
-    let fds = fs::read_dir("/dev/fd")
-        .expect("/dev/fd")
-        .count();
+    let fds = fs::read_dir("/dev/fd").expect("/dev/fd").count();
     ProcessMetrics {
         rss_kib,
         threads,

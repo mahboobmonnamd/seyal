@@ -318,6 +318,11 @@ fn open_attachment(harness: &RuntimeHarness) -> RawAttachment {
 
     let attached = attached.expect("Attached frame");
     assert_eq!(attached.execution_id, harness.execution_id);
+    assert_eq!(
+        attached.granted_role,
+        Role::Controller,
+        "attach must grant controller role"
+    );
     RawAttachment {
         stream,
         attachment_id: attached.attachment_id,

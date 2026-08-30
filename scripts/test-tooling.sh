@@ -36,7 +36,11 @@ grep -q 'mcpbridge' scripts/bootstrap-dev.sh || fail "official Xcode MCP bootstr
 grep -q 'xcodebuildmcp@${XCODEBUILD_MCP_VERSION}' scripts/bootstrap-dev.sh || fail "XcodeBuildMCP configuration is missing"
 grep -q '^configure_copilot()' scripts/bootstrap-dev.sh || fail "GitHub Copilot MCP setup is missing"
 grep -q 'configure_mcp_client copilot "GitHub Copilot CLI" builtin' scripts/bootstrap-dev.sh || fail "Copilot must use built-in GitHub MCP mode"
-grep -q 'if has claude || has codex; then' scripts/bootstrap-dev.sh || fail "external GitHub MCP should only be provisioned for clients that need it"
+grep -q '^configure_cursor()' scripts/bootstrap-dev.sh || fail "Cursor MCP setup is missing"
+grep -q 'SEYAL_CURSOR_MCP_CONFIG' scripts/bootstrap-dev.sh || fail "Cursor MCP config path is missing"
+grep -q 'servers\["xcode"\]' scripts/bootstrap-dev.sh || fail "Cursor Xcode MCP setup is missing"
+grep -q 'servers\["xcodebuild"\]' scripts/bootstrap-dev.sh || fail "Cursor XcodeBuildMCP setup is missing"
+grep -q 'if has claude || has codex || has cursor; then' scripts/bootstrap-dev.sh || fail "external GitHub MCP should only be provisioned for clients that need it"
 
 for adapter in project-context development-readiness verification code-review; do
   [[ -f ".agents/skills/${adapter}/SKILL.md" ]] || fail "Seyal ${adapter} adapter is missing"

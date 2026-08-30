@@ -45,16 +45,6 @@ fn pass9_cleanup_timer() -> Option<Instant> {
         .then(Instant::now)
 }
 
-#[cfg(feature = "benchmark-instrumentation")]
-fn emit_pass9_cleanup_sample(started: Option<Instant>) {
-    let Some(started) = started else {
-        return;
-    };
-    let elapsed = started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
-    println!("CLEANUP\t{elapsed}");
-    let _ = std::io::Write::flush(&mut std::io::stdout());
-}
-
 fn pack_terminal_color(color: Color) -> u32 {
     match color {
         Color::Default => 0,
@@ -355,7 +345,7 @@ impl Runtime {
                     let pass9_cleanup_started = pass9_cleanup_timer();
                     self.close_local_connection(token);
                     #[cfg(feature = "benchmark-instrumentation")]
-                    emit_pass9_cleanup_sample(pass9_cleanup_started);
+                    self.record_pass9_cleanup_sample(pass9_cleanup_started);
                 }
                 ServerEvent::Frame {
                     token,
@@ -826,7 +816,7 @@ impl Runtime {
             entry.attachments.remove(&detach.attachment_id);
         }
         #[cfg(feature = "benchmark-instrumentation")]
-        emit_pass9_cleanup_sample(pass9_cleanup_started);
+        self.record_pass9_cleanup_sample(pass9_cleanup_started);
         let response = framing::Detached {
             attachment_id: detach.attachment_id,
         };

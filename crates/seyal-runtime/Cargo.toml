@@ -42,6 +42,13 @@ required-features = ["benchmark-instrumentation"]
 # R&D-only prerequisite evidence for M001 Pass 9; never a production path.
 # SPEC-009 section 16 requires this controlled measurement before Ready.
 # This target records controlled evidence only; production code does not depend on it.
+#
+# `required-features` alone does not keep this off shared CI: workspace
+# feature unification means `seyal-client`'s dev-dependency on this crate
+# with `benchmark-instrumentation` enabled satisfies this gate for the whole
+# workspace, including plain `cargo bench --workspace`. The binary's own
+# `main()` re-checks the SEYAL_RUN_PASS9_CALIBRATION opt-in before running
+# anything expensive; that check, not this manifest entry, is the real gate.
 [[bench]]
 name = "pass9_preimplementation_calibration"
 harness = false

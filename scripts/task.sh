@@ -126,6 +126,17 @@ case "$cmd" in
         # runtime risks starving the job's time budget for every future PR.
         # Opt in explicitly on a controlled host with
         # SEYAL_RUN_PASS9_CALIBRATION=1.
+        #
+        # This shell-level check is documentation/convenience, not the
+        # enforcement boundary: `seyal-client`'s dev-dependency on
+        # `seyal-runtime` with `benchmark-instrumentation` enabled means
+        # Cargo's workspace feature unification already satisfies this
+        # bench's `required-features` during the unconditioned
+        # `cargo_pinned bench --workspace --locked` above, on every
+        # platform, regardless of this variable. The binary itself
+        # (crates/seyal-runtime/benches/pass9_preimplementation_calibration.rs)
+        # re-checks SEYAL_RUN_PASS9_CALIBRATION before doing anything
+        # expensive and is the actual, unconditional gate.
         if [[ "${SEYAL_RUN_PASS9_CALIBRATION:-0}" == "1" ]]; then
           cargo_pinned bench -p seyal-runtime --bench pass9_preimplementation_calibration --features benchmark-instrumentation --locked
         else

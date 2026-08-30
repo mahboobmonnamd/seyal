@@ -62,5 +62,25 @@ fn run_macos() {
         cohort::run_cohort(mode, geometry, cohort);
         return;
     }
+
+    // Cargo unifies features across a single build: `seyal-client`'s
+    // dev-dependency on `seyal-runtime` with `benchmark-instrumentation`
+    // enabled satisfies this bench's own `required-features` gate for *any*
+    // `cargo bench --workspace` invocation, including the unconditioned one
+    // `scripts/task.sh` runs before its explicit, opt-in-gated invocation of
+    // this same target. `required-features` and the shell-level
+    // `SEYAL_RUN_PASS9_CALIBRATION` check in scripts/task.sh are therefore
+    // not sufficient by themselves to keep this off shared/virtualized CI
+    // runners, which are not a valid SPEC-009 Section 16 controlled host.
+    // This is the actual, unconditional gate: the top-level entry point
+    // (no `--runtime-worker`/`--cohort` argument, i.e. exactly what any
+    // `cargo bench` invocation runs) always checks it before doing anything
+    // expensive, regardless of which command triggered this binary.
+    if std::env::var("SEYAL_RUN_PASS9_CALIBRATION").as_deref() != Ok("1") {
+        println!(
+            "pass9_preimplementation_calibration SKIPPED reason=opt_in_required opt_in_env=SEYAL_RUN_PASS9_CALIBRATION=1 not_a_valid_host=shared_or_virtualized_CI_runner {PERFORMANCE_CLAIM}"
+        );
+        return;
+    }
     orchestrator::run_orchestrator();
 }

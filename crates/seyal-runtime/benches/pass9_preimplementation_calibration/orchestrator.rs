@@ -174,8 +174,9 @@ fn print_host_metadata() {
     let hardware = command_text("/usr/sbin/sysctl", &["-n", "machdep.cpu.brand_string"]);
     let rust = command_text("rustc", &["--version"]);
     let commit = command_text("git", &["rev-parse", "HEAD"]);
+    let master_baseline = git_merge_base_with_master();
     println!(
-        "pass9_calibration_host macos_version={} macos_build={} model={:?} hardware={:?} arch={} rust={:?} build_mode=release commit={} master_baseline=efa365d48565fb09452b683577700a8e5e267fcb pass8_baseline=d9d21187e8429bbd3dbeb3e1c7cc4d05c1d147e6 {}",
+        "pass9_calibration_host macos_version={} macos_build={} model={:?} hardware={:?} arch={} rust={:?} build_mode=release commit={} master_baseline={} pass8_baseline=d9d21187e8429bbd3dbeb3e1c7cc4d05c1d147e6 {}",
         product,
         build,
         model,
@@ -183,6 +184,7 @@ fn print_host_metadata() {
         env::consts::ARCH,
         rust,
         commit,
+        master_baseline,
         PERFORMANCE_CLAIM,
     );
 }
@@ -194,4 +196,28 @@ fn command_text(program: &str, args: &[&str]) -> String {
         .ok()
         .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
         .unwrap_or_else(|| "unavailable".to_owned())
+}
+
+// The fork point this calibration ran against, derived at run time. A fixed
+// literal SHA here would go stale silently the moment this branch rebases or
+// `master` advances, misattributing the evidence in a later re-run — unlike
+// `pass8_baseline` above, which is a fixed historical fact (Pass 8 is already
+// merged and never moves) and is correctly a constant.
+fn git_merge_base_with_master() -> String {
+    for reference in ["origin/master", "master"] {
+        let Ok(output) = Command::new("git")
+            .args(["merge-base", "HEAD", reference])
+            .output()
+        else {
+            continue;
+        };
+        if !output.status.success() {
+            continue;
+        }
+        let sha = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        if !sha.is_empty() {
+            return sha;
+        }
+    }
+    "unavailable".to_owned()
 }

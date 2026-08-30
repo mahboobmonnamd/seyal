@@ -260,6 +260,18 @@ pub(crate) fn run_runtime_worker(geometry: Geometry) {
             .poll_once(Some(Duration::from_millis(2)))
             .expect("Runtime poll");
 
+        // SPEC-009 Section 16 forbids a synchronous logging dependency on the
+        // Runtime's disconnect/detach hot path. `poll_once` above only records
+        // the elapsed cleanup time into a plain in-memory field (see
+        // `Runtime::record_pass9_cleanup_sample` in
+        // crates/seyal-runtime/src/runtime.rs); this harness reads it back out
+        // and performs the actual CLEANUP line I/O here, entirely outside the
+        // production event-dispatch call.
+        if let Some(cleanup_ns) = runtime.take_benchmark_pass9_cleanup_sample() {
+            println!("CLEANUP\t{cleanup_ns}");
+            stdout().flush().expect("cleanup flush");
+        }
+
         loop {
             match command_rx.try_recv() {
                 Ok(command) => match command.as_str() {

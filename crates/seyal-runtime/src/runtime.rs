@@ -162,6 +162,14 @@ struct BenchmarkRuntimeState {
     pty_bytes_read: u64,
     pty_read_calls: u64,
     source_times: HashMap<(ExecutionId, u64), Instant>,
+    // R&D-only SPEC-009 Section 16 evidence for the M001 Pass 9 calibration
+    // harness. Written as a plain field from the disconnect/detach cleanup
+    // path (crates/seyal-runtime/src/runtime/local.rs); never printed or
+    // otherwise turned into I/O from inside that hot path. The calibration
+    // harness (benches/pass9_preimplementation_calibration/worker.rs) reads
+    // it out-of-band, right after the `poll_once` call that produced it, and
+    // only that harness code performs the logging I/O.
+    pass9_cleanup_ns: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -480,6 +488,20 @@ impl Runtime {
             .source_times
             .get(&(execution_id, generation))
             .copied()
+    }
+
+    #[cfg(feature = "benchmark-instrumentation")]
+    pub(crate) fn record_pass9_cleanup_sample(&mut self, started: Option<Instant>) {
+        let Some(started) = started else {
+            return;
+        };
+        let elapsed = started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+        self.benchmark.pass9_cleanup_ns = Some(elapsed);
+    }
+
+    #[cfg(feature = "benchmark-instrumentation")]
+    pub fn take_benchmark_pass9_cleanup_sample(&mut self) -> Option<u64> {
+        self.benchmark.pass9_cleanup_ns.take()
     }
 
     #[cfg(feature = "benchmark-instrumentation")]

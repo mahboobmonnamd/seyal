@@ -44,6 +44,5 @@ required-features = ["benchmark-instrumentation"]
 # This target records controlled evidence only; production code does not depend on it.
 [[bench]]
 name = "pass9_preimplementation_calibration"
-path = "benches/pass9_preimplementation_calibration_v2.rs"
 harness = false
 required-features = ["benchmark-instrumentation"]

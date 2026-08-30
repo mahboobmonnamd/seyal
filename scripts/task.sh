@@ -116,10 +116,21 @@ case "$cmd" in
         # client-cache and Runtime-timeline implementations.
         cargo_pinned bench -p seyal-client --bench pass8_block_metadata --features benchmark-instrumentation --locked
 
-        # Pass 9 pre-implementation calibration is R&D-only evidence. It must
-        # run with benchmark instrumentation so lifecycle timing can start at
-        # Runtime event dispatch without adding production hot-path overhead.
-        cargo_pinned bench -p seyal-runtime --bench pass9_preimplementation_calibration --features benchmark-instrumentation --locked
+        # Pass 9 pre-implementation calibration is R&D-only evidence for
+        # SPEC-009 Section 16, not a production benchmark: it spawns ~20
+        # fresh Runtime worker processes and drives ~2,400 attach/detach
+        # lifecycle cycles, and its absolute RSS/FD/thread-parity assertions
+        # are only meaningful on a controlled, unshared host. It must not run
+        # unconditionally on shared/virtualized CI runners, which are not a
+        # valid controlled host for these numbers and where the extra
+        # runtime risks starving the job's time budget for every future PR.
+        # Opt in explicitly on a controlled host with
+        # SEYAL_RUN_PASS9_CALIBRATION=1.
+        if [[ "${SEYAL_RUN_PASS9_CALIBRATION:-0}" == "1" ]]; then
+          cargo_pinned bench -p seyal-runtime --bench pass9_preimplementation_calibration --features benchmark-instrumentation --locked
+        else
+          echo "[seyal Pass-9 pre-implementation calibration] skipped: R&D-only SPEC-009 §16 evidence, opt-in via SEYAL_RUN_PASS9_CALIBRATION=1 on a controlled host, not run on shared CI runners."
+        fi
 
         # Pass 5 ends at the committed client display cache. Measure the distinct
         # Pass-6 native boundary separately in a Release app and label GPU

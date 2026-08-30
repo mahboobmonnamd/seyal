@@ -116,6 +116,11 @@ case "$cmd" in
         # client-cache and Runtime-timeline implementations.
         cargo_pinned bench -p seyal-client --bench pass8_block_metadata --features benchmark-instrumentation --locked
 
+        # Pass 9 pre-implementation calibration is R&D-only evidence. It must
+        # run with benchmark instrumentation so lifecycle timing can start at
+        # Runtime event dispatch without adding production hot-path overhead.
+        cargo_pinned bench -p seyal-runtime --bench pass9_preimplementation_calibration --features benchmark-instrumentation --locked
+
         # Pass 5 ends at the committed client display cache. Measure the distinct
         # Pass-6 native boundary separately in a Release app and label GPU
         # completion as a presentation proxy rather than claiming display scanout.
@@ -129,6 +134,7 @@ case "$cmd" in
         echo "[seyal Pass-7 input/resize benchmark] native measurement skipped: macOS-only."
         echo "[seyal Pass-7 validation matrix] native measurement skipped: macOS-only."
         echo "[seyal Pass-8 Block metadata benchmark] native measurement skipped: macOS-only."
+        echo "[seyal Pass-9 pre-implementation calibration] controlled lifecycle calibration skipped: macOS-only."
       fi
     else
       echo "[seyal task] bench: harness metadata recorder passed; no production benchmark target exists yet and no performance result is claimed."

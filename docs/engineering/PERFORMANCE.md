@@ -283,6 +283,10 @@ retention, while a growing tail remains a lifecycle/RSS root-cause blocker.
 It never replaces the full raw series, its slope, or the requirement to
 explain consistent positive growth before accepting a budget.
 
+Detached-idle Runtime CPU is retained as five independent 250 ms samples per
+cohort, with p50, p95 and maximum values. A single short CPU sample is not
+sufficient evidence for a detached-idle budget.
+
 Broader benchmark matrices run scheduled/release and on performance-sensitive changes. Absolute product budgets should be enforced on a controlled Apple-Silicon runner with pinned hardware, OS/build mode and toolchain once that runner exists.
 
 Pre-commit hooks may duplicate fast checks for developer feedback, but they are convenience only. CI is authoritative for mergeability.

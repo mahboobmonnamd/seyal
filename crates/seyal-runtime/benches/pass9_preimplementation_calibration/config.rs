@@ -6,6 +6,8 @@ pub(crate) const MEASURED_CYCLES: usize = 100;
 // allocator high-water mark distinguishable from RSS that is still advancing
 // at the end of a cohort; it must never replace the full-series slope/RCA.
 pub(crate) const RSS_TAIL_CYCLES: usize = 25;
+pub(crate) const IDLE_CPU_SAMPLE_COUNT: usize = 5;
+pub(crate) const IDLE_CPU_SAMPLE_WINDOW: Duration = Duration::from_millis(250);
 pub(crate) const COHORTS: usize = 5;
 pub(crate) const QUIESCENT_SAMPLE_COUNT: usize = 5;
 pub(crate) const QUIESCENT_SAMPLE_INTERVAL: Duration = Duration::from_millis(10);

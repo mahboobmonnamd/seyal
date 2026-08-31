@@ -87,8 +87,13 @@ def validate_lifecycle(text: str) -> list[str]:
         for name in ("reconnect_p50_us", "reconnect_p95_us", "reconnect_p99_us", "reconnect_max_us",
                      "renderer_p50_us", "renderer_p95_us", "renderer_p99_us", "renderer_max_us",
                      "cleanup_p50_us", "cleanup_p95_us", "cleanup_p99_us", "cleanup_max_us",
-                     "idle_runtime_cpu_percent"):
+                     "idle_runtime_cpu_p50_percent", "idle_runtime_cpu_p95_percent", "idle_runtime_cpu_max_percent"):
             require_number(errors, line, name, f"cohort {key}")
+        if field(line, "idle_runtime_cpu_sample_count") != "5":
+            errors.append(f"cohort {key} missing fixed idle_runtime_cpu_sample_count=5")
+        cpu_samples = field(line, "idle_runtime_cpu_samples_percent")
+        if cpu_samples is None or len(cpu_samples.split(",")) != 5:
+            errors.append(f"cohort {key} must retain five idle CPU samples")
         for resource in ("runtime_fds", "runtime_threads", "client_fds", "client_threads"):
             before, after = field(line, f"{resource}_baseline"), field(line, f"{resource}_final")
             if before is None or after is None:
@@ -201,7 +206,7 @@ def lifecycle_fixture() -> str:
             f"pass9_calibration_cohort mode={mode} geometry={geometry} cohort={cohort} sample_count=100 "
             "reconnect_p50_us=1 reconnect_p95_us=2 reconnect_p99_us=3 reconnect_max_us=4 "
             "renderer_p50_us=1 renderer_p95_us=2 renderer_p99_us=3 renderer_max_us=4 "
-            "cleanup_p50_us=1 cleanup_p95_us=2 cleanup_p99_us=3 cleanup_max_us=4 idle_runtime_cpu_percent=0 "
+            "cleanup_p50_us=1 cleanup_p95_us=2 cleanup_p99_us=3 cleanup_max_us=4 idle_runtime_cpu_sample_count=5 idle_runtime_cpu_samples_percent=0,0,0,0,0 idle_runtime_cpu_p50_percent=0 idle_runtime_cpu_p95_percent=0 idle_runtime_cpu_max_percent=0 "
             "runtime_fds_baseline=1 runtime_fds_final=1 runtime_threads_baseline=1 runtime_threads_final=1 "
             "client_fds_baseline=1 client_fds_final=1 client_threads_baseline=1 client_threads_final=1 "
             "attachment_controller_fd_thread_return_each_cycle=true client_socket_closed_each_cycle=true performance_claim=false"

@@ -12,8 +12,9 @@ use seyal_exec::{CommandSpec, WindowSize};
 use seyal_runtime::{ExecutionId, LocalIpcMode, Runtime, RuntimeConfig};
 
 use super::config::{
-    Geometry, QUIESCENT_SAMPLE_COUNT, QUIESCENT_SAMPLE_INTERVAL, WORKER_RESPONSE_TIMEOUT,
-    WORKER_SHUTDOWN_TIMEOUT, WORKER_STARTUP_TIMEOUT,
+    Geometry, IDLE_CPU_SAMPLE_COUNT, IDLE_CPU_SAMPLE_WINDOW, QUIESCENT_SAMPLE_COUNT,
+    QUIESCENT_SAMPLE_INTERVAL, WORKER_RESPONSE_TIMEOUT, WORKER_SHUTDOWN_TIMEOUT,
+    WORKER_STARTUP_TIMEOUT,
 };
 use super::metrics::{ProcessMetrics, metrics_for_pid, process_cpu_seconds};
 use super::process_io::spawn_line_reader;
@@ -27,6 +28,13 @@ pub(crate) struct RuntimeWorker {
     pub(crate) runtime_id: u128,
     pub(crate) execution_id: ExecutionId,
     pub(crate) expect_cleanup_transition: bool,
+}
+
+pub(crate) struct IdleCpuStats {
+    pub(crate) samples_percent: Vec<f64>,
+    pub(crate) p50_percent: f64,
+    pub(crate) p95_percent: f64,
+    pub(crate) max_percent: f64,
 }
 
 #[derive(Clone, Copy)]
@@ -233,16 +241,28 @@ impl RuntimeWorker {
         }
     }
 
-    pub(crate) fn measure_idle_cpu(&mut self) -> f64 {
-        let started_cpu = process_cpu_seconds(self.pid);
-        let started = Instant::now();
-        thread::sleep(Duration::from_millis(250));
-        let elapsed = started.elapsed().as_secs_f64();
-        let cpu = (process_cpu_seconds(self.pid) - started_cpu).max(0.0);
-        if elapsed == 0.0 {
-            0.0
-        } else {
-            cpu / elapsed * 100.0
+    pub(crate) fn measure_idle_cpu(&mut self) -> IdleCpuStats {
+        let mut samples_percent = Vec::with_capacity(IDLE_CPU_SAMPLE_COUNT);
+        for _ in 0..IDLE_CPU_SAMPLE_COUNT {
+            let started_cpu = process_cpu_seconds(self.pid);
+            let started = Instant::now();
+            thread::sleep(IDLE_CPU_SAMPLE_WINDOW);
+            let elapsed = started.elapsed().as_secs_f64();
+            let cpu = (process_cpu_seconds(self.pid) - started_cpu).max(0.0);
+            samples_percent.push(if elapsed == 0.0 {
+                0.0
+            } else {
+                cpu / elapsed * 100.0
+            });
+        }
+        let mut sorted = samples_percent.clone();
+        sorted.sort_by(f64::total_cmp);
+        let p95_index = (95 * sorted.len()).div_ceil(100).saturating_sub(1);
+        IdleCpuStats {
+            p50_percent: sorted[sorted.len() / 2],
+            p95_percent: sorted[p95_index],
+            max_percent: *sorted.last().expect("idle CPU samples"),
+            samples_percent,
         }
     }
 

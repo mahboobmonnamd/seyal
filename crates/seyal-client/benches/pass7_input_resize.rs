@@ -54,7 +54,14 @@ fn main() {
 fn run_macos() {
     let mut args = std::env::args();
     let _ = args.next();
-    if args.next().as_deref() == Some("--worker") {
+    let mode = args.next();
+    if mode.as_deref() == Some("--pass8-gate-self-test") {
+        assert!(pass8_regression_gate_enabled_from(None, Some("1")));
+        assert!(!pass8_regression_gate_enabled_from(None, None));
+        println!("pass8_regression_gate_self_test status=ok {PERFORMANCE_CLAIM}");
+        return;
+    }
+    if mode.as_deref() == Some("--worker") {
         let case = args.next().expect("Pass 7 benchmark worker case");
         worker(&case);
         return;
@@ -660,7 +667,18 @@ fn measure_pass8_resize_attribution() {
 
 #[cfg(target_os = "macos")]
 fn pass8_regression_gate_enabled() -> bool {
-    std::env::var(PASS8_REGRESSION_GATE_ENV).as_deref() == Ok("1")
+    pass8_regression_gate_enabled_from(
+        std::env::var(PASS8_REGRESSION_GATE_ENV).ok().as_deref(),
+        std::env::var("SEYAL_RUN_PASS9_CALIBRATION").ok().as_deref(),
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn pass8_regression_gate_enabled_from(
+    explicit_pass8_gate: Option<&str>,
+    pass9_controlled_calibration: Option<&str>,
+) -> bool {
+    explicit_pass8_gate == Some("1") || pass9_controlled_calibration == Some("1")
 }
 
 #[cfg(target_os = "macos")]

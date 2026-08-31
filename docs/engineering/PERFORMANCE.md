@@ -266,8 +266,10 @@ Future measured workloads must replace `not-applicable` smoke fields with real t
 Fast PR checks use deterministic structural guards and stable benchmark contract checks. Shared CI may run benchmark workloads as smoke/evidence, but it must not enforce noisy absolute latency/CPU/RSS thresholds that can randomly pass or fail due to host contention.
 
 The Pass 8 paired resize attribution benchmark always emits its raw nine-cohort
-distribution. Its `>5%` explanation and `>10%` blocking policy is enforced only
-when a controlled-run operator sets `SEYAL_PASS8_ENFORCE_REGRESSION_GATE=1`.
+distribution. Its `>5%` explanation and `>10%` blocking policy is enforced when
+a controlled-run operator sets `SEYAL_PASS8_ENFORCE_REGRESSION_GATE=1`, and
+automatically for a Pass 9 controlled calibration
+(`SEYAL_RUN_PASS9_CALIBRATION=1`).
 Shared or virtual CI must report `regression_gate=DIAGNOSTIC_SHARED_OR_UNCONTROLLED_HOST`;
 that result is diagnostic evidence and cannot accept or waive a regression. A
 controlled Apple-Silicon run must report

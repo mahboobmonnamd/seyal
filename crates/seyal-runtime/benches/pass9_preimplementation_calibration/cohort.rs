@@ -20,7 +20,9 @@ use super::config::{
     Geometry, IDLE_CPU_SAMPLE_COUNT, LossMode, MEASURED_CYCLES, RSS_TAIL_CYCLES, SETTLE_TIMEOUT,
     WARMUP_CYCLES,
 };
-use super::metrics::{ProcessMetrics, elapsed_ns, median_self_metrics, self_metrics, stats};
+use super::metrics::{
+    ProcessMetrics, allocator_metrics, elapsed_ns, median_self_metrics, self_metrics, stats,
+};
 use super::protocol::{panic_server_error, prepare_surface, read_frame, read_until, send_frame};
 use super::worker::RuntimeWorker;
 use crate::PERFORMANCE_CLAIM;
@@ -43,6 +45,7 @@ pub(crate) fn run_cohort(mode: LossMode, geometry: Geometry, cohort: usize) {
     let runtime_rss_baseline = worker.median_metrics().rss_kib;
     let runtime_allocator_baseline = worker.metrics();
     let client_rss_baseline = median_self_metrics().rss_kib;
+    let client_allocator_baseline = allocator_metrics();
     let mut reconnect_samples = Vec::with_capacity(MEASURED_CYCLES);
     let mut renderer_ready_samples = Vec::with_capacity(MEASURED_CYCLES);
     let mut cleanup_samples = Vec::with_capacity(MEASURED_CYCLES);
@@ -78,6 +81,7 @@ pub(crate) fn run_cohort(mode: LossMode, geometry: Geometry, cohort: usize) {
 
     let runtime_final = worker.median_metrics();
     let client_final = median_self_metrics();
+    let client_allocator_final = allocator_metrics();
     let idle_cpu = worker.measure_idle_cpu();
     let reconnect = stats(&mut reconnect_samples);
     let renderer_ready = stats(&mut renderer_ready_samples);
@@ -92,7 +96,7 @@ pub(crate) fn run_cohort(mode: LossMode, geometry: Geometry, cohort: usize) {
     let client_tail_growth = tail_growth(&client_rss_cycles, RSS_TAIL_CYCLES);
 
     println!(
-        "pass9_calibration_cohort mode={} geometry={} cohort={} runtime_pid={} runtime_id={} execution_id={} reconnect_boundary=local_connect_hello_resolve_attach_to_complete_authoritative_client_commit reconnect_p50_us={:.3} reconnect_p95_us={:.3} reconnect_p99_us={:.3} reconnect_max_us={:.3} renderer_ready_boundary=committed_client_state_to_PreparedSurface_ready renderer_p50_us={:.3} renderer_p95_us={:.3} renderer_p99_us={:.3} renderer_max_us={:.3} cleanup_boundary=Runtime_disconnect_or_Detach_dispatch_to_attachment_controller_cleanup cleanup_classification=MEASURED_EXACT_RUNTIME_DISPATCH cleanup_p50_us={:.3} cleanup_p95_us={:.3} cleanup_p99_us={:.3} cleanup_max_us={:.3} runtime_rss_baseline_kib={} runtime_rss_final_kib={} runtime_rss_delta_kib={} runtime_allocator_in_use_baseline_kib={} runtime_allocator_in_use_final_kib={} runtime_allocator_reserved_baseline_kib={} runtime_allocator_reserved_final_kib={} runtime_cycle_rss_growth_kib={} runtime_rss_tail_cycles={} runtime_rss_tail_growth_kib={} client_rss_baseline_kib={} client_rss_final_kib={} client_rss_delta_kib={} client_cycle_rss_growth_kib={} client_rss_tail_cycles={} client_rss_tail_growth_kib={} runtime_fds_baseline={} runtime_fds_final={} runtime_threads_baseline={} runtime_threads_final={} client_fds_baseline={} client_fds_final={} client_threads_baseline={} client_threads_final={} idle_runtime_cpu_sample_count={} idle_runtime_cpu_samples_percent={} idle_runtime_cpu_p50_percent={:.3} idle_runtime_cpu_p95_percent={:.3} idle_runtime_cpu_max_percent={:.3} controller_authority_source=Attached_granted_role_plus_Runtime_benchmark_diagnostics attachment_controller_fd_thread_return_each_cycle=true client_socket_closed_each_cycle=true pending_resync_work=Runtime_diagnostics_verified_zero retry_work=NOT_IMPLEMENTED_IN_PRE_PASS9_BASELINE runtime_lifecycle_quiescence=two_stable_direct_Runtime_diagnostic_samples sample_count={} {}",
+        "pass9_calibration_cohort mode={} geometry={} cohort={} runtime_pid={} runtime_id={} execution_id={} reconnect_boundary=local_connect_hello_resolve_attach_to_complete_authoritative_client_commit reconnect_p50_us={:.3} reconnect_p95_us={:.3} reconnect_p99_us={:.3} reconnect_max_us={:.3} renderer_ready_boundary=committed_client_state_to_PreparedSurface_ready renderer_p50_us={:.3} renderer_p95_us={:.3} renderer_p99_us={:.3} renderer_max_us={:.3} cleanup_boundary=Runtime_disconnect_or_Detach_dispatch_to_attachment_controller_cleanup cleanup_classification=MEASURED_EXACT_RUNTIME_DISPATCH cleanup_p50_us={:.3} cleanup_p95_us={:.3} cleanup_p99_us={:.3} cleanup_max_us={:.3} runtime_rss_baseline_kib={} runtime_rss_final_kib={} runtime_rss_delta_kib={} runtime_allocator_in_use_baseline_kib={} runtime_allocator_in_use_final_kib={} runtime_allocator_reserved_baseline_kib={} runtime_allocator_reserved_final_kib={} runtime_cycle_rss_growth_kib={} runtime_rss_tail_cycles={} runtime_rss_tail_growth_kib={} client_rss_baseline_kib={} client_rss_final_kib={} client_rss_delta_kib={} client_allocator_in_use_baseline_kib={} client_allocator_in_use_final_kib={} client_allocator_reserved_baseline_kib={} client_allocator_reserved_final_kib={} client_cycle_rss_growth_kib={} client_rss_tail_cycles={} client_rss_tail_growth_kib={} runtime_fds_baseline={} runtime_fds_final={} runtime_threads_baseline={} runtime_threads_final={} client_fds_baseline={} client_fds_final={} client_threads_baseline={} client_threads_final={} idle_runtime_cpu_sample_count={} idle_runtime_cpu_samples_percent={} idle_runtime_cpu_p50_percent={:.3} idle_runtime_cpu_p95_percent={:.3} idle_runtime_cpu_max_percent={:.3} controller_authority_source=Attached_granted_role_plus_Runtime_benchmark_diagnostics attachment_controller_fd_thread_return_each_cycle=true client_socket_closed_each_cycle=true pending_resync_work=Runtime_diagnostics_verified_zero retry_work=NOT_IMPLEMENTED_IN_PRE_PASS9_BASELINE runtime_lifecycle_quiescence=two_stable_direct_Runtime_diagnostic_samples sample_count={} {}",
         mode.label(),
         geometry.label(),
         cohort,
@@ -124,6 +128,10 @@ pub(crate) fn run_cohort(mode: LossMode, geometry: Geometry, cohort: usize) {
         client_rss_baseline,
         client_final.rss_kib,
         client_rss_delta_kib,
+        client_allocator_baseline.in_use_kib,
+        client_allocator_final.in_use_kib,
+        client_allocator_baseline.reserved_kib,
+        client_allocator_final.reserved_kib,
         client_cycle_growth,
         RSS_TAIL_CYCLES,
         client_tail_growth,

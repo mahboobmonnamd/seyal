@@ -46,6 +46,11 @@ fn main() {
 #[cfg(target_os = "macos")]
 fn run_macos() {
     let args = std::env::args().collect::<Vec<_>>();
+    if args.get(1).is_some_and(|arg| arg == "--metrics-self-test") {
+        metrics::assert_measurement_integrity();
+        println!("pass9_calibration_metrics_self_test status=ok {PERFORMANCE_CLAIM}");
+        return;
+    }
     if args.get(1).is_some_and(|arg| arg == "--runtime-worker") {
         let geometry = Geometry::parse(args.get(2).expect("worker geometry"));
         worker::run_runtime_worker(geometry);

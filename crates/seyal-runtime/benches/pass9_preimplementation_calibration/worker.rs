@@ -15,7 +15,7 @@ use super::config::{
     Geometry, QUIESCENT_SAMPLE_COUNT, QUIESCENT_SAMPLE_INTERVAL, WORKER_RESPONSE_TIMEOUT,
     WORKER_SHUTDOWN_TIMEOUT, WORKER_STARTUP_TIMEOUT,
 };
-use super::metrics::{ProcessMetrics, process_cpu_seconds, self_metrics};
+use super::metrics::{ProcessMetrics, metrics_for_pid, process_cpu_seconds};
 use super::process_io::spawn_line_reader;
 
 pub(crate) struct RuntimeWorker {
@@ -27,6 +27,15 @@ pub(crate) struct RuntimeWorker {
     pub(crate) runtime_id: u128,
     pub(crate) execution_id: ExecutionId,
     pub(crate) expect_cleanup_transition: bool,
+}
+
+struct LifecycleMetrics {
+    attachment_count: usize,
+    has_controller: bool,
+    local_connection_count: usize,
+    pending_resync_count: usize,
+    pending_resync_set_count: usize,
+    listener_backoff_active: bool,
 }
 
 fn recv_worker_line(rx: &mpsc::Receiver<String>, timeout: Duration, context: &str) -> String {
@@ -105,9 +114,16 @@ impl RuntimeWorker {
     }
 
     pub(crate) fn metrics(&mut self) -> ProcessMetrics {
-        self.send_command("metrics");
-        let line = self.read_line_with_prefix("METRICS\t");
-        parse_worker_metrics(&line)
+        let mut metrics = metrics_for_pid(self.pid);
+        self.send_command("lifecycle");
+        let lifecycle = parse_worker_lifecycle(&self.read_line_with_prefix("LIFECYCLE\t"));
+        metrics.attachment_count = lifecycle.attachment_count;
+        metrics.has_controller = lifecycle.has_controller;
+        metrics.local_connection_count = lifecycle.local_connection_count;
+        metrics.pending_resync_count = lifecycle.pending_resync_count;
+        metrics.pending_resync_set_count = lifecycle.pending_resync_set_count;
+        metrics.listener_backoff_active = lifecycle.listener_backoff_active;
+        metrics
     }
 
     pub(crate) fn median_metrics(&mut self) -> ProcessMetrics {
@@ -197,19 +213,16 @@ impl Drop for RuntimeWorker {
     }
 }
 
-fn parse_worker_metrics(line: &str) -> ProcessMetrics {
+fn parse_worker_lifecycle(line: &str) -> LifecycleMetrics {
     let fields = line.split('\t').collect::<Vec<_>>();
-    assert_eq!(fields[0], "METRICS");
-    ProcessMetrics {
-        rss_kib: fields[1].parse().expect("worker RSS"),
-        threads: fields[2].parse().expect("worker threads"),
-        fds: fields[3].parse().expect("worker fds"),
-        attachment_count: fields[4].parse().expect("worker attachments"),
-        has_controller: fields[5].parse().expect("worker controller"),
-        local_connection_count: fields[6].parse().expect("worker connections"),
-        pending_resync_count: fields[7].parse().expect("worker pending resync"),
-        pending_resync_set_count: fields[8].parse().expect("worker pending resync set"),
-        listener_backoff_active: fields[9].parse().expect("worker listener backoff"),
+    assert_eq!(fields[0], "LIFECYCLE");
+    LifecycleMetrics {
+        attachment_count: fields[1].parse().expect("worker attachments"),
+        has_controller: fields[2].parse().expect("worker controller"),
+        local_connection_count: fields[3].parse().expect("worker connections"),
+        pending_resync_count: fields[4].parse().expect("worker pending resync"),
+        pending_resync_set_count: fields[5].parse().expect("worker pending resync set"),
+        listener_backoff_active: fields[6].parse().expect("worker listener backoff"),
     }
 }
 
@@ -285,16 +298,12 @@ pub(crate) fn run_runtime_worker(geometry: Geometry) {
         loop {
             match command_rx.try_recv() {
                 Ok(command) => match command.as_str() {
-                    "metrics" => {
-                        let metrics = self_metrics();
+                    "lifecycle" => {
                         let lifecycle = runtime
                             .benchmark_pass9_lifecycle_diagnostics(execution_id)
                             .expect("Runtime local-IPC lifecycle diagnostics");
                         println!(
-                            "METRICS\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-                            metrics.rss_kib,
-                            metrics.threads,
-                            metrics.fds,
+                            "LIFECYCLE\t{}\t{}\t{}\t{}\t{}\t{}",
                             lifecycle.attachment_count,
                             lifecycle.has_controller,
                             lifecycle.local_connection_count,
@@ -302,7 +311,7 @@ pub(crate) fn run_runtime_worker(geometry: Geometry) {
                             lifecycle.pending_resync_set_count,
                             lifecycle.listener_backoff_active
                         );
-                        stdout().flush().expect("metrics flush");
+                        stdout().flush().expect("lifecycle flush");
                     }
                     "stop" => {
                         stop = true;

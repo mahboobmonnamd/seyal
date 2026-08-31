@@ -117,6 +117,10 @@ case "$cmd" in
         # client-cache and Runtime-timeline implementations.
         cargo_pinned bench -p seyal-client --bench pass8_block_metadata --features benchmark-instrumentation --locked
 
+        # Prove that Pass 9's benchmark-only process metrics query the target
+        # task directly instead of perturbing it by spawning `/bin/ps`.
+        cargo_pinned bench -p seyal-runtime --bench pass9_preimplementation_calibration --features benchmark-instrumentation --locked -- --metrics-self-test
+
         # Pass 9 pre-implementation calibration is R&D-only evidence for
         # SPEC-009 Section 16, not a production benchmark: it spawns ~20
         # fresh Runtime worker processes and drives ~2,400 attach/detach

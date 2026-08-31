@@ -17,7 +17,20 @@ grep -Eq 'components[[:space:]]*=[[:space:]]*\[[^]]*"clippy"' rust-toolchain.tom
 [[ -f scripts/check-pass9-calibration-coverage.py ]] || fail "Pass 9 calibration coverage validator is missing"
 python3 scripts/check-pass9-calibration-coverage.py --self-test >/dev/null || fail "Pass 9 calibration coverage validator self-test failed"
 grep -q -- '--controlled-calibration' crates/seyal-runtime/benches/pass9_preimplementation_calibration.rs || fail "Pass 9 calibration binary lacks explicit invocation gate"
+grep -q -- '--metrics-self-test' crates/seyal-runtime/benches/pass9_preimplementation_calibration.rs || fail "Pass 9 calibration binary lacks metrics integrity self-test"
 grep -q -- '-- --controlled-calibration' scripts/task.sh || fail "Pass 9 calibration task lacks the explicit invocation argument"
+grep -q -- '-- --metrics-self-test' scripts/task.sh || fail "Pass 9 calibration task does not run metrics integrity self-test"
+
+pass9_metrics='crates/seyal-runtime/benches/pass9_preimplementation_calibration/metrics.rs'
+grep -q 'libc::proc_pidinfo' "$pass9_metrics" || fail "Pass 9 metrics must query macOS process state without spawning ps"
+grep -q 'PROC_PIDTASKINFO' "$pass9_metrics" || fail "Pass 9 metrics must read target RSS and thread count from proc_taskinfo"
+grep -q 'PROC_PIDLISTFDS' "$pass9_metrics" || fail "Pass 9 metrics must count the target process FDs"
+if grep -q 'Command::new("/bin/ps")' "$pass9_metrics"; then
+  fail "Pass 9 metrics must not perturb measured processes by spawning ps"
+fi
+if grep -q 'read_dir("/dev/fd")' "$pass9_metrics"; then
+  fail "Pass 9 metrics must not count the sampler process FDs"
+fi
 
 for target in bootstrap bootstrap-agents build test check bench; do
   make -n "$target" >/dev/null || fail "canonical make target '${target}' does not resolve"

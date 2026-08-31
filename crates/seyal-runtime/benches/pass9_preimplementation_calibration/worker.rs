@@ -16,7 +16,7 @@ use super::config::{
     QUIESCENT_SAMPLE_INTERVAL, WORKER_RESPONSE_TIMEOUT, WORKER_SHUTDOWN_TIMEOUT,
     WORKER_STARTUP_TIMEOUT,
 };
-use super::metrics::{ProcessMetrics, metrics_for_pid, process_cpu_seconds};
+use super::metrics::{ProcessMetrics, allocator_metrics, metrics_for_pid, process_cpu_seconds};
 use super::process_io::spawn_line_reader;
 
 pub(crate) struct RuntimeWorker {
@@ -71,6 +71,8 @@ struct LifecycleMetrics {
     pending_resync_count: usize,
     pending_resync_set_count: usize,
     listener_backoff_active: bool,
+    allocator_in_use_kib: usize,
+    allocator_reserved_kib: usize,
 }
 
 fn recv_worker_output(
@@ -192,6 +194,8 @@ impl RuntimeWorker {
         metrics.pending_resync_count = lifecycle.pending_resync_count;
         metrics.pending_resync_set_count = lifecycle.pending_resync_set_count;
         metrics.listener_backoff_active = lifecycle.listener_backoff_active;
+        metrics.allocator_in_use_kib = lifecycle.allocator_in_use_kib;
+        metrics.allocator_reserved_kib = lifecycle.allocator_reserved_kib;
         metrics
     }
 
@@ -223,6 +227,8 @@ impl RuntimeWorker {
             pending_resync_count: 0,
             pending_resync_set_count: 0,
             listener_backoff_active: false,
+            allocator_in_use_kib: 0,
+            allocator_reserved_kib: 0,
         }
     }
 
@@ -359,6 +365,16 @@ fn parse_worker_output(line: &str) -> WorkerOutput {
                 .expect("worker listener backoff")
                 .parse()
                 .expect("worker listener backoff"),
+            allocator_in_use_kib: fields
+                .next()
+                .expect("worker allocator in use")
+                .parse()
+                .expect("worker allocator in use"),
+            allocator_reserved_kib: fields
+                .next()
+                .expect("worker allocator reserved")
+                .parse()
+                .expect("worker allocator reserved"),
         }),
         other => panic!("unknown Runtime worker output: {other}"),
     };
@@ -452,13 +468,15 @@ pub(crate) fn run_runtime_worker(geometry: Geometry) {
                             .benchmark_pass9_lifecycle_diagnostics(execution_id)
                             .expect("Runtime local-IPC lifecycle diagnostics");
                         println!(
-                            "LIFECYCLE\t{}\t{}\t{}\t{}\t{}\t{}",
+                            "LIFECYCLE\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                             lifecycle.attachment_count,
                             lifecycle.has_controller,
                             lifecycle.local_connection_count,
                             lifecycle.pending_resync_count,
                             lifecycle.pending_resync_set_count,
-                            lifecycle.listener_backoff_active
+                            lifecycle.listener_backoff_active,
+                            allocator_metrics().in_use_kib,
+                            allocator_metrics().reserved_kib
                         );
                         stdout().flush().expect("lifecycle flush");
                     }

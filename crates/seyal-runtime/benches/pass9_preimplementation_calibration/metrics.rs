@@ -18,6 +18,27 @@ pub(crate) struct ProcessMetrics {
     pub(crate) pending_resync_count: usize,
     pub(crate) pending_resync_set_count: usize,
     pub(crate) listener_backoff_active: bool,
+    pub(crate) allocator_in_use_kib: usize,
+    pub(crate) allocator_reserved_kib: usize,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct AllocatorMetrics {
+    pub(crate) in_use_kib: usize,
+    pub(crate) reserved_kib: usize,
+}
+
+#[allow(unsafe_code)]
+pub(crate) fn allocator_metrics() -> AllocatorMetrics {
+    let mut stats = std::mem::MaybeUninit::<libc::malloc_statistics_t>::zeroed();
+    // SAFETY: Darwin's default malloc zone and the correctly-sized output
+    // structure are valid for this read-only diagnostic call.
+    unsafe { libc::malloc_zone_statistics(libc::malloc_default_zone(), stats.as_mut_ptr()) };
+    let stats = unsafe { stats.assume_init() };
+    AllocatorMetrics {
+        in_use_kib: stats.size_in_use / 1024,
+        reserved_kib: stats.size_allocated / 1024,
+    }
 }
 
 pub(crate) fn self_metrics() -> ProcessMetrics {
@@ -48,6 +69,8 @@ pub(crate) fn metrics_for_pid(pid: u32) -> ProcessMetrics {
         pending_resync_count: 0,
         pending_resync_set_count: 0,
         listener_backoff_active: false,
+        allocator_in_use_kib: 0,
+        allocator_reserved_kib: 0,
     }
 }
 
@@ -77,6 +100,8 @@ pub(crate) fn median_self_metrics() -> ProcessMetrics {
         pending_resync_count: 0,
         pending_resync_set_count: 0,
         listener_backoff_active: false,
+        allocator_in_use_kib: 0,
+        allocator_reserved_kib: 0,
     }
 }
 

@@ -200,6 +200,39 @@ A foreground discovery recovery episode is exact and independently measurable:
 
 A GUI must not launch multiple Runtime processes merely because the first connection races process startup. One launch action is permitted per foreground recovery episode; every automatic attempt remains within the exact schedule above.
 
+### 8.1.1 Bundled Runtime helper and launch trust contract
+
+The production macOS client launches Runtime only from the signed helper embedded
+in the same application bundle at `Seyal.app/Contents/Helpers/seyal-runtime`.
+The build/package pipeline must create that helper on a clean checkout and
+validate the nested code signature as part of package verification. The client
+uses a direct executable URL/API, never a shell command, and passes neither
+terminal data nor credentials in arguments.
+
+The launch environment is a documented minimal allowlist required for normal
+per-user Runtime operation. Runtime control/listener descriptors are
+close-on-exec and the GUI must not intentionally inherit arbitrary descriptors
+or secret-bearing environment variables into the helper. Runtime then constructs
+the child-shell environment under ADR-005/ADR-008; helper launch does not grant
+the GUI authority over PTY ownership or execution lifetime.
+
+The client owns at most one launch request per foreground recovery episode;
+launch success only means the helper was started, never that old-PTY continuity
+was restored. Runtime owns singleton arbitration, stale canonical-socket
+validation/removal and endpoint binding. GUI exit or final-window close does
+not terminate an already-running Runtime.
+
+The client and helper must carry the same bundle build identity. An observed
+Runtime that cannot establish compatible protocol/build identity fails closed
+with a bounded non-secret state: it is not killed, replaced, or presented as
+continuity of the old execution. A later explicit retry after the bundle/update
+state is coherent starts a new recovery episode.
+
+Required production evidence includes clean-checkout helper embedding/signing
+inspection, trusted-path launch without a shell, environment/descriptor
+inheritance checks, one-launch race coverage, GUI-exit Runtime survival, and
+compatible/incompatible update behavior.
+
 Required discovery tests include missing endpoint, verified stale socket, active endpoint, connection refusal, endpoint disappearance between metadata check/connect/remove, two simultaneous Runtime starters, exact initial-plus-six-retry timing/count, one-second exhaustion, cancellation on success, zero surviving retry timer, and proof that only Runtime-side code removes/binds the endpoint.
 
 ### 8.2 Target execution resolution

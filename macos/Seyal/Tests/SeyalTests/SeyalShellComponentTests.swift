@@ -856,6 +856,47 @@ final class SeyalShellComponentTests: XCTestCase {
   }
 
   @MainActor
+  func testForcedShortcutHintControllerPresentsSynchronouslyWithoutMonitorTimer() throws {
+    let oldMainMenu = NSApp.mainMenu
+    let oldWindowsMenu = NSApp.windowsMenu
+    defer {
+      NSApp.mainMenu = oldMainMenu
+      NSApp.windowsMenu = oldWindowsMenu
+    }
+
+    let state = SeyalShellState.makePreview()
+    let shell = SeyalShellPreviewFactory.make(
+      frame: NSRect(x: 0, y: 0, width: 1280, height: 800),
+      state: state
+    )
+    let window = NSWindow(
+      contentRect: shell.frame,
+      styleMask: [.titled, .closable, .resizable],
+      backing: .buffered,
+      defer: false
+    )
+    window.contentView = shell
+
+    let controller = SeyalPreviewShortcutController(window: window, state: state)
+    controller.installMenus()
+    shell.layoutSubtreeIfNeeded()
+    controller.showShortcutHintsForTesting()
+
+    XCTAssertTrue(
+      shell.subviewsRecursively.contains {
+        $0.accessibilityIdentifier() == "shortcut-hint-overlay"
+      })
+    XCTAssertTrue(
+      shell.subviewsRecursively.contains {
+        $0.accessibilityIdentifier() == "shortcut-hint.tab.tab-terminal"
+      })
+    XCTAssertTrue(
+      shell.subviewsRecursively.contains {
+        $0.accessibilityIdentifier() == "tab.tab-terminal"
+      })
+  }
+
+  @MainActor
   func testShortcutRoutingMutatesExistingShellStateWithoutReplacingView() throws {
     let oldMainMenu = NSApp.mainMenu
     let oldWindowsMenu = NSApp.windowsMenu

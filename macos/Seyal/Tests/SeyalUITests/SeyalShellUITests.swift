@@ -432,6 +432,10 @@ final class SeyalShellUITests: XCTestCase {
         let window = app.windows["Seyal — UI Shell Preview"]
         XCTAssertTrue(window.waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["shortcut-hint.tab.tab-terminal"].waitForExistence(timeout: 2))
+        XCTAssertEqual(
+            app.staticTexts.matching(identifier: "shortcut-hint.tab.tab-terminal").count,
+            1
+        )
         XCTAssertEqual(app.staticTexts["shortcut-hint.tab.tab-terminal"].label, "⌘1")
         XCTAssertTrue(app.staticTexts["shortcut-hint.workspace.workspace-seyal"].waitForExistence(timeout: 2))
         XCTAssertEqual(app.staticTexts["shortcut-hint.workspace.workspace-seyal"].label, "⌃⌘1")

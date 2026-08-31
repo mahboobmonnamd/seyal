@@ -48,6 +48,7 @@ fn run_macos() {
     let args = std::env::args().collect::<Vec<_>>();
     if args.get(1).is_some_and(|arg| arg == "--metrics-self-test") {
         metrics::assert_measurement_integrity();
+        cohort::assert_rss_tail_measurement_integrity();
         println!("pass9_calibration_metrics_self_test status=ok {PERFORMANCE_CLAIM}");
         return;
     }

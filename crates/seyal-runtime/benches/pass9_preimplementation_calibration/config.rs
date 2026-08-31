@@ -2,6 +2,10 @@ use std::time::Duration;
 
 pub(crate) const WARMUP_CYCLES: usize = 20;
 pub(crate) const MEASURED_CYCLES: usize = 100;
+// The raw series remains authoritative. This trailing window makes a retained
+// allocator high-water mark distinguishable from RSS that is still advancing
+// at the end of a cohort; it must never replace the full-series slope/RCA.
+pub(crate) const RSS_TAIL_CYCLES: usize = 25;
 pub(crate) const COHORTS: usize = 5;
 pub(crate) const QUIESCENT_SAMPLE_COUNT: usize = 5;
 pub(crate) const QUIESCENT_SAMPLE_INTERVAL: Duration = Duration::from_millis(10);

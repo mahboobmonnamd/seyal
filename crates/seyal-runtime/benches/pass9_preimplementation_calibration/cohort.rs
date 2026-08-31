@@ -16,7 +16,9 @@ use seyal_runtime::{
     },
 };
 
-use super::config::{Geometry, LossMode, MEASURED_CYCLES, SETTLE_TIMEOUT, WARMUP_CYCLES};
+use super::config::{
+    Geometry, LossMode, MEASURED_CYCLES, RSS_TAIL_CYCLES, SETTLE_TIMEOUT, WARMUP_CYCLES,
+};
 use super::metrics::{ProcessMetrics, elapsed_ns, median_self_metrics, self_metrics, stats};
 use super::protocol::{panic_server_error, prepare_surface, read_frame, read_until, send_frame};
 use super::worker::RuntimeWorker;
@@ -84,9 +86,11 @@ pub(crate) fn run_cohort(mode: LossMode, geometry: Geometry, cohort: usize) {
     let client_cycle_growth = signed_growth(&client_rss_cycles);
     let runtime_cycle_slope = linear_slope(&runtime_rss_cycles);
     let client_cycle_slope = linear_slope(&client_rss_cycles);
+    let runtime_tail_growth = tail_growth(&runtime_rss_cycles, RSS_TAIL_CYCLES);
+    let client_tail_growth = tail_growth(&client_rss_cycles, RSS_TAIL_CYCLES);
 
     println!(
-        "pass9_calibration_cohort mode={} geometry={} cohort={} runtime_pid={} runtime_id={} execution_id={} reconnect_boundary=local_connect_hello_resolve_attach_to_complete_authoritative_client_commit reconnect_p50_us={:.3} reconnect_p95_us={:.3} reconnect_p99_us={:.3} reconnect_max_us={:.3} renderer_ready_boundary=committed_client_state_to_PreparedSurface_ready renderer_p50_us={:.3} renderer_p95_us={:.3} renderer_p99_us={:.3} renderer_max_us={:.3} cleanup_boundary=Runtime_disconnect_or_Detach_dispatch_to_attachment_controller_cleanup cleanup_classification=MEASURED_EXACT_RUNTIME_DISPATCH cleanup_p50_us={:.3} cleanup_p95_us={:.3} cleanup_p99_us={:.3} cleanup_max_us={:.3} runtime_rss_baseline_kib={} runtime_rss_final_kib={} runtime_rss_delta_kib={} runtime_cycle_rss_growth_kib={} client_rss_baseline_kib={} client_rss_final_kib={} client_rss_delta_kib={} client_cycle_rss_growth_kib={} runtime_fds_baseline={} runtime_fds_final={} runtime_threads_baseline={} runtime_threads_final={} client_fds_baseline={} client_fds_final={} client_threads_baseline={} client_threads_final={} idle_runtime_cpu_percent={:.3} controller_authority_source=Attached_granted_role_plus_Runtime_benchmark_diagnostics attachment_controller_fd_thread_return_each_cycle=true client_socket_closed_each_cycle=true pending_resync_work=Runtime_diagnostics_verified_zero retry_work=NOT_IMPLEMENTED_IN_PRE_PASS9_BASELINE runtime_lifecycle_quiescence=two_stable_direct_Runtime_diagnostic_samples sample_count={} {}",
+        "pass9_calibration_cohort mode={} geometry={} cohort={} runtime_pid={} runtime_id={} execution_id={} reconnect_boundary=local_connect_hello_resolve_attach_to_complete_authoritative_client_commit reconnect_p50_us={:.3} reconnect_p95_us={:.3} reconnect_p99_us={:.3} reconnect_max_us={:.3} renderer_ready_boundary=committed_client_state_to_PreparedSurface_ready renderer_p50_us={:.3} renderer_p95_us={:.3} renderer_p99_us={:.3} renderer_max_us={:.3} cleanup_boundary=Runtime_disconnect_or_Detach_dispatch_to_attachment_controller_cleanup cleanup_classification=MEASURED_EXACT_RUNTIME_DISPATCH cleanup_p50_us={:.3} cleanup_p95_us={:.3} cleanup_p99_us={:.3} cleanup_max_us={:.3} runtime_rss_baseline_kib={} runtime_rss_final_kib={} runtime_rss_delta_kib={} runtime_cycle_rss_growth_kib={} runtime_rss_tail_cycles={} runtime_rss_tail_growth_kib={} client_rss_baseline_kib={} client_rss_final_kib={} client_rss_delta_kib={} client_cycle_rss_growth_kib={} client_rss_tail_cycles={} client_rss_tail_growth_kib={} runtime_fds_baseline={} runtime_fds_final={} runtime_threads_baseline={} runtime_threads_final={} client_fds_baseline={} client_fds_final={} client_threads_baseline={} client_threads_final={} idle_runtime_cpu_percent={:.3} controller_authority_source=Attached_granted_role_plus_Runtime_benchmark_diagnostics attachment_controller_fd_thread_return_each_cycle=true client_socket_closed_each_cycle=true pending_resync_work=Runtime_diagnostics_verified_zero retry_work=NOT_IMPLEMENTED_IN_PRE_PASS9_BASELINE runtime_lifecycle_quiescence=two_stable_direct_Runtime_diagnostic_samples sample_count={} {}",
         mode.label(),
         geometry.label(),
         cohort,
@@ -109,10 +113,14 @@ pub(crate) fn run_cohort(mode: LossMode, geometry: Geometry, cohort: usize) {
         runtime_final.rss_kib,
         runtime_rss_delta_kib,
         runtime_cycle_growth,
+        RSS_TAIL_CYCLES,
+        runtime_tail_growth,
         client_rss_baseline,
         client_final.rss_kib,
         client_rss_delta_kib,
         client_cycle_growth,
+        RSS_TAIL_CYCLES,
+        client_tail_growth,
         runtime_baseline.fds,
         runtime_final.fds,
         runtime_baseline.threads,
@@ -126,15 +134,19 @@ pub(crate) fn run_cohort(mode: LossMode, geometry: Geometry, cohort: usize) {
         PERFORMANCE_CLAIM,
     );
     println!(
-        "pass9_calibration_rss_samples mode={} geometry={} cohort={} sample_count={} runtime_rss_kib={} runtime_slope_kib_per_cycle={:.6} client_rss_kib={} client_slope_kib_per_cycle={:.6} {}",
+        "pass9_calibration_rss_samples mode={} geometry={} cohort={} sample_count={} runtime_rss_kib={} runtime_slope_kib_per_cycle={:.6} runtime_tail_cycles={} runtime_tail_growth_kib={} client_rss_kib={} client_slope_kib_per_cycle={:.6} client_tail_cycles={} client_tail_growth_kib={} {}",
         mode.label(),
         geometry.label(),
         cohort,
         MEASURED_CYCLES,
         comma_separated(&runtime_rss_cycles),
         runtime_cycle_slope,
+        RSS_TAIL_CYCLES,
+        runtime_tail_growth,
         comma_separated(&client_rss_cycles),
         client_cycle_slope,
+        RSS_TAIL_CYCLES,
+        client_tail_growth,
         PERFORMANCE_CLAIM,
     );
     println!(
@@ -174,6 +186,18 @@ fn linear_slope(samples: &[usize]) -> f64 {
                 )
             });
     numerator / denominator
+}
+
+fn tail_growth(samples: &[usize], tail_cycles: usize) -> i64 {
+    assert!(tail_cycles > 0, "RSS tail window must be non-zero");
+    let tail = &samples[samples.len().saturating_sub(tail_cycles)..];
+    signed_growth(tail)
+}
+
+pub(crate) fn assert_rss_tail_measurement_integrity() {
+    assert_eq!(tail_growth(&[100, 112, 112, 112], 3), 0);
+    assert_eq!(tail_growth(&[100, 112, 120, 128], 3), 16);
+    assert_eq!(tail_growth(&[100, 112], 25), 12);
 }
 
 fn comma_separated(samples: &[usize]) -> String {

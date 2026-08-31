@@ -124,6 +124,11 @@ def validate_lifecycle(text: str) -> list[str]:
                 errors.append(f"RSS sample record {key} must retain 100 integer {name} samples")
         for name in ("runtime_slope_kib_per_cycle", "client_slope_kib_per_cycle"):
             require_number(errors, line, name, f"RSS sample record {key}")
+        for name in ("runtime_tail_cycles", "client_tail_cycles"):
+            if field(line, name) != "25":
+                errors.append(f"RSS sample record {key} missing fixed {name}=25")
+        for name in ("runtime_tail_growth_kib", "client_tail_growth_kib"):
+            require_number(errors, line, name, f"RSS sample record {key}")
     if rss_observed != expected_keys():
         errors.append("RSS sample records do not cover exactly every lifecycle cohort")
 
@@ -203,7 +208,7 @@ def lifecycle_fixture() -> str:
         )
         lines.append(
             f"pass9_calibration_rss_samples mode={mode} geometry={geometry} cohort={cohort} sample_count=100 "
-            f"runtime_rss_kib={samples} runtime_slope_kib_per_cycle=0 client_rss_kib={samples} client_slope_kib_per_cycle=0 performance_claim=false"
+            f"runtime_rss_kib={samples} runtime_slope_kib_per_cycle=0 runtime_tail_cycles=25 runtime_tail_growth_kib=0 client_rss_kib={samples} client_slope_kib_per_cycle=0 client_tail_cycles=25 client_tail_growth_kib=0 performance_claim=false"
         )
     for mode in MODES:
         for geometry in GEOMETRIES:

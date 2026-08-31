@@ -275,6 +275,14 @@ that result is diagnostic evidence and cannot accept or waive a regression. A
 controlled Apple-Silicon run must report
 `regression_gate=ENFORCED_CONTROLLED_HOST` and retains the same 10% assertion.
 
+Pass 9 calibration retains every per-cycle Runtime and client RSS sample. It
+also reports the net change across the final 25 measured cycles. The tail
+metric is diagnostic: a stable tail plus returned attachment/controller/fd/
+thread counters is evidence consistent with bounded allocator high-water
+retention, while a growing tail remains a lifecycle/RSS root-cause blocker.
+It never replaces the full raw series, its slope, or the requirement to
+explain consistent positive growth before accepting a budget.
+
 Broader benchmark matrices run scheduled/release and on performance-sensitive changes. Absolute product budgets should be enforced on a controlled Apple-Silicon runner with pinned hardware, OS/build mode and toolchain once that runner exists.
 
 Pre-commit hooks may duplicate fast checks for developer feedback, but they are convenience only. CI is authoritative for mergeability.

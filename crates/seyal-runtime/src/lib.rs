@@ -37,4 +37,7 @@ pub use capability::{CapabilityPolicy, m001_term_name};
 pub use error::RuntimeError;
 pub use ids::{AttachmentId, BlockId, ExecutionId, ProjectionId, RuntimeId, WorkspaceId};
 pub use input::InputIngress;
+#[cfg(all(target_os = "macos", feature = "benchmark-instrumentation"))]
+#[doc(hidden)]
+pub use runtime::Pass9LifecycleDiagnostics;
 pub use runtime::{ExecutionLifecycle, ExecutionSummary, LocalIpcMode, Runtime, RuntimeConfig};

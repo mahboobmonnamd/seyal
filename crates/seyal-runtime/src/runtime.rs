@@ -156,6 +156,20 @@ pub struct BenchmarkRuntimeDiagnostics {
     pub latest_damage_generation: u64,
 }
 
+/// Feature-gated lifecycle facts used only by the Pass 9 calibration worker.
+/// They expose existing Runtime ownership state without adding a control socket
+/// or a production reconnect path.
+#[cfg(all(target_os = "macos", feature = "benchmark-instrumentation"))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Pass9LifecycleDiagnostics {
+    pub attachment_count: usize,
+    pub has_controller: bool,
+    pub local_connection_count: usize,
+    pub pending_resync_count: usize,
+    pub pending_resync_set_count: usize,
+    pub listener_backoff_active: bool,
+}
+
 #[cfg(feature = "benchmark-instrumentation")]
 #[derive(Default)]
 struct BenchmarkRuntimeState {
@@ -163,13 +177,12 @@ struct BenchmarkRuntimeState {
     pty_read_calls: u64,
     source_times: HashMap<(ExecutionId, u64), Instant>,
     // R&D-only SPEC-009 Section 16 evidence for the M001 Pass 9 calibration
-    // harness. Written as a plain field from the disconnect/detach cleanup
-    // path (crates/seyal-runtime/src/runtime/local.rs); never printed or
-    // otherwise turned into I/O from inside that hot path. The calibration
-    // harness (benches/pass9_preimplementation_calibration/worker.rs) reads
-    // it out-of-band, right after the `poll_once` call that produced it, and
-    // only that harness code performs the logging I/O.
-    pass9_cleanup_ns: Option<u64>,
+    // harness. This only exists on Darwin, where the local-IPC lifecycle path
+    // and calibration worker exist. Samples are queued rather than overwritten
+    // so two disconnect events dispatched by one poll cannot silently replace
+    // each other's measurement.
+    #[cfg(target_os = "macos")]
+    pass9_cleanup_ns: VecDeque<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -490,18 +503,22 @@ impl Runtime {
             .copied()
     }
 
-    #[cfg(feature = "benchmark-instrumentation")]
+    #[cfg(all(target_os = "macos", feature = "benchmark-instrumentation"))]
     pub(crate) fn record_pass9_cleanup_sample(&mut self, started: Option<Instant>) {
         let Some(started) = started else {
             return;
         };
         let elapsed = started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
-        self.benchmark.pass9_cleanup_ns = Some(elapsed);
+        assert!(
+            self.benchmark.pass9_cleanup_ns.len() < EVENT_CAPACITY,
+            "Pass 9 benchmark cleanup sample queue overflow"
+        );
+        self.benchmark.pass9_cleanup_ns.push_back(elapsed);
     }
 
-    #[cfg(feature = "benchmark-instrumentation")]
+    #[cfg(all(target_os = "macos", feature = "benchmark-instrumentation"))]
     pub fn take_benchmark_pass9_cleanup_sample(&mut self) -> Option<u64> {
-        self.benchmark.pass9_cleanup_ns.take()
+        self.benchmark.pass9_cleanup_ns.pop_front()
     }
 
     #[cfg(feature = "benchmark-instrumentation")]

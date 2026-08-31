@@ -46,9 +46,10 @@ required-features = ["benchmark-instrumentation"]
 # `required-features` alone does not keep this off shared CI: workspace
 # feature unification means `seyal-client`'s dev-dependency on this crate
 # with `benchmark-instrumentation` enabled satisfies this gate for the whole
-# workspace, including plain `cargo bench --workspace`. The binary's own
-# `main()` re-checks the SEYAL_RUN_PASS9_CALIBRATION opt-in before running
-# anything expensive; that check, not this manifest entry, is the real gate.
+# workspace, including plain `cargo bench --workspace`. The binary requires
+# both the operator opt-in and an explicit `--controlled-calibration` argument
+# before running anything expensive; those checks, not this manifest entry,
+# are the enforcement boundary.
 [[bench]]
 name = "pass9_preimplementation_calibration"
 harness = false

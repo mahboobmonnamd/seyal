@@ -56,6 +56,7 @@ case "$cmd" in
     python3 scripts/check-pass5-benchmark-coverage.py --self-test
     python3 scripts/check-pass7-benchmark-coverage.py --self-test
     python3 scripts/check-pass7-validation-matrix.py --self-test
+    python3 scripts/check-pass9-calibration-coverage.py --self-test
     python3 scripts/check-ui-test-policy.py
     bash scripts/test-tooling.sh
     python3 scripts/test-workspace.py
@@ -127,18 +128,18 @@ case "$cmd" in
         # Opt in explicitly on a controlled host with
         # SEYAL_RUN_PASS9_CALIBRATION=1.
         #
-        # This shell-level check is documentation/convenience, not the
-        # enforcement boundary: `seyal-client`'s dev-dependency on
-        # `seyal-runtime` with `benchmark-instrumentation` enabled means
-        # Cargo's workspace feature unification already satisfies this
-        # bench's `required-features` during the unconditioned
-        # `cargo_pinned bench --workspace --locked` above, on every
-        # platform, regardless of this variable. The binary itself
-        # (crates/seyal-runtime/benches/pass9_preimplementation_calibration.rs)
-        # re-checks SEYAL_RUN_PASS9_CALIBRATION before doing anything
-        # expensive and is the actual, unconditional gate.
+        # The benchmark binary also requires --controlled-calibration. Cargo
+        # feature unification may compile and invoke this target during the
+        # ordinary workspace bench above, but that invocation has no argument
+        # and reports SKIPPED. This explicit command is the only path that may
+        # execute the calibration suite.
         if [[ "${SEYAL_RUN_PASS9_CALIBRATION:-0}" == "1" ]]; then
-          cargo_pinned bench -p seyal-runtime --bench pass9_preimplementation_calibration --features benchmark-instrumentation --locked
+          pass9_log="$(mktemp -t seyal-pass9-calibration.XXXXXX)"
+          trap 'rm -f "$pass9_log"' EXIT
+          cargo_pinned bench -p seyal-runtime --bench pass9_preimplementation_calibration --features benchmark-instrumentation --locked -- --controlled-calibration 2>&1 | tee "$pass9_log"
+          python3 scripts/check-pass9-calibration-coverage.py "$pass9_log"
+          rm -f "$pass9_log"
+          trap - EXIT
         else
           echo "[seyal Pass-9 pre-implementation calibration] skipped: R&D-only SPEC-009 §16 evidence, opt-in via SEYAL_RUN_PASS9_CALIBRATION=1 on a controlled host, not run on shared CI runners."
         fi
@@ -154,7 +155,12 @@ case "$cmd" in
         # dedicated surface/GPU resources return to zero on every detached
         # lifecycle cycle at both calibration geometries. It does not claim
         # display scanout or physical interaction latency.
-        /usr/bin/time -lp "$renderer_binary" --pass9-renderer-calibration
+        pass9_renderer_log="$(mktemp -t seyal-pass9-renderer-calibration.XXXXXX)"
+        trap 'rm -f "$pass9_renderer_log"' EXIT
+        /usr/bin/time -lp "$renderer_binary" --pass9-renderer-calibration 2>&1 | tee "$pass9_renderer_log"
+        python3 scripts/check-pass9-calibration-coverage.py --native "$pass9_renderer_log"
+        rm -f "$pass9_renderer_log"
+        trap - EXIT
         /usr/bin/time -lp "$renderer_binary" --renderer-benchmark
       else
         echo "[seyal Pass-5 benchmark coverage] measured Candidate-D validation skipped: production benchmark is macOS-only; validator self-test is enforced by make check."

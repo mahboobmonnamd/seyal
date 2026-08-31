@@ -1,7 +1,6 @@
 use std::{
     net::Shutdown,
     os::unix::net::UnixStream,
-    path::Path,
     thread,
     time::{Duration, Instant},
 };
@@ -9,7 +8,7 @@ use std::{
 use seyal_protocol::pass8::{BLOCK_STATE_MESSAGE_TYPE, CAP_BLOCK_METADATA};
 use seyal_render::PreparedSurface;
 use seyal_runtime::{
-    AttachmentId, ExecutionId,
+    AttachmentId,
     display::{DecodedDisplayChunk, decode_chunk, empty_cache},
     local_ipc::framing::{
         Attach, Attached, CAP_COMMAND_BLOCKS, ClientHello, Detach, Detached, ExecutionList,
@@ -58,6 +57,11 @@ pub(crate) fn run_cohort(mode: LossMode, geometry: Geometry, cohort: usize) {
         // that could contaminate the exact disconnect cleanup timing sample.
         let attached_metrics = worker.metrics();
         assert_eq!(attached_metrics.attachment_count, 1);
+        assert!(attached_metrics.has_controller);
+        assert_eq!(attached_metrics.local_connection_count, 1);
+        assert_eq!(attached_metrics.pending_resync_count, 0);
+        assert_eq!(attached_metrics.pending_resync_set_count, 0);
+        assert!(!attached_metrics.listener_backoff_active);
         assert_eq!(attached_metrics.threads, runtime_baseline.threads);
         assert_eq!(attached_metrics.fds, runtime_baseline.fds + 1);
 
@@ -78,9 +82,11 @@ pub(crate) fn run_cohort(mode: LossMode, geometry: Geometry, cohort: usize) {
     let client_rss_delta_kib = client_final.rss_kib as i64 - client_rss_baseline as i64;
     let runtime_cycle_growth = signed_growth(&runtime_rss_cycles);
     let client_cycle_growth = signed_growth(&client_rss_cycles);
+    let runtime_cycle_slope = linear_slope(&runtime_rss_cycles);
+    let client_cycle_slope = linear_slope(&client_rss_cycles);
 
     println!(
-        "pass9_calibration_cohort mode={} geometry={} cohort={} runtime_pid={} runtime_id={} execution_id={} reconnect_boundary=local_connect_hello_resolve_attach_to_complete_authoritative_client_commit reconnect_p50_us={:.3} reconnect_p95_us={:.3} reconnect_p99_us={:.3} reconnect_max_us={:.3} renderer_ready_boundary=committed_client_state_to_PreparedSurface_ready renderer_p50_us={:.3} renderer_p95_us={:.3} renderer_p99_us={:.3} renderer_max_us={:.3} cleanup_boundary=Runtime_disconnect_or_Detach_dispatch_to_attachment_controller_cleanup cleanup_classification=MEASURED_EXACT_RUNTIME_DISPATCH cleanup_p50_us={:.3} cleanup_p95_us={:.3} cleanup_p99_us={:.3} cleanup_max_us={:.3} runtime_rss_baseline_kib={} runtime_rss_final_kib={} runtime_rss_delta_kib={} runtime_cycle_rss_growth_kib={} client_rss_baseline_kib={} client_rss_final_kib={} client_rss_delta_kib={} client_cycle_rss_growth_kib={} runtime_fds_baseline={} runtime_fds_final={} runtime_threads_baseline={} runtime_threads_final={} client_fds_baseline={} client_fds_final={} client_threads_baseline={} client_threads_final={} idle_runtime_cpu_percent={:.3} controller_authority_source=Attached_granted_role_plus_post_cleanup_ExecutionList attachment_controller_fd_thread_return_each_cycle=true client_socket_closed_each_cycle=true pending_resync_work=NONE_BY_CONSTRUCTION retry_work=NOT_IMPLEMENTED_IN_PRE_PASS9_BASELINE runtime_lifecycle_quiescence=two_stable_baseline_resource_samples_after_authority_zero sample_count={} {}",
+        "pass9_calibration_cohort mode={} geometry={} cohort={} runtime_pid={} runtime_id={} execution_id={} reconnect_boundary=local_connect_hello_resolve_attach_to_complete_authoritative_client_commit reconnect_p50_us={:.3} reconnect_p95_us={:.3} reconnect_p99_us={:.3} reconnect_max_us={:.3} renderer_ready_boundary=committed_client_state_to_PreparedSurface_ready renderer_p50_us={:.3} renderer_p95_us={:.3} renderer_p99_us={:.3} renderer_max_us={:.3} cleanup_boundary=Runtime_disconnect_or_Detach_dispatch_to_attachment_controller_cleanup cleanup_classification=MEASURED_EXACT_RUNTIME_DISPATCH cleanup_p50_us={:.3} cleanup_p95_us={:.3} cleanup_p99_us={:.3} cleanup_max_us={:.3} runtime_rss_baseline_kib={} runtime_rss_final_kib={} runtime_rss_delta_kib={} runtime_cycle_rss_growth_kib={} client_rss_baseline_kib={} client_rss_final_kib={} client_rss_delta_kib={} client_cycle_rss_growth_kib={} runtime_fds_baseline={} runtime_fds_final={} runtime_threads_baseline={} runtime_threads_final={} client_fds_baseline={} client_fds_final={} client_threads_baseline={} client_threads_final={} idle_runtime_cpu_percent={:.3} controller_authority_source=Attached_granted_role_plus_Runtime_benchmark_diagnostics attachment_controller_fd_thread_return_each_cycle=true client_socket_closed_each_cycle=true pending_resync_work=Runtime_diagnostics_verified_zero retry_work=NOT_IMPLEMENTED_IN_PRE_PASS9_BASELINE runtime_lifecycle_quiescence=two_stable_direct_Runtime_diagnostic_samples sample_count={} {}",
         mode.label(),
         geometry.label(),
         cohort,
@@ -120,6 +126,18 @@ pub(crate) fn run_cohort(mode: LossMode, geometry: Geometry, cohort: usize) {
         PERFORMANCE_CLAIM,
     );
     println!(
+        "pass9_calibration_rss_samples mode={} geometry={} cohort={} sample_count={} runtime_rss_kib={} runtime_slope_kib_per_cycle={:.6} client_rss_kib={} client_slope_kib_per_cycle={:.6} {}",
+        mode.label(),
+        geometry.label(),
+        cohort,
+        MEASURED_CYCLES,
+        comma_separated(&runtime_rss_cycles),
+        runtime_cycle_slope,
+        comma_separated(&client_rss_cycles),
+        client_cycle_slope,
+        PERFORMANCE_CLAIM,
+    );
+    println!(
         "PASS9_RESULT reconnect_p99_us={:.3} renderer_ready_p99_us={:.3} cleanup_p99_us={:.3} runtime_rss_delta_kib={} client_rss_delta_kib={}",
         reconnect.p99_us,
         renderer_ready.p99_us,
@@ -137,6 +155,35 @@ fn signed_growth(samples: &[usize]) -> i64 {
     }
 }
 
+fn linear_slope(samples: &[usize]) -> f64 {
+    if samples.len() < 2 {
+        return 0.0;
+    }
+    let count = samples.len() as f64;
+    let mean_x = (count - 1.0) / 2.0;
+    let mean_y = samples.iter().map(|value| *value as f64).sum::<f64>() / count;
+    let (numerator, denominator) =
+        samples
+            .iter()
+            .enumerate()
+            .fold((0.0, 0.0), |(numerator, denominator), (index, value)| {
+                let delta_x = index as f64 - mean_x;
+                (
+                    numerator + delta_x * (*value as f64 - mean_y),
+                    denominator + delta_x * delta_x,
+                )
+            });
+    numerator / denominator
+}
+
+fn comma_separated(samples: &[usize]) -> String {
+    samples
+        .iter()
+        .map(usize::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 fn assert_fresh_attachment(previous: &mut Option<AttachmentId>, current: AttachmentId) {
     if let Some(previous) = previous {
         assert_ne!(*previous, current, "AttachmentId reused across reconnect");
@@ -151,25 +198,13 @@ fn assert_quiescent(
 ) {
     let deadline = Instant::now() + SETTLE_TIMEOUT;
     loop {
-        let status = query_execution_status(&worker.socket_path, worker.execution_id);
-        assert_eq!(status.execution_id, worker.execution_id);
-        if status.attachment_count == 0 && !status.has_controller {
-            let first = worker.metrics();
-            let client = self_metrics();
-            if first.attachment_count == 0
-                && first.fds == runtime_baseline.fds
-                && first.threads == runtime_baseline.threads
-                && client.fds == client_baseline.fds
-                && client.threads == client_baseline.threads
-            {
-                thread::yield_now();
-                let second = worker.metrics();
-                if second.attachment_count == 0
-                    && second.fds == runtime_baseline.fds
-                    && second.threads == runtime_baseline.threads
-                {
-                    return;
-                }
+        let first = worker.metrics();
+        let client = self_metrics();
+        if lifecycle_is_quiescent(first, runtime_baseline, client, client_baseline) {
+            thread::sleep(Duration::from_millis(10));
+            let second = worker.metrics();
+            if lifecycle_is_quiescent(second, runtime_baseline, self_metrics(), client_baseline) {
+                return;
             }
         }
         assert!(
@@ -178,6 +213,24 @@ fn assert_quiescent(
         );
         thread::yield_now();
     }
+}
+
+fn lifecycle_is_quiescent(
+    runtime: ProcessMetrics,
+    runtime_baseline: ProcessMetrics,
+    client: ProcessMetrics,
+    client_baseline: ProcessMetrics,
+) -> bool {
+    runtime.attachment_count == 0
+        && !runtime.has_controller
+        && runtime.local_connection_count == 0
+        && runtime.pending_resync_count == 0
+        && runtime.pending_resync_set_count == 0
+        && !runtime.listener_backoff_active
+        && runtime.fds == runtime_baseline.fds
+        && runtime.threads == runtime_baseline.threads
+        && client.fds == client_baseline.fds
+        && client.threads == client_baseline.threads
 }
 
 struct RawAttachment {
@@ -315,44 +368,4 @@ fn cleanup_attachment(mode: LossMode, worker: &mut RuntimeWorker, mut attachment
         }
     }
     drop(attachment);
-}
-
-#[derive(Clone, Copy)]
-struct ExecutionStatus {
-    execution_id: ExecutionId,
-    attachment_count: usize,
-    has_controller: bool,
-}
-
-fn query_execution_status(socket_path: &Path, execution_id: ExecutionId) -> ExecutionStatus {
-    let mut stream = UnixStream::connect(socket_path).expect("status connect");
-    stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .expect("status read timeout");
-    stream
-        .set_write_timeout(Some(Duration::from_secs(2)))
-        .expect("status write timeout");
-    send_frame(
-        &mut stream,
-        MessageType::ClientHello,
-        &ClientHello {
-            client_capabilities: CAP_COMMAND_BLOCKS | CAP_BLOCK_METADATA,
-        }
-        .encode(),
-    );
-    let hello = read_until(&mut stream, MessageType::ServerHello as u16);
-    ServerHello::decode(&hello).expect("status ServerHello");
-    send_frame(&mut stream, MessageType::ListExecutions, &[]);
-    let payload = read_until(&mut stream, MessageType::ExecutionList as u16);
-    let list = ExecutionList::decode(&payload).expect("status ExecutionList");
-    let entry = list
-        .entries
-        .into_iter()
-        .find(|entry| entry.execution_id == execution_id)
-        .expect("status execution");
-    ExecutionStatus {
-        execution_id,
-        attachment_count: usize::from(entry.attachment_count),
-        has_controller: entry.has_controller,
-    }
 }

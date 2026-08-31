@@ -63,22 +63,23 @@ fn run_macos() {
         return;
     }
 
-    // Cargo unifies features across a single build: `seyal-client`'s
-    // dev-dependency on `seyal-runtime` with `benchmark-instrumentation`
-    // enabled satisfies this bench's own `required-features` gate for *any*
-    // `cargo bench --workspace` invocation, including the unconditioned one
-    // `scripts/task.sh` runs before its explicit, opt-in-gated invocation of
-    // this same target. `required-features` and the shell-level
-    // `SEYAL_RUN_PASS9_CALIBRATION` check in scripts/task.sh are therefore
-    // not sufficient by themselves to keep this off shared/virtualized CI
-    // runners, which are not a valid SPEC-009 Section 16 controlled host.
-    // This is the actual, unconditional gate: the top-level entry point
-    // (no `--runtime-worker`/`--cohort` argument, i.e. exactly what any
-    // `cargo bench` invocation runs) always checks it before doing anything
-    // expensive, regardless of which command triggered this binary.
+    // Cargo unifies features across a workspace, so `required-features` does
+    // not distinguish ordinary `cargo bench --workspace` from an intentional
+    // controlled-host calibration. Require a dedicated argument as well as
+    // operator authorization: this prevents the workspace bench and the
+    // explicit task command from both running the expensive 2,400-cycle suite.
+    if args
+        .get(1)
+        .is_none_or(|arg| arg != "--controlled-calibration")
+    {
+        println!(
+            "pass9_preimplementation_calibration SKIPPED reason=explicit_controlled_calibration_argument_required required_arg=--controlled-calibration {PERFORMANCE_CLAIM}"
+        );
+        return;
+    }
     if std::env::var("SEYAL_RUN_PASS9_CALIBRATION").as_deref() != Ok("1") {
         println!(
-            "pass9_preimplementation_calibration SKIPPED reason=opt_in_required opt_in_env=SEYAL_RUN_PASS9_CALIBRATION=1 not_a_valid_host=shared_or_virtualized_CI_runner {PERFORMANCE_CLAIM}"
+            "pass9_preimplementation_calibration SKIPPED reason=operator_opt_in_required opt_in_env=SEYAL_RUN_PASS9_CALIBRATION=1 {PERFORMANCE_CLAIM}"
         );
         return;
     }

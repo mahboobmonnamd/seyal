@@ -13,6 +13,11 @@ pub(crate) struct ProcessMetrics {
     pub(crate) threads: usize,
     pub(crate) fds: usize,
     pub(crate) attachment_count: usize,
+    pub(crate) has_controller: bool,
+    pub(crate) local_connection_count: usize,
+    pub(crate) pending_resync_count: usize,
+    pub(crate) pending_resync_set_count: usize,
+    pub(crate) listener_backoff_active: bool,
 }
 
 pub(crate) fn self_metrics() -> ProcessMetrics {
@@ -50,6 +55,11 @@ pub(crate) fn metrics_for_pid(pid: u32) -> ProcessMetrics {
         threads,
         fds,
         attachment_count: 0,
+        has_controller: false,
+        local_connection_count: 0,
+        pending_resync_count: 0,
+        pending_resync_set_count: 0,
+        listener_backoff_active: false,
     }
 }
 
@@ -74,6 +84,11 @@ pub(crate) fn median_self_metrics() -> ProcessMetrics {
         threads: threads[QUIESCENT_SAMPLE_COUNT / 2],
         fds: fds[QUIESCENT_SAMPLE_COUNT / 2],
         attachment_count: 0,
+        has_controller: false,
+        local_connection_count: 0,
+        pending_resync_count: 0,
+        pending_resync_set_count: 0,
+        listener_backoff_active: false,
     }
 }
 

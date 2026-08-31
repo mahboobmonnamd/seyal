@@ -32,13 +32,15 @@ use crate::{
     },
 };
 
+#[cfg(all(target_os = "macos", feature = "benchmark-instrumentation"))]
+use super::Pass9LifecycleDiagnostics;
 use super::{BlockCompletion, ComposerAdmission, ExecutionLifecycle, Runtime};
 
 const RESYNC_SNAPSHOT_BUDGET_PER_POLL: usize = 2;
 const ACCEPT_BACKOFF_INITIAL: Duration = Duration::from_millis(10);
 const ACCEPT_BACKOFF_MAX: Duration = Duration::from_millis(250);
 
-#[cfg(feature = "benchmark-instrumentation")]
+#[cfg(all(target_os = "macos", feature = "benchmark-instrumentation"))]
 fn pass9_cleanup_timer() -> Option<Instant> {
     std::env::args()
         .any(|argument| argument == "--runtime-worker")
@@ -184,6 +186,22 @@ fn resize_error_code(error: &RuntimeError) -> ErrorCode {
 }
 
 impl Runtime {
+    #[cfg(all(target_os = "macos", feature = "benchmark-instrumentation"))]
+    pub fn benchmark_pass9_lifecycle_diagnostics(
+        &self,
+        execution_id: ExecutionId,
+    ) -> Option<Pass9LifecycleDiagnostics> {
+        let state = self.local_ipc.as_ref()?;
+        Some(Pass9LifecycleDiagnostics {
+            attachment_count: self.entries.get(&execution_id)?.attachments.len(),
+            has_controller: state.attachments.has_controller(execution_id),
+            local_connection_count: state.connections.len(),
+            pending_resync_count: state.pending_resync.len(),
+            pending_resync_set_count: state.pending_resync_set.len(),
+            listener_backoff_active: state.listener_backoff_deadline.is_some(),
+        })
+    }
+
     pub(super) fn local_ipc_deadline(&self) -> Option<Instant> {
         self.local_ipc
             .as_ref()

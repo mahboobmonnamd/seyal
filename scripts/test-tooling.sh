@@ -14,6 +14,11 @@ grep -Eq 'channel[[:space:]]*=[[:space:]]*"1\.98\.0"' rust-toolchain.toml || fai
 grep -Eq 'components[[:space:]]*=[[:space:]]*\[[^]]*"rustfmt"' rust-toolchain.toml || fail "rustfmt is not pinned"
 grep -Eq 'components[[:space:]]*=[[:space:]]*\[[^]]*"clippy"' rust-toolchain.toml || fail "clippy is not pinned"
 
+[[ -f scripts/check-pass9-calibration-coverage.py ]] || fail "Pass 9 calibration coverage validator is missing"
+python3 scripts/check-pass9-calibration-coverage.py --self-test >/dev/null || fail "Pass 9 calibration coverage validator self-test failed"
+grep -q -- '--controlled-calibration' crates/seyal-runtime/benches/pass9_preimplementation_calibration.rs || fail "Pass 9 calibration binary lacks explicit invocation gate"
+grep -q -- '-- --controlled-calibration' scripts/task.sh || fail "Pass 9 calibration task lacks the explicit invocation argument"
+
 for target in bootstrap bootstrap-agents build test check bench; do
   make -n "$target" >/dev/null || fail "canonical make target '${target}' does not resolve"
 done

@@ -133,6 +133,11 @@ impl RuntimeWorker {
             threads: threads[QUIESCENT_SAMPLE_COUNT / 2],
             fds: fds[QUIESCENT_SAMPLE_COUNT / 2],
             attachment_count,
+            has_controller: false,
+            local_connection_count: 0,
+            pending_resync_count: 0,
+            pending_resync_set_count: 0,
+            listener_backoff_active: false,
         }
     }
 
@@ -200,6 +205,11 @@ fn parse_worker_metrics(line: &str) -> ProcessMetrics {
         threads: fields[2].parse().expect("worker threads"),
         fds: fields[3].parse().expect("worker fds"),
         attachment_count: fields[4].parse().expect("worker attachments"),
+        has_controller: fields[5].parse().expect("worker controller"),
+        local_connection_count: fields[6].parse().expect("worker connections"),
+        pending_resync_count: fields[7].parse().expect("worker pending resync"),
+        pending_resync_set_count: fields[8].parse().expect("worker pending resync set"),
+        listener_backoff_active: fields[9].parse().expect("worker listener backoff"),
     }
 }
 
@@ -277,13 +287,20 @@ pub(crate) fn run_runtime_worker(geometry: Geometry) {
                 Ok(command) => match command.as_str() {
                     "metrics" => {
                         let metrics = self_metrics();
-                        let attachment_count = runtime
-                            .lookup(execution_id)
-                            .expect("live execution")
-                            .attachment_count;
+                        let lifecycle = runtime
+                            .benchmark_pass9_lifecycle_diagnostics(execution_id)
+                            .expect("Runtime local-IPC lifecycle diagnostics");
                         println!(
-                            "METRICS\t{}\t{}\t{}\t{}",
-                            metrics.rss_kib, metrics.threads, metrics.fds, attachment_count
+                            "METRICS\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                            metrics.rss_kib,
+                            metrics.threads,
+                            metrics.fds,
+                            lifecycle.attachment_count,
+                            lifecycle.has_controller,
+                            lifecycle.local_connection_count,
+                            lifecycle.pending_resync_count,
+                            lifecycle.pending_resync_set_count,
+                            lifecycle.listener_backoff_active
                         );
                         stdout().flush().expect("metrics flush");
                     }

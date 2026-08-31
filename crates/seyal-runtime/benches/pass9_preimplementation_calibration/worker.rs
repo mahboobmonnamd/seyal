@@ -204,12 +204,16 @@ impl RuntimeWorker {
         let mut threads = Vec::with_capacity(QUIESCENT_SAMPLE_COUNT);
         let mut fds = Vec::with_capacity(QUIESCENT_SAMPLE_COUNT);
         let mut attachment_count = 0;
+        let mut allocator_in_use_kib = 0;
+        let mut allocator_reserved_kib = 0;
         for sample in 0..QUIESCENT_SAMPLE_COUNT {
             let metrics = self.metrics();
             rss.push(metrics.rss_kib);
             threads.push(metrics.threads);
             fds.push(metrics.fds);
             attachment_count = metrics.attachment_count;
+            allocator_in_use_kib = metrics.allocator_in_use_kib;
+            allocator_reserved_kib = metrics.allocator_reserved_kib;
             if sample + 1 != QUIESCENT_SAMPLE_COUNT {
                 thread::sleep(QUIESCENT_SAMPLE_INTERVAL);
             }
@@ -227,8 +231,8 @@ impl RuntimeWorker {
             pending_resync_count: 0,
             pending_resync_set_count: 0,
             listener_backoff_active: false,
-            allocator_in_use_kib: 0,
-            allocator_reserved_kib: 0,
+            allocator_in_use_kib,
+            allocator_reserved_kib,
         }
     }
 

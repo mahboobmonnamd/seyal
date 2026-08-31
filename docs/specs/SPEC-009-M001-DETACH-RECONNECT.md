@@ -202,19 +202,55 @@ A GUI must not launch multiple Runtime processes merely because the first connec
 
 ### 8.1.1 Bundled Runtime helper and launch trust contract
 
-The production macOS client launches Runtime only from the signed helper embedded
-in the same application bundle at `Seyal.app/Contents/Helpers/seyal-runtime`.
-The build/package pipeline must create that helper on a clean checkout and
-validate the nested code signature as part of package verification. The client
-uses a direct executable URL/API, never a shell command, and passes neither
-terminal data nor credentials in arguments.
+The production macOS client launches Runtime only from the Mach-O helper at the
+fixed bundle-relative path `Seyal.app/Contents/Helpers/seyal-runtime`. The URL is
+derived from the running app bundle, not from configuration, the current
+directory, `PATH` or an environment value. Before every launch action the client
+canonicalizes the bundle and helper URLs, rejects any symlink or non-regular
+helper leaf, and requires the canonical helper to remain below the canonical
+`Contents/Helpers` directory at that exact name. A missing, substituted or
+unverifiable helper is a non-retryable security failure.
 
-The launch environment is a documented minimal allowlist required for normal
-per-user Runtime operation. Runtime control/listener descriptors are
-close-on-exec and the GUI must not intentionally inherit arbitrary descriptors
-or secret-bearing environment variables into the helper. Runtime then constructs
-the child-shell environment under ADR-005/ADR-008; helper launch does not grant
-the GUI authority over PTY ownership or execution lifetime.
+The helper has code-signing identifier `dev.seyal.Seyal.runtime`, an empty
+entitlement set for M001, and is signed before the outer app bundle is signed.
+Package verification validates both the helper's signature and
+the outer bundle seal. Immediately before launch, a distribution client validates
+the helper with macOS Code Signing Services against its identifier, an Apple
+code-signing anchor and the same Team Identifier as the containing app. A
+Debug/test-only ad-hoc build may accept an ad-hoc helper only when the containing
+app is also ad-hoc signed; that allowance is compile-time excluded from Release
+and package acceptance. This trust check proves package integrity and the
+expected release signer/identifier. It does not add isolation from already
+trusted code running as the same effective user; that remains outside M001's
+same-UID local IPC threat boundary.
+
+The client launches the verified URL directly with no shell and an empty argument
+list. The helper launch environment is constructed from scratch and contains
+only:
+
+- `HOME`: the absolute home directory returned by the effective user's account
+  record;
+- `USER` and `LOGNAME`: the effective user's account name;
+- `SHELL`: the absolute executable shell path returned by that account record;
+- `TMPDIR`: the already-validated absolute per-user Darwin temporary directory;
+- `PATH`: exactly `/usr/bin:/bin:/usr/sbin:/sbin`;
+- `LANG` and `LC_CTYPE`: copied independently from the GUI environment only when
+  present, valid UTF-8, free of control characters and at most 128 bytes.
+
+No other key is inherited. In particular all `DYLD_*`, `LD_*`, credential,
+token, agent-socket, shell-hook, allocator/debug and application-private values
+are absent. Runtime later constructs the child-shell environment under
+ADR-005/ADR-008; helper launch does not grant the GUI authority over PTY
+ownership or execution lifetime.
+
+The spawned helper receives `/dev/null` as file descriptors 0, 1 and 2 and no
+GUI-owned pipe, socket or log descriptor. Every descriptor at 3 or above is
+closed in the child through close-all/default-close-on-exec spawn semantics; a
+small hand-maintained close list is insufficient. Runtime creates its canonical
+listener only after launch and never inherits it from the GUI. The helper is put
+in an independent process group and has no parent-death signal, parent-monitoring
+pipe or GUI-owned lifetime token. Logging therefore cannot block on or fail due
+to a dead GUI.
 
 The client owns at most one launch request per foreground recovery episode;
 launch success only means the helper was started, never that old-PTY continuity
@@ -222,16 +258,40 @@ was restored. Runtime owns singleton arbitration, stale canonical-socket
 validation/removal and endpoint binding. GUI exit or final-window close does
 not terminate an already-running Runtime.
 
-The client and helper must carry the same bundle build identity. An observed
-Runtime that cannot establish compatible protocol/build identity fails closed
-with a bounded non-secret state: it is not killed, replaced, or presented as
-continuity of the old execution. A later explicit retry after the bundle/update
-state is coherent starts a new recovery episode.
+Pass 9 introduces no build-identity field and no protocol-wire change. Runtime
+compatibility is determined only by SPEC-004's existing frame version and
+capability negotiation: version `1.0` must be accepted and every capability
+required by the reconnect path must be present. Compatible app/Runtime builds
+may attach across an app update. A version mismatch or missing mandatory
+capability maps to non-retryable `RuntimeMismatch`; the observed Runtime is not
+killed, replaced or presented as continuity of the old execution. The UI exposes
+a bounded non-secret update/restart-required state and explicit retry, but the
+automatic recovery episode never restarts Runtime. Additive optional
+capabilities remain ignorable under SPEC-004. This preserves ADR-001 and does
+not require a new architecture decision.
 
-Required production evidence includes clean-checkout helper embedding/signing
-inspection, trusted-path launch without a shell, environment/descriptor
-inheritance checks, one-launch race coverage, GUI-exit Runtime survival, and
-compatible/incompatible update behavior.
+Helper path, signature and launch failures are reported only as bounded
+structured codes: `helperMissing`, `helperPathInvalid`, `helperTrustInvalid`,
+`launchDenied` or `launchFailed`. `RuntimeMismatch` covers the compatibility
+case. These paths must not log argv, environment names or values, descriptor
+details, terminal cells, input, marked text, history, cwd, credentials, sensitive
+paths, signer certificate contents or unredacted operating-system error text;
+numeric error domain/code and the structured category are sufficient.
+
+Required production evidence includes clean-checkout helper embedding and outer
+bundle sealing, Release nested-signature/designated-requirement verification,
+Debug-only ad-hoc gating, canonical no-symlink path resolution, direct empty-argv
+launch, exact environment equality and poisoned-environment rejection. Separate
+canary regular-file, directory, pipe-read, pipe-write, Unix-socket and kqueue
+descriptors opened at numbers 3 or above prove close-all behavior. Evidence also
+includes missing helper, non-regular/symlink/substituted helper, wrong signer,
+wrong helper identifier, unexpected entitlement, duplicate launch race, active
+and verified-stale canonical sockets, immediate GUI death while Runtime writes to
+all standard streams, and proof that Runtime continues serving the canonical
+socket without parent/process-group coupling. The compatibility matrix covers
+same version with required capabilities, missing mandatory capability, framing
+major/minor mismatch, and optional-capability skew in both client/Runtime age
+directions. Every failure case asserts the structured redacted log contract.
 
 Required discovery tests include missing endpoint, verified stale socket, active endpoint, connection refusal, endpoint disappearance between metadata check/connect/remove, two simultaneous Runtime starters, exact initial-plus-six-retry timing/count, one-second exhaustion, cancellation on success, zero surviving retry timer, and proof that only Runtime-side code removes/binds the endpoint.
 

@@ -1,6 +1,6 @@
 use std::{
     env,
-    io::{BufRead, Write, stdin, stdout},
+    io::{BufRead, BufReader, Read, Write, stdin, stdout},
     path::PathBuf,
     process::{self, Child, ChildStdin, Command, Stdio},
     sync::mpsc,
@@ -21,7 +21,7 @@ use super::process_io::spawn_line_reader;
 pub(crate) struct RuntimeWorker {
     child: Child,
     stdin: ChildStdin,
-    output_rx: mpsc::Receiver<String>,
+    output_rx: mpsc::Receiver<WorkerOutput>,
     pub(crate) pid: u32,
     pub(crate) socket_path: PathBuf,
     pub(crate) runtime_id: u128,
@@ -29,6 +29,33 @@ pub(crate) struct RuntimeWorker {
     pub(crate) expect_cleanup_transition: bool,
 }
 
+#[derive(Clone, Copy)]
+enum WorkerCommand {
+    Lifecycle,
+    Stop,
+}
+
+impl WorkerCommand {
+    fn wire_name(self) -> &'static str {
+        match self {
+            Self::Lifecycle => "lifecycle",
+            Self::Stop => "stop",
+        }
+    }
+}
+
+enum WorkerOutput {
+    Ready {
+        pid: u32,
+        socket_path: PathBuf,
+        runtime_id: u128,
+        execution_id: u128,
+    },
+    Cleanup(u64),
+    Lifecycle(LifecycleMetrics),
+}
+
+#[derive(Clone, Copy)]
 struct LifecycleMetrics {
     attachment_count: usize,
     has_controller: bool,
@@ -38,10 +65,41 @@ struct LifecycleMetrics {
     listener_backoff_active: bool,
 }
 
-fn recv_worker_line(rx: &mpsc::Receiver<String>, timeout: Duration, context: &str) -> String {
+fn recv_worker_output(
+    rx: &mpsc::Receiver<WorkerOutput>,
+    timeout: Duration,
+    context: &str,
+) -> WorkerOutput {
     rx.recv_timeout(timeout).unwrap_or_else(|_| {
         panic!("Runtime worker produced no output within {timeout:?} while waiting for {context}")
     })
+}
+
+fn spawn_worker_output_reader<R>(reader: R) -> mpsc::Receiver<WorkerOutput>
+where
+    R: Read + Send + 'static,
+{
+    // The bounded channel is allocated once. Each lifecycle/cleanup message is
+    // parsed into a Copy value while one reusable line buffer retains its
+    // capacity, so observing the Runtime does not create per-sample heap work
+    // in the measured client cohort.
+    let (tx, rx) = mpsc::sync_channel(4);
+    thread::spawn(move || {
+        let mut reader = BufReader::new(reader);
+        let mut line = String::with_capacity(256);
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            let output = parse_worker_output(line.trim_end());
+            if tx.send(output).is_err() {
+                break;
+            }
+        }
+    });
+    rx
 }
 
 impl RuntimeWorker {
@@ -64,7 +122,7 @@ impl RuntimeWorker {
             .spawn()
             .expect("spawn fresh Runtime worker process");
         let stdin = child.stdin.take().expect("worker stdin");
-        let output_rx = spawn_line_reader(child.stdout.take().expect("worker stdout"));
+        let output_rx = spawn_worker_output_reader(child.stdout.take().expect("worker stdout"));
         let stderr_rx = spawn_line_reader(child.stderr.take().expect("worker stderr"));
         thread::spawn(move || {
             while let Ok(line) = stderr_rx.recv() {
@@ -72,14 +130,16 @@ impl RuntimeWorker {
             }
         });
 
-        let line = recv_worker_line(&output_rx, WORKER_STARTUP_TIMEOUT, "READY");
-        let fields = line.split('\t').collect::<Vec<_>>();
-        assert_eq!(fields.first().copied(), Some("READY"));
-        let pid: u32 = fields[1].parse().expect("worker pid");
+        let WorkerOutput::Ready {
+            pid,
+            socket_path,
+            runtime_id,
+            execution_id,
+        } = recv_worker_output(&output_rx, WORKER_STARTUP_TIMEOUT, "READY")
+        else {
+            panic!("Runtime worker emitted a non-READY record during startup");
+        };
         assert_eq!(pid, child.id());
-        let socket_path = PathBuf::from(fields[2]);
-        let runtime_id = fields[3].parse().expect("RuntimeId u128");
-        let execution_raw: u128 = fields[4].parse().expect("ExecutionId u128");
         Self {
             child,
             stdin,
@@ -87,36 +147,37 @@ impl RuntimeWorker {
             pid,
             socket_path,
             runtime_id,
-            execution_id: ExecutionId::from_bytes(execution_raw.to_le_bytes()),
+            execution_id: ExecutionId::from_bytes(execution_id.to_le_bytes()),
             expect_cleanup_transition: false,
         }
     }
 
-    fn send_command(&mut self, command: &str) {
-        writeln!(self.stdin, "{command}").expect("worker command write");
+    fn send_command(&mut self, command: WorkerCommand) {
+        writeln!(self.stdin, "{}", command.wire_name()).expect("worker command write");
         self.stdin.flush().expect("worker command flush");
     }
 
-    fn read_line_with_prefix(&mut self, prefix: &str) -> String {
+    fn read_lifecycle(&mut self) -> LifecycleMetrics {
         loop {
-            let line = recv_worker_line(&self.output_rx, WORKER_RESPONSE_TIMEOUT, prefix);
-            if line.starts_with(prefix) {
-                return line;
-            }
-            assert!(
-                line.starts_with("CLEANUP\t"),
-                "unexpected Runtime worker output: {line}"
-            );
-            if self.expect_cleanup_transition {
-                panic!("cleanup transition consumed before explicit read: {line}");
+            match recv_worker_output(&self.output_rx, WORKER_RESPONSE_TIMEOUT, "LIFECYCLE") {
+                WorkerOutput::Lifecycle(lifecycle) => return lifecycle,
+                WorkerOutput::Cleanup(cleanup_ns) if self.expect_cleanup_transition => {
+                    panic!("cleanup transition consumed before explicit read: {cleanup_ns}");
+                }
+                WorkerOutput::Cleanup(_) => {}
+                WorkerOutput::Ready { .. } => {
+                    panic!("Runtime worker emitted duplicate READY output");
+                }
             }
         }
     }
 
     pub(crate) fn metrics(&mut self) -> ProcessMetrics {
+        self.send_command(WorkerCommand::Lifecycle);
+        let lifecycle = self.read_lifecycle();
+        // Sample after the fixed diagnostic exchange so the OS counters and
+        // logical state describe the same settled observation point.
         let mut metrics = metrics_for_pid(self.pid);
-        self.send_command("lifecycle");
-        let lifecycle = parse_worker_lifecycle(&self.read_line_with_prefix("LIFECYCLE\t"));
         metrics.attachment_count = lifecycle.attachment_count;
         metrics.has_controller = lifecycle.has_controller;
         metrics.local_connection_count = lifecycle.local_connection_count;
@@ -158,13 +219,18 @@ impl RuntimeWorker {
     }
 
     pub(crate) fn read_cleanup_sample(&mut self) -> u64 {
-        let line = self.read_line_with_prefix("CLEANUP\t");
-        self.expect_cleanup_transition = false;
-        line.split('\t')
-            .nth(1)
-            .expect("cleanup ns")
-            .parse()
-            .expect("cleanup integer")
+        match recv_worker_output(&self.output_rx, WORKER_RESPONSE_TIMEOUT, "CLEANUP") {
+            WorkerOutput::Cleanup(cleanup_ns) => {
+                self.expect_cleanup_transition = false;
+                cleanup_ns
+            }
+            WorkerOutput::Lifecycle(_) => {
+                panic!("Runtime worker emitted unexpected lifecycle output before cleanup");
+            }
+            WorkerOutput::Ready { .. } => {
+                panic!("Runtime worker emitted duplicate READY output");
+            }
+        }
     }
 
     pub(crate) fn measure_idle_cpu(&mut self) -> f64 {
@@ -181,7 +247,7 @@ impl RuntimeWorker {
     }
 
     pub(crate) fn finish(mut self) {
-        self.send_command("stop");
+        self.send_command(WorkerCommand::Stop);
         let deadline = Instant::now() + WORKER_SHUTDOWN_TIMEOUT;
         loop {
             if let Some(status) = self.child.try_wait().expect("Runtime worker wait") {
@@ -213,17 +279,74 @@ impl Drop for RuntimeWorker {
     }
 }
 
-fn parse_worker_lifecycle(line: &str) -> LifecycleMetrics {
-    let fields = line.split('\t').collect::<Vec<_>>();
-    assert_eq!(fields[0], "LIFECYCLE");
-    LifecycleMetrics {
-        attachment_count: fields[1].parse().expect("worker attachments"),
-        has_controller: fields[2].parse().expect("worker controller"),
-        local_connection_count: fields[3].parse().expect("worker connections"),
-        pending_resync_count: fields[4].parse().expect("worker pending resync"),
-        pending_resync_set_count: fields[5].parse().expect("worker pending resync set"),
-        listener_backoff_active: fields[6].parse().expect("worker listener backoff"),
-    }
+fn parse_worker_output(line: &str) -> WorkerOutput {
+    let mut fields = line.split('\t');
+    let kind = fields.next().expect("worker output kind");
+    let output = match kind {
+        "READY" => WorkerOutput::Ready {
+            pid: fields
+                .next()
+                .expect("worker pid")
+                .parse()
+                .expect("worker pid"),
+            socket_path: PathBuf::from(fields.next().expect("worker socket path")),
+            runtime_id: fields
+                .next()
+                .expect("RuntimeId")
+                .parse()
+                .expect("RuntimeId u128"),
+            execution_id: fields
+                .next()
+                .expect("ExecutionId")
+                .parse()
+                .expect("ExecutionId u128"),
+        },
+        "CLEANUP" => WorkerOutput::Cleanup(
+            fields
+                .next()
+                .expect("cleanup ns")
+                .parse()
+                .expect("cleanup integer"),
+        ),
+        "LIFECYCLE" => WorkerOutput::Lifecycle(LifecycleMetrics {
+            attachment_count: fields
+                .next()
+                .expect("worker attachments")
+                .parse()
+                .expect("worker attachments"),
+            has_controller: fields
+                .next()
+                .expect("worker controller")
+                .parse()
+                .expect("worker controller"),
+            local_connection_count: fields
+                .next()
+                .expect("worker connections")
+                .parse()
+                .expect("worker connections"),
+            pending_resync_count: fields
+                .next()
+                .expect("worker pending resync")
+                .parse()
+                .expect("worker pending resync"),
+            pending_resync_set_count: fields
+                .next()
+                .expect("worker pending resync set")
+                .parse()
+                .expect("worker pending resync set"),
+            listener_backoff_active: fields
+                .next()
+                .expect("worker listener backoff")
+                .parse()
+                .expect("worker listener backoff"),
+        }),
+        other => panic!("unknown Runtime worker output: {other}"),
+    };
+    assert!(
+        fields.next().is_none(),
+        "extra Runtime worker output fields"
+    );
+    output
 }
 
 pub(crate) fn run_runtime_worker(geometry: Geometry) {
@@ -261,18 +384,24 @@ pub(crate) fn run_runtime_worker(geometry: Geometry) {
     );
     stdout().flush().expect("READY flush");
 
-    let (command_tx, command_rx) = mpsc::channel::<String>();
+    let (command_tx, command_rx) = mpsc::sync_channel::<WorkerCommand>(1);
     let command_thread = thread::spawn(move || {
         let stdin = stdin();
-        for line in stdin.lock().lines() {
-            match line {
-                Ok(line) => {
-                    let stop = line == "stop";
-                    if command_tx.send(line).is_err() || stop {
-                        break;
-                    }
-                }
-                Err(_) => break,
+        let mut stdin = stdin.lock();
+        let mut command_buffer = String::with_capacity(16);
+        loop {
+            command_buffer.clear();
+            match stdin.read_line(&mut command_buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+            let command = match command_buffer.trim_end() {
+                "lifecycle" => WorkerCommand::Lifecycle,
+                "stop" => WorkerCommand::Stop,
+                other => panic!("unknown Runtime worker command: {other}"),
+            };
+            if command_tx.send(command).is_err() || matches!(command, WorkerCommand::Stop) {
+                break;
             }
         }
     });
@@ -297,8 +426,8 @@ pub(crate) fn run_runtime_worker(geometry: Geometry) {
 
         loop {
             match command_rx.try_recv() {
-                Ok(command) => match command.as_str() {
-                    "lifecycle" => {
+                Ok(command) => match command {
+                    WorkerCommand::Lifecycle => {
                         let lifecycle = runtime
                             .benchmark_pass9_lifecycle_diagnostics(execution_id)
                             .expect("Runtime local-IPC lifecycle diagnostics");
@@ -313,16 +442,15 @@ pub(crate) fn run_runtime_worker(geometry: Geometry) {
                         );
                         stdout().flush().expect("lifecycle flush");
                     }
-                    "stop" => {
+                    WorkerCommand::Stop => {
                         stop = true;
                         break;
                     }
-                    other => panic!("unknown Runtime worker command: {other}"),
                 },
                 Err(mpsc::TryRecvError::Empty) => break,
                 // The command channel disconnects only when the reader
-                // thread's `for line in stdin.lock().lines()` loop ends,
-                // which happens on stdin EOF — i.e. the controlling cohort
+                // thread's reusable-buffer read loop ends, which happens on
+                // stdin EOF — i.e. the controlling cohort
                 // process is gone and can never send an explicit "stop".
                 // Treating this the same as "stop" is the only way this
                 // worker terminates instead of running forever as an

@@ -22,6 +22,7 @@ grep -q -- '-- --controlled-calibration' scripts/task.sh || fail "Pass 9 calibra
 grep -q -- '-- --metrics-self-test' scripts/task.sh || fail "Pass 9 calibration task does not run metrics integrity self-test"
 
 pass9_metrics='crates/seyal-runtime/benches/pass9_preimplementation_calibration/metrics.rs'
+pass9_worker='crates/seyal-runtime/benches/pass9_preimplementation_calibration/worker.rs'
 grep -q 'libc::proc_pidinfo' "$pass9_metrics" || fail "Pass 9 metrics must query macOS process state without spawning ps"
 grep -q 'PROC_PIDTASKINFO' "$pass9_metrics" || fail "Pass 9 metrics must read target RSS and thread count from proc_taskinfo"
 grep -q 'PROC_PIDLISTFDS' "$pass9_metrics" || fail "Pass 9 metrics must count the target process FDs"
@@ -30,6 +31,17 @@ if grep -q 'Command::new("/bin/ps")' "$pass9_metrics"; then
 fi
 if grep -q 'read_dir("/dev/fd")' "$pass9_metrics"; then
   fail "Pass 9 metrics must not count the sampler process FDs"
+fi
+grep -q 'sync_channel::<WorkerCommand>' "$pass9_worker" || fail "Pass 9 Runtime diagnostics must use a preallocated bounded command channel"
+grep -q 'read_line(&mut command_buffer)' "$pass9_worker" || fail "Pass 9 Runtime diagnostics must reuse their command input buffer"
+if grep -q 'mpsc::channel::<String>' "$pass9_worker"; then
+  fail "Pass 9 Runtime diagnostics must not allocate a String channel node per sample"
+fi
+if grep -q 'stdin.lock().lines()' "$pass9_worker"; then
+  fail "Pass 9 Runtime diagnostics must not allocate a fresh command String per sample"
+fi
+if grep -q 'line.split.*collect::<Vec' "$pass9_worker"; then
+  fail "Pass 9 Runtime diagnostic parsing must not allocate a field vector per sample"
 fi
 
 for target in bootstrap bootstrap-agents build test check bench; do

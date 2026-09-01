@@ -208,6 +208,17 @@ mod tests {
         ))
     }
 
+    fn temp_socket_path(tag: &str) -> PathBuf {
+        PathBuf::from("/tmp").join(format!(
+            "syl-{tag}-{}-{}.sock",
+            std::process::id() % 100_000,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ))
+    }
+
     #[test]
     fn darwin_user_runtime_dir_resolves_a_nonempty_path() {
         let dir = darwin_user_runtime_dir().unwrap();
@@ -270,7 +281,7 @@ mod tests {
 
     #[test]
     fn control_socket_leaf_accepts_owned_private_socket() {
-        let path = temp_scope("trusted-leaf");
+        let path = temp_socket_path("trusted");
         let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
         verify_control_socket_leaf(&path).unwrap();
@@ -280,21 +291,21 @@ mod tests {
 
     #[test]
     fn control_socket_leaf_rejects_regular_symlink_and_writable_socket() {
-        let regular = temp_scope("leaf-regular");
+        let regular = temp_socket_path("regular");
         std::fs::write(&regular, b"not a socket").unwrap();
         assert!(matches!(
             verify_control_socket_leaf(&regular),
             Err(DiscoveryError::NotADirectory)
         ));
 
-        let link = temp_scope("leaf-link");
+        let link = temp_socket_path("link");
         std::os::unix::fs::symlink(&regular, &link).unwrap();
         assert!(matches!(
             verify_control_socket_leaf(&link),
             Err(DiscoveryError::NotADirectory)
         ));
 
-        let writable = temp_scope("leaf-writable");
+        let writable = temp_socket_path("writable");
         let listener = std::os::unix::net::UnixListener::bind(&writable).unwrap();
         std::fs::set_permissions(&writable, std::fs::Permissions::from_mode(0o622)).unwrap();
         assert!(matches!(

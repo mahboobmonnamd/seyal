@@ -55,7 +55,10 @@ pub enum ClientError {
     InvalidAttachment,
     Display,
     Prepare,
-    Server(u16),
+    /// A server-declared protocol error. Keeping the wire enum here prevents
+    /// callers from accidentally assigning semantics to the wrong numeric
+    /// code (notably ControllerBusy vs CapacityExceeded).
+    Server(ErrorCode),
     Disconnected,
     Capacity,
     ClientBackpressure,
@@ -64,6 +67,15 @@ pub enum ClientError {
     ResizeProtocolFailure,
     InvalidGeometry,
     BlockMetadataConflict,
+}
+
+/// Decode a server error at the protocol boundary. Unknown future codes are
+/// deliberately treated as protocol failures instead of being exposed as an
+/// untyped number with guessed retry semantics.
+fn server_error(code: u16) -> ClientError {
+    ErrorCode::from_u16(code)
+        .map(ClientError::Server)
+        .unwrap_or(ClientError::Protocol)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -517,7 +529,7 @@ impl LocalDisplayClient {
         let (kind, payload) = read_blocking_frame(&mut stream)?;
         if kind == MessageType::Error {
             let error = ErrorMessage::decode(&payload).map_err(|_| ClientError::Protocol)?;
-            return Err(ClientError::Server(error.error_code));
+            return Err(server_error(error.error_code));
         }
         if kind != MessageType::Attached {
             return Err(ClientError::Protocol);
@@ -1469,7 +1481,7 @@ fn classify_server_error(
     {
         return Ok(Some(InputAdmissionFailure::ClientBackpressure));
     }
-    Err(ClientError::Server(error.error_code))
+    Err(server_error(error.error_code))
 }
 
 /// Accepts a ComposerResult only when it belongs to this attachment and to a
@@ -1554,7 +1566,7 @@ fn runtime_attributes_to_render(attributes: DisplayAttributes) -> RenderAttribut
 }
 
 fn connect_stream(path: &Path) -> Result<UnixStream, ClientError> {
-    let stream = UnixStream::connect(path).map_err(|_| ClientError::Io)?;
+    let stream = UnixStream::connect(path).map_err(classify_connect_error)?;
     stream
         .set_read_timeout(Some(STARTUP_TIMEOUT))
         .map_err(|_| ClientError::Io)?;
@@ -1562,6 +1574,45 @@ fn connect_stream(path: &Path) -> Result<UnixStream, ClientError> {
         .set_write_timeout(Some(STARTUP_TIMEOUT))
         .map_err(|_| ClientError::Io)?;
     Ok(stream)
+}
+
+/// Discovery is allowed to retry only when the endpoint is not currently
+/// usable. Preserve all other I/O failures as hard failures so the recovery
+/// coordinator cannot turn permission, descriptor, or local resource errors
+/// into an unbounded helper-launch loop.
+fn classify_connect_error(error: std::io::Error) -> ClientError {
+    match error.kind() {
+        std::io::ErrorKind::NotFound
+        | std::io::ErrorKind::ConnectionRefused
+        | std::io::ErrorKind::ConnectionReset
+        | std::io::ErrorKind::NotConnected => ClientError::RuntimeDiscovery,
+        _ => ClientError::Io,
+    }
+}
+
+#[cfg(test)]
+mod connect_error_tests {
+    use super::{ClientError, classify_connect_error};
+    use std::io;
+
+    #[test]
+    fn endpoint_lifecycle_errors_are_retryable_discovery() {
+        for kind in [
+            io::ErrorKind::NotFound,
+            io::ErrorKind::ConnectionRefused,
+            io::ErrorKind::ConnectionReset,
+            io::ErrorKind::NotConnected,
+        ] {
+            assert_eq!(classify_connect_error(io::Error::from(kind)), ClientError::RuntimeDiscovery);
+        }
+    }
+
+    #[test]
+    fn unrelated_connect_errors_remain_io_failures() {
+        for kind in [io::ErrorKind::PermissionDenied, io::ErrorKind::Other] {
+            assert_eq!(classify_connect_error(io::Error::from(kind)), ClientError::Io);
+        }
+    }
 }
 
 fn requested_capabilities(request_block_metadata: bool) -> u32 {
@@ -1590,7 +1641,7 @@ fn hello(
     let (kind, payload) = read_blocking_frame(stream)?;
     if kind == MessageType::Error {
         let error = ErrorMessage::decode(&payload).map_err(|_| ClientError::Protocol)?;
-        return Err(ClientError::Server(error.error_code));
+        return Err(server_error(error.error_code));
     }
     if kind != MessageType::ServerHello {
         return Err(ClientError::Protocol);
@@ -1944,7 +1995,7 @@ mod tests {
                 offending_message_type: MessageType::Input as u16,
                 detail_code: 0,
             }),
-            Err(ClientError::Server(ErrorCode::InvalidExecution as u16))
+            Err(ClientError::Server(ErrorCode::InvalidExecution))
         );
     }
 

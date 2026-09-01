@@ -303,6 +303,9 @@ final class RustDisplayBridge {
   private(set) var clientHandle: UInt64 = 0
   private(set) var isConnected = false
   private(set) var lastRecoveryResult = RecoveryResult.current()
+  /// The last bundled-helper failure is retained for the recovery coordinator
+  /// to classify as blocked. Do not silently discard trust or spawn errors.
+  private(set) var lastLaunchError: BundledRuntimeLaunchError?
   private(set) var runtimeIdentityWords: (low: UInt64, high: UInt64) = (0, 0)
   private(set) var attachmentIdentityWords: (low: UInt64, high: UInt64) = (0, 0)
   private(set) var reconstructionState = ReconnectReconstructionState()
@@ -376,6 +379,7 @@ final class RustDisplayBridge {
       return false
     }
     reconnectRequested = false
+    lastLaunchError = nil
     reconstructionState.beginAttempt()
 
     let handle: UInt64
@@ -474,8 +478,17 @@ final class RustDisplayBridge {
 
   /// Starts only the trusted helper packaged inside Seyal.app. Episode-level
   /// launch-once ownership belongs to RuntimeLifecycleRecoveryCoordinator.
-  func launchBundledRuntime() {
-    _ = runtimeLauncher.launch()
+  @discardableResult
+  func launchBundledRuntime() -> Bool {
+    let result = runtimeLauncher.launch()
+    if case let .failure(error) = result {
+      lastLaunchError = error
+      onError(error.nativeCode)
+      onStatusChanged()
+      return false
+    }
+    lastLaunchError = nil
+    return true
   }
 
   static func executionWords(from value: String) -> (UInt64, UInt64)? {

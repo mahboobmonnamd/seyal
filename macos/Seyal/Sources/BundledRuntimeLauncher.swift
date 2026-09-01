@@ -8,6 +8,19 @@ enum BundledRuntimeLaunchError: Error, Equatable {
   case helperTrustInvalid
   case launchDenied
   case launchFailed(Int32)
+
+  /// Stable, non-secret native diagnostic codes. These are deliberately
+  /// separate from protocol/server error codes so the UI can present a
+  /// bounded, actionable reconnect failure.
+  var nativeCode: Int32 {
+    switch self {
+    case .helperMissing: return -30
+    case .helperPathInvalid: return -31
+    case .helperTrustInvalid: return -32
+    case .launchDenied: return -33
+    case .launchFailed: return -34
+    }
+  }
 }
 
 /// Launches the one permanent Runtime helper without transferring Runtime or

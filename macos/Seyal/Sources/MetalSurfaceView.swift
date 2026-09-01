@@ -635,6 +635,12 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     guard shouldRender, let bridge, !bridge.isConnected else {
       return bridge?.isConnected == true ? .connected : .blocked
     }
+    if bridge.lastLaunchError != nil {
+      // Bundled helper trust/path/spawn failures are terminal for this
+      // foreground episode. The coordinator must not keep retrying a known
+      // invalid or denied launch.
+      return .blocked
+    }
     guard !bridge.start() else { return .connected }
     let result = bridge.lastRecoveryResult
     if result.failureClass == 1, result.retryable {

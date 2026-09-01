@@ -42,6 +42,30 @@ def extract_function(source: str, name: str) -> str | None:
     return None
 
 
+def validate_native_recovery_ownership(errors: list[str]) -> None:
+    relpath = "macos/Seyal/Sources/MetalSurfaceView.swift"
+    path = ROOT / relpath
+    if not path.exists():
+        errors.append(f"missing guarded native lifecycle file: {relpath}")
+        return
+    source = path.read_text(encoding="utf-8")
+
+    # Pass 9 gives the lifecycle coordinator sole production ownership of the
+    # startup/recovery connect sequence. A direct bridge.start() from AppKit
+    # creates an extra connection attempt and a fresh timeout outside the
+    # exact seven-attempt/one-second episode, and may block the main actor.
+    if re.search(r"\bbridge\??\.start\s*\(", source):
+        errors.append(
+            f"{relpath} performs a direct bridge.start(); production startup/recovery must be coordinator-owned"
+        )
+    for required in (
+        "bridgeRecoveryCoordinator.beginEpisode()",
+        "bridgeRecoveryCoordinator.retry()",
+    ):
+        if required not in source:
+            errors.append(f"{relpath} is missing coordinator recovery boundary {required!r}")
+
+
 def main() -> None:
     errors: list[str] = []
     for relpath, functions in HOT_FUNCTIONS.items():
@@ -61,6 +85,8 @@ def main() -> None:
                         errors.append(
                             f"{relpath}::{function} contains forbidden {category} primitive {pattern!r}"
                         )
+
+    validate_native_recovery_ownership(errors)
 
     if errors:
         print("Hot-path performance guardrail violations:")

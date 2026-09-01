@@ -62,7 +62,7 @@ final class SeyalShellComponentTests: XCTestCase {
 
   @MainActor
   private final class RecoveryScheduler {
-    final class Job {
+    final class Job: @unchecked Sendable {
       let delay: TimeInterval
       let operation: RuntimeLifecycleRecoveryCoordinator.ScheduledOperation
       var cancelled = false
@@ -82,7 +82,7 @@ final class SeyalShellComponentTests: XCTestCase {
     func schedule(
       delay: TimeInterval,
       operation: @escaping RuntimeLifecycleRecoveryCoordinator.ScheduledOperation
-    ) -> () -> Void {
+    ) -> @Sendable () -> Void {
       let job = Job(delay: delay, operation: operation)
       jobs.append(job)
       return { job.cancelled = true }

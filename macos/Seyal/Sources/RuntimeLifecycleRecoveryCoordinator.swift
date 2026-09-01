@@ -75,7 +75,7 @@ struct ReconnectReconstructionState: Equatable {
 /// attachment, and terminal-state authority remain behind the injected attempt
 /// and launcher hooks.
 final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
-  typealias Cancellation = () -> Void
+  typealias Cancellation = @Sendable () -> Void
   typealias Clock = () -> TimeInterval
   /// Scheduler callbacks are deliberately not MainActor isolated. Recovery
   /// discovery is lifecycle work, not presentation work, and must remain

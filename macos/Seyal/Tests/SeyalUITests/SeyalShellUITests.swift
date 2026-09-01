@@ -184,21 +184,15 @@ final class SeyalShellUITests: XCTestCase {
         let surfaces = app
             .descendants(matching: .any)
             .matching(identifier: "terminal-surface.pane-local")
-        XCTAssertEqual(surfaces.count, 1)
+        XCTAssertEqual(
+            surfaces.count,
+            1,
+            "the production terminal surface remains discoverable at the recovery boundary"
+        )
 
         composer.click()
         composer.typeText("printf 'pass7.1'")
         XCTAssertEqual(composer.value as? String, "printf 'pass7.1'")
-    }
-
-    func testProductionSurfaceRemainsDiscoverableDuringRecoveryLifecycle() {
-        let window = app.windows["Seyal"]
-        XCTAssertTrue(window.waitForExistence(timeout: 5))
-        XCTAssertTrue(
-            app.otherElements["terminal-surface.pane-local"].exists
-                || app.otherElements["terminal-surface"].exists,
-            "the production terminal surface must remain an XCUI-discoverable interaction target"
-        )
     }
 
     func testShellLaunchesWithFrozenCoreHierarchyWithoutFabricatedRuntimeOutput() {

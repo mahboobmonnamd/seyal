@@ -72,6 +72,12 @@ def require_exact_return(record: dict[str, Any], field: str, context: str, error
         errors.append(f"{context}.{field} did not return exactly: {before} -> {after}")
 
 
+def nearest_rank(samples: list[float], percentile: float) -> float:
+    ordered = sorted(samples)
+    rank = max(1, math.ceil(percentile * len(ordered)))
+    return ordered[rank - 1]
+
+
 def validate(document: dict[str, Any], expected_head: str | None = None) -> list[str]:
     errors: list[str] = []
     if document.get("schema") != "seyal.pass9.production-budget.v1":
@@ -121,8 +127,22 @@ def validate(document: dict[str, Any], expected_head: str | None = None) -> list
         if not isinstance(cpu_samples, list) or len(cpu_samples) != CPU_SAMPLES:
             errors.append(f"{context}.detached_cpu_samples_percent must contain exactly {CPU_SAMPLES} samples")
         else:
+            parsed_cpu_samples = []
             for sample_index, sample in enumerate(cpu_samples):
-                number(sample, f"{context}.detached_cpu_samples_percent[{sample_index}]", errors)
+                parsed_cpu_samples.append(
+                    number(sample, f"{context}.detached_cpu_samples_percent[{sample_index}]", errors)
+                )
+            supplied_p95 = number(
+                cohort.get("detached_cpu_p95_percent"),
+                f"{context}.detached_cpu_p95_percent",
+                errors,
+            )
+            computed_p95 = nearest_rank(parsed_cpu_samples, 0.95)
+            if not math.isclose(supplied_p95, computed_p95, rel_tol=0.0, abs_tol=1e-12):
+                errors.append(
+                    f"{context}.detached_cpu_p95_percent={supplied_p95:g} does not match "
+                    f"nearest-rank p95 {computed_p95:g} from retained samples"
+                )
 
         require_at_most(cohort, "reconnect_p99_us", RECONNECT_P99_US, context, errors)
         require_at_most(cohort, "cleanup_p99_us", CLEANUP_P99_US, context, errors)
@@ -133,7 +153,8 @@ def validate(document: dict[str, Any], expected_head: str | None = None) -> list
         require_at_most(cohort, "client_rss_delta_kib", CLIENT_RSS_KIB, context, errors)
 
         for resource in (
-            "attachments", "controllers", "runtime_fds", "client_fds", "sockets",
+            "attachments", "controllers", "runtime_fds", "client_fds",
+            "runtime_threads", "client_threads", "sockets",
             "renderer_surfaces", "renderer_gpu_resources", "pending_resync", "retry_timers",
         ):
             require_exact_return(cohort, resource, context, errors)
@@ -169,7 +190,11 @@ def validate(document: dict[str, Any], expected_head: str | None = None) -> list
         for cohort in range(1, MIN_COHORTS + 1)
     }
     if observed != expected:
-        errors.append(f"cohorts must cover exactly five independent cohorts for each mode/geometry; missing={sorted(expected - observed)} unexpected={sorted(observed - expected)}")
+        errors.append(
+            "cohorts must cover exactly five independent cohorts for each mode/geometry; "
+            f"missing={sorted(expected - observed, key=repr)} "
+            f"unexpected={sorted(observed - expected, key=repr)}"
+        )
 
     pass8 = document.get("pass8", {})
     paired_delta = number(pass8.get("paired_delta_percent"), "pass8.paired_delta_percent", errors)
@@ -201,7 +226,8 @@ def fixture() -> dict[str, Any]:
                     "client_allocator_delta_classification": "HARNESS_OWNED_FIXED_CAPACITY",
                 }
                 for resource in (
-                    "attachments", "controllers", "runtime_fds", "client_fds", "sockets",
+                    "attachments", "controllers", "runtime_fds", "client_fds",
+                    "runtime_threads", "client_threads", "sockets",
                     "renderer_surfaces", "renderer_gpu_resources", "pending_resync", "retry_timers",
                     "runtime_allocator_in_use_kib",
                 ):
@@ -233,6 +259,7 @@ def self_test() -> None:
         ("cycle count", lambda d: d["cohorts"][0].update(cycles=99)),
         ("cohort coverage", lambda d: d["cohorts"].pop()),
         ("CPU sample count", lambda d: d["cohorts"][0].update(detached_cpu_samples_percent=[0.01] * 4)),
+        ("CPU p95 derivation", lambda d: d["cohorts"][0].update(detached_cpu_samples_percent=[0.01, 0.01, 0.01, 0.01, 0.02])),
         ("resource return", lambda d: d["cohorts"][0].update(attachments_final=2)),
         ("reconnect budget", lambda d: d["cohorts"][0].update(reconnect_p99_us=1000.01)),
         ("cleanup budget", lambda d: d["cohorts"][0].update(cleanup_p99_us=25.01)),

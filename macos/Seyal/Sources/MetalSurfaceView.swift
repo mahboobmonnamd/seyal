@@ -347,6 +347,7 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     // cleared here.
     historyRanges.removeAll(keepingCapacity: false)
     invalidatePreparedPresentation()
+    startAutomaticBridgeRecoveryIfNeeded()
   }
 
   /// Presentation-only notification. Runtime/Metal remains authoritative;
@@ -368,8 +369,10 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
   @discardableResult
   func ensureTerminalBridgeConnected() -> Bool {
     guard bridge?.isConnected != true else { return true }
-    guard shouldRender else { return false }
-    if !bridgeRecoveryCoordinator.isActive {
+    guard shouldRender, bridge?.clientHandle == 0 else { return false }
+    if !bridgeRecoveryCoordinator.isActive,
+      runtimeRecoveryState.stage != .blocked
+    {
       bridgeRecoveryCoordinator.retry()
     }
     return false
@@ -622,6 +625,10 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
       )
     }
     if newWindow == nil {
+      // Suppress status-driven reconnect before stop() publishes its
+      // disconnected transition. Teardown is detach-only and must not create
+      // a replacement foreground recovery episode.
+      renderable = false
       renderer.setVisible(false)
       invalidatePreparedPresentation()
       invalidateMetalDisplayLink()
@@ -660,11 +667,29 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     bridgeRecoveryCoordinator.cancel()
   }
 
+  private func startAutomaticBridgeRecoveryIfNeeded() {
+    guard renderable,
+      bridge?.isConnected == false,
+      // stop() keeps the old clientHandle until both dispatch-source cancel
+      // handlers complete. Waiting for zero prevents consuming a retry on our
+      // own in-progress detach/controller cleanup.
+      bridge?.clientHandle == 0,
+      !bridgeRecoveryCoordinator.isActive,
+      runtimeRecoveryState.stage != .exhausted,
+      runtimeRecoveryState.stage != .blocked
+    else { return }
+    bridgeRecoveryCoordinator.beginEpisode()
+  }
+
   /// Explicit user retry starts a new bounded foreground recovery episode.
   /// Automatic exhaustion never invokes this method recursively.
   @discardableResult
   func retryRuntimeConnection() -> Bool {
-    guard shouldRender, bridge?.isConnected != true else { return true }
+    guard shouldRender,
+      bridge?.isConnected != true,
+      bridge?.clientHandle == 0,
+      runtimeRecoveryState.stage != .blocked
+    else { return bridge?.isConnected == true }
     bridgeRecoveryCoordinator.retry()
     return bridge?.isConnected == true
   }
@@ -678,14 +703,7 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
         installMetalDisplayLink(on: metalLayer)
       }
       forceNextFrame = true
-      if bridge?.isConnected == false {
-        if !bridgeRecoveryCoordinator.isActive,
-          runtimeRecoveryState.stage != .exhausted,
-          runtimeRecoveryState.stage != .blocked
-        {
-          bridgeRecoveryCoordinator.beginEpisode()
-        }
-      }
+      startAutomaticBridgeRecoveryIfNeeded()
     } else {
       invalidateMetalDisplayLink()
       invalidatePreparedPresentation()

@@ -251,9 +251,15 @@ final class SeyalShellUITests: XCTestCase {
         XCTAssertGreaterThan(surface.frame.width, 0)
         XCTAssertGreaterThan(surface.frame.height, 0)
 
-        // Command-W exercises the production window-close/App termination path.
-        app.typeKey("w", modifierFlags: .command)
-        XCTAssertTrue(wait { self.app.state == .notRunning })
+        // The standard AppKit close control exercises the production
+        // window-close path. Hosted XCTest
+        // can retain the application process after its last window closes, so
+        // explicitly end that now-windowless process before reopening it.
+        let closeButton = window.buttons[XCUIIdentifierCloseWindow]
+        XCTAssertTrue(closeButton.exists)
+        closeButton.click()
+        XCTAssertTrue(wait { !window.exists })
+        if app.state != .notRunning { app.terminate() }
         surface = launchProductionApp()
         let afterClose = try XCTUnwrap(recoveryFields(surface))
         XCTAssertEqual(afterClose["runtime"], first["runtime"])

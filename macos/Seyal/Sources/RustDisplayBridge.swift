@@ -310,7 +310,6 @@ final class RustDisplayBridge {
   private(set) var attachmentIdentityWords: (low: UInt64, high: UInt64) = (0, 0)
   private(set) var reconstructionState = ReconnectReconstructionState()
   private(set) var runtimeBlockMetadata: RuntimeBlockMetadata?
-  private var reconnectRequested = false
   private let runtimeLauncher = BundledRuntimeLauncher()
   private var lastTimelineRevision: UInt64 = 0
   private let paneID: String
@@ -374,11 +373,9 @@ final class RustDisplayBridge {
   @discardableResult
   func start() -> Bool {
     guard !isConnected else { return true }
-    if teardown.disconnectPending {
-      reconnectRequested = true
-      return false
-    }
-    reconnectRequested = false
+    // Explicit self-test seams may still call start(), but production recovery
+    // never queues a second open while the previous socket is tearing down.
+    guard !teardown.disconnectPending else { return false }
     lastLaunchError = nil
     reconstructionState.beginAttempt()
 
@@ -419,7 +416,6 @@ final class RustDisplayBridge {
       seyal_bridge_disconnect_handle(handle)
       return false
     }
-    reconnectRequested = false
     lastLaunchError = nil
     reconstructionState.beginAttempt()
     guard seyal_bridge_adopt_handle(handle) == 0 else {
@@ -534,8 +530,11 @@ final class RustDisplayBridge {
     return (low, high)
   }
 
-  func stop(reconnect: Bool = false) {
-    reconnectRequested = reconnect
+  /// Tears down only the disposable socket/client side of the Pane. The
+  /// `reconnect` spelling is retained for source compatibility with older
+  /// callers, but replacement scheduling/opening belongs exclusively to
+  /// RuntimeLifecycleRecoveryCoordinator.
+  func stop(reconnect _: Bool = false) {
     guard isConnected || socketFileDescriptor >= 0 else { return }
     guard !teardown.disconnectPending else { return }
 
@@ -567,10 +566,10 @@ final class RustDisplayBridge {
   }
 
   private func teardownCompleted() {
+    // Completion only releases the old executor-local handle. It intentionally
+    // never opens a replacement; the owning surface observes disconnected
+    // status and starts one bounded coordinator episode if still renderable.
     onStatusChanged()
-    guard reconnectRequested else { return }
-    reconnectRequested = false
-    _ = start()
   }
 
   @discardableResult
@@ -915,7 +914,6 @@ final class RustDisplayBridge {
   deinit {
     // The coordinator is retained by cancellation handlers, so teardown
     // completes even if the owning surface destroys this bridge first.
-    reconnectRequested = false
     teardown.requestDisconnect()
     readSource?.cancel()
     writeSource?.cancel()

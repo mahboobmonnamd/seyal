@@ -202,6 +202,19 @@ run_live_renderer_case() {
   "$RUNTIME" /bin/sh -c "$command" &
   runtime_pid=$!
 
+  local ready=0
+  for _ in $(seq 1 40); do
+    if [[ -S "$RUNTIME_SOCKET" ]]; then
+      ready=1
+      break
+    fi
+    if ! kill -0 "$runtime_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.025
+  done
+  [[ "$ready" == "1" ]] || fail "live fixture Runtime did not bind its canonical endpoint"
+
   local passed=0
   for _ in $(seq 1 20); do
     if "$BINARY" --renderer-live-self-test "$@"; then

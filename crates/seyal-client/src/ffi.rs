@@ -119,6 +119,26 @@ fn set_recovery_failure(error: ClientError) {
     });
 }
 
+fn set_recovery_success(client: &LocalDisplayClient, handle: u64, origin: u8) {
+    let (runtime_id_low, runtime_id_high) = identity_words(client.runtime_id());
+    let execution = client.execution_id().to_bytes();
+    let attachment = client.attachment_id().to_bytes();
+    LAST_RECOVERY_RESULT.with(|result| {
+        result.set(SeyalRecoveryResult {
+            stage: 2,
+            connection_origin: origin,
+            handle,
+            runtime_id_low,
+            runtime_id_high,
+            execution_id_low: u64::from_le_bytes(execution[..8].try_into().unwrap()),
+            execution_id_high: u64::from_le_bytes(execution[8..].try_into().unwrap()),
+            attachment_id_low: u64::from_le_bytes(attachment[..8].try_into().unwrap()),
+            attachment_id_high: u64::from_le_bytes(attachment[8..].try_into().unwrap()),
+            ..SeyalRecoveryResult::empty()
+        })
+    });
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn seyal_bridge_last_recovery_result() -> SeyalRecoveryResult {
     LAST_RECOVERY_RESULT.with(Cell::get)
@@ -557,13 +577,10 @@ pub extern "C" fn seyal_bridge_open_first() -> u64 {
         clients.borrow_mut().insert(handle, Box::new(client));
     });
     ACTIVE_HANDLE.with(|active| active.set(handle));
-    LAST_RECOVERY_RESULT.with(|result| {
-        result.set(SeyalRecoveryResult {
-            stage: 2,
-            connection_origin: 1,
-            handle,
-            ..SeyalRecoveryResult::empty()
-        })
+    CLIENTS.with(|clients| {
+        if let Some(client) = clients.borrow().get(&handle) {
+            set_recovery_success(client, handle, 1);
+        }
     });
     handle
 }
@@ -589,15 +606,10 @@ pub extern "C" fn seyal_bridge_open_execution(execution_low: u64, execution_high
         clients.borrow_mut().insert(handle, Box::new(client));
     });
     ACTIVE_HANDLE.with(|active| active.set(handle));
-    LAST_RECOVERY_RESULT.with(|result| {
-        result.set(SeyalRecoveryResult {
-            stage: 2,
-            connection_origin: 2,
-            handle,
-            execution_id_low: execution_low,
-            execution_id_high: execution_high,
-            ..SeyalRecoveryResult::empty()
-        })
+    CLIENTS.with(|clients| {
+        if let Some(client) = clients.borrow().get(&handle) {
+            set_recovery_success(client, handle, 2);
+        }
     });
     handle
 }

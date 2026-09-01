@@ -258,6 +258,37 @@ final class RustDisplayBridge {
   typealias ErrorHandler = (Int32) -> Void
   typealias StatusHandler = () -> Void
 
+  struct RecoveryResult: Equatable {
+    let stage: UInt8
+    let failureClass: UInt8
+    let retryable: Bool
+    let connectionOrigin: UInt8
+    let handle: UInt64
+    let runtimeIDLow: UInt64
+    let runtimeIDHigh: UInt64
+    let executionIDLow: UInt64
+    let executionIDHigh: UInt64
+    let attachmentIDLow: UInt64
+    let attachmentIDHigh: UInt64
+
+    static func current() -> RecoveryResult {
+      let result = seyal_bridge_last_recovery_result()
+      return RecoveryResult(
+        stage: result.stage,
+        failureClass: result.failure_class,
+        retryable: result.retryable != 0,
+        connectionOrigin: result.connection_origin,
+        handle: result.handle,
+        runtimeIDLow: result.runtime_id_low,
+        runtimeIDHigh: result.runtime_id_high,
+        executionIDLow: result.execution_id_low,
+        executionIDHigh: result.execution_id_high,
+        attachmentIDLow: result.attachment_id_low,
+        attachmentIDHigh: result.attachment_id_high
+      )
+    }
+  }
+
   private let onFrame: FrameHandler
   private let onTimeline: TimelineHandler
   private let onHistory: HistoryHandler
@@ -271,6 +302,7 @@ final class RustDisplayBridge {
   private var teardown: RustBridgeTeardownCoordinator!
   private(set) var clientHandle: UInt64 = 0
   private(set) var isConnected = false
+  private(set) var lastRecoveryResult = RecoveryResult.current()
   private(set) var runtimeBlockMetadata: RuntimeBlockMetadata?
   private var reconnectRequested = false
   private var lastTimelineRevision: UInt64 = 0
@@ -358,6 +390,7 @@ final class RustDisplayBridge {
       return false
     }
     guard handle != 0 else {
+      lastRecoveryResult = RecoveryResult.current()
       onError(-6)
       onStatusChanged()
       return false
@@ -370,6 +403,7 @@ final class RustDisplayBridge {
     }
     clientHandle = handle
     handleBox.value = handle
+    lastRecoveryResult = RecoveryResult.current()
 
     let fileDescriptor = seyal_bridge_socket_fd()
     guard fileDescriptor >= 0 else {

@@ -21,6 +21,105 @@ thread_local! {
     static CLIENTS: RefCell<HashMap<u64, Box<LocalDisplayClient>>> = RefCell::new(HashMap::new());
     static ACTIVE_HANDLE: Cell<u64> = const { Cell::new(0) };
     static NEXT_HANDLE: Cell<u64> = const { Cell::new(1) };
+    static LAST_RECOVERY_RESULT: Cell<SeyalRecoveryResult> = const { Cell::new(SeyalRecoveryResult::empty()) };
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C)]
+pub struct SeyalRecoveryResult {
+    pub stage: u8,
+    pub failure_class: u8,
+    pub retryable: u8,
+    pub connection_origin: u8,
+    pub handle: u64,
+    pub runtime_id_low: u64,
+    pub runtime_id_high: u64,
+    pub execution_id_low: u64,
+    pub execution_id_high: u64,
+    pub attachment_id_low: u64,
+    pub attachment_id_high: u64,
+}
+
+impl SeyalRecoveryResult {
+    const fn empty() -> Self {
+        Self {
+            stage: 0,
+            failure_class: 0,
+            retryable: 0,
+            connection_origin: 0,
+            handle: 0,
+            runtime_id_low: 0,
+            runtime_id_high: 0,
+            execution_id_low: 0,
+            execution_id_high: 0,
+            attachment_id_low: 0,
+            attachment_id_high: 0,
+        }
+    }
+}
+
+#[cfg(test)]
+mod recovery_result_tests {
+    use super::{SeyalRecoveryResult, set_recovery_failure};
+    use crate::ClientError;
+
+    #[test]
+    fn retryable_discovery_failure_is_typed() {
+        set_recovery_failure(ClientError::RuntimeDiscovery);
+        let result = super::LAST_RECOVERY_RESULT.with(std::cell::Cell::get);
+        assert_eq!(result.failure_class, 1);
+        assert_eq!(result.retryable, 1);
+        assert_eq!(result.stage, 1);
+    }
+
+    #[test]
+    fn security_and_controller_failures_are_not_retryable() {
+        set_recovery_failure(ClientError::Protocol);
+        let protocol = super::LAST_RECOVERY_RESULT.with(std::cell::Cell::get);
+        assert_eq!(protocol.failure_class, 4);
+        assert_eq!(protocol.retryable, 0);
+
+        set_recovery_failure(ClientError::Server(9));
+        let busy = super::LAST_RECOVERY_RESULT.with(std::cell::Cell::get);
+        assert_eq!(busy.failure_class, 3);
+        assert_eq!(busy.retryable, 1);
+        let _ = SeyalRecoveryResult::empty();
+    }
+}
+
+fn set_recovery_failure(error: ClientError) {
+    let (failure_class, retryable) = match error {
+        ClientError::RuntimeDiscovery | ClientError::Io | ClientError::Disconnected => (1, 1),
+        ClientError::NoRunningExecution => (2, 0),
+        ClientError::Server(9) => (3, 1),
+        ClientError::UnsupportedDisplayCapability
+        | ClientError::UnsupportedInteractiveCapability
+        | ClientError::Protocol
+        | ClientError::InvalidAttachment
+        | ClientError::Display
+        | ClientError::Prepare
+        | ClientError::Capacity
+        | ClientError::CommitTooLarge
+        | ClientError::LostController
+        | ClientError::ResizeProtocolFailure
+        | ClientError::InvalidGeometry
+        | ClientError::BlockMetadataConflict
+        | ClientError::Server(_) => (4, 0),
+        ClientError::ClientBackpressure => (5, 1),
+    };
+    LAST_RECOVERY_RESULT.with(|result| {
+        result.set(SeyalRecoveryResult {
+            stage: 1,
+            failure_class,
+            retryable,
+            ..SeyalRecoveryResult::empty()
+        });
+    });
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_last_recovery_result() -> SeyalRecoveryResult {
+    LAST_RECOVERY_RESULT.with(Cell::get)
 }
 
 fn allocate_handle() -> u64 {
@@ -410,14 +509,26 @@ pub extern "C" fn seyal_bridge_connect_first() -> i32 {
 /// execution identity is known.
 #[unsafe(no_mangle)]
 pub extern "C" fn seyal_bridge_open_first() -> u64 {
-    let Ok(client) = LocalDisplayClient::connect_first_running() else {
-        return 0;
+    let client = match LocalDisplayClient::connect_first_running() {
+        Ok(client) => client,
+        Err(error) => {
+            set_recovery_failure(error);
+            return 0;
+        }
     };
     let handle = allocate_handle();
     CLIENTS.with(|clients| {
         clients.borrow_mut().insert(handle, Box::new(client));
     });
     ACTIVE_HANDLE.with(|active| active.set(handle));
+    LAST_RECOVERY_RESULT.with(|result| {
+        result.set(SeyalRecoveryResult {
+            stage: 2,
+            connection_origin: 1,
+            handle,
+            ..SeyalRecoveryResult::empty()
+        })
+    });
     handle
 }
 
@@ -430,15 +541,28 @@ pub extern "C" fn seyal_bridge_open_execution(execution_low: u64, execution_high
     bytes[..8].copy_from_slice(&execution_low.to_le_bytes());
     bytes[8..].copy_from_slice(&execution_high.to_le_bytes());
     let execution_id = ExecutionId::from_bytes(bytes);
-    let Ok(client) = LocalDisplayClient::connect_execution_id(execution_id, Role::Controller)
-    else {
-        return 0;
+    let client = match LocalDisplayClient::connect_execution_id(execution_id, Role::Controller) {
+        Ok(client) => client,
+        Err(error) => {
+            set_recovery_failure(error);
+            return 0;
+        }
     };
     let handle = allocate_handle();
     CLIENTS.with(|clients| {
         clients.borrow_mut().insert(handle, Box::new(client));
     });
     ACTIVE_HANDLE.with(|active| active.set(handle));
+    LAST_RECOVERY_RESULT.with(|result| {
+        result.set(SeyalRecoveryResult {
+            stage: 2,
+            connection_origin: 2,
+            handle,
+            execution_id_low: execution_low,
+            execution_id_high: execution_high,
+            ..SeyalRecoveryResult::empty()
+        })
+    });
     handle
 }
 

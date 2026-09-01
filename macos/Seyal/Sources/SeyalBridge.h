@@ -86,6 +86,20 @@ typedef struct SeyalComposerResult {
     uint8_t reserved[7];
 } SeyalComposerResult;
 
+typedef struct SeyalRecoveryResult {
+    uint8_t stage;
+    uint8_t failure_class;
+    uint8_t retryable;
+    uint8_t connection_origin;
+    uint64_t handle;
+    uint64_t runtime_id_low;
+    uint64_t runtime_id_high;
+    uint64_t execution_id_low;
+    uint64_t execution_id_high;
+    uint64_t attachment_id_low;
+    uint64_t attachment_id_high;
+} SeyalRecoveryResult;
+
 enum SeyalTerminalKeyKind {
     SEYAL_KEY_ENTER = 1,
     SEYAL_KEY_TAB = 2,
@@ -124,6 +138,7 @@ SeyalHistoryRange seyal_bridge_history_range_peek_for(uint64_t block_id, uint64_
 SeyalHistoryRow seyal_bridge_history_range_row_for(uint64_t block_id, uint64_t request_id, uint32_t index);
 uint8_t seyal_bridge_history_range_consume(uint64_t block_id, uint64_t request_id);
 SeyalComposerResult seyal_bridge_composer_result(void);
+SeyalRecoveryResult seyal_bridge_last_recovery_result(void);
 int32_t seyal_bridge_submit_key(uint16_t kind, uint32_t scalar);
 int32_t seyal_bridge_propose_geometry(
     double viewport_width,

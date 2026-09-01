@@ -109,6 +109,64 @@ fn block_identity_is_not_reused_across_runtime_incarnations() {
 }
 
 #[test]
+fn detached_output_is_in_authoritative_snapshot_and_exited_child_is_not_recreated() {
+    let mut runtime = Runtime::new(config("detached-output-child-exit")).expect("runtime");
+    let execution_id = runtime
+        .create_execution(
+            CommandSpec::new("/bin/sh").args([
+                "-c",
+                "printf 'before-detach\\n'; sleep 0.05; printf 'after-detach\\n'; exit 23",
+            ]),
+            size(80, 24),
+        )
+        .expect("execution");
+    let attachment = runtime.attach(execution_id).expect("attach");
+    runtime.detach(execution_id, attachment).expect("detach");
+
+    // The GUI is detached while the Runtime continues polling the same PTY.
+    // Read the canonical projection only after output has arrived; this is the
+    // production reconnect seam and does not introduce a second terminal model.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut output = String::new();
+    while Instant::now() < deadline {
+        runtime
+            .poll_once(Some(Duration::from_millis(10)))
+            .expect("poll detached output");
+        if let Some(execution) = runtime.execution(execution_id) {
+            let snapshot = execution.projection_snapshot();
+            output = snapshot.cells.iter().map(|cell| cell.scalar).collect();
+            if output.contains("after-detach") {
+                break;
+            }
+        }
+    }
+    assert!(
+        output.contains("before-detach") && output.contains("after-detach"),
+        "detached output was not retained in the authoritative snapshot: {output:?}"
+    );
+
+    // The primary child exit must drain and remove the original execution;
+    // recovery must never manufacture a replacement execution for a dead PTY.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline && runtime.execution(execution_id).is_some() {
+        runtime
+            .poll_once(Some(Duration::from_millis(10)))
+            .expect("poll child exit");
+    }
+    assert!(
+        runtime.execution(execution_id).is_none(),
+        "exited child remained registered or was replaced"
+    );
+    assert!(
+        runtime
+            .list()
+            .iter()
+            .all(|summary| summary.id != execution_id),
+        "child exit must not create a replacement execution"
+    );
+}
+
+#[test]
 fn real_runtime_population_lifecycle_probes_to_50_with_10_execution_floor() {
     const REQUIRED_REAL_PTY_FLOOR: usize = 10;
     const REAL_PTY_PROBE_TARGET: usize = 50;

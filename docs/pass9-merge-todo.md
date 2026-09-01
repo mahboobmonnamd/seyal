@@ -33,6 +33,9 @@ item must have exact-head evidence before the PR is marked ready.
   singleton races.
 - [x] Swift component tests cover lifecycle states, cancellation, stale-frame
   suppression, input admission, focus, accessibility, IME reset, and geometry.
+- [x] Runtime production-path tests cover output produced while detached and
+  prove that a naturally exited child is drained without creating a replacement
+  execution. These tests do not substitute for the required headed UI evidence.
 - [ ] Native headed XCTest/XCUIAutomation proves the complete required matrix.
   The current headed fixture proves graceful/forced relaunch, same
   Runtime/Execution identity, fresh attachment, input, Control-C, resize,

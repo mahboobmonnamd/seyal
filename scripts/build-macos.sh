@@ -47,7 +47,7 @@ esac
   exit 1
 }
 
-cargo_args=(build -p seyal-client --locked)
+cargo_args=(build -p seyal-client -p seyal-runtime --locked)
 if [[ "$CONFIGURATION" == "Release" ]]; then
   cargo_args+=(--release)
 fi
@@ -65,5 +65,16 @@ xcodebuild \
   CODE_SIGNING_ALLOWED=NO \
   SWIFT_ACTIVE_COMPILATION_CONDITIONS='DEBUG $(inherited)' \
   build
+
+# Runtime is a permanent bundled helper. Keep the launch path inside the
+# signed app bundle; the GUI must never discover or launch an arbitrary shell
+# command as a substitute for this helper.
+APP_BUNDLE="${DERIVED_DATA}/Build/Products/${CONFIGURATION}/Seyal.app"
+HELPERS_DIR="${APP_BUNDLE}/Contents/Helpers"
+mkdir -p "$HELPERS_DIR"
+RUNTIME_BINARY="${ROOT}/target/$([[ "$CONFIGURATION" == "Release" ]] && echo release || echo debug)/seyal-runtime"
+[[ -x "$RUNTIME_BINARY" ]] || { echo "bundled Runtime binary is missing: $RUNTIME_BINARY" >&2; exit 1; }
+install -m 755 "$RUNTIME_BINARY" "${HELPERS_DIR}/seyal-runtime"
+[[ -x "${HELPERS_DIR}/seyal-runtime" ]] || { echo "failed to package bundled Runtime helper" >&2; exit 1; }
 
 printf '[seyal macOS build] built %s (%s)\n' "${DERIVED_DATA}/Build/Products/${CONFIGURATION}/Seyal.app" "$MACOS_ARCH"

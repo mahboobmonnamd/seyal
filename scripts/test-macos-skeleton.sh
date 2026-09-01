@@ -138,6 +138,8 @@ channel="$(sed -nE 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"([^"]+)".*/\
 rustup run "$channel" cargo build -p seyal-runtime --bin seyal-runtime --locked
 RUNTIME="${ROOT}/target/debug/seyal-runtime"
 [[ -x "$RUNTIME" ]] || fail "seyal-runtime fixture executable is missing"
+RUNTIME_DIR="$(getconf DARWIN_USER_TEMP_DIR)/seyal-runtime"
+RUNTIME_SOCKET="${RUNTIME_DIR}/control.sock"
 
 runtime_pid=""
 cleanup_runtime() {
@@ -153,6 +155,23 @@ run_pass8_native_metadata_case() {
   cleanup_runtime
   "$RUNTIME" /bin/sh -c "sleep 3" &
   runtime_pid=$!
+
+  # Wait until the fixture Runtime owns the canonical endpoint before asking
+  # the client to discover it. Without this barrier, a legitimate endpoint
+  # absence can cause the production one-shot bundled-helper recovery path to
+  # win the singleton race and make the fixture Runtime report AlreadyRunning.
+  local ready=0
+  for _ in $(seq 1 40); do
+    if [[ -S "$RUNTIME_SOCKET" ]]; then
+      ready=1
+      break
+    fi
+    if ! kill -0 "$runtime_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.025
+  done
+  [[ "$ready" == "1" ]] || fail "fixture Runtime did not bind its canonical endpoint"
 
   local passed=0
   for _ in $(seq 1 20); do

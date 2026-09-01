@@ -33,10 +33,13 @@ item must have exact-head evidence before the PR is marked ready.
   singleton races.
 - [x] Swift component tests cover lifecycle states, cancellation, stale-frame
   suppression, input admission, focus, accessibility, IME reset, and geometry.
-- [x] Native headed XCTest/XCUIAutomation proves real shell close/reopen,
-  forced GUI loss, same Runtime/Execution identity, input, Control-C, resize,
-  dead key, IME commit, accessibility focus/geometry, VoiceOver smoke, and
-  alternate-screen recovery.
+- [ ] Native headed XCTest/XCUIAutomation proves the complete required matrix.
+  The current headed fixture proves graceful/forced relaunch, same
+  Runtime/Execution identity, fresh attachment, input, Control-C, resize,
+  focus/geometry, and alternate-screen recovery. It does **not** yet prove
+  dead-key input, a real IME commit/cancel flow, VoiceOver focus/geometry,
+  detached output, or detached-child exit. Do not mark those cases complete
+  from component tests or a synthetic fixture.
 - [ ] At least 100 graceful and 100 abrupt cycles return attachment,
   Controller, fd, renderer, and RSS counters to baseline.
 - [ ] Five independent 100-cycle performance cohorts after warm-up validate
@@ -56,11 +59,30 @@ item must have exact-head evidence before the PR is marked ready.
 - [ ] Issue #719 contains the final evidence matrix and truthful Done state;
   PR #734 has the exact owning-Issue relationship and is no longer Draft.
 
+## Governance and review disposition
+
+- [ ] Record the pre-Ready production-start ordering violation. Production
+  work began at `eada76640776779ad3f8bd65a0cb8199d91f396f` before Issue #719
+  was explicitly marked Ready. This is an acceptance blocker, even if the
+  implementation is later corrected.
+- [ ] Re-baseline PR #734 against the accepted dependency/calibration state
+  after recording that ordering violation. Freeze the resulting exact head
+  and obtain fresh independent implementation, architecture, security,
+  performance, and accessibility reviews against that head.
+- [ ] Record the corrective review decision and evidence links in Issue #719;
+  do not infer approval from passing CI or from PR #726 calibration evidence.
+
 ## Current known status
 
 The bundled helper, typed identities, bounded recovery state, explicit retry,
-reconnect reconstruction, native recovery coverage, and Rust/runtime suites are
-implemented. `make test` is not yet clean because the standalone live renderer
-self-test collides with an already-running canonical Runtime in this host.
-Deterministic headed IME/dead-key input-source behavior, physical stress/resource
-cohorts, release-signing evidence, and independent final reviews remain open.
+reconnect reconstruction, and Rust/runtime suites are implemented. The typed
+error and lifecycle-queue fixes require fresh exact-head review. `make test` is
+not yet clean because the standalone live renderer self-test collides with an
+already-running canonical Runtime in this host. Deterministic headed
+IME/dead-key input-source behavior, VoiceOver recovery, detached-output and
+child-exit workloads, physical stress/resource cohorts, release-signing
+evidence, governance re-baselining, and independent final reviews remain open.
+
+**Merge status: BLOCKED.** This document is a checklist, not evidence; a
+passing validator or CI workflow cannot check an item without the retained
+artifact and exact-head provenance required by the specification.

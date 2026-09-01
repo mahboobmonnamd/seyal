@@ -93,10 +93,7 @@ mod recovery_result_tests {
         set_recovery_failure,
     };
     use crate::{ClientError, DiscoveryFailure};
-    use seyal_runtime::local_ipc::{
-        discovery::DiscoveryError,
-        framing::ErrorCode,
-    };
+    use seyal_runtime::local_ipc::{discovery::DiscoveryError, framing::ErrorCode};
     use std::io;
 
     #[test]

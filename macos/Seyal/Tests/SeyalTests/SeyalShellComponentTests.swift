@@ -212,6 +212,84 @@ final class SeyalShellComponentTests: XCTestCase {
     XCTAssertFalse(coordinator.isActive)
   }
 
+  func testReconnectReconstructionPinsRuntimeExecutionAndRequiresFreshAttachment() {
+    let runtime = RuntimeContinuityIdentity(low: 1, high: 2)
+    let execution = RuntimeContinuityIdentity(low: 3, high: 4)
+    let firstAttachment = RuntimeContinuityIdentity(low: 5, high: 6)
+    let secondAttachment = RuntimeContinuityIdentity(low: 7, high: 8)
+    var state = ReconnectReconstructionState()
+
+    state.beginAttempt()
+    XCTAssertFalse(state.canMutate)
+    XCTAssertTrue(state.commit(
+      runtime: runtime,
+      execution: execution,
+      attachment: firstAttachment,
+      controllerAuthorityCommitted: true,
+      authoritativeSnapshotCommitted: true
+    ))
+    XCTAssertTrue(state.canMutate)
+    state.disconnect()
+    state.beginAttempt()
+    XCTAssertFalse(state.canMutate)
+    XCTAssertTrue(state.commit(
+      runtime: runtime,
+      execution: execution,
+      attachment: secondAttachment,
+      controllerAuthorityCommitted: true,
+      authoritativeSnapshotCommitted: true
+    ))
+
+    state.disconnect()
+    state.beginAttempt()
+    XCTAssertFalse(state.commit(
+      runtime: RuntimeContinuityIdentity(low: 99, high: 2),
+      execution: execution,
+      attachment: RuntimeContinuityIdentity(low: 9, high: 10),
+      controllerAuthorityCommitted: true,
+      authoritativeSnapshotCommitted: true
+    ))
+    XCTAssertEqual(state.stage, .blockedIdentityMismatch)
+    XCTAssertFalse(state.canMutate)
+  }
+
+  func testReconnectReconstructionRejectsInterruptedSnapshotAndOldAttachment() {
+    let runtime = RuntimeContinuityIdentity(low: 1, high: 2)
+    let execution = RuntimeContinuityIdentity(low: 3, high: 4)
+    let attachment = RuntimeContinuityIdentity(low: 5, high: 6)
+    var state = ReconnectReconstructionState()
+
+    state.beginAttempt()
+    XCTAssertFalse(state.commit(
+      runtime: runtime,
+      execution: execution,
+      attachment: attachment,
+      controllerAuthorityCommitted: true,
+      authoritativeSnapshotCommitted: false
+    ))
+    XCTAssertEqual(state.stage, .awaitingAuthoritativeSnapshot)
+    XCTAssertFalse(state.canMutate)
+
+    XCTAssertTrue(state.commit(
+      runtime: runtime,
+      execution: execution,
+      attachment: attachment,
+      controllerAuthorityCommitted: true,
+      authoritativeSnapshotCommitted: true
+    ))
+    state.disconnect()
+    state.beginAttempt()
+    XCTAssertFalse(state.commit(
+      runtime: runtime,
+      execution: execution,
+      attachment: attachment,
+      controllerAuthorityCommitted: true,
+      authoritativeSnapshotCommitted: true
+    ))
+    XCTAssertEqual(state.stage, .blockedIdentityMismatch)
+    XCTAssertFalse(state.canMutate)
+  }
+
   func testRuntimeBlockMetadataKeepsOpaqueExecutionIdentityAnchorAndState() {
     let current = RuntimeBlockMetadata(
       blockIDLow: 0x0123,

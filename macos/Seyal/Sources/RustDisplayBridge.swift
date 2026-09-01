@@ -305,6 +305,7 @@ final class RustDisplayBridge {
   private(set) var lastRecoveryResult = RecoveryResult.current()
   private(set) var runtimeIdentityWords: (low: UInt64, high: UInt64) = (0, 0)
   private(set) var attachmentIdentityWords: (low: UInt64, high: UInt64) = (0, 0)
+  private(set) var reconstructionState = ReconnectReconstructionState()
   private(set) var runtimeBlockMetadata: RuntimeBlockMetadata?
   private var reconnectRequested = false
   private let runtimeLauncher = BundledRuntimeLauncher()
@@ -375,12 +376,15 @@ final class RustDisplayBridge {
       return false
     }
     reconnectRequested = false
+    reconstructionState.beginAttempt()
 
     let handle: UInt64
     if let executionIdentity = requestedExecutionIdentity,
       let (low, high) = Self.executionWords(from: executionIdentity)
     {
       handle = seyal_bridge_open_execution(low, high)
+    } else if let execution = reconstructionState.expectedExecution {
+      handle = seyal_bridge_open_execution(execution.low, execution.high)
     } else if allowsImplicitExecutionBootstrap {
       handle = seyal_bridge_open_first()
     } else {
@@ -404,11 +408,39 @@ final class RustDisplayBridge {
       onStatusChanged()
       return false
     }
+    lastRecoveryResult = RecoveryResult.current()
+    let runtime = RuntimeContinuityIdentity(
+      low: lastRecoveryResult.runtimeIDLow,
+      high: lastRecoveryResult.runtimeIDHigh
+    )
+    let execution = RuntimeContinuityIdentity(
+      low: lastRecoveryResult.executionIDLow,
+      high: lastRecoveryResult.executionIDHigh
+    )
+    let attachment = RuntimeContinuityIdentity(
+      low: lastRecoveryResult.attachmentIDLow,
+      high: lastRecoveryResult.attachmentIDHigh
+    )
+    // A Rust client handle is published only after finish_attach has validated
+    // Controller authority and atomically committed the complete initial
+    // snapshot. Identity drift or attachment reuse fails closed here before
+    // AppKit can submit input or expose stale presentation.
+    guard reconstructionState.commit(
+      runtime: runtime,
+      execution: execution,
+      attachment: attachment,
+      controllerAuthorityCommitted: true,
+      authoritativeSnapshotCommitted: true
+    ) else {
+      seyal_bridge_disconnect_handle(handle)
+      onError(-4)
+      onStatusChanged()
+      return false
+    }
     clientHandle = handle
     handleBox.value = handle
-    lastRecoveryResult = RecoveryResult.current()
-    runtimeIdentityWords = (seyal_bridge_runtime_id_low(), seyal_bridge_runtime_id_high())
-    attachmentIdentityWords = (seyal_bridge_attachment_id_low(), seyal_bridge_attachment_id_high())
+    runtimeIdentityWords = (runtime.low, runtime.high)
+    attachmentIdentityWords = (attachment.low, attachment.high)
 
     let fileDescriptor = seyal_bridge_socket_fd()
     guard fileDescriptor >= 0 else {
@@ -463,6 +495,7 @@ final class RustDisplayBridge {
     guard !teardown.disconnectPending else { return }
 
     isConnected = false
+    reconstructionState.disconnect()
     runtimeBlockMetadata = nil
     // All request/display correlations are connection-local. A reconnect
     // receives a fresh attachment and must never reuse pending history,
@@ -471,6 +504,8 @@ final class RustDisplayBridge {
     historyRevisions.removeAll(keepingCapacity: false)
     lastTimelineRevision = 0
     lastComposerResultRequestID = 0
+    runtimeIdentityWords = (0, 0)
+    attachmentIdentityWords = (0, 0)
     socketFileDescriptor = -1
     _ = seyal_bridge_select(clientHandle)
     teardown.requestDisconnect()
@@ -500,7 +535,7 @@ final class RustDisplayBridge {
   }
 
   func currentFrame() -> SeyalPreparedFrame? {
-    guard isConnected, selectClient() else { return nil }
+    guard isConnected, reconstructionState.canMutate, selectClient() else { return nil }
     let frame = seyal_bridge_frame()
     guard frame.cells != nil, frame.cell_count > 0 else { return nil }
     return frame
@@ -514,7 +549,7 @@ final class RustDisplayBridge {
   /// Minimal read-only Pass 8 presentation seam. The rich command transcript
   /// remains the independent Pass 7.1 timeline above.
   func currentBlockMetadata() -> RuntimeBlockMetadata? {
-    guard isConnected, selectClient() else { return nil }
+    guard isConnected, reconstructionState.canMutate, selectClient() else { return nil }
     let value = seyal_bridge_execution_block_metadata()
     guard value.revision > 0,
       value.start_line_id > 0,
@@ -530,7 +565,7 @@ final class RustDisplayBridge {
   }
 
   func currentTimeline() -> [NativeBlockRecord] {
-    guard selectClient() else { return [] }
+    guard isConnected, reconstructionState.canMutate, selectClient() else { return [] }
     let count = Int(seyal_bridge_block_count())
     return (0..<count).compactMap { index in
       let record = seyal_bridge_block_record(UInt32(index))
@@ -555,12 +590,12 @@ final class RustDisplayBridge {
   }
 
   func nextComposerRequestID() -> UInt64 {
-    guard selectClient() else { return 0 }
+    guard isConnected, reconstructionState.canMutate, selectClient() else { return 0 }
     return seyal_bridge_next_composer_request_id()
   }
 
   private func publishComposerResult() {
-    guard selectClient() else { return }
+    guard isConnected, reconstructionState.canMutate, selectClient() else { return }
     let result = seyal_bridge_composer_result()
     guard result.request_id != 0,
       result.request_id != lastComposerResultRequestID
@@ -584,7 +619,9 @@ final class RustDisplayBridge {
 
   @discardableResult
   func requestHistoryRange(startLine: UInt64, endLine: UInt64, blockID: UInt64) -> Int32 {
-    guard isConnected, selectClient(), blockID > 0, startLine > 0, endLine >= startLine else { return -4 }
+    guard isConnected, reconstructionState.canMutate, selectClient(),
+      blockID > 0, startLine > 0, endLine >= startLine
+    else { return -4 }
     let requestID = seyal_bridge_next_history_request_id()
     guard requestID != 0 else { return -4 }
     let result = finishMutation(
@@ -604,7 +641,7 @@ final class RustDisplayBridge {
   }
 
   private func publishHistoryRanges() {
-    guard selectClient() else { return }
+    guard isConnected, reconstructionState.canMutate, selectClient() else { return }
     for (requestKey, request) in Array(requestedHistoryRanges) {
       let metadata = seyal_bridge_history_range_peek_for(request.blockID, requestKey.requestID)
       guard metadata.block_id != 0,
@@ -651,7 +688,7 @@ final class RustDisplayBridge {
 
   @discardableResult
   func submitCommittedText(_ text: String) -> Int32 {
-    guard isConnected, selectClient() else {
+    guard isConnected, reconstructionState.canMutate, selectClient() else {
       onStatusChanged()
       return -10
     }
@@ -673,7 +710,7 @@ final class RustDisplayBridge {
 
   @discardableResult
   func submitComposerCommand(_ text: String) -> Int32 {
-    guard isConnected, selectClient() else {
+    guard isConnected, reconstructionState.canMutate, selectClient() else {
       onStatusChanged()
       return -10
     }
@@ -695,7 +732,7 @@ final class RustDisplayBridge {
 
   @discardableResult
   func submitKey(kind: UInt16, scalar: UInt32) -> Int32 {
-    guard isConnected, selectClient() else {
+    guard isConnected, reconstructionState.canMutate, selectClient() else {
       onStatusChanged()
       return -10
     }
@@ -712,7 +749,7 @@ final class RustDisplayBridge {
     cellHeight: Double,
     meaningfulLayoutEpoch: Bool
   ) -> Int32 {
-    guard isConnected, selectClient() else {
+    guard isConnected, reconstructionState.canMutate, selectClient() else {
       onStatusChanged()
       return -10
     }
@@ -731,7 +768,7 @@ final class RustDisplayBridge {
 
   @discardableResult
   func retryResize() -> Int32 {
-    guard isConnected, selectClient() else {
+    guard isConnected, reconstructionState.canMutate, selectClient() else {
       onStatusChanged()
       return -10
     }
@@ -739,12 +776,12 @@ final class RustDisplayBridge {
   }
 
   func inputFailureCode() -> Int32 {
-    guard isConnected, selectClient() else { return 4 }
+    guard isConnected, reconstructionState.canMutate, selectClient() else { return 4 }
     return seyal_bridge_input_failure()
   }
 
   func resizeFailureCode() -> Int32 {
-    guard isConnected, selectClient() else { return 201 }
+    guard isConnected, reconstructionState.canMutate, selectClient() else { return 201 }
     return seyal_bridge_resize_failure()
   }
 

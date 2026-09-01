@@ -8,6 +8,67 @@ enum RuntimeRecoveryAttemptOutcome: Equatable {
   case blocked
 }
 
+struct RuntimeContinuityIdentity: Equatable {
+  let low: UInt64
+  let high: UInt64
+
+  static let none = RuntimeContinuityIdentity(low: 0, high: 0)
+  var isValid: Bool { self != .none }
+}
+
+enum ReconnectReconstructionStage: Equatable {
+  case disconnected
+  case awaitingAuthoritativeSnapshot
+  case usable
+  case blockedIdentityMismatch
+}
+
+/// Pins the Runtime/execution continuity claim while treating every attachment
+/// and all client-side reconstruction state as disposable.
+struct ReconnectReconstructionState: Equatable {
+  private(set) var stage: ReconnectReconstructionStage = .disconnected
+  private(set) var expectedRuntime: RuntimeContinuityIdentity?
+  private(set) var expectedExecution: RuntimeContinuityIdentity?
+  private(set) var lastAttachment: RuntimeContinuityIdentity?
+
+  var canMutate: Bool { stage == .usable }
+
+  mutating func beginAttempt() {
+    stage = .awaitingAuthoritativeSnapshot
+  }
+
+  mutating func commit(
+    runtime: RuntimeContinuityIdentity,
+    execution: RuntimeContinuityIdentity,
+    attachment: RuntimeContinuityIdentity,
+    controllerAuthorityCommitted: Bool,
+    authoritativeSnapshotCommitted: Bool
+  ) -> Bool {
+    guard runtime.isValid, execution.isValid, attachment.isValid,
+      expectedRuntime.map({ $0 == runtime }) ?? true,
+      expectedExecution.map({ $0 == execution }) ?? true,
+      lastAttachment.map({ $0 != attachment }) ?? true
+    else {
+      stage = .blockedIdentityMismatch
+      return false
+    }
+    guard controllerAuthorityCommitted, authoritativeSnapshotCommitted else {
+      stage = .awaitingAuthoritativeSnapshot
+      return false
+    }
+
+    expectedRuntime = runtime
+    expectedExecution = execution
+    lastAttachment = attachment
+    stage = .usable
+    return true
+  }
+
+  mutating func disconnect() {
+    stage = .disconnected
+  }
+}
+
 /// Deterministic owner of one SPEC-009 foreground recovery episode.
 ///
 /// The coordinator owns retry/deadline/launch accounting only. Runtime, PTY,

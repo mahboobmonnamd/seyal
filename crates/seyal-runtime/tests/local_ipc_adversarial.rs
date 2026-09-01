@@ -245,3 +245,57 @@ fn another_connection_cannot_reuse_controller_attachment_identity() {
         .run_until_empty(Instant::now() + Duration::from_secs(3))
         .unwrap();
 }
+
+#[test]
+fn reconnected_controller_rejects_every_old_attachment_mutation() {
+    let mut harness = Harness::new();
+    let execution_id = harness.spawn_cat();
+    let mut first = harness.connect();
+    harness.hello(&mut first);
+    let (old, _cache) = harness.attach(&mut first, execution_id, Role::Controller);
+    drop(first);
+    harness.pump();
+
+    let mut replacement = harness.connect();
+    harness.hello(&mut replacement);
+    let (fresh, _cache) = harness.attach(&mut replacement, execution_id, Role::Controller);
+    assert_ne!(old.attachment_id, fresh.attachment_id);
+
+    harness.stale(
+        &mut replacement,
+        MessageType::Input,
+        &InputRef {
+            attachment_id: old.attachment_id,
+            bytes: b"STALE",
+        }
+        .encode(),
+    );
+    harness.stale(
+        &mut replacement,
+        MessageType::Resize,
+        &Resize {
+            attachment_id: old.attachment_id,
+            rows: 40,
+            columns: 120,
+        }
+        .encode(),
+    );
+    harness.stale(
+        &mut replacement,
+        MessageType::Detach,
+        &Detach {
+            attachment_id: old.attachment_id,
+        }
+        .encode(),
+    );
+
+    harness.send(
+        &mut replacement,
+        MessageType::Input,
+        &InputRef {
+            attachment_id: fresh.attachment_id,
+            bytes: b"FRESH",
+        }
+        .encode(),
+    );
+}

@@ -303,6 +303,8 @@ final class RustDisplayBridge {
   private(set) var clientHandle: UInt64 = 0
   private(set) var isConnected = false
   private(set) var lastRecoveryResult = RecoveryResult.current()
+  private(set) var runtimeIdentityWords: (low: UInt64, high: UInt64) = (0, 0)
+  private(set) var attachmentIdentityWords: (low: UInt64, high: UInt64) = (0, 0)
   private(set) var runtimeBlockMetadata: RuntimeBlockMetadata?
   private var reconnectRequested = false
   private var runtimeLaunchAttempted = false
@@ -416,6 +418,8 @@ final class RustDisplayBridge {
     handleBox.value = handle
     lastRecoveryResult = RecoveryResult.current()
     runtimeLaunchAttempted = false
+    runtimeIdentityWords = (seyal_bridge_runtime_id_low(), seyal_bridge_runtime_id_high())
+    attachmentIdentityWords = (seyal_bridge_attachment_id_low(), seyal_bridge_attachment_id_high())
 
     let fileDescriptor = seyal_bridge_socket_fd()
     guard fileDescriptor >= 0 else {

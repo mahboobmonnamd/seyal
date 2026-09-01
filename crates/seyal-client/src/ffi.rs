@@ -124,6 +124,40 @@ pub extern "C" fn seyal_bridge_last_recovery_result() -> SeyalRecoveryResult {
     LAST_RECOVERY_RESULT.with(Cell::get)
 }
 
+fn identity_words(value: u128) -> (u64, u64) {
+    let bytes = value.to_le_bytes();
+    (
+        u64::from_le_bytes(bytes[..8].try_into().unwrap()),
+        u64::from_le_bytes(bytes[8..].try_into().unwrap()),
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_runtime_id_low() -> u64 {
+    with_active_client(|client| identity_words(client.runtime_id()).0).unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_runtime_id_high() -> u64 {
+    with_active_client(|client| identity_words(client.runtime_id()).1).unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_attachment_id_low() -> u64 {
+    with_active_client(|client| {
+        identity_words(u128::from_le_bytes(client.attachment_id().to_bytes())).0
+    })
+    .unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_attachment_id_high() -> u64 {
+    with_active_client(|client| {
+        identity_words(u128::from_le_bytes(client.attachment_id().to_bytes())).1
+    })
+    .unwrap_or(0)
+}
+
 fn allocate_handle() -> u64 {
     NEXT_HANDLE.with(|next| {
         let handle = next.get();

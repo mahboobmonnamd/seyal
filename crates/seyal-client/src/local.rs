@@ -613,6 +613,14 @@ impl LocalDisplayClient {
         self.execution_id
     }
 
+    pub fn runtime_id(&self) -> u128 {
+        self.runtime_id
+    }
+
+    pub fn attachment_id(&self) -> AttachmentId {
+        self.attachment_id
+    }
+
     /// Disposable Pass 8 execution-level metadata. This never owns terminal
     /// cells, PTY state, or the Pass 7.1 command transcript.
     pub fn block_state(&self) -> Option<BlockState> {

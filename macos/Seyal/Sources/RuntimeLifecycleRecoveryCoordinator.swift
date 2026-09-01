@@ -85,6 +85,14 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
   typealias Launcher = () -> Void
   typealias Attempt = () -> RuntimeRecoveryAttemptOutcome
 
+  /// Production attempts are always dispatched to the lifecycle queue.  The
+  /// inline mode exists solely for deterministic state-machine tests; it is
+  /// never selected by a production call site.
+  enum AttemptExecution: Equatable {
+    case lifecycleQueue
+    case inline
+  }
+
   static let retryDelays: [TimeInterval] = [0.010, 0.020, 0.040, 0.080, 0.160, 0.250]
   static let maximumAttempts = retryDelays.count + 1
   static let episodeDeadline: TimeInterval = 1.0
@@ -93,6 +101,7 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
   private let scheduler: Scheduler
   private let launcher: Launcher
   private let attempt: Attempt
+  private let attemptExecution: AttemptExecution
   /// A dedicated serial queue is the ownership boundary for discovery,
   /// hello, attach and snapshot attempts. The queue is intentionally created
   /// per coordinator so a torn-down pane cannot share lifecycle work with a
@@ -104,6 +113,7 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
   private var cancelScheduled: Cancellation?
   private var deadline: TimeInterval?
   private var launchClaimed = false
+  private var inFlightAttempt: DispatchWorkItem?
   private(set) var attemptCount = 0
   private(set) var state = RuntimeRecoveryState()
 
@@ -111,12 +121,14 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
     clock: @escaping Clock,
     scheduler: @escaping Scheduler,
     launcher: @escaping Launcher,
-    attempt: @escaping Attempt
+    attempt: @escaping Attempt,
+    attemptExecution: AttemptExecution = .lifecycleQueue
   ) {
     self.clock = clock
     self.scheduler = scheduler
     self.launcher = launcher
     self.attempt = attempt
+    self.attemptExecution = attemptExecution
   }
 
   var hasScheduledAttempt: Bool { cancelScheduled != nil }
@@ -142,6 +154,8 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
   }
 
   func cancel() {
+    inFlightAttempt?.cancel()
+    inFlightAttempt = nil
     cancelScheduled?()
     cancelScheduled = nil
     deadline = nil
@@ -155,6 +169,8 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
   }
 
   private func replaceGeneration(stage: RuntimeRecoveryStage) {
+    inFlightAttempt?.cancel()
+    inFlightAttempt = nil
     cancelScheduled?()
     cancelScheduled = nil
     deadline = nil
@@ -172,10 +188,28 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
 
     attemptCount += 1
     // Local IPC performs bounded blocking reads during hello/attach. Execute
-    // those reads on the lifecycle queue so the AppKit actor never becomes
-    // the blocking I/O executor. The coordinator remains serial: retry
-    // callbacks cannot overtake an in-flight attempt.
-    let outcome = lifecycleQueue.sync(execute: attempt)
+    // those reads asynchronously on the lifecycle queue so the AppKit actor
+    // never becomes the blocking I/O executor. Completion is marshalled back
+    // to the caller's actor; stale generations and cancelled work are dropped.
+    guard attemptExecution == .lifecycleQueue else {
+      completeAttempt(attempt(), generation: generation)
+      return
+    }
+    let work = DispatchWorkItem { [attempt] in
+      let outcome = attempt()
+      DispatchQueue.main.async { [weak self] in
+        self?.completeAttempt(outcome, generation: generation)
+      }
+    }
+    inFlightAttempt = work
+    lifecycleQueue.async(execute: work)
+  }
+
+  private func completeAttempt(
+    _ outcome: RuntimeRecoveryAttemptOutcome,
+    generation: UInt64
+  ) {
+    inFlightAttempt = nil
     guard generation == state.generation else { return }
     switch outcome {
     case .connected:

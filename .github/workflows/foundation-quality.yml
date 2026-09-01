@@ -97,4 +97,8 @@ jobs:
           # CAMetalDisplayLink callbacks. Interactive/local runs require the
           # presentation proxy and remain the acceptance measurement.
           SEYAL_REQUIRE_DISPLAY_LINK_BENCHMARK: "0"
+          # This job validates the unsigned CI benchmark artifact, not a
+          # distributable release. Keep the Release packaging contract
+          # explicit without requiring a private Apple signing credential.
+          SEYAL_CODESIGN_IDENTITY: "-"
         run: make bench

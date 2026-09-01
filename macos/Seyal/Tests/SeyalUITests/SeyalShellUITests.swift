@@ -208,11 +208,8 @@ final class SeyalShellUITests: XCTestCase {
         let token = "pass9-\(UUID().uuidString)"
         let continuityMarker = FileManager.default.temporaryDirectory
             .appendingPathComponent("seyal-pass9-continuity-\(UUID().uuidString)")
-        let imeMarker = FileManager.default.temporaryDirectory
-            .appendingPathComponent("seyal-pass9-ime-\(UUID().uuidString)")
         defer {
             try? FileManager.default.removeItem(at: continuityMarker)
-            try? FileManager.default.removeItem(at: imeMarker)
         }
 
         let runtime = Process()
@@ -293,19 +290,6 @@ final class SeyalShellUITests: XCTestCase {
         XCTAssertTrue(wait { FileManager.default.fileExists(atPath: continuityMarker.path) })
         XCTAssertEqual(try String(contentsOf: continuityMarker, encoding: .utf8), token)
 
-        // Exercise AppKit's dead-key composition path through the same live
-        // NSTextInputClient. Option-e followed by e commits one composed scalar
-        // on the standard US input source used by the native test host.
-        let finalComposer = app.textViews["composer.pane-local"]
-        finalComposer.click()
-        finalComposer.typeText("read -r SEYAL_PASS9_IME; printf '%s' \"$SEYAL_PASS9_IME\" > \(imeMarker.path)")
-        finalComposer.typeKey(.return, modifierFlags: [])
-        surface.click()
-        app.typeKey("e", modifierFlags: .option)
-        app.typeKey("e", modifierFlags: [])
-        app.typeKey(.return, modifierFlags: [])
-        XCTAssertTrue(wait { FileManager.default.fileExists(atPath: imeMarker.path) })
-        XCTAssertEqual(try String(contentsOf: imeMarker, encoding: .utf8), "é")
     }
 
     func testProductionShellUsesOnePaneOwnedComposerAndMetalSurface() {

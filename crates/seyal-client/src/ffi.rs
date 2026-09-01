@@ -130,6 +130,10 @@ mod recovery_result_tests {
         let capacity = super::LAST_RECOVERY_RESULT.with(std::cell::Cell::get);
         assert_eq!(capacity.failure_class, 4);
         assert_eq!(capacity.retryable, 0);
+        set_recovery_failure(ClientError::StartupDeadlineExceeded);
+        let deadline = super::LAST_RECOVERY_RESULT.with(std::cell::Cell::get);
+        assert_eq!(deadline.failure_class, 4);
+        assert_eq!(deadline.retryable, 0);
         let _ = SeyalRecoveryResult::empty();
     }
 }
@@ -146,6 +150,10 @@ fn set_recovery_failure(error: ClientError) {
         ClientError::Discovery(
             DiscoveryFailure::UntrustedEndpoint | DiscoveryFailure::InvalidPath,
         ) => (4, 0),
+        // The deadline is the caller's episode budget, not a transient I/O
+        // failure. Retrying it would permit a recovery episode to outlive its
+        // specified wall-clock bound.
+        ClientError::StartupDeadlineExceeded => (4, 0),
         ClientError::Io | ClientError::Disconnected => (2, 1),
         ClientError::NoRunningExecution => (2, 0),
         ClientError::AmbiguousExecutions => (6, 0),
@@ -968,6 +976,7 @@ fn terminal_key_kind(value: u16) -> Option<TerminalKeyKind> {
 fn error_code(error: ClientError) -> i32 {
     match error {
         ClientError::Discovery(_) => -2,
+        ClientError::StartupDeadlineExceeded => -20,
         ClientError::Io => -3,
         ClientError::Protocol => -4,
         ClientError::UnsupportedDisplayCapability => -5,

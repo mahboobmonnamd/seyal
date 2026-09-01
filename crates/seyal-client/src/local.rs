@@ -4,7 +4,7 @@ use std::{
     net::Shutdown,
     os::{fd::AsRawFd, unix::net::UnixStream},
     path::Path,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use seyal_render::{
@@ -38,7 +38,10 @@ use seyal_runtime::{
 
 use crate::block::{BlockApply, BlockCache, is_epoch_quarantined, quarantine_epoch};
 
-const STARTUP_TIMEOUT: Duration = Duration::from_secs(2);
+/// Pass 9 owns one wall-clock second for discovery, handshake, attach and the
+/// initial authoritative snapshot.
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(1);
+const STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(1);
 const READ_CHUNK_BYTES: usize = 64 * 1024;
 const MAX_BUFFERED_BYTES: usize = (MAX_FRAME_PAYLOAD as usize + HEADER_LEN) * 2;
 const MAX_FRAMES_PER_POLL: usize = 64;
@@ -71,6 +74,10 @@ pub enum DiscoveryFailure {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClientError {
     Discovery(DiscoveryFailure),
+    /// The caller's absolute startup/recovery deadline elapsed while the
+    /// disposable connection was still discovering, handshaking, attaching,
+    /// or collecting its initial authoritative snapshot.
+    StartupDeadlineExceeded,
     Io,
     Protocol,
     UnsupportedDisplayCapability,
@@ -444,8 +451,16 @@ impl LocalDisplayClient {
         execution_id: ExecutionId,
         role: Role,
     ) -> Result<Self, ClientError> {
+        Self::connect_execution_id_until(execution_id, role, Instant::now() + STARTUP_TIMEOUT)
+    }
+
+    pub fn connect_execution_id_until(
+        execution_id: ExecutionId,
+        role: Role,
+        deadline: Instant,
+    ) -> Result<Self, ClientError> {
         let socket_path = canonical_control_socket_path()?;
-        Self::connect_execution(&socket_path, execution_id, role)
+        Self::connect_execution_until(&socket_path, execution_id, role, deadline)
     }
 
     /// Connect to the verified per-user Runtime and attach as Controller to the
@@ -453,12 +468,16 @@ impl LocalDisplayClient {
     /// interactive production terminal; an existing controller is surfaced as
     /// an explicit attach error rather than silently degrading to Observer.
     pub fn connect_first_running() -> Result<Self, ClientError> {
+        Self::connect_first_running_until(Instant::now() + STARTUP_TIMEOUT)
+    }
+
+    pub fn connect_first_running_until(deadline: Instant) -> Result<Self, ClientError> {
         let socket_path = canonical_control_socket_path()?;
 
-        let mut stream = connect_stream(&socket_path)?;
-        let mut server_hello = hello(&mut stream, true, true)?;
-        send_control(&mut stream, MessageType::ListExecutions, &[])?;
-        let (kind, payload) = read_blocking_frame(&mut stream)?;
+        let mut stream = connect_stream_until(&socket_path, deadline)?;
+        let mut server_hello = hello_until(&mut stream, true, true, deadline)?;
+        send_control_until(&mut stream, MessageType::ListExecutions, &[], deadline)?;
+        let (kind, payload) = read_blocking_frame_until(&mut stream, deadline)?;
         if kind != MessageType::ExecutionList {
             return Err(ClientError::Protocol);
         }
@@ -467,18 +486,19 @@ impl LocalDisplayClient {
 
         if is_epoch_quarantined(server_hello.runtime_id, execution_id) {
             drop(stream);
-            stream = connect_stream(&socket_path)?;
-            server_hello = hello(&mut stream, true, false)?;
+            stream = connect_stream_until(&socket_path, deadline)?;
+            server_hello = hello_until(&mut stream, true, false, deadline)?;
         }
         let block_metadata_negotiated = server_hello.server_capabilities & CAP_BLOCK_METADATA != 0
             && !is_epoch_quarantined(server_hello.runtime_id, execution_id);
-        Self::finish_attach(
+        Self::finish_attach_with_deadline(
             stream,
             execution_id,
             Role::Controller,
             server_hello.server_capabilities & CAP_COMMAND_BLOCKS != 0,
             server_hello.runtime_id,
             block_metadata_negotiated,
+            deadline,
         )
     }
 
@@ -487,22 +507,37 @@ impl LocalDisplayClient {
         execution_id: ExecutionId,
         role: Role,
     ) -> Result<Self, ClientError> {
-        let mut stream = connect_stream(socket_path)?;
-        let mut server_hello = hello(&mut stream, role == Role::Controller, true)?;
+        Self::connect_execution_until(
+            socket_path,
+            execution_id,
+            role,
+            Instant::now() + STARTUP_TIMEOUT,
+        )
+    }
+
+    pub fn connect_execution_until(
+        socket_path: &Path,
+        execution_id: ExecutionId,
+        role: Role,
+        deadline: Instant,
+    ) -> Result<Self, ClientError> {
+        let mut stream = connect_stream_until(socket_path, deadline)?;
+        let mut server_hello = hello_until(&mut stream, role == Role::Controller, true, deadline)?;
         if is_epoch_quarantined(server_hello.runtime_id, execution_id) {
             drop(stream);
-            stream = connect_stream(socket_path)?;
-            server_hello = hello(&mut stream, role == Role::Controller, false)?;
+            stream = connect_stream_until(socket_path, deadline)?;
+            server_hello = hello_until(&mut stream, role == Role::Controller, false, deadline)?;
         }
         let block_metadata_negotiated = server_hello.server_capabilities & CAP_BLOCK_METADATA != 0
             && !is_epoch_quarantined(server_hello.runtime_id, execution_id);
-        Self::finish_attach(
+        Self::finish_attach_with_deadline(
             stream,
             execution_id,
             role,
             server_hello.server_capabilities & CAP_COMMAND_BLOCKS != 0,
             server_hello.runtime_id,
             block_metadata_negotiated,
+            deadline,
         )
     }
 
@@ -516,27 +551,50 @@ impl LocalDisplayClient {
         execution_id: ExecutionId,
         role: Role,
     ) -> Result<Self, ClientError> {
-        let mut stream = connect_stream(socket_path)?;
-        let server_hello = hello(&mut stream, role == Role::Controller, false)?;
-        Self::finish_attach(
+        let deadline = Instant::now() + STARTUP_TIMEOUT;
+        let mut stream = connect_stream_until(socket_path, deadline)?;
+        let server_hello = hello_until(&mut stream, role == Role::Controller, false, deadline)?;
+        Self::finish_attach_with_deadline(
             stream,
             execution_id,
             role,
             server_hello.server_capabilities & CAP_COMMAND_BLOCKS != 0,
             server_hello.runtime_id,
             false,
+            deadline,
         )
     }
 
+    #[cfg(test)]
     fn finish_attach(
-        mut stream: UnixStream,
+        stream: UnixStream,
         execution_id: ExecutionId,
         role: Role,
         command_blocks_supported: bool,
         runtime_id: u128,
         block_metadata_negotiated: bool,
     ) -> Result<Self, ClientError> {
-        send_control(
+        Self::finish_attach_with_deadline(
+            stream,
+            execution_id,
+            role,
+            command_blocks_supported,
+            runtime_id,
+            block_metadata_negotiated,
+            Instant::now() + STARTUP_TIMEOUT,
+        )
+    }
+
+    fn finish_attach_with_deadline(
+        mut stream: UnixStream,
+        execution_id: ExecutionId,
+        role: Role,
+        command_blocks_supported: bool,
+        runtime_id: u128,
+        block_metadata_negotiated: bool,
+        deadline: Instant,
+    ) -> Result<Self, ClientError> {
+        send_control_until(
             &mut stream,
             MessageType::Attach,
             &Attach {
@@ -544,8 +602,9 @@ impl LocalDisplayClient {
                 requested_role: role,
             }
             .encode(),
+            deadline,
         )?;
-        let (kind, payload) = read_blocking_frame(&mut stream)?;
+        let (kind, payload) = read_blocking_frame_until(&mut stream, deadline)?;
         if kind == MessageType::Error {
             let error = ErrorMessage::decode(&payload).map_err(|_| ClientError::Protocol)?;
             return Err(server_error(error.error_code));
@@ -558,7 +617,7 @@ impl LocalDisplayClient {
             return Err(ClientError::InvalidAttachment);
         }
 
-        let first_frame = read_blocking_raw_frame(&mut stream)?;
+        let first_frame = read_blocking_raw_frame_until(&mut stream, deadline)?;
         let first = decode_chunk(&first_frame).map_err(|_| ClientError::Display)?;
         if first.kind != DisplayKind::Snapshot || first.chunk_index != 0 {
             return Err(ClientError::Protocol);
@@ -567,7 +626,7 @@ impl LocalDisplayClient {
         let mut batch = PendingDisplayBatch::default();
         let mut complete = batch.push(first)?;
         for _ in 1..chunk_count {
-            let frame = read_blocking_raw_frame(&mut stream)?;
+            let frame = read_blocking_raw_frame_until(&mut stream, deadline)?;
             complete = batch.push(decode_chunk(&frame).map_err(|_| ClientError::Display)?)?;
         }
         if !complete {
@@ -591,9 +650,6 @@ impl LocalDisplayClient {
         let result = prepare_cache(&mut prepared, &cache, RowDamage::full(cache.rows), true)?;
 
         stream.set_read_timeout(None).map_err(|_| ClientError::Io)?;
-        stream
-            .set_write_timeout(None)
-            .map_err(|_| ClientError::Io)?;
         stream.set_nonblocking(true).map_err(|_| ClientError::Io)?;
 
         batch.clear();
@@ -1584,15 +1640,45 @@ fn runtime_attributes_to_render(attributes: DisplayAttributes) -> RenderAttribut
     }
 }
 
-fn connect_stream(path: &Path) -> Result<UnixStream, ClientError> {
+fn connect_stream_until(path: &Path, deadline: Instant) -> Result<UnixStream, ClientError> {
+    startup_remaining(deadline)?;
     let stream = UnixStream::connect(path).map_err(classify_connect_error)?;
-    stream
-        .set_read_timeout(Some(STARTUP_TIMEOUT))
-        .map_err(|_| ClientError::Io)?;
-    stream
-        .set_write_timeout(Some(STARTUP_TIMEOUT))
-        .map_err(|_| ClientError::Io)?;
+    configure_startup_timeout(&stream, deadline)?;
     Ok(stream)
+}
+
+fn startup_remaining(deadline: Instant) -> Result<Duration, ClientError> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or(ClientError::StartupDeadlineExceeded)
+}
+
+fn configure_startup_timeout(stream: &UnixStream, deadline: Instant) -> Result<(), ClientError> {
+    startup_remaining(deadline)?;
+    stream.set_nonblocking(true).map_err(|_| ClientError::Io)
+}
+
+fn read_exact_until(
+    stream: &mut UnixStream,
+    buffer: &mut [u8],
+    deadline: Instant,
+) -> Result<(), ClientError> {
+    let mut offset = 0;
+    while offset < buffer.len() {
+        configure_startup_timeout(stream, deadline)?;
+        match stream.read(&mut buffer[offset..]) {
+            Ok(0) => return Err(ClientError::Io),
+            Ok(read) => offset += read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                startup_remaining(deadline)?;
+                std::thread::sleep(STARTUP_POLL_INTERVAL);
+            }
+            Err(_) => return Err(ClientError::Io),
+        }
+    }
+    Ok(())
 }
 
 fn canonical_control_socket_path() -> Result<std::path::PathBuf, ClientError> {
@@ -1702,21 +1788,23 @@ fn requested_capabilities(request_block_metadata: bool) -> u32 {
         }
 }
 
-fn hello(
+fn hello_until(
     stream: &mut UnixStream,
     interactive: bool,
     request_block_metadata: bool,
+    deadline: Instant,
 ) -> Result<ServerHello, ClientError> {
     let client_capabilities = requested_capabilities(request_block_metadata);
-    send_control(
+    send_control_until(
         stream,
         MessageType::ClientHello,
         &ClientHello {
             client_capabilities,
         }
         .encode(),
+        deadline,
     )?;
-    let (kind, payload) = read_blocking_frame(stream)?;
+    let (kind, payload) = read_blocking_frame_until(stream, deadline)?;
     if kind == MessageType::Error {
         let error = ErrorMessage::decode(&payload).map_err(|_| ClientError::Protocol)?;
         return Err(server_error(error.error_code));
@@ -1737,16 +1825,31 @@ fn hello(
     Ok(hello)
 }
 
-fn send_control(
+fn send_control_until(
     stream: &mut UnixStream,
     message_type: MessageType,
     payload: &[u8],
+    deadline: Instant,
 ) -> Result<(), ClientError> {
-    stream
-        .write_all(&encode_frame(message_type, payload))
-        .map_err(|_| ClientError::Io)
+    configure_startup_timeout(stream, deadline)?;
+    let frame = encode_frame(message_type, payload);
+    let mut offset = 0;
+    while offset < frame.len() {
+        match stream.write(&frame[offset..]) {
+            Ok(0) => return Err(ClientError::Io),
+            Ok(written) => offset += written,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                startup_remaining(deadline)?;
+                std::thread::sleep(STARTUP_POLL_INTERVAL);
+            }
+            Err(_) => return Err(ClientError::Io),
+        }
+    }
+    Ok(())
 }
 
+#[cfg(test)]
 fn read_blocking_frame(stream: &mut UnixStream) -> Result<(MessageType, Vec<u8>), ClientError> {
     let frame = read_blocking_raw_frame(stream)?;
     let header = FrameHeader::decode(&frame[..HEADER_LEN]).map_err(|_| ClientError::Protocol)?;
@@ -1754,6 +1857,17 @@ fn read_blocking_frame(stream: &mut UnixStream) -> Result<(MessageType, Vec<u8>)
     Ok((message_type, frame[HEADER_LEN..].to_vec()))
 }
 
+fn read_blocking_frame_until(
+    stream: &mut UnixStream,
+    deadline: Instant,
+) -> Result<(MessageType, Vec<u8>), ClientError> {
+    let frame = read_blocking_raw_frame_until(stream, deadline)?;
+    let header = FrameHeader::decode(&frame[..HEADER_LEN]).map_err(|_| ClientError::Protocol)?;
+    let message_type = MessageType::from_u16(header.message_type).ok_or(ClientError::Protocol)?;
+    Ok((message_type, frame[HEADER_LEN..].to_vec()))
+}
+
+#[cfg(test)]
 fn read_blocking_raw_frame(stream: &mut UnixStream) -> Result<Vec<u8>, ClientError> {
     let mut header_bytes = [0u8; HEADER_LEN];
     stream
@@ -1766,6 +1880,20 @@ fn read_blocking_raw_frame(stream: &mut UnixStream) -> Result<Vec<u8>, ClientErr
     stream
         .read_exact(&mut frame[HEADER_LEN..])
         .map_err(|_| ClientError::Io)?;
+    Ok(frame)
+}
+
+fn read_blocking_raw_frame_until(
+    stream: &mut UnixStream,
+    deadline: Instant,
+) -> Result<Vec<u8>, ClientError> {
+    let mut header_bytes = [0u8; HEADER_LEN];
+    read_exact_until(stream, &mut header_bytes, deadline)?;
+    let header = FrameHeader::decode(&header_bytes).map_err(|_| ClientError::Protocol)?;
+    let mut frame = Vec::with_capacity(HEADER_LEN + header.payload_len as usize);
+    frame.extend_from_slice(&header_bytes);
+    frame.resize(HEADER_LEN + header.payload_len as usize, 0);
+    read_exact_until(stream, &mut frame[HEADER_LEN..], deadline)?;
     Ok(frame)
 }
 
@@ -1851,6 +1979,34 @@ mod tests {
             assert!(matches!(result, Err(actual) if actual == expected));
             server_thread.join().expect("server thread");
         }
+    }
+
+    #[test]
+    fn startup_deadline_bounds_a_stalled_attach_read() {
+        let (client, mut server) = UnixStream::pair().expect("unix stream pair");
+        let execution_id = ExecutionId::from_bytes([4; 16]);
+        let server_thread = std::thread::spawn(move || {
+            let (kind, _) = read_blocking_frame(&mut server).expect("attach request");
+            assert_eq!(kind, MessageType::Attach);
+            std::thread::sleep(Duration::from_millis(120));
+        });
+
+        let started = std::time::Instant::now();
+        let result = LocalDisplayClient::finish_attach_with_deadline(
+            client,
+            execution_id,
+            Role::Controller,
+            false,
+            9,
+            false,
+            std::time::Instant::now() + Duration::from_millis(25),
+        );
+        assert!(matches!(result, Err(ClientError::StartupDeadlineExceeded)));
+        assert!(
+            started.elapsed() < Duration::from_millis(90),
+            "stalled attach exceeded the supplied startup deadline"
+        );
+        server_thread.join().expect("server thread");
     }
 
     fn display_cell() -> DisplayCell {

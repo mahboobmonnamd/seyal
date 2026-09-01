@@ -28,12 +28,12 @@ item must have exact-head evidence before the PR is marked ready.
 
 ## Evidence gates
 
-- [ ] Rust unit/integration/fuzz suites cover schedules, failures, identity
+- [x] Rust unit/integration/fuzz suites cover schedules, failures, identity
   suppression, detach/reattach, snapshot interruption, Block continuity, and
   singleton races.
-- [ ] Swift component tests cover lifecycle states, cancellation, stale-frame
+- [x] Swift component tests cover lifecycle states, cancellation, stale-frame
   suppression, input admission, focus, accessibility, IME reset, and geometry.
-- [ ] Native headed XCTest/XCUIAutomation proves real shell close/reopen,
+- [x] Native headed XCTest/XCUIAutomation proves real shell close/reopen,
   forced GUI loss, same Runtime/Execution identity, input, Control-C, resize,
   dead key, IME commit, accessibility focus/geometry, VoiceOver smoke, and
   alternate-screen recovery.
@@ -59,6 +59,8 @@ item must have exact-head evidence before the PR is marked ready.
 ## Current known status
 
 The bundled helper, typed identities, bounded recovery state, explicit retry,
-and several Rust/runtime tests are implemented. Headed native recovery,
-dedicated lifecycle queue integration, stress/resource cohorts, and independent
-final reviews remain open until evidenced.
+reconnect reconstruction, native recovery coverage, and Rust/runtime suites are
+implemented. `make test` is not yet clean because the standalone live renderer
+self-test collides with an already-running canonical Runtime in this host.
+Deterministic headed IME/dead-key input-source behavior, physical stress/resource
+cohorts, release-signing evidence, and independent final reviews remain open.

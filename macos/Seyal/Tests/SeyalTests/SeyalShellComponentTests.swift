@@ -112,7 +112,8 @@ final class SeyalShellComponentTests: XCTestCase {
       attempt: {
         attempts += 1
         return .retryable
-      }
+      },
+      attemptExecution: .inline
     )
 
     coordinator.beginEpisode()
@@ -139,7 +140,8 @@ final class SeyalShellComponentTests: XCTestCase {
         }
       },
       launcher: { launches += 1 },
-      attempt: { .endpointMissing }
+      attempt: { .endpointMissing },
+      attemptExecution: .inline
     )
     missing.beginEpisode()
     for index in RuntimeLifecycleRecoveryCoordinator.retryDelays.indices {
@@ -157,7 +159,8 @@ final class SeyalShellComponentTests: XCTestCase {
         }
       },
       launcher: { launches += 1 },
-      attempt: { .controllerBusy }
+      attempt: { .controllerBusy },
+      attemptExecution: .inline
     )
     busy.beginEpisode()
     XCTAssertEqual(busy.state.stage, .waitingForController)
@@ -184,7 +187,8 @@ final class SeyalShellComponentTests: XCTestCase {
       attempt: {
         attempts += 1
         return .retryable
-      }
+      },
+      attemptExecution: .inline
     )
 
     coordinator.beginEpisode()
@@ -222,7 +226,8 @@ final class SeyalShellComponentTests: XCTestCase {
         }
       },
       launcher: {},
-      attempt: { outcomes.removeFirst() }
+      attempt: { outcomes.removeFirst() },
+      attemptExecution: .inline
     )
 
     coordinator.beginEpisode()
@@ -848,6 +853,28 @@ final class SeyalShellComponentTests: XCTestCase {
     XCTAssertEqual(descendants(of: BlockView.self, in: shell).count, 0)
     XCTAssertEqual(descendants(of: PaneComposerShellView.self, in: shell).count, 1)
     XCTAssertTrue(descendants(of: TerminalSurfaceHostView.self, in: shell).isEmpty)
+  }
+
+  @MainActor
+  func testProductionTerminalSurfaceExposesSafeAccessibilityAndInputContract() throws {
+    let shell = SeyalShellProductionFactory.make(
+      frame: NSRect(x: 0, y: 0, width: 960, height: 600)
+    )
+    shell.layoutSubtreeIfNeeded()
+
+    let surface = try XCTUnwrap(
+      descendants(of: InteractiveMetalSurfaceView.self, in: shell).first
+    )
+
+    // The custom Metal surface is the accessibility element. Its metadata is
+    // intentionally limited to role/label/state; terminal cells and command
+    // text must never be exposed through the accessibility value.
+    XCTAssertTrue(surface.isAccessibilityElement())
+    XCTAssertEqual(surface.accessibilityRole(), .group)
+    XCTAssertEqual(surface.accessibilityRoleDescription(), "Terminal")
+    XCTAssertEqual(surface.accessibilityLabel(), "Seyal Terminal")
+    XCTAssertTrue(surface.acceptsFirstResponder)
+    XCTAssertTrue(InteractiveMetalSurfaceView.pass7InputSelfTest())
   }
 
   @MainActor

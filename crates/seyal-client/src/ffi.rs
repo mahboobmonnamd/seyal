@@ -89,7 +89,8 @@ mod recovery_result_tests {
 
 fn set_recovery_failure(error: ClientError) {
     let (failure_class, retryable) = match error {
-        ClientError::RuntimeDiscovery | ClientError::Io | ClientError::Disconnected => (1, 1),
+        ClientError::RuntimeDiscovery => (1, 1),
+        ClientError::Io | ClientError::Disconnected => (2, 1),
         ClientError::NoRunningExecution => (2, 0),
         ClientError::AmbiguousExecutions => (6, 0),
         ClientError::Server(9) => (3, 1),

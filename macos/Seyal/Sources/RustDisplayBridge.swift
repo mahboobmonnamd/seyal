@@ -393,7 +393,12 @@ final class RustDisplayBridge {
     }
     guard handle != 0 else {
       lastRecoveryResult = RecoveryResult.current()
-      if lastRecoveryResult.retryable && !runtimeLaunchAttempted {
+      // Only a classified endpoint-missing discovery result may launch the
+      // bundled helper. Refusals and transient I/O remain retryable but must
+      // converge on an already-starting external Runtime.
+      if lastRecoveryResult.retryable,
+         lastRecoveryResult.failureClass == 1,
+         !runtimeLaunchAttempted {
         runtimeLaunchAttempted = true
         launchBundledRuntimeIfNeeded()
       }

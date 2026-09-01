@@ -401,9 +401,11 @@ impl Runtime {
                 // a second endpoint authority.
                 let runtime_dir = match runtime_dir_override {
                     Some(dir) => dir.clone(),
-                    None => crate::local_ipc::discovery::darwin_user_runtime_dir().map_err(|_| {
-                        RuntimeError::Io(std::io::Error::other("local IPC discovery failed"))
-                    })?,
+                    None => {
+                        crate::local_ipc::discovery::darwin_user_runtime_dir().map_err(|_| {
+                            RuntimeError::Io(std::io::Error::other("local IPC discovery failed"))
+                        })?
+                    }
                 };
                 crate::local_ipc::discovery::create_verified_runtime_dir(&runtime_dir).map_err(
                     |_| {
@@ -823,7 +825,8 @@ impl Runtime {
                         processed += 1;
                     }
                 }
-                ReactorEventKind::AuxiliaryReadable | ReactorEventKind::AuxiliaryWritable => {
+                ReactorEventKind::AuxiliaryReadable | ReactorEventKind::AuxiliaryWritable =>
+                {
                     #[cfg(target_os = "macos")]
                     if let Some(token) = event.token {
                         self.service_local_reactor_event(token, event.kind, event.hangup)?;

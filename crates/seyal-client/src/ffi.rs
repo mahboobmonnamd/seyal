@@ -16,7 +16,7 @@ use seyal_runtime::{
     local_ipc::{
         discovery::{
             DiscoveryError, control_socket_path, darwin_user_runtime_dir,
-            ensure_verified_runtime_dir, verify_connected_peer_fd, verify_control_socket_leaf,
+            verify_connected_peer_fd, verify_control_socket_leaf, verify_runtime_dir,
         },
         framing::{ComposerResultCode, ErrorCode, Role, TerminalKeyKind},
     },
@@ -682,7 +682,7 @@ fn classify_bridge_discovery_error(error: DiscoveryError) -> ClientError {
 
 fn verified_recovery_socket_path() -> Result<PathBuf, ClientError> {
     let runtime_dir = darwin_user_runtime_dir().map_err(classify_bridge_discovery_error)?;
-    ensure_verified_runtime_dir(&runtime_dir).map_err(classify_bridge_discovery_error)?;
+    verify_runtime_dir(&runtime_dir).map_err(classify_bridge_discovery_error)?;
     let socket_path = control_socket_path(&runtime_dir).map_err(classify_bridge_discovery_error)?;
     verify_control_socket_leaf(&socket_path).map_err(classify_bridge_discovery_error)?;
     Ok(socket_path)

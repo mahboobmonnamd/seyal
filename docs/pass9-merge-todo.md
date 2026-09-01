@@ -1,91 +1,134 @@
 # Pass 9 final merge TODO
 
-This checklist is the delivery boundary for Issue #719 and PR #734. Every
-item must have exact-head evidence before the PR is marked ready.
+This checklist is the delivery boundary for Issue #719 and PR #734. It mirrors
+the closure rebaseline in Issue #719 comment `5498085185` and keeps production
+implementation separate from acceptance evidence. A checked implementation
+item does not waive any exact-head evidence or independent-review gate.
 
-## Implementation
+## Closure implementation
 
-- [ ] Lifecycle coordinator runs discovery/hello/attach on a dedicated serial
-  lifecycle queue with injected clock, scheduler, launcher, and attempt hooks.
-- [ ] Recovery has exactly seven attempts at 0, 10, 20, 40, 80, 160, and
-  250 ms, one-second episode ceiling, cancellation, generation replacement,
-  launch-once behavior, and explicit retry after exhaustion.
-- [ ] Typed discovery classifies endpoint absence/refusal, security failure,
-  Runtime mismatch, no execution, ambiguous executions, Controller busy,
-  protocol failure, and success with Runtime/Execution/Attachment identity.
-- [ ] Client discovery is verification-only; only Runtime owns socket cleanup,
-  singleton binding, stale endpoint removal, and repair.
-- [ ] Runtime helper is built, embedded, signed with the app, launched only
-  from the trusted bundle path, and never terminated by GUI teardown.
-- [ ] Reconnect preserves the expected ExecutionId, discards all disposable
-  socket/request/display/controller state, and requires a complete authoritative
-  snapshot before input or rendering becomes usable.
-- [ ] Runtime cleanup revokes dead attachments and Controller exactly once;
-  stale identities and malformed/interrupted frames are rejected.
-- [ ] Native surface restores Metal, focus, accessibility, IME, geometry, and
-  input admission only after the reconstructed surface is usable.
-- [ ] Reconnect logs and diagnostics contain no terminal content or secrets.
+- [x] Restore legacy `seyal_bridge_connect_first` connect-and-adopt semantics so
+  retained callers own a live Pane-local client instead of a disposable pending
+  handle.
+- [x] Dispose pending lifecycle handles on cancellation, generation replacement,
+  failed/stale completion, coordinator deallocation, failed adoption, and window
+  closure without adding another Runtime or terminal-state authority.
+- [x] Carry one recovery-episode deadline through Swift scheduling and Rust
+  discovery, connect, hello, attach, and authoritative initial snapshot reads.
+- [x] Preserve typed bundled-Runtime launch failures and transition them to
+  deterministic blocked recovery rather than retrying or guessing.
+- [x] Verify the canonical socket leaf before/after connect and verify the
+  connected AF_UNIX peer UID; reject symlink/non-socket, ownership, writable
+  substitution, and peer-identity failures.
+- [x] Add lifecycle/deadline/launcher/security regression coverage, including
+  stalled startup reads and adversarial socket-leaf/peer cases.
+- [x] Keep client discovery verification-only. An absent Runtime directory is
+  observed without mutation and still resolves to endpoint-missing; after the
+  singleton is acquired, Runtime alone creates/verifies the 0700 directory and
+  retains stale-endpoint cleanup/bind ownership.
 
-## Evidence gates
+## Core Pass 9 implementation invariants
 
-- [x] Rust unit/integration/fuzz suites cover schedules, failures, identity
-  suppression, detach/reattach, snapshot interruption, Block continuity, and
-  singleton races.
-- [x] Swift component tests cover lifecycle states, cancellation, stale-frame
-  suppression, input admission, focus, accessibility, IME reset, and geometry.
-- [x] Runtime production-path tests cover output produced while detached and
-  prove that a naturally exited child is drained without creating a replacement
-  execution. These tests do not substitute for the required headed UI evidence.
-- [ ] Native headed XCTest/XCUIAutomation proves the complete required matrix.
-  The current headed fixture proves graceful/forced relaunch, same
-  Runtime/Execution identity, fresh attachment, input, Control-C, resize,
-  focus/geometry, and alternate-screen recovery. It does **not** yet prove
-  dead-key input, a real IME commit/cancel flow, VoiceOver focus/geometry,
-  detached output, or detached-child exit. Do not mark those cases complete
-  from component tests or a synthetic fixture.
-- [ ] At least 100 graceful and 100 abrupt cycles return attachment,
-  Controller, fd, renderer, and RSS counters to baseline.
-- [ ] Five independent 100-cycle performance cohorts after warm-up validate
-  SPEC-009 timestamps, cleanup/reconnect/RSS/fd/CPU budgets, and paired Pass 8
-  regression movement with no unexplained >5% movement or >10% breach.
-  Validate the supplied exact-head measurement artifact with
-  `python3 scripts/check-pass9-production-budget.py <evidence.json>`; the
-  validator does not generate measurements or turn a self-test into hardware
-  evidence. A bounded client allocator delta of at most 4 KiB is accepted only
-  when the artifact classifies it as fixed harness-owned capacity, never as
-  production retention.
-- [ ] Exact final head passes `make bootstrap`, `make build`, `make test`,
-  `make check`, `make bench`, native clean-checkout build/tests, and package
-  inspection.
-- [ ] Independent architecture, security, performance, accessibility, and
-  implementation reviews have no unresolved blockers.
-- [ ] Issue #719 contains the final evidence matrix and truthful Done state;
-  PR #734 has the exact owning-Issue relationship and is no longer Draft.
+- [x] Lifecycle coordinator uses the dedicated lifecycle executor with injected
+  clock, scheduler, launcher, attempt, and handle-adoption hooks.
+- [x] Recovery uses exactly seven scheduled opportunities at 0, 10, 20, 40,
+  80, 160, and 250 ms inside one one-second episode ceiling, with cancellation,
+  generation replacement, launch-once behavior, exhaustion, and explicit retry.
+- [x] Typed discovery distinguishes endpoint absence/refusal/disappearance,
+  security/path failure, no execution, ambiguous executions, Controller busy,
+  protocol failure, and successful Runtime/Execution/Attachment identity.
+- [x] Runtime helper is built and embedded as a bundle-relative helper; launcher
+  validation and launch remain outside terminal I/O/rendering hot paths.
+- [x] Reconnect preserves expected Execution identity, creates a fresh
+  Attachment, discards disposable connection/display request state, and accepts
+  interaction only after a complete authoritative snapshot is reconstructed.
+- [x] Runtime attachment/controller cleanup remains authoritative and stale,
+  malformed, interrupted, or cross-attachment data fails closed.
+- [x] Native recovery reconstructs the existing Metal presentation and restores
+  input/focus/geometry state without creating a second VT/grid/renderer authority.
+- [x] Recovery diagnostics expose bounded typed state/identity only and do not
+  log terminal content or secrets.
 
-## Governance and review disposition
+## Automated evidence
 
-- [ ] Record the pre-Ready production-start ordering violation. Production
-  work began at `eada76640776779ad3f8bd65a0cb8199d91f396f` before Issue #719
-  was explicitly marked Ready. This is an acceptance blocker, even if the
-  implementation is later corrected.
-- [ ] Re-baseline PR #734 against the accepted dependency/calibration state
-  after recording that ordering violation. Freeze the resulting exact head
-  and obtain fresh independent implementation, architecture, security,
-  performance, and accessibility reviews against that head.
-- [ ] Record the corrective review decision and evidence links in Issue #719;
-  do not infer approval from passing CI or from PR #726 calibration evidence.
+- [x] Rust unit/integration/fuzz suites cover recovery scheduling, failure
+  classification, identity suppression, detach/reattach, snapshot interruption,
+  Block continuity, singleton races, and local IPC adversarial cases.
+- [x] Swift component tests cover lifecycle state, cancellation/generation
+  replacement, stale completion suppression, input admission, focus,
+  accessibility state, IME reset, and geometry behavior.
+- [x] Runtime production-path tests cover output while detached and naturally
+  exited children without creating replacement executions.
+- [ ] Freeze the final implementation head and pass exact-head `make bootstrap`,
+  `make build`, `make test`, `make check`, and `make bench`.
+- [ ] Exact final head passes `repository-policy`, `rust-and-harness-quality`,
+  `native-macos-smoke`, Pass 5 production fuzz, native clean-checkout tests, and
+  package inspection. Do not infer this from an earlier green commit.
 
-## Current known status
+## Required native continuity evidence
 
-The bundled helper, typed identities, bounded recovery state, explicit retry,
-reconnect reconstruction, and Rust/runtime suites are implemented. The typed
-error and lifecycle-queue fixes require fresh exact-head review. `make test` is
-not yet clean because the standalone live renderer self-test collides with an
-already-running canonical Runtime in this host. Deterministic headed
-IME/dead-key input-source behavior, VoiceOver recovery, detached-output and
-child-exit workloads, physical stress/resource cohorts, release-signing
-evidence, governance re-baselining, and independent final reviews remain open.
+- [ ] Retain a fresh-user headed native run covering graceful GUI close/reopen
+  and forced GUI death with the same RuntimeId/ExecutionId and fresh AttachmentId.
+- [ ] Retain alternate-screen recovery plus post-recovery direct input,
+  Control-C, resize, focus, and finite/contained accessibility geometry.
+- [ ] Add/retain detached-output evidence produced while no GUI is attached and
+  prove the reconstructed surface contains that authoritative output.
+- [ ] Add/retain detached-child-exit evidence proving natural exit is drained and
+  reported without manufacturing a replacement execution.
+- [ ] Retain stale, malformed, and interrupted reconnect/snapshot cases on the
+  production path and prove they cannot admit input or stale rendering.
+- [ ] Run at least 100 graceful and 100 abrupt recovery cycles and prove
+  attachment, Controller, fd, renderer-resource, and RSS counters return to the
+  accepted baseline/budget.
 
-**Merge status: BLOCKED.** This document is a checklist, not evidence; a
-passing validator or CI workflow cannot check an item without the retained
-artifact and exact-head provenance required by the specification.
+## Native accessibility and text-input evidence
+
+- [ ] Real dead-key input validation through the production NSTextInputClient.
+- [ ] Real IME commit and cancel/replacement validation through the production
+  NSTextInputClient; component-only synthetic marked-text tests are insufficient.
+- [ ] VoiceOver focus/recovery validation, including usable-state announcement
+  and finite geometry after reconnect.
+- [ ] Confirm ordinary keyboard focus and focus restoration remain correct after
+  both graceful and abrupt recovery.
+
+## Performance and resource evidence
+
+- [ ] Collect five independent exact-head Apple-silicon 100-cycle cohorts after
+  warm-up under the accepted controlled-host preconditions.
+- [ ] Validate SPEC-009 reconnect/cleanup/RSS/fd/Controller/attachment/renderer
+  resource and detached-idle CPU budgets against retained raw artifacts.
+- [ ] Compare the paired Pass 8 baseline and explain every >5% movement; reject
+  any unexplained >10% regression.
+- [ ] Validate the retained exact-head artifact with
+  `python3 scripts/check-pass9-production-budget.py --expected-head <head> <artifact>`.
+  Validator self-tests and PR #726 calibration are not production evidence.
+
+## Packaging, governance, and independent review
+
+- [ ] Retain exact-head package inspection proving bundled-helper location,
+  identifier, entitlements, bundle seal/signing/Team identity, environment/fd
+  closure, direct no-shell launch, and Release rejection of ad-hoc trust.
+- [x] Record the pre-Ready production-start ordering violation: production work
+  began at `eada76640776779ad3f8bd65a0cb8199d91f396f` before Issue #719 was
+  explicitly Ready.
+- [x] Rebaseline PR #734 against accepted master, SPEC-009, and authorized
+  calibration authority; no pre-Ready implementation is grandfathered.
+- [ ] Freeze one exact final head after all fixes/evidence are committed.
+- [ ] Obtain fresh independent implementation, architecture, security,
+  performance, and accessibility reviews against that exact head with no
+  unresolved blockers.
+- [ ] Update Issue #719 with the final evidence matrix and truthful Done state.
+- [ ] Update PR #734 body to the final scope/evidence and correct owning-Issue
+  relationship. Use a closing relationship only if every Done gate is proven.
+- [ ] Ask for explicit user confirmation before merging PR #734.
+
+## Current status
+
+Production fixes from the closure rebaseline are implemented on the PR branch,
+including the late security ownership correction that makes client discovery
+verification-only and Runtime directory creation singleton-owned. Because that
+late correction changes lifecycle/security behavior, all exact-head automated,
+native, performance, packaging, and specialist-review evidence must be rerun.
+
+**Merge status: BLOCKED until every unchecked acceptance/review item above is
+satisfied with exact-head evidence.**

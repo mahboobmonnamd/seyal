@@ -308,6 +308,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @MainActor NSTextInpu
 
   private func configureInteractiveSurface() {
     configureAccessibility()
+    refreshRecoveryAccessibilityValue()
     configureFailureLayer()
   }
 

@@ -319,6 +319,7 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
   }
 
   func terminalBridgeStatusDidChange() {
+    refreshRecoveryAccessibilityValue()
     guard bridge?.isConnected != true else { return }
     // History/composer/display correlations are disposable connection state;
     // logical pane and Block identity remain owned by Runtime and are not
@@ -498,12 +499,44 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
   }
 
   var terminalExecutionIdentity: String? {
-    guard terminalBridgeIsConnected else { return nil }
-    return String(
-      format: "%016llx%016llx",
-      seyal_bridge_execution_id_high(),
-      seyal_bridge_execution_id_low()
+    guard terminalBridgeIsConnected, let bridge else { return nil }
+    return Self.identityString((
+      low: bridge.lastRecoveryResult.executionIDLow,
+      high: bridge.lastRecoveryResult.executionIDHigh
+    ))
+  }
+
+  var terminalRuntimeIdentity: String? {
+    guard terminalBridgeIsConnected, let bridge else { return nil }
+    return Self.identityString(bridge.runtimeIdentityWords)
+  }
+
+  var terminalAttachmentIdentity: String? {
+    guard terminalBridgeIsConnected, let bridge else { return nil }
+    return Self.identityString(bridge.attachmentIdentityWords)
+  }
+
+  /// Makes the authoritative recovery state observable to VoiceOver and to
+  /// native acceptance automation without introducing a second terminal
+  /// model or changing the Runtime protocol.
+  func refreshRecoveryAccessibilityValue() {
+    let connection = terminalBridgeIsConnected ? "usable" : "disconnected"
+    let runtime = terminalRuntimeIdentity ?? "none"
+    let execution = terminalExecutionIdentity ?? "none"
+    let attachment = terminalAttachmentIdentity ?? "none"
+    let alternate = lastAlternateScreen == true ? "true" : "false"
+    setAccessibilityValue(
+      "process=\(ProcessInfo.processInfo.processIdentifier) connection=\(connection) "
+        + "runtime=\(runtime) execution=\(execution) "
+        + "attachment=\(attachment) alternate-screen=\(alternate)"
     )
+  }
+
+  private static func identityString(
+    _ words: (low: UInt64, high: UInt64)
+  ) -> String? {
+    guard words.low != 0 || words.high != 0 else { return nil }
+    return String(format: "%016llx%016llx", words.high, words.low)
   }
 
   /// Logical cell metrics come from the permanent renderer's font/atlas metric
@@ -685,6 +718,7 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
       lastAlternateScreen = frame.alternateScreen
       onAlternateScreenChanged?(frame.alternateScreen)
     }
+    refreshRecoveryAccessibilityValue()
     let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
     do {
       let result = try renderer.update(

@@ -8,6 +8,23 @@ private final class RuntimeRecoveryBudgetBox: NSObject {
   }
 }
 
+private final class RuntimeRecoveryDisposalRecorder: @unchecked Sendable {
+  private let lock = NSLock()
+  private var storage: [UInt64] = []
+
+  func record(_ handle: UInt64) {
+    lock.lock()
+    storage.append(handle)
+    lock.unlock()
+  }
+
+  var handles: [UInt64] {
+    lock.lock()
+    defer { lock.unlock() }
+    return storage
+  }
+}
+
 /// Carries the coordinator's remaining absolute episode budget across the
 /// injected attempt closure without changing Pane/renderer ownership. The
 /// value exists only for the synchronous lifecycle attempt on the current
@@ -241,6 +258,99 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
 
   var isActive: Bool {
     deadline != nil
+  }
+
+  /// Exercises only lifecycle ownership bookkeeping; no Runtime, PTY, terminal
+  /// state, or renderer is created. This runs from the canonical native
+  /// self-test so cancellation/deallocation disposal is executable evidence,
+  /// not a code-inspection assumption.
+  static func ownershipSelfTest() -> Bool {
+    func pumpUntil(_ condition: () -> Bool) -> Bool {
+      let deadline = Date().addingTimeInterval(1)
+      while !condition(), Date() < deadline {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.005))
+      }
+      return condition()
+    }
+
+    let cancelledRecorder = RuntimeRecoveryDisposalRecorder()
+    let cancelledStarted = DispatchSemaphore(value: 0)
+    let cancelledRelease = DispatchSemaphore(value: 0)
+    let cancelled = RuntimeLifecycleRecoveryCoordinator(
+      clock: { ProcessInfo.processInfo.systemUptime },
+      scheduler: { _, _ in {} },
+      launcher: {},
+      attempt: {
+        cancelledStarted.signal()
+        _ = cancelledRelease.wait(timeout: .now() + 1)
+        return .opened(101)
+      },
+      handleAdopter: { _ in true },
+      handleDisposer: { cancelledRecorder.record($0) }
+    )
+    cancelled.beginEpisode()
+    guard cancelledStarted.wait(timeout: .now() + 1) == .success else { return false }
+    cancelled.cancel()
+    cancelledRelease.signal()
+    guard pumpUntil({ cancelledRecorder.handles.count == 1 }),
+      cancelledRecorder.handles == [101],
+      cancelled.state.stage == .disconnected
+    else { return false }
+
+    let deallocatedRecorder = RuntimeRecoveryDisposalRecorder()
+    let deallocatedStarted = DispatchSemaphore(value: 0)
+    let deallocatedRelease = DispatchSemaphore(value: 0)
+    var deallocated: RuntimeLifecycleRecoveryCoordinator? = RuntimeLifecycleRecoveryCoordinator(
+      clock: { ProcessInfo.processInfo.systemUptime },
+      scheduler: { _, _ in {} },
+      launcher: {},
+      attempt: {
+        deallocatedStarted.signal()
+        _ = deallocatedRelease.wait(timeout: .now() + 1)
+        return .opened(102)
+      },
+      handleAdopter: { _ in true },
+      handleDisposer: { deallocatedRecorder.record($0) }
+    )
+    deallocated?.beginEpisode()
+    guard deallocatedStarted.wait(timeout: .now() + 1) == .success else { return false }
+    deallocated = nil
+    deallocatedRelease.signal()
+    guard pumpUntil({ deallocatedRecorder.handles.count == 1 }),
+      deallocatedRecorder.handles == [102]
+    else { return false }
+
+    let rejectedRecorder = RuntimeRecoveryDisposalRecorder()
+    let rejected = RuntimeLifecycleRecoveryCoordinator(
+      clock: { 0 },
+      scheduler: { _, _ in {} },
+      launcher: {},
+      attempt: { .opened(103) },
+      handleAdopter: { _ in false },
+      handleDisposer: { rejectedRecorder.record($0) },
+      attemptExecution: .inline
+    )
+    rejected.beginEpisode()
+    guard rejected.state.stage == .blocked,
+      rejectedRecorder.handles == [103]
+    else { return false }
+
+    let fakeBundle = FileManager.default.temporaryDirectory
+      .appendingPathComponent("seyal-pass9-launch-self-test-\(UUID().uuidString)")
+      .appendingPathComponent("Seyal.app", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: fakeBundle.deletingLastPathComponent()) }
+    let launcher = BundledRuntimeLauncher()
+    let blocked = RuntimeLifecycleRecoveryCoordinator(
+      clock: { 0 },
+      scheduler: { _, _ in {} },
+      launcher: { _ = launcher.launch(bundleURL: fakeBundle) },
+      attempt: { .endpointMissing },
+      attemptExecution: .inline
+    )
+    blocked.beginEpisode()
+    return blocked.state.stage == .blocked
+      && blocked.blockedLaunchError == .helperMissing
+      && !blocked.hasScheduledAttempt
   }
 
   /// Begins a new foreground episode and invalidates every callback from the

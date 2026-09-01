@@ -57,15 +57,20 @@ pub fn darwin_user_runtime_dir() -> Result<PathBuf, DiscoveryError> {
 }
 
 /// Verification-only Runtime-directory check for clients. This function never
-/// creates, repairs, chmods, or removes filesystem state; only the Runtime may
-/// perform those ownership operations.
+/// creates, repairs, chmods, or removes filesystem state. Absence is not a
+/// trust failure: the caller can continue to the canonical socket leaf, whose
+/// `NotFound` result is the typed endpoint-missing discovery outcome.
 pub fn verify_runtime_dir(dir: &Path) -> Result<(), DiscoveryError> {
-    verify_directory_metadata(&std::fs::symlink_metadata(dir)?)
+    match std::fs::symlink_metadata(dir) {
+        Ok(metadata) => verify_directory_metadata(&metadata),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(DiscoveryError::Io(error)),
+    }
 }
 
 /// Backward-compatible verification spelling used by client discovery. The
-/// name is retained to avoid widening the Pass 9 patch through unrelated
-/// callers, but it is intentionally verification-only.
+/// name is retained to avoid widening Pass 9 through unrelated callers, but it
+/// is intentionally verification-only.
 pub fn ensure_verified_runtime_dir(dir: &Path) -> Result<(), DiscoveryError> {
     verify_runtime_dir(dir)
 }
@@ -83,7 +88,8 @@ pub fn create_verified_runtime_dir(dir: &Path) -> Result<(), DiscoveryError> {
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(error) => return Err(DiscoveryError::Io(error)),
             }
-            verify_runtime_dir(dir)?;
+            let metadata = std::fs::symlink_metadata(dir)?;
+            verify_directory_metadata(&metadata)?;
         }
         Err(error) => return Err(DiscoveryError::Io(error)),
     }
@@ -211,10 +217,7 @@ mod tests {
     #[test]
     fn client_verification_never_creates_a_missing_directory() {
         let dir = temp_scope("verify-only-missing");
-        assert!(matches!(
-            ensure_verified_runtime_dir(&dir),
-            Err(DiscoveryError::Io(error)) if error.kind() == io::ErrorKind::NotFound
-        ));
+        ensure_verified_runtime_dir(&dir).unwrap();
         assert!(!dir.exists());
     }
 

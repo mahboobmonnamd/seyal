@@ -299,3 +299,107 @@ fn reconnected_controller_rejects_every_old_attachment_mutation() {
         .encode(),
     );
 }
+
+#[test]
+fn controller_cleanup_survives_100_graceful_and_100_abrupt_reconnect_cycles() {
+    let mut harness = Harness::new();
+    let execution_id = harness.spawn_cat();
+    let runtime_id = harness.runtime.id();
+    let mut attachment_ids = Vec::with_capacity(201);
+
+    for cycle in 0..100 {
+        let mut client = harness.connect();
+        harness.hello(&mut client);
+        let (attached, _cache) = harness.attach(&mut client, execution_id, Role::Controller);
+        assert!(
+            !attachment_ids.contains(&attached.attachment_id),
+            "graceful cycle {cycle} reused an AttachmentId"
+        );
+        attachment_ids.push(attached.attachment_id);
+
+        harness.send(
+            &mut client,
+            MessageType::Detach,
+            &Detach {
+                attachment_id: attached.attachment_id,
+            }
+            .encode(),
+        );
+        let (kind, _payload) = harness.frame(&mut client);
+        assert_eq!(kind, MessageType::Detached);
+        assert_eq!(
+            harness.runtime.lookup(execution_id).unwrap().attachment_count,
+            0,
+            "graceful cycle {cycle} retained attachment/controller authority"
+        );
+        assert_eq!(harness.runtime.id(), runtime_id);
+        assert!(harness.runtime.execution(execution_id).is_some());
+        drop(client);
+        harness.pump();
+    }
+
+    for cycle in 0..100 {
+        let mut client = harness.connect();
+        harness.hello(&mut client);
+        let (attached, _cache) = harness.attach(&mut client, execution_id, Role::Controller);
+        assert!(
+            !attachment_ids.contains(&attached.attachment_id),
+            "abrupt cycle {cycle} reused an AttachmentId"
+        );
+        attachment_ids.push(attached.attachment_id);
+        drop(client);
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while harness.runtime.lookup(execution_id).unwrap().attachment_count != 0 {
+            assert!(
+                Instant::now() < deadline,
+                "abrupt cycle {cycle} did not release Controller authority"
+            );
+            harness.pump();
+        }
+        assert_eq!(harness.runtime.id(), runtime_id);
+        assert!(
+            harness.runtime.execution(execution_id).is_some(),
+            "abrupt cycle {cycle} terminated the live execution"
+        );
+    }
+
+    let mut final_client = harness.connect();
+    harness.hello(&mut final_client);
+    let (final_attachment, mut final_cache) =
+        harness.attach(&mut final_client, execution_id, Role::Controller);
+    assert!(!attachment_ids.contains(&final_attachment.attachment_id));
+    harness.send(
+        &mut final_client,
+        MessageType::Input,
+        &InputRef {
+            attachment_id: final_attachment.attachment_id,
+            bytes: b"FINAL",
+        }
+        .encode(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let visible: String = final_cache.cells.iter().map(|cell| cell.scalar).collect();
+        if visible.contains("FINAL") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "Controller was not usable after 200 reconnect cycles"
+        );
+        harness.apply_display(&mut final_client, &mut final_cache);
+    }
+
+    drop(final_client);
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while harness.runtime.lookup(execution_id).unwrap().attachment_count != 0 {
+        assert!(Instant::now() < deadline, "final attachment cleanup timed out");
+        harness.pump();
+    }
+    harness.runtime.begin_shutdown().unwrap();
+    harness
+        .runtime
+        .run_until_empty(Instant::now() + Duration::from_secs(3))
+        .unwrap();
+}

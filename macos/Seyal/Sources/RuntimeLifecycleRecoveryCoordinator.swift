@@ -303,14 +303,13 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
       return
     }
 
-    let clock = self.clock
-    let attempt = self.attempt
-    let work = DispatchWorkItem {
-      let remaining = deadline - clock()
+    let work = DispatchWorkItem { [weak self] in
+      guard let self else { return }
+      let remaining = deadline - self.clock()
       let outcome: RuntimeRecoveryAttemptOutcome
       if remaining > 0 {
         outcome = RuntimeRecoveryDeadlineContext.withRemainingBudget(remaining) {
-          attempt()
+          self.attempt()
         }
       } else {
         outcome = .retryable

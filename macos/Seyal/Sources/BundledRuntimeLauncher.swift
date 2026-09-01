@@ -23,6 +23,14 @@ enum BundledRuntimeLaunchError: Error, Equatable {
   }
 }
 
+private final class BundledRuntimeLaunchErrorBox: NSObject {
+  let error: BundledRuntimeLaunchError
+
+  init(_ error: BundledRuntimeLaunchError) {
+    self.error = error
+  }
+}
+
 /// Launches the one permanent Runtime helper without transferring Runtime or
 /// execution lifetime to the GUI. The recovery coordinator owns episode-level
 /// launch-once accounting; this type owns package trust and spawn hygiene.
@@ -30,6 +38,27 @@ final class BundledRuntimeLauncher {
   static let helperIdentifier = "dev.seyal.Seyal.runtime"
   static let helperRelativePath = "Contents/Helpers/seyal-runtime"
   static let systemPath = "/usr/bin:/bin:/usr/sbin:/sbin"
+
+  /// The launch is synchronous and currently invoked by the recovery
+  /// coordinator on one executor. Retain its typed outcome only until that
+  /// caller consumes it; this is an execution-local result relay, not Runtime
+  /// state and never participates in terminal authority.
+  private static let launchErrorThreadKey = "dev.seyal.runtime-launch-error"
+
+  static func consumeLastLaunchError() -> BundledRuntimeLaunchError? {
+    let dictionary = Thread.current.threadDictionary
+    defer { dictionary.removeObject(forKey: launchErrorThreadKey) }
+    return (dictionary[launchErrorThreadKey] as? BundledRuntimeLaunchErrorBox)?.error
+  }
+
+  private static func recordLaunchError(_ error: BundledRuntimeLaunchError?) {
+    let dictionary = Thread.current.threadDictionary
+    if let error {
+      dictionary[launchErrorThreadKey] = BundledRuntimeLaunchErrorBox(error)
+    } else {
+      dictionary.removeObject(forKey: launchErrorThreadKey)
+    }
+  }
 
   @discardableResult
   func launch(bundleURL: URL = Bundle.main.bundleURL) -> Result<pid_t, BundledRuntimeLaunchError> {
@@ -39,10 +68,13 @@ final class BundledRuntimeLauncher {
       let environment = try Self.launchEnvironment()
       let pid = try Self.spawn(helperURL: helperURL, environment: environment)
       reapWhenExited(pid)
+      Self.recordLaunchError(nil)
       return .success(pid)
     } catch let error as BundledRuntimeLaunchError {
+      Self.recordLaunchError(error)
       return .failure(error)
     } catch {
+      Self.recordLaunchError(.launchDenied)
       return .failure(.launchDenied)
     }
   }

@@ -147,6 +147,13 @@ cleanup_runtime() {
     kill "$runtime_pid" 2>/dev/null || true
     wait "$runtime_pid" 2>/dev/null || true
   fi
+  # Runtime performs bounded graceful cleanup of its canonical listener. Do
+  # not start the next fixture while the old listener still owns the socket;
+  # otherwise the new fixture reports AlreadyRunning nondeterministically.
+  for _ in $(seq 1 40); do
+    [[ ! -S "$RUNTIME_SOCKET" ]] && break
+    sleep 0.025
+  done
   runtime_pid=""
 }
 trap cleanup_runtime EXIT

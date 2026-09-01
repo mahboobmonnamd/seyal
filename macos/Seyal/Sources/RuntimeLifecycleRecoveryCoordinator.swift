@@ -88,9 +88,12 @@ enum RuntimeRecoveryAttemptOutcome: Equatable, Sendable {
   case blocked
 }
 
-private func disposeRuntimeRecoveryOutcome(_ outcome: RuntimeRecoveryAttemptOutcome) {
+private func disposeRuntimeRecoveryOutcome(
+  _ outcome: RuntimeRecoveryAttemptOutcome,
+  using disposer: @Sendable (UInt64) -> Void
+) {
   if case let .opened(handle) = outcome {
-    seyal_bridge_disconnect_handle(handle)
+    disposer(handle)
   }
 }
 
@@ -171,6 +174,7 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
   typealias Launcher = () -> Void
   typealias Attempt = () -> RuntimeRecoveryAttemptOutcome
   typealias HandleAdopter = (UInt64) -> Bool
+  typealias HandleDisposer = @Sendable (UInt64) -> Void
 
   /// Production attempts are always dispatched to the lifecycle queue. The
   /// inline mode exists solely for deterministic state-machine tests; it is
@@ -189,6 +193,7 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
   private let launcher: Launcher
   private let attempt: Attempt
   private let handleAdopter: HandleAdopter
+  private let handleDisposer: HandleDisposer
   private let attemptExecution: AttemptExecution
   /// A dedicated serial queue is the ownership boundary for discovery,
   /// hello, attach and snapshot attempts. The queue is intentionally created
@@ -212,6 +217,7 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
     launcher: @escaping Launcher,
     attempt: @escaping Attempt,
     handleAdopter: @escaping HandleAdopter = { _ in false },
+    handleDisposer: @escaping HandleDisposer = { seyal_bridge_disconnect_handle($0) },
     attemptExecution: AttemptExecution = .lifecycleQueue
   ) {
     self.clock = clock
@@ -219,6 +225,7 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
     self.launcher = launcher
     self.attempt = attempt
     self.handleAdopter = handleAdopter
+    self.handleDisposer = handleDisposer
     self.attemptExecution = attemptExecution
   }
 
@@ -303,6 +310,7 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
       return
     }
 
+    let handleDisposer = handleDisposer
     let work = DispatchWorkItem { [weak self] in
       guard let self else { return }
       let remaining = deadline - self.clock()
@@ -316,7 +324,7 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
       }
       DispatchQueue.main.async { [weak self] in
         guard let self else {
-          disposeRuntimeRecoveryOutcome(outcome)
+          disposeRuntimeRecoveryOutcome(outcome, using: handleDisposer)
           return
         }
         self.completeAttempt(outcome, generation: generation)
@@ -332,11 +340,11 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
   ) {
     inFlightAttempt = nil
     guard generation == state.generation else {
-      disposeRuntimeRecoveryOutcome(outcome)
+      disposeRuntimeRecoveryOutcome(outcome, using: handleDisposer)
       return
     }
     guard let deadline, clock() < deadline else {
-      disposeRuntimeRecoveryOutcome(outcome)
+      disposeRuntimeRecoveryOutcome(outcome, using: handleDisposer)
       exhaust(generation: generation)
       return
     }
@@ -345,7 +353,7 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
       finishConnected(generation: generation)
     case let .opened(handle):
       guard handleAdopter(handle) else {
-        seyal_bridge_disconnect_handle(handle)
+        handleDisposer(handle)
         state.transition(to: .blocked)
         self.deadline = nil
         return

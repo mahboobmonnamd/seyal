@@ -394,10 +394,26 @@ impl Runtime {
             LocalIpcMode::Disabled => None,
             LocalIpcMode::Enabled {
                 runtime_dir_override,
-            } => Some(LocalIpcState::bind(
-                &mut reactor,
-                runtime_dir_override.clone(),
-            )?),
+            } => {
+                // The singleton-holding Runtime is the sole owner allowed to
+                // create/repair its local IPC directory. Client discovery is
+                // verification-only and can therefore never race to establish
+                // a second endpoint authority.
+                let runtime_dir = match runtime_dir_override {
+                    Some(dir) => dir.clone(),
+                    None => crate::local_ipc::discovery::darwin_user_runtime_dir().map_err(|_| {
+                        RuntimeError::Io(std::io::Error::other("local IPC discovery failed"))
+                    })?,
+                };
+                crate::local_ipc::discovery::create_verified_runtime_dir(&runtime_dir).map_err(
+                    |_| {
+                        RuntimeError::Io(std::io::Error::other(
+                            "local IPC directory creation/verification failed",
+                        ))
+                    },
+                )?;
+                Some(LocalIpcState::bind(&mut reactor, Some(runtime_dir))?)
+            }
         };
         Ok(Self {
             id: RuntimeId::new(),
@@ -807,8 +823,7 @@ impl Runtime {
                         processed += 1;
                     }
                 }
-                ReactorEventKind::AuxiliaryReadable | ReactorEventKind::AuxiliaryWritable =>
-                {
+                ReactorEventKind::AuxiliaryReadable | ReactorEventKind::AuxiliaryWritable => {
                     #[cfg(target_os = "macos")]
                     if let Some(token) = event.token {
                         self.service_local_reactor_event(token, event.kind, event.hangup)?;

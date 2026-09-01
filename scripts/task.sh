@@ -124,12 +124,19 @@ case "$cmd" in
         renderer_binary="${ROOT}/target/macos-derived-data/Build/Products/Release/Seyal.app/Contents/MacOS/Seyal"
         [[ -x "$renderer_binary" ]] || { echo "Pass-6 renderer benchmark binary missing" >&2; exit 1; }
         /usr/bin/time -lp "$renderer_binary" --renderer-benchmark
+
+        # Pass 9 retains the accepted native resource lifecycle measurement on
+        # the exact production renderer. This is diagnostic on shared CI; the
+        # controlled-host production evidence gate still requires the separately
+        # retained five-cohort artifact validated by check-pass9-production-budget.py.
+        /usr/bin/time -lp "$renderer_binary" --pass9-renderer-calibration
       else
         echo "[seyal Pass-5 benchmark coverage] measured Candidate-D validation skipped: production benchmark is macOS-only; validator self-test is enforced by make check."
         echo "[seyal Pass-6 renderer benchmark] native Metal measurement skipped: macOS-only."
         echo "[seyal Pass-7 input/resize benchmark] native measurement skipped: macOS-only."
         echo "[seyal Pass-7 validation matrix] native measurement skipped: macOS-only."
         echo "[seyal Pass-8 Block metadata benchmark] native measurement skipped: macOS-only."
+        echo "[seyal Pass-9 renderer lifecycle] native measurement skipped: macOS-only."
       fi
     else
       echo "[seyal task] bench: harness metadata recorder passed; no production benchmark target exists yet and no performance result is claimed."

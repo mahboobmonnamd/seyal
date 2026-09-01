@@ -1,6 +1,16 @@
 # Pass 9 production budget environment report
 
 - **Status:** `ENVIRONMENT_UNSUPPORTED`
+
+## Local paired resize reproduction (2026-09-01)
+
+Five exact-head runs of `pass7_input_resize` were collected on the Apple-Silicon
+host at commit `f649e035dc9ab071e1a146cb9f49b8fb898c58b7`. The 120×40 paired
+Pass 8 p99 deltas were `-0.94%`, `-3.75%`, `+3.47%`, `+3.66%`, and `-7.48%`.
+All five stayed below the fixed `+10%` blocking threshold. Raw logs are
+retained in `/private/tmp/seyal-pass9-cohorts/` for reviewer inspection; this
+local reproduction does not replace the required independently reviewed CI
+and controlled production evidence.
 - **Date:** 2026-09-01
 - **Scope:** physical controlled-host Pass 9 lifecycle/performance cohorts only
 

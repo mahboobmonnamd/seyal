@@ -19,7 +19,10 @@ use seyal_runtime::{
         MAX_DISPLAY_BATCH_BYTES, MAX_DISPLAY_CELLS, decode_chunk, empty_cache,
     },
     local_ipc::{
-        discovery::{control_socket_path, darwin_user_runtime_dir, ensure_verified_runtime_dir},
+        discovery::{
+            DiscoveryError, control_socket_path, darwin_user_runtime_dir,
+            ensure_verified_runtime_dir,
+        },
         framing::{
             Attach, Attached, BlockTimeline, CAP_BINARY_DISPLAY, CAP_COMMAND_BLOCKS,
             CAP_CORRELATED_RESIZE, CAP_SEMANTIC_TERMINAL_KEY, ClientHello, ComposerCommandRef,
@@ -44,8 +47,30 @@ const MAX_OUTBOUND_WIRE_BYTES: usize = 262_144;
 const MAX_UNRESOLVED_RESIZES: usize = 1_024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiscoveryFailure {
+    /// The verified canonical endpoint does not exist. This is the sole
+    /// discovery result that may claim the one helper-launch action for an
+    /// episode.
+    EndpointMissing,
+    /// A canonical endpoint exists but is not accepting connections yet. The
+    /// client retries the canonical path and never repairs or launches solely
+    /// because of this observation.
+    ConnectionRefused,
+    /// The endpoint changed state while a connection was being attempted.
+    /// This remains a bounded canonical-path retry, not evidence to create a
+    /// competing Runtime.
+    EndpointDisappeared,
+    /// Directory/socket metadata or ownership failed same-user trust checks.
+    /// This is terminal for the episode and must never trigger repair.
+    UntrustedEndpoint,
+    /// The canonical runtime location cannot be derived or represented safely.
+    /// This is terminal for the episode and must never trigger a helper launch.
+    InvalidPath,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClientError {
-    RuntimeDiscovery,
+    Discovery(DiscoveryFailure),
     Io,
     Protocol,
     UnsupportedDisplayCapability,
@@ -419,10 +444,7 @@ impl LocalDisplayClient {
         execution_id: ExecutionId,
         role: Role,
     ) -> Result<Self, ClientError> {
-        let runtime_dir = darwin_user_runtime_dir().map_err(|_| ClientError::RuntimeDiscovery)?;
-        ensure_verified_runtime_dir(&runtime_dir).map_err(|_| ClientError::RuntimeDiscovery)?;
-        let socket_path =
-            control_socket_path(&runtime_dir).map_err(|_| ClientError::RuntimeDiscovery)?;
+        let socket_path = canonical_control_socket_path()?;
         Self::connect_execution(&socket_path, execution_id, role)
     }
 
@@ -431,10 +453,7 @@ impl LocalDisplayClient {
     /// interactive production terminal; an existing controller is surfaced as
     /// an explicit attach error rather than silently degrading to Observer.
     pub fn connect_first_running() -> Result<Self, ClientError> {
-        let runtime_dir = darwin_user_runtime_dir().map_err(|_| ClientError::RuntimeDiscovery)?;
-        ensure_verified_runtime_dir(&runtime_dir).map_err(|_| ClientError::RuntimeDiscovery)?;
-        let socket_path =
-            control_socket_path(&runtime_dir).map_err(|_| ClientError::RuntimeDiscovery)?;
+        let socket_path = canonical_control_socket_path()?;
 
         let mut stream = connect_stream(&socket_path)?;
         let mut server_hello = hello(&mut stream, true, true)?;
@@ -1576,42 +1595,95 @@ fn connect_stream(path: &Path) -> Result<UnixStream, ClientError> {
     Ok(stream)
 }
 
+fn canonical_control_socket_path() -> Result<std::path::PathBuf, ClientError> {
+    let runtime_dir = darwin_user_runtime_dir().map_err(classify_discovery_error)?;
+    ensure_verified_runtime_dir(&runtime_dir).map_err(classify_discovery_error)?;
+    control_socket_path(&runtime_dir).map_err(classify_discovery_error)
+}
+
+/// Preserve discovery/trust distinctions through the client boundary. The
+/// Swift recovery coordinator may launch only after `EndpointMissing`; it must
+/// not turn an insecure path or an unready canonical listener into a launch or
+/// repair action.
+fn classify_discovery_error(error: DiscoveryError) -> ClientError {
+    let failure = match error {
+        DiscoveryError::NotADirectory
+        | DiscoveryError::NotOwnedByEffectiveUser
+        | DiscoveryError::GroupOrWorldWritable
+        | DiscoveryError::ActiveEndpoint => DiscoveryFailure::UntrustedEndpoint,
+        DiscoveryError::ConfstrFailed
+        | DiscoveryError::PathTooLongForSocket
+        | DiscoveryError::Io(_) => DiscoveryFailure::InvalidPath,
+    };
+    ClientError::Discovery(failure)
+}
+
 /// Discovery is allowed to retry only when the endpoint is not currently
 /// usable. Preserve all other I/O failures as hard failures so the recovery
 /// coordinator cannot turn permission, descriptor, or local resource errors
 /// into an unbounded helper-launch loop.
 fn classify_connect_error(error: std::io::Error) -> ClientError {
     match error.kind() {
-        std::io::ErrorKind::NotFound
-        | std::io::ErrorKind::ConnectionRefused
-        | std::io::ErrorKind::ConnectionReset
-        | std::io::ErrorKind::NotConnected => ClientError::RuntimeDiscovery,
+        std::io::ErrorKind::NotFound => ClientError::Discovery(DiscoveryFailure::EndpointMissing),
+        std::io::ErrorKind::ConnectionRefused => {
+            ClientError::Discovery(DiscoveryFailure::ConnectionRefused)
+        }
+        std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::NotConnected => {
+            ClientError::Discovery(DiscoveryFailure::EndpointDisappeared)
+        }
         _ => ClientError::Io,
     }
 }
 
 #[cfg(test)]
 mod connect_error_tests {
-    use super::{ClientError, classify_connect_error};
+    use super::{ClientError, DiscoveryFailure, classify_connect_error, classify_discovery_error};
+    use seyal_runtime::local_ipc::discovery::DiscoveryError;
     use std::io;
 
     #[test]
-    fn endpoint_lifecycle_errors_are_retryable_discovery() {
-        for kind in [
-            io::ErrorKind::NotFound,
-            io::ErrorKind::ConnectionRefused,
-            io::ErrorKind::ConnectionReset,
-            io::ErrorKind::NotConnected,
-        ] {
+    fn endpoint_absence_refusal_and_disappearance_remain_distinct() {
+        assert_eq!(
+            classify_connect_error(io::Error::from(io::ErrorKind::NotFound)),
+            ClientError::Discovery(DiscoveryFailure::EndpointMissing)
+        );
+        assert_eq!(
+            classify_connect_error(io::Error::from(io::ErrorKind::ConnectionRefused)),
+            ClientError::Discovery(DiscoveryFailure::ConnectionRefused)
+        );
+        for kind in [io::ErrorKind::ConnectionReset, io::ErrorKind::NotConnected] {
             assert_eq!(
                 classify_connect_error(io::Error::from(kind)),
-                ClientError::RuntimeDiscovery
+                ClientError::Discovery(DiscoveryFailure::EndpointDisappeared)
             );
         }
     }
 
     #[test]
-    fn unrelated_connect_errors_remain_io_failures() {
+    fn insecure_or_invalid_discovery_preconditions_fail_closed() {
+        for error in [
+            DiscoveryError::NotADirectory,
+            DiscoveryError::NotOwnedByEffectiveUser,
+            DiscoveryError::GroupOrWorldWritable,
+        ] {
+            assert_eq!(
+                classify_discovery_error(error),
+                ClientError::Discovery(DiscoveryFailure::UntrustedEndpoint)
+            );
+        }
+        for error in [
+            DiscoveryError::ConfstrFailed,
+            DiscoveryError::PathTooLongForSocket,
+        ] {
+            assert_eq!(
+                classify_discovery_error(error),
+                ClientError::Discovery(DiscoveryFailure::InvalidPath)
+            );
+        }
+    }
+
+    #[test]
+    fn unrelated_connect_errors_remain_non_discovery_io_failures() {
         for kind in [io::ErrorKind::PermissionDenied, io::ErrorKind::Other] {
             assert_eq!(
                 classify_connect_error(io::Error::from(kind)),
@@ -1739,6 +1811,46 @@ mod tests {
             resolve_single_running_execution(&list),
             Err(ClientError::AmbiguousExecutions)
         );
+    }
+
+    #[test]
+    fn attach_error_wire_codes_preserve_controller_busy_and_capacity_semantics() {
+        for (code, expected) in [
+            (
+                ErrorCode::ControllerBusy,
+                ClientError::Server(ErrorCode::ControllerBusy),
+            ),
+            (
+                ErrorCode::CapacityExceeded,
+                ClientError::Server(ErrorCode::CapacityExceeded),
+            ),
+        ] {
+            let (client, mut server) = UnixStream::pair().expect("unix stream pair");
+            let execution_id = ExecutionId::from_bytes([3; 16]);
+            let server_thread = std::thread::spawn(move || {
+                let (kind, _) = read_blocking_frame(&mut server).expect("attach request");
+                assert_eq!(kind, MessageType::Attach);
+                let error = ErrorMessage {
+                    error_code: code as u16,
+                    offending_message_type: MessageType::Attach as u16,
+                    detail_code: 0,
+                };
+                server
+                    .write_all(&encode_frame(MessageType::Error, &error.encode()))
+                    .expect("attach error response");
+            });
+
+            let result = LocalDisplayClient::finish_attach(
+                client,
+                execution_id,
+                Role::Controller,
+                false,
+                9,
+                false,
+            );
+            assert!(matches!(result, Err(actual) if actual == expected));
+            server_thread.join().expect("server thread");
+        }
     }
 
     fn display_cell() -> DisplayCell {

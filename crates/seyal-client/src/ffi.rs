@@ -15,7 +15,7 @@ use seyal_runtime::{
 };
 
 use crate::{
-    ClientError, LocalDisplayClient,
+    ClientError, DiscoveryFailure, LocalDisplayClient,
     local::{InputAdmissionFailure, ResizeFailure, derive_grid_geometry},
 };
 
@@ -75,16 +75,44 @@ impl SeyalRecoveryResult {
 #[cfg(test)]
 mod recovery_result_tests {
     use super::{SeyalRecoveryResult, set_recovery_failure};
-    use crate::ClientError;
+    use crate::{ClientError, DiscoveryFailure};
     use seyal_runtime::local_ipc::framing::ErrorCode;
 
     #[test]
     fn retryable_discovery_failure_is_typed() {
-        set_recovery_failure(ClientError::RuntimeDiscovery);
+        set_recovery_failure(ClientError::Discovery(DiscoveryFailure::EndpointMissing));
         let result = super::LAST_RECOVERY_RESULT.with(std::cell::Cell::get);
         assert_eq!(result.failure_class, 1);
         assert_eq!(result.retryable, 1);
         assert_eq!(result.stage, 1);
+    }
+
+    #[test]
+    fn refusal_retries_without_claiming_a_missing_endpoint_or_launch_path() {
+        set_recovery_failure(ClientError::Discovery(DiscoveryFailure::ConnectionRefused));
+        let refused = super::LAST_RECOVERY_RESULT.with(std::cell::Cell::get);
+        assert_eq!(refused.failure_class, 2);
+        assert_eq!(refused.retryable, 1);
+
+        set_recovery_failure(ClientError::Discovery(
+            DiscoveryFailure::EndpointDisappeared,
+        ));
+        let disappeared = super::LAST_RECOVERY_RESULT.with(std::cell::Cell::get);
+        assert_eq!(disappeared.failure_class, 2);
+        assert_eq!(disappeared.retryable, 1);
+    }
+
+    #[test]
+    fn untrusted_or_invalid_endpoint_is_never_retryable_or_launchable() {
+        for failure in [
+            DiscoveryFailure::UntrustedEndpoint,
+            DiscoveryFailure::InvalidPath,
+        ] {
+            set_recovery_failure(ClientError::Discovery(failure));
+            let result = super::LAST_RECOVERY_RESULT.with(std::cell::Cell::get);
+            assert_eq!(result.failure_class, 4);
+            assert_eq!(result.retryable, 0);
+        }
     }
 
     #[test]
@@ -108,7 +136,16 @@ mod recovery_result_tests {
 
 fn set_recovery_failure(error: ClientError) {
     let (failure_class, retryable) = match error {
-        ClientError::RuntimeDiscovery => (1, 1),
+        // Only an absent verified canonical endpoint permits the one helper
+        // launch action. Refusal/disappearance remain bounded retries of that
+        // same endpoint; trust/path failures fail closed.
+        ClientError::Discovery(DiscoveryFailure::EndpointMissing) => (1, 1),
+        ClientError::Discovery(
+            DiscoveryFailure::ConnectionRefused | DiscoveryFailure::EndpointDisappeared,
+        ) => (2, 1),
+        ClientError::Discovery(
+            DiscoveryFailure::UntrustedEndpoint | DiscoveryFailure::InvalidPath,
+        ) => (4, 0),
         ClientError::Io | ClientError::Disconnected => (2, 1),
         ClientError::NoRunningExecution => (2, 0),
         ClientError::AmbiguousExecutions => (6, 0),
@@ -930,7 +967,7 @@ fn terminal_key_kind(value: u16) -> Option<TerminalKeyKind> {
 
 fn error_code(error: ClientError) -> i32 {
     match error {
-        ClientError::RuntimeDiscovery => -2,
+        ClientError::Discovery(_) => -2,
         ClientError::Io => -3,
         ClientError::Protocol => -4,
         ClientError::UnsupportedDisplayCapability => -5,

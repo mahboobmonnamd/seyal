@@ -267,10 +267,9 @@ final class SeyalShellUITests: XCTestCase {
         XCTAssertNotEqual(afterClose["attachment"], first["attachment"])
 
         // Keep the PTY in alternate screen while the GUI disappears abruptly.
-        let reopenedComposer = app.textViews["composer.pane-local"]
-        reopenedComposer.click()
-        reopenedComposer.typeText("printf '\\033[?1049h'; while :; do sleep 1; done")
-        reopenedComposer.typeKey(.return, modifierFlags: [])
+        surface.click()
+        app.typeText("printf '\\033[?1049hALT'; while :; do sleep 1; done")
+        app.typeKey(.return, modifierFlags: [])
         XCTAssertTrue(wait { self.recoveryFields(surface)?["alternate-screen"] == "true" })
 
         let killedPID = try XCTUnwrap(Int32(afterClose["process"] ?? ""))
@@ -289,7 +288,7 @@ final class SeyalShellUITests: XCTestCase {
         surface.click()
         XCTAssertTrue(surface.isHittable)
         app.typeKey("c", modifierFlags: .control)
-        app.typeText("printf '%s' \"$SEYAL_PASS9_TOKEN\" > \(continuityMarker.path)")
+        app.typeText("printf '%s' '\(token)' > \(continuityMarker.path)")
         app.typeKey(.return, modifierFlags: [])
         XCTAssertTrue(wait { FileManager.default.fileExists(atPath: continuityMarker.path) })
         XCTAssertEqual(try String(contentsOf: continuityMarker, encoding: .utf8), token)

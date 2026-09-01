@@ -2,6 +2,14 @@ import AppKit
 import Metal
 @preconcurrency import QuartzCore
 
+private final class RuntimeRecoveryTimerBox: @unchecked Sendable {
+  let timer: Timer
+
+  init(timer: Timer) {
+    self.timer = timer
+  }
+}
+
 enum RuntimeRecoveryStage: UInt8, Equatable {
   case disconnected = 0
   case discovering = 1
@@ -200,7 +208,8 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
       let timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { _ in
         MainActor.assumeIsolated { operation() }
       }
-      return { timer.invalidate() }
+      let timerBox = RuntimeRecoveryTimerBox(timer: timer)
+      return { timerBox.timer.invalidate() }
     },
     launcher: { [weak self] in self?.bridge?.launchBundledRuntime() },
     attempt: { [weak self] in self?.attemptBridgeRecovery() ?? .blocked }

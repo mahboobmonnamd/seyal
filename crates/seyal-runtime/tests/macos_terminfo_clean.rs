@@ -3,7 +3,7 @@
 use std::time::{Duration, Instant};
 
 use seyal_exec::{CommandSpec, WindowSize};
-use seyal_runtime::{Runtime, RuntimeConfig};
+use seyal_runtime::{LocalIpcMode, Runtime, RuntimeConfig};
 
 #[test]
 fn bundled_terminfo_resolves_with_cleared_parent_environment() {
@@ -16,6 +16,17 @@ fn bundled_terminfo_resolves_with_cleared_parent_environment() {
             .unwrap()
             .as_nanos()
     ));
+    let runtime_dir = std::env::temp_dir().join(format!(
+        "st-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    config.local_ipc = LocalIpcMode::Enabled {
+        runtime_dir_override: Some(runtime_dir.clone()),
+    };
     config.final_drain = Duration::from_millis(100);
     let mut runtime = Runtime::new(config).unwrap();
     let id = runtime
@@ -47,4 +58,5 @@ fn bundled_terminfo_resolves_with_cleared_parent_environment() {
     runtime
         .run_until_empty(Instant::now() + Duration::from_secs(2))
         .unwrap();
+    let _ = std::fs::remove_dir_all(runtime_dir);
 }

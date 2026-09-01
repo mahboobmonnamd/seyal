@@ -91,6 +91,7 @@ fn set_recovery_failure(error: ClientError) {
     let (failure_class, retryable) = match error {
         ClientError::RuntimeDiscovery | ClientError::Io | ClientError::Disconnected => (1, 1),
         ClientError::NoRunningExecution => (2, 0),
+        ClientError::AmbiguousExecutions => (6, 0),
         ClientError::Server(9) => (3, 1),
         ClientError::UnsupportedDisplayCapability
         | ClientError::UnsupportedInteractiveCapability
@@ -873,6 +874,7 @@ fn error_code(error: ClientError) -> i32 {
         ClientError::Protocol => -4,
         ClientError::UnsupportedDisplayCapability => -5,
         ClientError::NoRunningExecution => -6,
+        ClientError::AmbiguousExecutions => -19,
         ClientError::InvalidAttachment => -7,
         ClientError::Display => -8,
         ClientError::Prepare => -9,

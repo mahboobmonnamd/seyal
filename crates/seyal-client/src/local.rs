@@ -51,6 +51,7 @@ pub enum ClientError {
     UnsupportedDisplayCapability,
     UnsupportedInteractiveCapability,
     NoRunningExecution,
+    AmbiguousExecutions,
     InvalidAttachment,
     Display,
     Prepare,
@@ -85,6 +86,19 @@ pub enum ResizeFailure {
 pub struct GridGeometry {
     pub rows: u16,
     pub columns: u16,
+}
+
+fn resolve_single_running_execution(list: &ExecutionList) -> Result<ExecutionId, ClientError> {
+    let mut running = list
+        .entries
+        .iter()
+        .filter(|entry| entry.lifecycle == Lifecycle::Running)
+        .map(|entry| entry.execution_id);
+    let first = running.next().ok_or(ClientError::NoRunningExecution)?;
+    if running.next().is_some() {
+        return Err(ClientError::AmbiguousExecutions);
+    }
+    Ok(first)
 }
 
 pub fn derive_grid_geometry(
@@ -418,12 +432,7 @@ impl LocalDisplayClient {
             return Err(ClientError::Protocol);
         }
         let list = ExecutionList::decode(&payload).map_err(|_| ClientError::Protocol)?;
-        let execution_id = list
-            .entries
-            .iter()
-            .find(|entry| entry.lifecycle == Lifecycle::Running)
-            .map(|entry| entry.execution_id)
-            .ok_or(ClientError::NoRunningExecution)?;
+        let execution_id = resolve_single_running_execution(&list)?;
 
         if is_epoch_quarantined(server_hello.runtime_id, execution_id) {
             drop(stream);
@@ -1639,6 +1648,32 @@ mod tests {
         assert_eq!(fallback & CAP_BLOCK_METADATA, 0);
         assert_ne!(full & CAP_COMMAND_BLOCKS, 0);
         assert_ne!(fallback & CAP_COMMAND_BLOCKS, 0);
+    }
+
+    #[test]
+    fn implicit_resolution_fails_closed_when_multiple_executions_are_running() {
+        let first = ExecutionId::from_bytes([1; 16]);
+        let second = ExecutionId::from_bytes([2; 16]);
+        let list = ExecutionList {
+            entries: vec![
+                seyal_runtime::local_ipc::framing::ExecutionListEntry {
+                    execution_id: first,
+                    lifecycle: Lifecycle::Running,
+                    has_controller: false,
+                    attachment_count: 0,
+                },
+                seyal_runtime::local_ipc::framing::ExecutionListEntry {
+                    execution_id: second,
+                    lifecycle: Lifecycle::Running,
+                    has_controller: false,
+                    attachment_count: 0,
+                },
+            ],
+        };
+        assert_eq!(
+            resolve_single_running_execution(&list),
+            Err(ClientError::AmbiguousExecutions)
+        );
     }
 
     fn display_cell() -> DisplayCell {

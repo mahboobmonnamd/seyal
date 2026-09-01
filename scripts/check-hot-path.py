@@ -43,27 +43,56 @@ def extract_function(source: str, name: str) -> str | None:
 
 
 def validate_native_recovery_ownership(errors: list[str]) -> None:
-    relpath = "macos/Seyal/Sources/MetalSurfaceView.swift"
-    path = ROOT / relpath
-    if not path.exists():
-        errors.append(f"missing guarded native lifecycle file: {relpath}")
+    surface_relpath = "macos/Seyal/Sources/MetalSurfaceView.swift"
+    surface_path = ROOT / surface_relpath
+    if not surface_path.exists():
+        errors.append(f"missing guarded native lifecycle file: {surface_relpath}")
         return
-    source = path.read_text(encoding="utf-8")
+    surface = surface_path.read_text(encoding="utf-8")
 
     # Pass 9 gives the lifecycle coordinator sole production ownership of the
     # startup/recovery connect sequence. A direct bridge.start() from AppKit
     # creates an extra connection attempt and a fresh timeout outside the
     # exact seven-attempt/one-second episode, and may block the main actor.
-    if re.search(r"\bbridge\??\.start\s*\(", source):
+    if re.search(r"\bbridge\??\.start\s*\(", surface):
         errors.append(
-            f"{relpath} performs a direct bridge.start(); production startup/recovery must be coordinator-owned"
+            f"{surface_relpath} performs a direct bridge.start(); production startup/recovery must be coordinator-owned"
         )
     for required in (
         "bridgeRecoveryCoordinator.beginEpisode()",
         "bridgeRecoveryCoordinator.retry()",
+        "startAutomaticBridgeRecoveryIfNeeded()",
     ):
-        if required not in source:
-            errors.append(f"{relpath} is missing coordinator recovery boundary {required!r}")
+        if required not in surface:
+            errors.append(
+                f"{surface_relpath} is missing coordinator recovery boundary {required!r}"
+            )
+
+    bridge_relpath = "macos/Seyal/Sources/RustDisplayBridge.swift"
+    bridge_path = ROOT / bridge_relpath
+    if not bridge_path.exists():
+        errors.append(f"missing guarded native bridge file: {bridge_relpath}")
+        return
+    bridge = bridge_path.read_text(encoding="utf-8")
+
+    # RustDisplayBridge owns one disposable client/socket only. It must never
+    # remember or execute a self-reconnect request after teardown; otherwise a
+    # dead live socket can bypass the coordinator and receive a fresh timeout.
+    if "reconnectRequested" in bridge:
+        errors.append(
+            f"{bridge_relpath} retains bridge-owned reconnect state; lifecycle recovery must be coordinator-owned"
+        )
+    teardown_match = re.search(
+        r"private\s+func\s+teardownCompleted\s*\(\s*\)\s*\{(?P<body>.*?)\n\s*\}",
+        bridge,
+        re.S,
+    )
+    if teardown_match is None:
+        errors.append(f"{bridge_relpath} is missing teardownCompleted()")
+    elif re.search(r"\bstart\s*\(", teardown_match.group("body")):
+        errors.append(
+            f"{bridge_relpath}::teardownCompleted reopens a client; it may only publish teardown completion"
+        )
 
 
 def main() -> None:

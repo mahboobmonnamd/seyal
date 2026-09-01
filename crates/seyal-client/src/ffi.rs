@@ -1,7 +1,11 @@
 use std::{
-    cell::{Cell, RefCell},
+    cell::Cell,
     collections::HashMap,
     ptr, slice, str,
+    sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use seyal_render::PreparedCell;
@@ -15,13 +19,23 @@ use crate::{
     local::{InputAdmissionFailure, ResizeFailure, derive_grid_geometry},
 };
 
+/// The bridge can be driven by the lifecycle queue while the AppKit event
+/// source consumes the currently selected client. Keep the registry process
+/// global and synchronized: a thread-local registry would silently make a
+/// handle opened during recovery invisible to the main/native event path.
+static CLIENTS: OnceLock<Mutex<HashMap<u64, Box<LocalDisplayClient>>>> = OnceLock::new();
+static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
+
 thread_local! {
-    /// Each native Pane owns one entry. Values are boxed so borrowed C
-    /// pointers remain stable when another Pane opens or closes a client.
-    static CLIENTS: RefCell<HashMap<u64, Box<LocalDisplayClient>>> = RefCell::new(HashMap::new());
+    // Selection is executor-local. The registry itself is global, while this
+    // preserves independent AppKit panes and prevents one queue from changing
+    // another pane's legacy-shaped active selection.
     static ACTIVE_HANDLE: Cell<u64> = const { Cell::new(0) };
-    static NEXT_HANDLE: Cell<u64> = const { Cell::new(1) };
     static LAST_RECOVERY_RESULT: Cell<SeyalRecoveryResult> = const { Cell::new(SeyalRecoveryResult::empty()) };
+}
+
+fn clients() -> &'static Mutex<HashMap<u64, Box<LocalDisplayClient>>> {
+    CLIENTS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -184,12 +198,8 @@ pub extern "C" fn seyal_bridge_attachment_id_high() -> u64 {
 }
 
 fn allocate_handle() -> u64 {
-    NEXT_HANDLE.with(|next| {
-        let handle = next.get();
-        let next_handle = handle.wrapping_add(1);
-        next.set(if next_handle == 0 { 1 } else { next_handle });
-        if handle == 0 { 1 } else { handle }
-    })
+    let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
+    if handle == 0 { 1 } else { handle }
 }
 
 fn active_handle() -> u64 {
@@ -198,22 +208,18 @@ fn active_handle() -> u64 {
 
 fn with_active_client<R>(operation: impl FnOnce(&LocalDisplayClient) -> R) -> Option<R> {
     let handle = active_handle();
-    CLIENTS.with(|clients| {
-        clients
-            .borrow()
-            .get(&handle)
-            .map(|client| operation(client))
-    })
+    clients()
+        .lock()
+        .ok()
+        .and_then(|clients| clients.get(&handle).map(|client| operation(client)))
 }
 
 fn with_active_client_mut<R>(operation: impl FnOnce(&mut LocalDisplayClient) -> R) -> Option<R> {
     let handle = active_handle();
-    CLIENTS.with(|clients| {
-        clients
-            .borrow_mut()
-            .get_mut(&handle)
-            .map(|client| operation(client))
-    })
+    clients()
+        .lock()
+        .ok()
+        .and_then(|mut clients| clients.get_mut(&handle).map(|client| operation(client)))
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -578,15 +584,15 @@ pub extern "C" fn seyal_bridge_open_first() -> u64 {
         }
     };
     let handle = allocate_handle();
-    CLIENTS.with(|clients| {
-        clients.borrow_mut().insert(handle, Box::new(client));
-    });
-    ACTIVE_HANDLE.with(|active| active.set(handle));
-    CLIENTS.with(|clients| {
-        if let Some(client) = clients.borrow().get(&handle) {
+    if let Ok(mut registry) = clients().lock() {
+        registry.insert(handle, Box::new(client));
+        if let Some(client) = registry.get(&handle) {
             set_recovery_success(client, handle, 1);
         }
-    });
+    } else {
+        return 0;
+    }
+    ACTIVE_HANDLE.with(|active| active.set(handle));
     handle
 }
 
@@ -607,15 +613,15 @@ pub extern "C" fn seyal_bridge_open_execution(execution_low: u64, execution_high
         }
     };
     let handle = allocate_handle();
-    CLIENTS.with(|clients| {
-        clients.borrow_mut().insert(handle, Box::new(client));
-    });
-    ACTIVE_HANDLE.with(|active| active.set(handle));
-    CLIENTS.with(|clients| {
-        if let Some(client) = clients.borrow().get(&handle) {
+    if let Ok(mut registry) = clients().lock() {
+        registry.insert(handle, Box::new(client));
+        if let Some(client) = registry.get(&handle) {
             set_recovery_success(client, handle, 2);
         }
-    });
+    } else {
+        return 0;
+    }
+    ACTIVE_HANDLE.with(|active| active.set(handle));
     handle
 }
 
@@ -624,7 +630,10 @@ pub extern "C" fn seyal_bridge_open_execution(execution_low: u64, execution_high
 /// while each Pane still owns an independent socket/client.
 #[unsafe(no_mangle)]
 pub extern "C" fn seyal_bridge_select(handle: u64) -> i32 {
-    let exists = CLIENTS.with(|clients| clients.borrow().contains_key(&handle));
+    let exists = clients()
+        .lock()
+        .map(|clients| clients.contains_key(&handle))
+        .unwrap_or(false);
     if exists {
         ACTIVE_HANDLE.with(|active| active.set(handle));
         0
@@ -635,9 +644,9 @@ pub extern "C" fn seyal_bridge_select(handle: u64) -> i32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn seyal_bridge_disconnect_handle(handle: u64) {
-    CLIENTS.with(|clients| {
-        clients.borrow_mut().remove(&handle);
-    });
+    if let Ok(mut registry) = clients().lock() {
+        registry.remove(&handle);
+    }
     ACTIVE_HANDLE.with(|active| {
         if active.get() == handle {
             active.set(0);

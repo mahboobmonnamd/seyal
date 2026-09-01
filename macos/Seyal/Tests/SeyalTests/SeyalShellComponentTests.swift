@@ -32,6 +32,19 @@ final class SeyalShellComponentTests: XCTestCase {
     XCTAssertEqual(plan.claimRetryDelay(), RuntimeRecoveryAttemptPlan.retryDelays[0])
   }
 
+  func testRuntimeRecoveryStateRequiresExplicitRetryAfterExhaustion() {
+    var state = RuntimeRecoveryState()
+    state.begin()
+    XCTAssertEqual(state.stage, .discovering)
+    state.transition(to: .exhausted)
+    let exhaustedGeneration = state.generation
+    XCTAssertEqual(state.stage, .exhausted)
+
+    state.retry()
+    XCTAssertEqual(state.stage, .discovering)
+    XCTAssertGreaterThan(state.generation, exhaustedGeneration)
+  }
+
   func testRuntimeBlockMetadataKeepsOpaqueExecutionIdentityAnchorAndState() {
     let current = RuntimeBlockMetadata(
       blockIDLow: 0x0123,

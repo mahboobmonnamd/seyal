@@ -1,18 +1,61 @@
 import Foundation
 
+private final class RuntimeRecoveryBudgetBox: NSObject {
+  let seconds: TimeInterval
+
+  init(seconds: TimeInterval) {
+    self.seconds = seconds
+  }
+}
+
+/// Carries the coordinator's remaining absolute episode budget across the
+/// injected attempt closure without changing Pane/renderer ownership. The
+/// value exists only for the synchronous lifecycle attempt on the current
+/// executor and is removed before control returns to the queue.
+private enum RuntimeRecoveryDeadlineContext {
+  private static let threadKey = "dev.seyal.runtime-recovery-budget"
+
+  static var currentRemainingBudget: TimeInterval? {
+    (Thread.current.threadDictionary[threadKey] as? RuntimeRecoveryBudgetBox)?.seconds
+  }
+
+  static func withRemainingBudget<T>(
+    _ seconds: TimeInterval,
+    operation: () -> T
+  ) -> T {
+    let dictionary = Thread.current.threadDictionary
+    let previous = dictionary[threadKey]
+    dictionary[threadKey] = RuntimeRecoveryBudgetBox(seconds: seconds)
+    defer {
+      if let previous {
+        dictionary[threadKey] = previous
+      } else {
+        dictionary.removeObject(forKey: threadKey)
+      }
+    }
+    return operation()
+  }
+}
+
 /// Lifecycle-queue-only FFI attempt. It owns no AppKit state and returns only
 /// a pending Rust handle; MainActor later adopts that handle into its Pane.
 func openRuntimeRecoveryHandle(
   executionIdentity: String?,
   allowsImplicitExecutionBootstrap: Bool
 ) -> RuntimeRecoveryAttemptOutcome {
+  let remaining = RuntimeRecoveryDeadlineContext.currentRemainingBudget
+    ?? RuntimeLifecycleRecoveryCoordinator.episodeDeadline
+  guard remaining.isFinite, remaining > 0 else { return .retryable }
+  let microsDouble = min(remaining * 1_000_000, Double(UInt64.max))
+  let budgetMicros = max(UInt64(1), UInt64(microsDouble.rounded(.down)))
+
   let handle: UInt64
   if let executionIdentity,
     let words = runtimeRecoveryExecutionWords(executionIdentity)
   {
-    handle = seyal_bridge_open_execution(words.low, words.high)
+    handle = seyal_bridge_open_execution_until(words.low, words.high, budgetMicros)
   } else if allowsImplicitExecutionBootstrap {
-    handle = seyal_bridge_open_first()
+    handle = seyal_bridge_open_first_until(budgetMicros)
   } else {
     return .blocked
   }
@@ -36,13 +79,19 @@ private func runtimeRecoveryExecutionWords(_ value: String) -> (low: UInt64, hig
   return (low, high)
 }
 
-enum RuntimeRecoveryAttemptOutcome: Equatable {
+enum RuntimeRecoveryAttemptOutcome: Equatable, Sendable {
   case connected
   case opened(UInt64)
   case endpointMissing
   case retryable
   case controllerBusy
   case blocked
+}
+
+private func disposeRuntimeRecoveryOutcome(_ outcome: RuntimeRecoveryAttemptOutcome) {
+  if case let .opened(handle) = outcome {
+    seyal_bridge_disconnect_handle(handle)
+  }
 }
 
 struct RuntimeContinuityIdentity: Equatable {
@@ -123,7 +172,7 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
   typealias Attempt = () -> RuntimeRecoveryAttemptOutcome
   typealias HandleAdopter = (UInt64) -> Bool
 
-  /// Production attempts are always dispatched to the lifecycle queue.  The
+  /// Production attempts are always dispatched to the lifecycle queue. The
   /// inline mode exists solely for deterministic state-machine tests; it is
   /// never selected by a production call site.
   enum AttemptExecution: Equatable {
@@ -155,6 +204,7 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
   private var inFlightAttempt: DispatchWorkItem?
   private(set) var attemptCount = 0
   private(set) var state = RuntimeRecoveryState()
+  private(set) var blockedLaunchError: BundledRuntimeLaunchError?
 
   init(
     clock: @escaping Clock,
@@ -172,6 +222,14 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
     self.attemptExecution = attemptExecution
   }
 
+  deinit {
+    // Cancelling a not-yet-started DispatchWorkItem guarantees no handle was
+    // created. If work is already running, its completion closure owns disposal
+    // when `self` no longer exists.
+    inFlightAttempt?.cancel()
+    cancelScheduled?()
+  }
+
   var hasScheduledAttempt: Bool { cancelScheduled != nil }
 
   var isActive: Bool {
@@ -184,6 +242,8 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
     replaceGeneration(stage: .discovering)
     deadline = clock() + Self.episodeDeadline
     launchClaimed = false
+    blockedLaunchError = nil
+    _ = BundledRuntimeLauncher.consumeLastLaunchError()
     attemptCount = 0
     performAttempt(generation: state.generation)
   }
@@ -201,6 +261,7 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
     cancelScheduled = nil
     deadline = nil
     launchClaimed = false
+    blockedLaunchError = nil
     attemptCount = 0
     state.cancel()
   }
@@ -222,7 +283,8 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
   private func performAttempt(generation: UInt64) {
     guard generation == state.generation, let deadline else { return }
     cancelScheduled = nil
-    guard clock() < deadline, attemptCount < Self.maximumAttempts else {
+    let remaining = deadline - clock()
+    guard remaining > 0, attemptCount < Self.maximumAttempts else {
       exhaust(generation: generation)
       return
     }
@@ -230,16 +292,35 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
     attemptCount += 1
     // Local IPC performs bounded blocking reads during hello/attach. Execute
     // those reads asynchronously on the lifecycle queue so the AppKit actor
-    // never becomes the blocking I/O executor. Completion is marshalled back
-    // to the caller's actor; stale generations and cancelled work are dropped.
+    // never becomes the blocking I/O executor. The exact remaining coordinator
+    // budget is carried into Rust, so queue delay cannot reset the one-second
+    // episode deadline.
     guard attemptExecution == .lifecycleQueue else {
-      completeAttempt(attempt(), generation: generation)
+      let outcome = RuntimeRecoveryDeadlineContext.withRemainingBudget(remaining) {
+        attempt()
+      }
+      completeAttempt(outcome, generation: generation)
       return
     }
-    let work = DispatchWorkItem { [attempt] in
-      let outcome = attempt()
+
+    let clock = self.clock
+    let attempt = self.attempt
+    let work = DispatchWorkItem {
+      let remaining = deadline - clock()
+      let outcome: RuntimeRecoveryAttemptOutcome
+      if remaining > 0 {
+        outcome = RuntimeRecoveryDeadlineContext.withRemainingBudget(remaining) {
+          attempt()
+        }
+      } else {
+        outcome = .retryable
+      }
       DispatchQueue.main.async { [weak self] in
-        self?.completeAttempt(outcome, generation: generation)
+        guard let self else {
+          disposeRuntimeRecoveryOutcome(outcome)
+          return
+        }
+        self.completeAttempt(outcome, generation: generation)
       }
     }
     inFlightAttempt = work
@@ -252,11 +333,11 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
   ) {
     inFlightAttempt = nil
     guard generation == state.generation else {
-      discardPendingHandle(from: outcome)
+      disposeRuntimeRecoveryOutcome(outcome)
       return
     }
     guard let deadline, clock() < deadline else {
-      discardPendingHandle(from: outcome)
+      disposeRuntimeRecoveryOutcome(outcome)
       exhaust(generation: generation)
       return
     }
@@ -276,6 +357,14 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
       if !launchClaimed {
         launchClaimed = true
         launcher()
+        if let launchError = BundledRuntimeLauncher.consumeLastLaunchError() {
+          blockedLaunchError = launchError
+          cancelScheduled?()
+          cancelScheduled = nil
+          self.deadline = nil
+          state.transition(to: .blocked)
+          return
+        }
       }
       scheduleRetry(generation: generation)
     case .controllerBusy:
@@ -289,12 +378,6 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
       cancelScheduled = nil
       self.deadline = nil
       state.transition(to: .blocked)
-    }
-  }
-
-  private func discardPendingHandle(from outcome: RuntimeRecoveryAttemptOutcome) {
-    if case let .opened(handle) = outcome {
-      seyal_bridge_disconnect_handle(handle)
     }
   }
 

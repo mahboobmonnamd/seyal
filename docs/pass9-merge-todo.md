@@ -42,6 +42,12 @@ item must have exact-head evidence before the PR is marked ready.
 - [ ] Five independent 100-cycle performance cohorts after warm-up validate
   SPEC-009 timestamps, cleanup/reconnect/RSS/fd/CPU budgets, and paired Pass 8
   regression movement with no unexplained >5% movement or >10% breach.
+  Validate the supplied exact-head measurement artifact with
+  `python3 scripts/check-pass9-production-budget.py <evidence.json>`; the
+  validator does not generate measurements or turn a self-test into hardware
+  evidence. A bounded client allocator delta of at most 4 KiB is accepted only
+  when the artifact classifies it as fixed harness-owned capacity, never as
+  production retention.
 - [ ] Exact final head passes `make bootstrap`, `make build`, `make test`,
   `make check`, `make bench`, native clean-checkout build/tests, and package
   inspection.

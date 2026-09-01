@@ -74,12 +74,14 @@ struct ReconnectReconstructionState: Equatable {
 /// The coordinator owns retry/deadline/launch accounting only. Runtime, PTY,
 /// attachment, and terminal-state authority remain behind the injected attempt
 /// and launcher hooks.
-@MainActor
 final class RuntimeLifecycleRecoveryCoordinator {
   typealias Cancellation = () -> Void
   typealias Clock = () -> TimeInterval
-  typealias ScheduledOperation = @MainActor @Sendable () -> Void
-  typealias Scheduler = (TimeInterval, @escaping ScheduledOperation) -> Cancellation
+  /// Scheduler callbacks are deliberately not MainActor isolated. Recovery
+  /// discovery is lifecycle work, not presentation work, and must remain
+  /// serial even while AppKit is busy rendering a frame.
+  typealias ScheduledOperation = @Sendable () -> Void
+  typealias Scheduler = @MainActor (TimeInterval, @escaping ScheduledOperation) -> Cancellation
   typealias Launcher = () -> Void
   typealias Attempt = () -> RuntimeRecoveryAttemptOutcome
 
@@ -91,6 +93,14 @@ final class RuntimeLifecycleRecoveryCoordinator {
   private let scheduler: Scheduler
   private let launcher: Launcher
   private let attempt: Attempt
+  /// A dedicated serial queue is the ownership boundary for discovery,
+  /// hello, attach and snapshot attempts. The queue is intentionally created
+  /// per coordinator so a torn-down pane cannot share lifecycle work with a
+  /// replacement pane.
+  private let lifecycleQueue = DispatchQueue(
+    label: "com.seyal.runtime.lifecycle-recovery",
+    qos: .userInitiated
+  )
   private var cancelScheduled: Cancellation?
   private var deadline: TimeInterval?
   private var launchClaimed = false
@@ -161,7 +171,11 @@ final class RuntimeLifecycleRecoveryCoordinator {
     }
 
     attemptCount += 1
-    let outcome = attempt()
+    // Local IPC performs bounded blocking reads during hello/attach. Execute
+    // those reads on the lifecycle queue so the AppKit actor never becomes
+    // the blocking I/O executor. The coordinator remains serial: retry
+    // callbacks cannot overtake an in-flight attempt.
+    let outcome = lifecycleQueue.sync(execute: attempt)
     guard generation == state.generation else { return }
     switch outcome {
     case .connected:

@@ -1603,14 +1603,20 @@ mod connect_error_tests {
             io::ErrorKind::ConnectionReset,
             io::ErrorKind::NotConnected,
         ] {
-            assert_eq!(classify_connect_error(io::Error::from(kind)), ClientError::RuntimeDiscovery);
+            assert_eq!(
+                classify_connect_error(io::Error::from(kind)),
+                ClientError::RuntimeDiscovery
+            );
         }
     }
 
     #[test]
     fn unrelated_connect_errors_remain_io_failures() {
         for kind in [io::ErrorKind::PermissionDenied, io::ErrorKind::Other] {
-            assert_eq!(classify_connect_error(io::Error::from(kind)), ClientError::Io);
+            assert_eq!(
+                classify_connect_error(io::Error::from(kind)),
+                ClientError::Io
+            );
         }
     }
 }

@@ -56,6 +56,13 @@ pub fn darwin_user_runtime_dir() -> Result<PathBuf, DiscoveryError> {
     Ok(PathBuf::from(OsString::from_vec(buffer)).join("seyal-runtime"))
 }
 
+/// Verification-only Runtime-directory check for clients. This function never
+/// creates, repairs, chmods, or removes filesystem state; only the Runtime may
+/// perform those ownership operations.
+pub fn verify_runtime_dir(dir: &Path) -> Result<(), DiscoveryError> {
+    verify_directory_metadata(&std::fs::symlink_metadata(dir)?)
+}
+
 pub fn ensure_verified_runtime_dir(dir: &Path) -> Result<(), DiscoveryError> {
     match std::fs::symlink_metadata(dir) {
         Ok(metadata) => verify_directory_metadata(&metadata)?,
@@ -67,7 +74,7 @@ pub fn ensure_verified_runtime_dir(dir: &Path) -> Result<(), DiscoveryError> {
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(error) => return Err(DiscoveryError::Io(error)),
             }
-            verify_directory_metadata(&std::fs::symlink_metadata(dir)?)?;
+            verify_runtime_dir(dir)?;
         }
         Err(error) => return Err(DiscoveryError::Io(error)),
     }
@@ -102,7 +109,7 @@ pub fn control_socket_path(runtime_dir: &Path) -> Result<PathBuf, DiscoveryError
 /// Validate the canonical control socket leaf before a client connects. This
 /// never follows a leaf symlink and rejects non-sockets, wrong ownership and
 /// group/world-writable endpoints. The directory itself is validated
-/// separately by `ensure_verified_runtime_dir`.
+/// separately by `verify_runtime_dir`.
 pub fn verify_control_socket_leaf(path: &Path) -> Result<(), DiscoveryError> {
     let metadata = std::fs::symlink_metadata(path)?;
     if metadata.is_symlink() || !metadata.file_type().is_socket() {
@@ -190,6 +197,16 @@ mod tests {
     fn darwin_user_runtime_dir_resolves_a_nonempty_path() {
         let dir = darwin_user_runtime_dir().unwrap();
         assert!(dir.ends_with("seyal-runtime"));
+    }
+
+    #[test]
+    fn verify_runtime_dir_never_creates_a_missing_directory() {
+        let dir = temp_scope("verify-only-missing");
+        assert!(matches!(
+            verify_runtime_dir(&dir),
+            Err(DiscoveryError::Io(error)) if error.kind() == io::ErrorKind::NotFound
+        ));
+        assert!(!dir.exists());
     }
 
     #[test]

@@ -212,7 +212,15 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
       return { timerBox.timer.invalidate() }
     },
     launcher: { [weak self] in self?.bridge?.launchBundledRuntime() },
-    attempt: { [weak self] in self?.attemptBridgeRecovery() ?? .blocked }
+    attempt: { [requestedExecutionIdentity, allowsImplicitExecutionBootstrap] in
+      openRuntimeRecoveryHandle(
+        executionIdentity: requestedExecutionIdentity,
+        allowsImplicitExecutionBootstrap: allowsImplicitExecutionBootstrap
+      )
+    },
+    handleAdopter: { [weak self] handle in
+      self?.bridge?.adoptRecoveredHandle(handle) ?? false
+    }
   )
   var runtimeRecoveryState: RuntimeRecoveryState { bridgeRecoveryCoordinator.state }
   private var forceNextFrame = false
@@ -638,27 +646,6 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     return !window.isMiniaturized
       && window.occlusionState.contains(.visible)
       && !isHiddenOrHasHiddenAncestor
-  }
-
-  private func attemptBridgeRecovery() -> RuntimeRecoveryAttemptOutcome {
-    guard shouldRender, let bridge, !bridge.isConnected else {
-      return bridge?.isConnected == true ? .connected : .blocked
-    }
-    if bridge.lastLaunchError != nil {
-      // Bundled helper trust/path/spawn failures are terminal for this
-      // foreground episode. The coordinator must not keep retrying a known
-      // invalid or denied launch.
-      return .blocked
-    }
-    guard !bridge.start() else { return .connected }
-    let result = bridge.lastRecoveryResult
-    if result.failureClass == 1, result.retryable {
-      return .endpointMissing
-    }
-    if result.failureClass == 3, result.retryable {
-      return .controllerBusy
-    }
-    return result.retryable ? .retryable : .blocked
   }
 
   private func cancelBridgeReconnect() {

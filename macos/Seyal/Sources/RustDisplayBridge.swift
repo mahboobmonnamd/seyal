@@ -406,24 +406,56 @@ final class RustDisplayBridge {
       onStatusChanged()
       return false
     }
-    guard seyal_bridge_select(handle) == 0 else {
+    lastRecoveryResult = RecoveryResult.current()
+    return adoptOpenedHandle(handle, recoveryResult: lastRecoveryResult)
+  }
+
+  /// Called only on the MainActor after the lifecycle executor has completed
+  /// the disposable Rust connection. Adoption moves the client into this
+  /// Pane's executor-local registry before AppKit registers socket sources.
+  @discardableResult
+  func adoptRecoveredHandle(_ handle: UInt64) -> Bool {
+    guard !isConnected, !teardown.disconnectPending else {
+      seyal_bridge_disconnect_handle(handle)
+      return false
+    }
+    reconnectRequested = false
+    lastLaunchError = nil
+    reconstructionState.beginAttempt()
+    guard seyal_bridge_adopt_handle(handle) == 0 else {
       seyal_bridge_disconnect_handle(handle)
       onError(-1)
       onStatusChanged()
       return false
     }
     lastRecoveryResult = RecoveryResult.current()
+    return finishAdoptedHandle(handle, recoveryResult: lastRecoveryResult)
+  }
+
+  @discardableResult
+  private func adoptOpenedHandle(_ handle: UInt64, recoveryResult: RecoveryResult) -> Bool {
+    guard seyal_bridge_adopt_handle(handle) == 0 else {
+      seyal_bridge_disconnect_handle(handle)
+      onError(-1)
+      onStatusChanged()
+      return false
+    }
+    return finishAdoptedHandle(handle, recoveryResult: recoveryResult)
+  }
+
+  @discardableResult
+  private func finishAdoptedHandle(_ handle: UInt64, recoveryResult: RecoveryResult) -> Bool {
     let runtime = RuntimeContinuityIdentity(
-      low: lastRecoveryResult.runtimeIDLow,
-      high: lastRecoveryResult.runtimeIDHigh
+      low: recoveryResult.runtimeIDLow,
+      high: recoveryResult.runtimeIDHigh
     )
     let execution = RuntimeContinuityIdentity(
-      low: lastRecoveryResult.executionIDLow,
-      high: lastRecoveryResult.executionIDHigh
+      low: recoveryResult.executionIDLow,
+      high: recoveryResult.executionIDHigh
     )
     let attachment = RuntimeContinuityIdentity(
-      low: lastRecoveryResult.attachmentIDLow,
-      high: lastRecoveryResult.attachmentIDHigh
+      low: recoveryResult.attachmentIDLow,
+      high: recoveryResult.attachmentIDHigh
     )
     // A Rust client handle is published only after finish_attach has validated
     // Controller authority and atomically committed the complete initial

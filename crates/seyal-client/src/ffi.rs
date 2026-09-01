@@ -1,5 +1,5 @@
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     collections::HashMap,
     ptr, slice, str,
     sync::{
@@ -19,23 +19,28 @@ use crate::{
     local::{InputAdmissionFailure, ResizeFailure, derive_grid_geometry},
 };
 
-/// The bridge can be driven by the lifecycle queue while the AppKit event
-/// source consumes the currently selected client. Keep the registry process
-/// global and synchronized: a thread-local registry would silently make a
-/// handle opened during recovery invisible to the main/native event path.
-static CLIENTS: OnceLock<Mutex<HashMap<u64, Box<LocalDisplayClient>>>> = OnceLock::new();
+/// A completed lifecycle connection crosses executors exactly once, before it
+/// becomes a Pane's nonblocking event-loop client. The mutex is never used by
+/// poll, input, resize or rendering: those paths use the executor-local map.
+struct PendingClient {
+    client: Box<LocalDisplayClient>,
+    origin: u8,
+}
+
+static PENDING_CLIENTS: OnceLock<Mutex<HashMap<u64, PendingClient>>> = OnceLock::new();
 static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
 
 thread_local! {
-    // Selection is executor-local. The registry itself is global, while this
-    // preserves independent AppKit panes and prevents one queue from changing
-    // another pane's legacy-shaped active selection.
+    // A Pane's live Runtime client belongs to its AppKit executor. It is never
+    // shared with the lifecycle queue after adoption, keeping all steady-state
+    // terminal calls free of cross-pane locks.
+    static CLIENTS: RefCell<HashMap<u64, Box<LocalDisplayClient>>> = RefCell::new(HashMap::new());
     static ACTIVE_HANDLE: Cell<u64> = const { Cell::new(0) };
     static LAST_RECOVERY_RESULT: Cell<SeyalRecoveryResult> = const { Cell::new(SeyalRecoveryResult::empty()) };
 }
 
-fn clients() -> &'static Mutex<HashMap<u64, Box<LocalDisplayClient>>> {
-    CLIENTS.get_or_init(|| Mutex::new(HashMap::new()))
+fn pending_clients() -> &'static Mutex<HashMap<u64, PendingClient>> {
+    PENDING_CLIENTS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -253,18 +258,22 @@ fn active_handle() -> u64 {
 
 fn with_active_client<R>(operation: impl FnOnce(&LocalDisplayClient) -> R) -> Option<R> {
     let handle = active_handle();
-    clients()
-        .lock()
-        .ok()
-        .and_then(|clients| clients.get(&handle).map(|client| operation(client)))
+    CLIENTS.with(|clients| {
+        clients
+            .borrow()
+            .get(&handle)
+            .map(|client| operation(client))
+    })
 }
 
 fn with_active_client_mut<R>(operation: impl FnOnce(&mut LocalDisplayClient) -> R) -> Option<R> {
     let handle = active_handle();
-    clients()
-        .lock()
-        .ok()
-        .and_then(|mut clients| clients.get_mut(&handle).map(|client| operation(client)))
+    CLIENTS.with(|clients| {
+        clients
+            .borrow_mut()
+            .get_mut(&handle)
+            .map(|client| operation(client))
+    })
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -629,15 +638,20 @@ pub extern "C" fn seyal_bridge_open_first() -> u64 {
         }
     };
     let handle = allocate_handle();
-    if let Ok(mut registry) = clients().lock() {
-        registry.insert(handle, Box::new(client));
-        if let Some(client) = registry.get(&handle) {
-            set_recovery_success(client, handle, 1);
+    if let Ok(mut registry) = pending_clients().lock() {
+        registry.insert(
+            handle,
+            PendingClient {
+                client: Box::new(client),
+                origin: 1,
+            },
+        );
+        if let Some(pending) = registry.get(&handle) {
+            set_recovery_success(&pending.client, handle, pending.origin);
         }
     } else {
         return 0;
     }
-    ACTIVE_HANDLE.with(|active| active.set(handle));
     handle
 }
 
@@ -658,16 +672,40 @@ pub extern "C" fn seyal_bridge_open_execution(execution_low: u64, execution_high
         }
     };
     let handle = allocate_handle();
-    if let Ok(mut registry) = clients().lock() {
-        registry.insert(handle, Box::new(client));
-        if let Some(client) = registry.get(&handle) {
-            set_recovery_success(client, handle, 2);
+    if let Ok(mut registry) = pending_clients().lock() {
+        registry.insert(
+            handle,
+            PendingClient {
+                client: Box::new(client),
+                origin: 2,
+            },
+        );
+        if let Some(pending) = registry.get(&handle) {
+            set_recovery_success(&pending.client, handle, pending.origin);
         }
     } else {
         return 0;
     }
-    ACTIVE_HANDLE.with(|active| active.set(handle));
     handle
+}
+
+/// Transfer a fully validated, disposable startup client from the lifecycle
+/// queue to the calling Pane executor. A handle may be adopted exactly once.
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_adopt_handle(handle: u64) -> i32 {
+    let Some(pending) = pending_clients()
+        .lock()
+        .ok()
+        .and_then(|mut pending| pending.remove(&handle))
+    else {
+        return -1;
+    };
+    set_recovery_success(&pending.client, handle, pending.origin);
+    CLIENTS.with(|clients| {
+        clients.borrow_mut().insert(handle, pending.client);
+    });
+    ACTIVE_HANDLE.with(|active| active.set(handle));
+    0
 }
 
 /// Selects the client used by the legacy-shaped bridge calls. Swift calls
@@ -675,10 +713,7 @@ pub extern "C" fn seyal_bridge_open_execution(execution_low: u64, execution_high
 /// while each Pane still owns an independent socket/client.
 #[unsafe(no_mangle)]
 pub extern "C" fn seyal_bridge_select(handle: u64) -> i32 {
-    let exists = clients()
-        .lock()
-        .map(|clients| clients.contains_key(&handle))
-        .unwrap_or(false);
+    let exists = CLIENTS.with(|clients| clients.borrow().contains_key(&handle));
     if exists {
         ACTIVE_HANDLE.with(|active| active.set(handle));
         0
@@ -689,8 +724,11 @@ pub extern "C" fn seyal_bridge_select(handle: u64) -> i32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn seyal_bridge_disconnect_handle(handle: u64) {
-    if let Ok(mut registry) = clients().lock() {
-        registry.remove(&handle);
+    CLIENTS.with(|clients| {
+        clients.borrow_mut().remove(&handle);
+    });
+    if let Ok(mut pending) = pending_clients().lock() {
+        pending.remove(&handle);
     }
     ACTIVE_HANDLE.with(|active| {
         if active.get() == handle {

@@ -1,7 +1,44 @@
 import Foundation
 
+/// Lifecycle-queue-only FFI attempt. It owns no AppKit state and returns only
+/// a pending Rust handle; MainActor later adopts that handle into its Pane.
+func openRuntimeRecoveryHandle(
+  executionIdentity: String?,
+  allowsImplicitExecutionBootstrap: Bool
+) -> RuntimeRecoveryAttemptOutcome {
+  let handle: UInt64
+  if let executionIdentity,
+    let words = runtimeRecoveryExecutionWords(executionIdentity)
+  {
+    handle = seyal_bridge_open_execution(words.low, words.high)
+  } else if allowsImplicitExecutionBootstrap {
+    handle = seyal_bridge_open_first()
+  } else {
+    return .blocked
+  }
+  guard handle != 0 else {
+    let result = seyal_bridge_last_recovery_result()
+    if result.failure_class == 1, result.retryable != 0 { return .endpointMissing }
+    if result.failure_class == 3, result.retryable != 0 { return .controllerBusy }
+    return result.retryable != 0 ? .retryable : .blocked
+  }
+  return .opened(handle)
+}
+
+private func runtimeRecoveryExecutionWords(_ value: String) -> (low: UInt64, high: UInt64)? {
+  let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    .lowercased()
+    .replacingOccurrences(of: "0x", with: "")
+  guard normalized.count == 32,
+    let high = UInt64(normalized.prefix(16), radix: 16),
+    let low = UInt64(normalized.suffix(16), radix: 16)
+  else { return nil }
+  return (low, high)
+}
+
 enum RuntimeRecoveryAttemptOutcome: Equatable {
   case connected
+  case opened(UInt64)
   case endpointMissing
   case retryable
   case controllerBusy
@@ -84,6 +121,7 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
   typealias Scheduler = @Sendable (TimeInterval, @escaping ScheduledOperation) -> Cancellation
   typealias Launcher = () -> Void
   typealias Attempt = () -> RuntimeRecoveryAttemptOutcome
+  typealias HandleAdopter = (UInt64) -> Bool
 
   /// Production attempts are always dispatched to the lifecycle queue.  The
   /// inline mode exists solely for deterministic state-machine tests; it is
@@ -101,6 +139,7 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
   private let scheduler: Scheduler
   private let launcher: Launcher
   private let attempt: Attempt
+  private let handleAdopter: HandleAdopter
   private let attemptExecution: AttemptExecution
   /// A dedicated serial queue is the ownership boundary for discovery,
   /// hello, attach and snapshot attempts. The queue is intentionally created
@@ -122,12 +161,14 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
     scheduler: @escaping Scheduler,
     launcher: @escaping Launcher,
     attempt: @escaping Attempt,
+    handleAdopter: @escaping HandleAdopter = { _ in false },
     attemptExecution: AttemptExecution = .lifecycleQueue
   ) {
     self.clock = clock
     self.scheduler = scheduler
     self.launcher = launcher
     self.attempt = attempt
+    self.handleAdopter = handleAdopter
     self.attemptExecution = attemptExecution
   }
 
@@ -210,9 +251,25 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
     generation: UInt64
   ) {
     inFlightAttempt = nil
-    guard generation == state.generation else { return }
+    guard generation == state.generation else {
+      discardPendingHandle(from: outcome)
+      return
+    }
+    guard let deadline, clock() < deadline else {
+      discardPendingHandle(from: outcome)
+      exhaust(generation: generation)
+      return
+    }
     switch outcome {
     case .connected:
+      finishConnected(generation: generation)
+    case let .opened(handle):
+      guard handleAdopter(handle) else {
+        seyal_bridge_disconnect_handle(handle)
+        state.transition(to: .blocked)
+        self.deadline = nil
+        return
+      }
       finishConnected(generation: generation)
     case .endpointMissing:
       state.transition(to: .startingRuntime)
@@ -232,6 +289,12 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
       cancelScheduled = nil
       self.deadline = nil
       state.transition(to: .blocked)
+    }
+  }
+
+  private func discardPendingHandle(from outcome: RuntimeRecoveryAttemptOutcome) {
+    if case let .opened(handle) = outcome {
+      seyal_bridge_disconnect_handle(handle)
     }
   }
 

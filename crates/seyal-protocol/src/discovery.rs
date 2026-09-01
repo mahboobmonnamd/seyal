@@ -63,7 +63,16 @@ pub fn verify_runtime_dir(dir: &Path) -> Result<(), DiscoveryError> {
     verify_directory_metadata(&std::fs::symlink_metadata(dir)?)
 }
 
+/// Backward-compatible verification spelling used by client discovery. The
+/// name is retained to avoid widening the Pass 9 patch through unrelated
+/// callers, but it is intentionally verification-only.
 pub fn ensure_verified_runtime_dir(dir: &Path) -> Result<(), DiscoveryError> {
+    verify_runtime_dir(dir)
+}
+
+/// Runtime-owner-only creation/verification operation. Client discovery must
+/// never call this function.
+pub fn create_verified_runtime_dir(dir: &Path) -> Result<(), DiscoveryError> {
     match std::fs::symlink_metadata(dir) {
         Ok(metadata) => verify_directory_metadata(&metadata)?,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -200,19 +209,19 @@ mod tests {
     }
 
     #[test]
-    fn verify_runtime_dir_never_creates_a_missing_directory() {
+    fn client_verification_never_creates_a_missing_directory() {
         let dir = temp_scope("verify-only-missing");
         assert!(matches!(
-            verify_runtime_dir(&dir),
+            ensure_verified_runtime_dir(&dir),
             Err(DiscoveryError::Io(error)) if error.kind() == io::ErrorKind::NotFound
         ));
         assert!(!dir.exists());
     }
 
     #[test]
-    fn ensure_verified_runtime_dir_creates_a_0700_directory() {
+    fn runtime_creation_creates_a_0700_directory() {
         let dir = temp_scope("create");
-        ensure_verified_runtime_dir(&dir).unwrap();
+        create_verified_runtime_dir(&dir).unwrap();
         let metadata = std::fs::symlink_metadata(&dir).unwrap();
         assert!(metadata.is_dir());
         assert_eq!(metadata.mode() & 0o777, 0o700);
@@ -220,13 +229,13 @@ mod tests {
     }
 
     #[test]
-    fn ensure_verified_runtime_dir_rejects_a_symlink_leaf() {
+    fn runtime_creation_rejects_a_symlink_leaf() {
         let real_dir = temp_scope("real");
         std::fs::create_dir(&real_dir).unwrap();
         let symlink_path = temp_scope("symlink");
         std::os::unix::fs::symlink(&real_dir, &symlink_path).unwrap();
         assert!(matches!(
-            ensure_verified_runtime_dir(&symlink_path),
+            create_verified_runtime_dir(&symlink_path),
             Err(DiscoveryError::NotADirectory)
         ));
         std::fs::remove_file(&symlink_path).unwrap();
@@ -234,14 +243,14 @@ mod tests {
     }
 
     #[test]
-    fn ensure_verified_runtime_dir_rejects_group_writable_existing_directory() {
+    fn runtime_creation_rejects_group_writable_existing_directory() {
         let dir = temp_scope("group-writable");
         let mut builder = DirBuilder::new();
         builder.recursive(false).mode(0o770);
         builder.create(&dir).unwrap();
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o770)).unwrap();
         assert!(matches!(
-            ensure_verified_runtime_dir(&dir),
+            create_verified_runtime_dir(&dir),
             Err(DiscoveryError::GroupOrWorldWritable)
         ));
         std::fs::remove_dir_all(&dir).unwrap();

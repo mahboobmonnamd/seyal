@@ -15,8 +15,8 @@ use seyal_runtime::{
     ExecutionId,
     local_ipc::{
         discovery::{
-            DiscoveryError, control_socket_path, darwin_user_runtime_dir,
-            verify_connected_peer_fd, verify_control_socket_leaf, verify_runtime_dir,
+            DiscoveryError, control_socket_path, darwin_user_runtime_dir, verify_connected_peer_fd,
+            verify_control_socket_leaf, verify_runtime_dir,
         },
         framing::{ComposerResultCode, ErrorCode, Role, TerminalKeyKind},
     },

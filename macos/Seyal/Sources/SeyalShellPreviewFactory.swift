@@ -225,10 +225,6 @@ final class SeyalShortcutHintMonitor {
         cancelPendingAndHide()
     }
 
-    func showImmediatelyForTesting() {
-        setVisible(true)
-    }
-
     private func handleKeyDown(_ event: NSEvent) {
         guard isCurrentWindow(eventWindow: event.window) else { return }
         cancelPendingAndHide()
@@ -332,7 +328,10 @@ final class SeyalPreviewShortcutController: NSObject {
     }
 
     func showShortcutHintsForTesting() {
-        hintMonitor?.showImmediatelyForTesting()
+        // The forced XCUI path is a deterministic snapshot hook, not a
+        // synthesized modifier-key lifecycle. Present directly so pending
+        // key-window notifications cannot immediately cancel the fixture.
+        presentShortcutHints()
     }
 
     private func installHintMonitor() {

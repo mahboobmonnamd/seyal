@@ -91,12 +91,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         #if DEBUG
         if useShellPreview, environment["SEYAL_UI_TEST_FORCE_SHORTCUT_HINTS"] == "1" {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                [weak previewShortcutController, weak window] in
-                window?.contentView?.layoutSubtreeIfNeeded()
-                window?.displayIfNeeded()
-                previewShortcutController?.showShortcutHintsForTesting()
-            }
+            // The preview hierarchy is built synchronously above. Present the
+            // test-only overlay from that same authoritative layout instead of
+            // racing a fixed-delay callback against hosted-runner startup.
+            window.contentView?.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            previewShortcutController?.showShortcutHintsForTesting()
         }
         #endif
     }

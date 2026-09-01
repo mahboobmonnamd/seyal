@@ -317,7 +317,11 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
       allowsImplicitExecutionBootstrap: allowsImplicitExecutionBootstrap
     )
     self.bridge = bridge
-    _ = bridge.start()
+    // A production surface must not perform a synchronous pre-attempt on the
+    // AppKit thread. Visibility starts the one authoritative recovery episode
+    // so startup, retries and cancellation share the exact seven-attempt/
+    // one-second contract instead of creating an eighth attempt with a fresh
+    // timeout before the lifecycle coordinator begins.
   }
 
   @available(*, unavailable)
@@ -357,14 +361,18 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     bridge?.isConnected == true
   }
 
-  /// Reconnects the pane's existing PTY bridge at the command boundary.
-  /// Block timeline updates may recreate presentation views, but a command
-  /// must never be rejected merely because that view has just re-entered the
-  /// window hierarchy.
+  /// A command entered while disconnected is an explicit recovery action, but
+  /// it must never synchronously connect/handshake/attach on the AppKit thread.
+  /// The Pane composer keeps the draft when this returns false; the coordinator
+  /// owns the bounded episode and the user can submit once the surface is usable.
   @discardableResult
   func ensureTerminalBridgeConnected() -> Bool {
     guard bridge?.isConnected != true else { return true }
-    return bridge?.start() == true
+    guard shouldRender else { return false }
+    if !bridgeRecoveryCoordinator.isActive {
+      bridgeRecoveryCoordinator.retry()
+    }
+    return false
   }
 
   @discardableResult
@@ -858,6 +866,8 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
 
     guard shouldRender,
       hasPreparedState,
+      renderer.persistentDisplayFailure == nil,
+      !presentationState.exhausted,
       presentationState.consumeOpportunity()
     else {
       return

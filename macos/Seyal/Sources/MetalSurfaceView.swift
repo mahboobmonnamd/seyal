@@ -2,6 +2,35 @@ import AppKit
 import Metal
 @preconcurrency import QuartzCore
 
+/// The fixed foreground recovery schedule required by SPEC-009 §8.1.
+/// The immediate attempt occurs at t=0; these are the six subsequent delays.
+struct RuntimeRecoveryAttemptPlan: Equatable {
+  static let retryDelays: [TimeInterval] = [0.010, 0.020, 0.040, 0.080, 0.160, 0.250]
+  static let maximumAttempts = retryDelays.count + 1
+  static let episodeDeadline: TimeInterval = 1.0
+
+  private(set) var attemptCount = 0
+
+  mutating func beginEpisode() {
+    attemptCount = 0
+  }
+
+  mutating func claimImmediateAttempt() -> Bool {
+    guard attemptCount == 0 else { return false }
+    attemptCount = 1
+    return true
+  }
+
+  mutating func claimRetryDelay() -> TimeInterval? {
+    guard attemptCount >= 1, attemptCount < Self.maximumAttempts else { return nil }
+    let delay = Self.retryDelays[attemptCount - 1]
+    attemptCount += 1
+    return delay
+  }
+
+  var exhausted: Bool { attemptCount >= Self.maximumAttempts }
+}
+
 struct PresentationRetryBudget: Equatable {
   private static let delays: [TimeInterval] = [1.0 / 60.0, 0.05, 0.20, 0.75]
   static let maximumAutomaticRetries = 4
@@ -161,6 +190,8 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
   private var bridge: RustDisplayBridge?
   private var bridgeReconnectTimer: Timer?
   private var bridgeReconnectGeneration: UInt64 = 0
+  private var bridgeRecoveryPlan = RuntimeRecoveryAttemptPlan()
+  private var bridgeRecoveryDeadline: TimeInterval?
   private var forceNextFrame = false
   private var hasPreparedState = false
   private var presentationState = PresentationRecoveryState()
@@ -548,10 +579,17 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
 
   private func scheduleBridgeReconnect() {
     guard shouldRender, bridge?.isConnected == false, bridgeReconnectTimer == nil else { return }
+    guard let deadline = bridgeRecoveryDeadline,
+          CACurrentMediaTime() < deadline,
+          let delay = bridgeRecoveryPlan.claimRetryDelay()
+    else {
+      cancelBridgeReconnect()
+      return
+    }
     bridgeReconnectGeneration &+= 1
     let generation = bridgeReconnectGeneration
     bridgeReconnectTimer = Timer.scheduledTimer(
-      timeInterval: 0.1,
+      timeInterval: delay,
       target: self,
       selector: #selector(bridgeReconnectTimerFired(_:)),
       userInfo: generation,
@@ -576,6 +614,8 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     bridgeReconnectTimer?.invalidate()
     bridgeReconnectTimer = nil
     bridgeReconnectGeneration &+= 1
+    bridgeRecoveryDeadline = nil
+    bridgeRecoveryPlan.beginEpisode()
   }
 
   private func updateVisibility() {
@@ -588,6 +628,11 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
       }
       forceNextFrame = true
       if bridge?.isConnected == false {
+        if bridgeRecoveryDeadline == nil {
+          bridgeRecoveryPlan.beginEpisode()
+          guard bridgeRecoveryPlan.claimImmediateAttempt() else { return }
+          bridgeRecoveryDeadline = CACurrentMediaTime() + RuntimeRecoveryAttemptPlan.episodeDeadline
+        }
         if bridge?.start() == true {
           cancelBridgeReconnect()
         } else {

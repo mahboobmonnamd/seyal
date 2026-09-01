@@ -5,6 +5,33 @@ import XCTest
 
 final class SeyalShellComponentTests: XCTestCase {
 
+  func testRuntimeRecoveryAttemptPlanUsesExactSevenAttemptSchedule() {
+    var plan = RuntimeRecoveryAttemptPlan()
+    plan.beginEpisode()
+
+    XCTAssertTrue(plan.claimImmediateAttempt())
+    XCTAssertFalse(plan.claimImmediateAttempt())
+    XCTAssertEqual(
+      (0..<RuntimeRecoveryAttemptPlan.retryDelays.count).compactMap { _ in plan.claimRetryDelay() },
+      RuntimeRecoveryAttemptPlan.retryDelays
+    )
+    XCTAssertTrue(plan.exhausted)
+    XCTAssertNil(plan.claimRetryDelay())
+  }
+
+  func testRuntimeRecoveryAttemptPlanResetsForASeparateForegroundEpisode() {
+    var plan = RuntimeRecoveryAttemptPlan()
+    plan.beginEpisode()
+    XCTAssertTrue(plan.claimImmediateAttempt())
+    while plan.claimRetryDelay() != nil {}
+    XCTAssertTrue(plan.exhausted)
+
+    plan.beginEpisode()
+    XCTAssertFalse(plan.exhausted)
+    XCTAssertTrue(plan.claimImmediateAttempt())
+    XCTAssertEqual(plan.claimRetryDelay(), RuntimeRecoveryAttemptPlan.retryDelays[0])
+  }
+
   func testRuntimeBlockMetadataKeepsOpaqueExecutionIdentityAnchorAndState() {
     let current = RuntimeBlockMetadata(
       blockIDLow: 0x0123,

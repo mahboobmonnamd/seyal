@@ -103,7 +103,11 @@ final class SeyalShellComponentTests: XCTestCase {
     var attempts = 0
     let coordinator = RuntimeLifecycleRecoveryCoordinator(
       clock: { scheduler.now },
-      scheduler: scheduler.schedule,
+      scheduler: { delay, operation in
+        MainActor.assumeIsolated {
+          scheduler.schedule(delay: delay, operation: operation)
+        }
+      },
       launcher: {},
       attempt: {
         attempts += 1
@@ -129,7 +133,11 @@ final class SeyalShellComponentTests: XCTestCase {
     var launches = 0
     let missing = RuntimeLifecycleRecoveryCoordinator(
       clock: { missingScheduler.now },
-      scheduler: missingScheduler.schedule,
+      scheduler: { delay, operation in
+        MainActor.assumeIsolated {
+          missingScheduler.schedule(delay: delay, operation: operation)
+        }
+      },
       launcher: { launches += 1 },
       attempt: { .endpointMissing }
     )
@@ -143,7 +151,11 @@ final class SeyalShellComponentTests: XCTestCase {
     let busyScheduler = RecoveryScheduler()
     let busy = RuntimeLifecycleRecoveryCoordinator(
       clock: { busyScheduler.now },
-      scheduler: busyScheduler.schedule,
+      scheduler: { delay, operation in
+        MainActor.assumeIsolated {
+          busyScheduler.schedule(delay: delay, operation: operation)
+        }
+      },
       launcher: { launches += 1 },
       attempt: { .controllerBusy }
     )
@@ -163,7 +175,11 @@ final class SeyalShellComponentTests: XCTestCase {
     var attempts = 0
     let coordinator = RuntimeLifecycleRecoveryCoordinator(
       clock: { scheduler.now },
-      scheduler: scheduler.schedule,
+      scheduler: { delay, operation in
+        MainActor.assumeIsolated {
+          scheduler.schedule(delay: delay, operation: operation)
+        }
+      },
       launcher: {},
       attempt: {
         attempts += 1
@@ -200,7 +216,11 @@ final class SeyalShellComponentTests: XCTestCase {
     var outcomes: [RuntimeRecoveryAttemptOutcome] = [.retryable, .connected]
     let coordinator = RuntimeLifecycleRecoveryCoordinator(
       clock: { scheduler.now },
-      scheduler: scheduler.schedule,
+      scheduler: { delay, operation in
+        MainActor.assumeIsolated {
+          scheduler.schedule(delay: delay, operation: operation)
+        }
+      },
       launcher: {},
       attempt: { outcomes.removeFirst() }
     )

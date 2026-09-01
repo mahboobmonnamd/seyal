@@ -150,7 +150,9 @@ cleanup_runtime() {
   # Runtime performs bounded graceful cleanup of its canonical listener. Do
   # not start the next fixture while the old listener still owns the socket;
   # otherwise the new fixture reports AlreadyRunning nondeterministically.
-  for _ in $(seq 1 40); do
+  # Runtime may finish its child before the listener cleanup completes. Keep
+  # the singleton boundary closed until the endpoint is actually gone.
+  for _ in $(seq 1 200); do
     [[ ! -S "$RUNTIME_SOCKET" ]] && break
     sleep 0.025
   done
@@ -228,7 +230,10 @@ run_live_renderer_case() {
   done
   [[ "$passed" == "1" ]] || fail "live Candidate-D to Metal case failed: $command"
   wait "$runtime_pid" || true
-  runtime_pid=""
+  # The child can exit before Runtime has removed its listener. Reuse the
+  # same teardown path while ownership is still tracked so the next fixture
+  # cannot race a draining singleton.
+  cleanup_runtime
 }
 
 run_pass8_native_metadata_case

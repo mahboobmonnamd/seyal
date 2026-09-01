@@ -328,7 +328,11 @@ fn controller_cleanup_survives_100_graceful_and_100_abrupt_reconnect_cycles() {
         let (kind, _payload) = harness.frame(&mut client);
         assert_eq!(kind, MessageType::Detached);
         assert_eq!(
-            harness.runtime.lookup(execution_id).unwrap().attachment_count,
+            harness
+                .runtime
+                .lookup(execution_id)
+                .unwrap()
+                .attachment_count,
             0,
             "graceful cycle {cycle} retained attachment/controller authority"
         );
@@ -350,7 +354,13 @@ fn controller_cleanup_survives_100_graceful_and_100_abrupt_reconnect_cycles() {
         drop(client);
 
         let deadline = Instant::now() + Duration::from_secs(1);
-        while harness.runtime.lookup(execution_id).unwrap().attachment_count != 0 {
+        while harness
+            .runtime
+            .lookup(execution_id)
+            .unwrap()
+            .attachment_count
+            != 0
+        {
             assert!(
                 Instant::now() < deadline,
                 "abrupt cycle {cycle} did not release Controller authority"
@@ -393,8 +403,17 @@ fn controller_cleanup_survives_100_graceful_and_100_abrupt_reconnect_cycles() {
 
     drop(final_client);
     let deadline = Instant::now() + Duration::from_secs(1);
-    while harness.runtime.lookup(execution_id).unwrap().attachment_count != 0 {
-        assert!(Instant::now() < deadline, "final attachment cleanup timed out");
+    while harness
+        .runtime
+        .lookup(execution_id)
+        .unwrap()
+        .attachment_count
+        != 0
+    {
+        assert!(
+            Instant::now() < deadline,
+            "final attachment cleanup timed out"
+        );
         harness.pump();
     }
     harness.runtime.begin_shutdown().unwrap();

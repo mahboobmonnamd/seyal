@@ -690,7 +690,7 @@ fn verified_recovery_socket_path() -> Result<PathBuf, ClientError> {
 
 fn verify_connected_recovery_client(
     client: &LocalDisplayClient,
-    socket_path: &PathBuf,
+    socket_path: &std::path::Path,
     deadline: Instant,
 ) -> Result<(), ClientError> {
     ensure_recovery_deadline(deadline)?;

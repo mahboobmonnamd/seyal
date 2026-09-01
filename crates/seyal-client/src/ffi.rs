@@ -7,7 +7,7 @@ use std::{
 use seyal_render::PreparedCell;
 use seyal_runtime::{
     ExecutionId,
-    local_ipc::framing::{ComposerResultCode, Role, TerminalKeyKind},
+    local_ipc::framing::{ComposerResultCode, ErrorCode, Role, TerminalKeyKind},
 };
 
 use crate::{
@@ -62,6 +62,7 @@ impl SeyalRecoveryResult {
 mod recovery_result_tests {
     use super::{SeyalRecoveryResult, set_recovery_failure};
     use crate::ClientError;
+    use seyal_runtime::local_ipc::framing::ErrorCode;
 
     #[test]
     fn retryable_discovery_failure_is_typed() {
@@ -79,10 +80,14 @@ mod recovery_result_tests {
         assert_eq!(protocol.failure_class, 4);
         assert_eq!(protocol.retryable, 0);
 
-        set_recovery_failure(ClientError::Server(9));
+        set_recovery_failure(ClientError::Server(ErrorCode::ControllerBusy));
         let busy = super::LAST_RECOVERY_RESULT.with(std::cell::Cell::get);
         assert_eq!(busy.failure_class, 3);
         assert_eq!(busy.retryable, 1);
+        set_recovery_failure(ClientError::Server(ErrorCode::CapacityExceeded));
+        let capacity = super::LAST_RECOVERY_RESULT.with(std::cell::Cell::get);
+        assert_eq!(capacity.failure_class, 4);
+        assert_eq!(capacity.retryable, 0);
         let _ = SeyalRecoveryResult::empty();
     }
 }
@@ -93,7 +98,7 @@ fn set_recovery_failure(error: ClientError) {
         ClientError::Io | ClientError::Disconnected => (2, 1),
         ClientError::NoRunningExecution => (2, 0),
         ClientError::AmbiguousExecutions => (6, 0),
-        ClientError::Server(9) => (3, 1),
+        ClientError::Server(ErrorCode::ControllerBusy) => (3, 1),
         ClientError::UnsupportedDisplayCapability
         | ClientError::UnsupportedInteractiveCapability
         | ClientError::Protocol
@@ -934,6 +939,6 @@ fn error_code(error: ClientError) -> i32 {
         ClientError::ResizeProtocolFailure => -16,
         ClientError::InvalidGeometry => -17,
         ClientError::BlockMetadataConflict => -18,
-        ClientError::Server(code) => -1000 - i32::from(code),
+        ClientError::Server(code) => -1000 - i32::from(code as u16),
     }
 }

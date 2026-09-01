@@ -5,6 +5,61 @@ import XCTest
 
 final class SeyalShellComponentTests: XCTestCase {
 
+  func testBundledRuntimeEnvironmentIsExactAllowlistAndRejectsPoisonedValues() throws {
+    let environment = try BundledRuntimeLauncher.launchEnvironment(inherited: [
+      "LANG": "en_US.UTF-8",
+      "LC_CTYPE": "bad\nvalue",
+      "DYLD_INSERT_LIBRARIES": "/tmp/injected.dylib",
+      "SSH_AUTH_SOCK": "/tmp/agent.sock",
+      "SEYAL_SECRET": "secret",
+    ])
+
+    XCTAssertEqual(
+      Set(environment.keys),
+      Set(["HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "PATH", "LANG"])
+    )
+    XCTAssertEqual(environment["PATH"], "/usr/bin:/bin:/usr/sbin:/sbin")
+    XCTAssertEqual(environment["USER"], environment["LOGNAME"])
+    XCTAssertEqual(environment["LANG"], "en_US.UTF-8")
+    XCTAssertNil(environment["LC_CTYPE"])
+    XCTAssertNil(environment["DYLD_INSERT_LIBRARIES"])
+    XCTAssertNil(environment["SSH_AUTH_SOCK"])
+    XCTAssertNil(environment["SEYAL_SECRET"])
+  }
+
+  func testBundledRuntimeLocaleValidationIsBoundedAndControlFree() {
+    XCTAssertTrue(BundledRuntimeLauncher.isValidLocale("en_US.UTF-8"))
+    XCTAssertFalse(BundledRuntimeLauncher.isValidLocale(""))
+    XCTAssertFalse(BundledRuntimeLauncher.isValidLocale("en_US\nUTF-8"))
+    XCTAssertFalse(BundledRuntimeLauncher.isValidLocale(String(repeating: "x", count: 129)))
+  }
+
+  func testBundledRuntimePathAcceptsOnlyExactRegularExecutableHelper() throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let bundle = root.appendingPathComponent("Seyal.app", isDirectory: true)
+    let helpers = bundle.appendingPathComponent("Contents/Helpers", isDirectory: true)
+    let helper = helpers.appendingPathComponent("seyal-runtime")
+    try FileManager.default.createDirectory(at: helpers, withIntermediateDirectories: true)
+    XCTAssertThrowsError(try BundledRuntimeLauncher.validateHelperPath(bundleURL: bundle)) {
+      XCTAssertEqual($0 as? BundledRuntimeLaunchError, .helperMissing)
+    }
+
+    XCTAssertTrue(FileManager.default.createFile(atPath: helper.path, contents: Data("runtime".utf8)))
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helper.path)
+    XCTAssertEqual(
+      try BundledRuntimeLauncher.validateHelperPath(bundleURL: bundle),
+      helper.standardizedFileURL
+    )
+
+    try FileManager.default.removeItem(at: helper)
+    try FileManager.default.createSymbolicLink(at: helper, withDestinationURL: URL(fileURLWithPath: "/bin/true"))
+    XCTAssertThrowsError(try BundledRuntimeLauncher.validateHelperPath(bundleURL: bundle)) {
+      XCTAssertEqual($0 as? BundledRuntimeLaunchError, .helperPathInvalid)
+    }
+    try? FileManager.default.removeItem(at: root)
+  }
+
   @MainActor
   private final class RecoveryScheduler {
     final class Job {

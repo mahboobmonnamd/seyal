@@ -307,7 +307,7 @@ final class RustDisplayBridge {
   private(set) var attachmentIdentityWords: (low: UInt64, high: UInt64) = (0, 0)
   private(set) var runtimeBlockMetadata: RuntimeBlockMetadata?
   private var reconnectRequested = false
-  private var runtimeProcess: Process?
+  private let runtimeLauncher = BundledRuntimeLauncher()
   private var lastTimelineRevision: UInt64 = 0
   private let paneID: String
   private let requestedExecutionIdentity: String?
@@ -443,31 +443,7 @@ final class RustDisplayBridge {
   /// Starts only the trusted helper packaged inside Seyal.app. Episode-level
   /// launch-once ownership belongs to RuntimeLifecycleRecoveryCoordinator.
   func launchBundledRuntime() {
-    guard runtimeProcess?.isRunning != true else { return }
-    let executableURL = Bundle.main.bundleURL
-      .appendingPathComponent("Contents/Helpers/seyal-runtime")
-    guard FileManager.default.isExecutableFile(atPath: executableURL.path) else { return }
-
-    let process = Process()
-    process.executableURL = executableURL
-    process.arguments = []
-    var environment: [String: String] = [
-      "PATH": "/usr/bin:/bin",
-      "HOME": NSHomeDirectory()
-    ]
-    if let temporaryDirectory = ProcessInfo.processInfo.environment["TMPDIR"] {
-      environment["TMPDIR"] = temporaryDirectory
-    }
-    process.environment = environment
-    process.standardInput = FileHandle.nullDevice
-    process.standardOutput = FileHandle.nullDevice
-    process.standardError = FileHandle.nullDevice
-    do {
-      try process.run()
-      runtimeProcess = process
-    } catch {
-      runtimeProcess = nil
-    }
+    _ = runtimeLauncher.launch()
   }
 
   static func executionWords(from value: String) -> (UInt64, UInt64)? {

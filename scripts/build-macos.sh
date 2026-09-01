@@ -54,6 +54,10 @@ fi
 rustup run "$channel" cargo "${cargo_args[@]}"
 
 DERIVED_DATA="${ROOT}/target/macos-derived-data"
+SWIFT_CONDITIONS='$(inherited)'
+if [[ "$CONFIGURATION" == "Debug" ]]; then
+  SWIFT_CONDITIONS='DEBUG $(inherited)'
+fi
 
 xcodebuild \
   -project macos/Seyal/Seyal.xcodeproj \
@@ -63,7 +67,7 @@ xcodebuild \
   ARCHS="$MACOS_ARCH" \
   ONLY_ACTIVE_ARCH=YES \
   CODE_SIGNING_ALLOWED=NO \
-  SWIFT_ACTIVE_COMPILATION_CONDITIONS='DEBUG $(inherited)' \
+  SWIFT_ACTIVE_COMPILATION_CONDITIONS="$SWIFT_CONDITIONS" \
   build
 
 # Runtime is a permanent bundled helper. Keep the launch path inside the
@@ -76,5 +80,34 @@ RUNTIME_BINARY="${ROOT}/target/$([[ "$CONFIGURATION" == "Release" ]] && echo rel
 [[ -x "$RUNTIME_BINARY" ]] || { echo "bundled Runtime binary is missing: $RUNTIME_BINARY" >&2; exit 1; }
 install -m 755 "$RUNTIME_BINARY" "${HELPERS_DIR}/seyal-runtime"
 [[ -x "${HELPERS_DIR}/seyal-runtime" ]] || { echo "failed to package bundled Runtime helper" >&2; exit 1; }
+
+# Sign the nested helper before sealing the outer app. Debug's ad-hoc allowance
+# is compiled out of Release; distribution builds must name an Apple-issued
+# identity whose Team ID is inherited by both signatures.
+if [[ "$CONFIGURATION" == "Debug" ]]; then
+  CODESIGN_IDENTITY="-"
+  codesign --force --sign "$CODESIGN_IDENTITY" --identifier dev.seyal.Seyal.runtime \
+    --timestamp=none "${HELPERS_DIR}/seyal-runtime"
+  codesign --force --sign "$CODESIGN_IDENTITY" --identifier dev.seyal.Seyal \
+    --timestamp=none "$APP_BUNDLE"
+else
+  CODESIGN_IDENTITY="${SEYAL_CODESIGN_IDENTITY:-}"
+  [[ -n "$CODESIGN_IDENTITY" ]] || {
+    echo "Release packaging requires SEYAL_CODESIGN_IDENTITY" >&2
+    exit 1
+  }
+  codesign --force --sign "$CODESIGN_IDENTITY" --identifier dev.seyal.Seyal.runtime \
+    --options runtime --timestamp "${HELPERS_DIR}/seyal-runtime"
+  codesign --force --sign "$CODESIGN_IDENTITY" --identifier dev.seyal.Seyal \
+    --options runtime --timestamp "$APP_BUNDLE"
+fi
+
+codesign --verify --strict --all-architectures "${HELPERS_DIR}/seyal-runtime"
+codesign --verify --strict --all-architectures "$APP_BUNDLE"
+helper_identifier="$(codesign -dvv "${HELPERS_DIR}/seyal-runtime" 2>&1 | sed -n 's/^Identifier=//p')"
+[[ "$helper_identifier" == "dev.seyal.Seyal.runtime" ]] || {
+  echo "bundled Runtime helper has unexpected identifier: $helper_identifier" >&2
+  exit 1
+}
 
 printf '[seyal macOS build] built %s (%s)\n' "${DERIVED_DATA}/Build/Products/${CONFIGURATION}/Seyal.app" "$MACOS_ARCH"

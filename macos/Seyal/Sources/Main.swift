@@ -26,12 +26,13 @@ enum SeyalMain {
             guard RendererValidation.deterministicSelfTest(),
                   Pass6RegressionValidation.selfTest(),
                   MetalTerminalRenderer.gpuCompletionFailureRecoverySelfTest(),
-                  InteractiveMetalSurfaceView.pass7InputSelfTest()
+                  InteractiveMetalSurfaceView.pass7InputSelfTest(),
+                  RuntimeLifecycleRecoveryCoordinator.ownershipSelfTest()
             else {
-                print("Seyal deterministic Metal renderer/input self-test failed.")
+                print("Seyal deterministic Metal renderer/input/recovery self-test failed.")
                 exit(1)
             }
-            print("Seyal deterministic Metal renderer/input self-test passed.")
+            print("Seyal deterministic Metal renderer/input/recovery self-test passed.")
             return
         }
 

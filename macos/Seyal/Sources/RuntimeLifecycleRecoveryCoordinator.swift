@@ -74,14 +74,14 @@ struct ReconnectReconstructionState: Equatable {
 /// The coordinator owns retry/deadline/launch accounting only. Runtime, PTY,
 /// attachment, and terminal-state authority remain behind the injected attempt
 /// and launcher hooks.
-final class RuntimeLifecycleRecoveryCoordinator {
+final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
   typealias Cancellation = () -> Void
   typealias Clock = () -> TimeInterval
   /// Scheduler callbacks are deliberately not MainActor isolated. Recovery
   /// discovery is lifecycle work, not presentation work, and must remain
   /// serial even while AppKit is busy rendering a frame.
   typealias ScheduledOperation = @Sendable () -> Void
-  typealias Scheduler = @MainActor (TimeInterval, @escaping ScheduledOperation) -> Cancellation
+  typealias Scheduler = @Sendable (TimeInterval, @escaping ScheduledOperation) -> Cancellation
   typealias Launcher = () -> Void
   typealias Attempt = () -> RuntimeRecoveryAttemptOutcome
 

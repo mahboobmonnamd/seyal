@@ -54,9 +54,9 @@ fi
 rustup run "$channel" cargo "${cargo_args[@]}"
 
 DERIVED_DATA="${ROOT}/target/macos-derived-data"
-SWIFT_CONDITIONS='$(inherited)'
+SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited)'
 if [[ "$CONFIGURATION" == "Debug" ]]; then
-  SWIFT_CONDITIONS='DEBUG $(inherited)'
+  SWIFT_ACTIVE_COMPILATION_CONDITIONS='DEBUG $(inherited)'
 fi
 
 xcodebuild \
@@ -67,7 +67,7 @@ xcodebuild \
   ARCHS="$MACOS_ARCH" \
   ONLY_ACTIVE_ARCH=YES \
   CODE_SIGNING_ALLOWED=NO \
-  SWIFT_ACTIVE_COMPILATION_CONDITIONS="$SWIFT_CONDITIONS" \
+  SWIFT_ACTIVE_COMPILATION_CONDITIONS="$SWIFT_ACTIVE_COMPILATION_CONDITIONS" \
   build
 
 # Runtime is a permanent bundled helper. Keep the launch path inside the

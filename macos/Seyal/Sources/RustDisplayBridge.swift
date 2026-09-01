@@ -305,6 +305,8 @@ final class RustDisplayBridge {
   private(set) var lastRecoveryResult = RecoveryResult.current()
   private(set) var runtimeBlockMetadata: RuntimeBlockMetadata?
   private var reconnectRequested = false
+  private var runtimeLaunchAttempted = false
+  private var runtimeProcess: Process?
   private var lastTimelineRevision: UInt64 = 0
   private let paneID: String
   private let requestedExecutionIdentity: String?
@@ -391,6 +393,10 @@ final class RustDisplayBridge {
     }
     guard handle != 0 else {
       lastRecoveryResult = RecoveryResult.current()
+      if lastRecoveryResult.retryable && !runtimeLaunchAttempted {
+        runtimeLaunchAttempted = true
+        launchBundledRuntimeIfNeeded()
+      }
       onError(-6)
       onStatusChanged()
       return false
@@ -404,6 +410,7 @@ final class RustDisplayBridge {
     clientHandle = handle
     handleBox.value = handle
     lastRecoveryResult = RecoveryResult.current()
+    runtimeLaunchAttempted = false
 
     let fileDescriptor = seyal_bridge_socket_fd()
     guard fileDescriptor >= 0 else {
@@ -433,6 +440,36 @@ final class RustDisplayBridge {
     synchronizeWriteReadinessSource()
     onStatusChanged()
     return true
+  }
+
+  /// Starts only the trusted helper packaged inside Seyal.app. The helper is
+  /// launched at most once for this bridge's foreground recovery episode.
+  private func launchBundledRuntimeIfNeeded() {
+    guard runtimeProcess?.isRunning != true else { return }
+    let executableURL = Bundle.main.bundleURL
+      .appendingPathComponent("Contents/Helpers/seyal-runtime")
+    guard FileManager.default.isExecutableFile(atPath: executableURL.path) else { return }
+
+    let process = Process()
+    process.executableURL = executableURL
+    process.arguments = []
+    var environment: [String: String] = [
+      "PATH": "/usr/bin:/bin",
+      "HOME": NSHomeDirectory()
+    ]
+    if let temporaryDirectory = ProcessInfo.processInfo.environment["TMPDIR"] {
+      environment["TMPDIR"] = temporaryDirectory
+    }
+    process.environment = environment
+    process.standardInput = FileHandle.nullDevice
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    do {
+      try process.run()
+      runtimeProcess = process
+    } catch {
+      runtimeProcess = nil
+    }
   }
 
   static func executionWords(from value: String) -> (UInt64, UInt64)? {

@@ -304,7 +304,14 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     _ = code
   }
 
-  func terminalBridgeStatusDidChange() {}
+  func terminalBridgeStatusDidChange() {
+    guard bridge?.isConnected != true else { return }
+    // History/composer/display correlations are disposable connection state;
+    // logical pane and Block identity remain owned by Runtime and are not
+    // cleared here.
+    historyRanges.removeAll(keepingCapacity: false)
+    invalidatePreparedPresentation()
+  }
 
   /// Presentation-only notification. Runtime/Metal remains authoritative;
   /// AppKit uses this to switch the surrounding Pane chrome.

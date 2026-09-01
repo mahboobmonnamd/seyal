@@ -499,6 +499,13 @@ final class RustDisplayBridge {
 
     isConnected = false
     runtimeBlockMetadata = nil
+    // All request/display correlations are connection-local. A reconnect
+    // receives a fresh attachment and must never reuse pending history,
+    // composer, timeline, or generation state from the dead socket.
+    requestedHistoryRanges.removeAll(keepingCapacity: false)
+    historyRevisions.removeAll(keepingCapacity: false)
+    lastTimelineRevision = 0
+    lastComposerResultRequestID = 0
     socketFileDescriptor = -1
     _ = seyal_bridge_select(clientHandle)
     teardown.requestDisconnect()

@@ -2,35 +2,6 @@ import AppKit
 import Metal
 @preconcurrency import QuartzCore
 
-/// The fixed foreground recovery schedule required by SPEC-009 §8.1.
-/// The immediate attempt occurs at t=0; these are the six subsequent delays.
-struct RuntimeRecoveryAttemptPlan: Equatable {
-  static let retryDelays: [TimeInterval] = [0.010, 0.020, 0.040, 0.080, 0.160, 0.250]
-  static let maximumAttempts = retryDelays.count + 1
-  static let episodeDeadline: TimeInterval = 1.0
-
-  private(set) var attemptCount = 0
-
-  mutating func beginEpisode() {
-    attemptCount = 0
-  }
-
-  mutating func claimImmediateAttempt() -> Bool {
-    guard attemptCount == 0 else { return false }
-    attemptCount = 1
-    return true
-  }
-
-  mutating func claimRetryDelay() -> TimeInterval? {
-    guard attemptCount >= 1, attemptCount < Self.maximumAttempts else { return nil }
-    let delay = Self.retryDelays[attemptCount - 1]
-    attemptCount += 1
-    return delay
-  }
-
-  var exhausted: Bool { attemptCount >= Self.maximumAttempts }
-}
-
 enum RuntimeRecoveryStage: UInt8, Equatable {
   case disconnected = 0
   case discovering = 1
@@ -223,11 +194,18 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
   private let metalDevice: any MTLDevice
   private let renderer: MetalTerminalRenderer
   private var bridge: RustDisplayBridge?
-  private var bridgeReconnectTimer: Timer?
-  private var bridgeReconnectGeneration: UInt64 = 0
-  private var bridgeRecoveryPlan = RuntimeRecoveryAttemptPlan()
-  private var bridgeRecoveryDeadline: TimeInterval?
-  private(set) var runtimeRecoveryState = RuntimeRecoveryState()
+  private lazy var bridgeRecoveryCoordinator = RuntimeLifecycleRecoveryCoordinator(
+    clock: { CACurrentMediaTime() },
+    scheduler: { delay, operation in
+      let timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { _ in
+        MainActor.assumeIsolated { operation() }
+      }
+      return { timer.invalidate() }
+    },
+    launcher: { [weak self] in self?.bridge?.launchBundledRuntime() },
+    attempt: { [weak self] in self?.attemptBridgeRecovery() ?? .blocked }
+  )
+  var runtimeRecoveryState: RuntimeRecoveryState { bridgeRecoveryCoordinator.state }
   private var forceNextFrame = false
   private var hasPreparedState = false
   private var presentationState = PresentationRecoveryState()
@@ -620,57 +598,23 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
       && !isHiddenOrHasHiddenAncestor
   }
 
-  private func scheduleBridgeReconnect() {
-    guard shouldRender, bridge?.isConnected == false, bridgeReconnectTimer == nil else { return }
-    guard let deadline = bridgeRecoveryDeadline,
-          CACurrentMediaTime() < deadline,
-          let delay = bridgeRecoveryPlan.claimRetryDelay()
-    else {
-      bridgeReconnectTimer?.invalidate()
-      bridgeReconnectTimer = nil
-      bridgeRecoveryDeadline = nil
-      runtimeRecoveryState.transition(to: .exhausted)
-      return
+  private func attemptBridgeRecovery() -> RuntimeRecoveryAttemptOutcome {
+    guard shouldRender, let bridge, !bridge.isConnected else {
+      return bridge?.isConnected == true ? .connected : .blocked
     }
-    bridgeReconnectGeneration &+= 1
-    let generation = bridgeReconnectGeneration
-    bridgeReconnectTimer = Timer.scheduledTimer(
-      timeInterval: delay,
-      target: self,
-      selector: #selector(bridgeReconnectTimerFired(_:)),
-      userInfo: generation,
-      repeats: false
-    )
-  }
-
-  @objc private func bridgeReconnectTimerFired(_ timer: Timer) {
-    guard let generation = timer.userInfo as? UInt64,
-          generation == bridgeReconnectGeneration
-    else { return }
-    bridgeReconnectTimer = nil
-    guard shouldRender, bridge?.isConnected == false else { return }
-    if bridge?.start() == true {
-      finishBridgeRecovery()
-    } else {
-      scheduleBridgeReconnect()
+    guard !bridge.start() else { return .connected }
+    let result = bridge.lastRecoveryResult
+    if result.failureClass == 1, result.retryable {
+      return .endpointMissing
     }
+    if result.failureClass == 3, result.retryable {
+      return .controllerBusy
+    }
+    return result.retryable ? .retryable : .blocked
   }
 
   private func cancelBridgeReconnect() {
-    bridgeReconnectTimer?.invalidate()
-    bridgeReconnectTimer = nil
-    bridgeReconnectGeneration &+= 1
-    bridgeRecoveryDeadline = nil
-    bridgeRecoveryPlan.beginEpisode()
-    runtimeRecoveryState.cancel()
-  }
-
-  private func finishBridgeRecovery() {
-    bridgeReconnectTimer?.invalidate()
-    bridgeReconnectTimer = nil
-    bridgeRecoveryDeadline = nil
-    bridgeRecoveryPlan.beginEpisode()
-    runtimeRecoveryState.transition(to: .reconstructing)
+    bridgeRecoveryCoordinator.cancel()
   }
 
   /// Explicit user retry starts a new bounded foreground recovery episode.
@@ -678,9 +622,7 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
   @discardableResult
   func retryRuntimeConnection() -> Bool {
     guard shouldRender, bridge?.isConnected != true else { return true }
-    cancelBridgeReconnect()
-    runtimeRecoveryState.retry()
-    updateVisibility()
+    bridgeRecoveryCoordinator.retry()
     return bridge?.isConnected == true
   }
 
@@ -694,16 +636,11 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
       }
       forceNextFrame = true
       if bridge?.isConnected == false {
-        if bridgeRecoveryDeadline == nil {
-          bridgeRecoveryPlan.beginEpisode()
-          guard bridgeRecoveryPlan.claimImmediateAttempt() else { return }
-          bridgeRecoveryDeadline = CACurrentMediaTime() + RuntimeRecoveryAttemptPlan.episodeDeadline
-          runtimeRecoveryState.begin()
-        }
-        if bridge?.start() == true {
-          finishBridgeRecovery()
-        } else {
-          scheduleBridgeReconnect()
+        if !bridgeRecoveryCoordinator.isActive,
+          runtimeRecoveryState.stage != .exhausted,
+          runtimeRecoveryState.stage != .blocked
+        {
+          bridgeRecoveryCoordinator.beginEpisode()
         }
       }
     } else {
@@ -758,7 +695,7 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
       if result == .updated {
         forceNextFrame = false
         hasPreparedState = true
-        runtimeRecoveryState.transition(to: .restoringInteraction)
+        bridgeRecoveryCoordinator.transition(to: .restoringInteraction)
         // Candidate-D can continue advancing while an exhausted GPU
         // display failure is latched. A successful CPU preparation must
         // not erase that asynchronous display diagnostic.
@@ -773,7 +710,7 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
           hasPreparedState,
           !presentationState.exhausted
         {
-          runtimeRecoveryState.transition(to: .usable)
+          bridgeRecoveryCoordinator.transition(to: .usable)
         }
         if shouldRender,
           renderer.persistentDisplayFailure == nil,

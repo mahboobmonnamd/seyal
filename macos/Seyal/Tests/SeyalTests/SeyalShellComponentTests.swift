@@ -5,44 +5,156 @@ import XCTest
 
 final class SeyalShellComponentTests: XCTestCase {
 
-  func testRuntimeRecoveryAttemptPlanUsesExactSevenAttemptSchedule() {
-    var plan = RuntimeRecoveryAttemptPlan()
-    plan.beginEpisode()
+  @MainActor
+  private final class RecoveryScheduler {
+    final class Job {
+      let delay: TimeInterval
+      let operation: RuntimeLifecycleRecoveryCoordinator.ScheduledOperation
+      var cancelled = false
 
-    XCTAssertTrue(plan.claimImmediateAttempt())
-    XCTAssertFalse(plan.claimImmediateAttempt())
-    XCTAssertEqual(
-      (0..<RuntimeRecoveryAttemptPlan.retryDelays.count).compactMap { _ in plan.claimRetryDelay() },
-      RuntimeRecoveryAttemptPlan.retryDelays
+      init(
+        delay: TimeInterval,
+        operation: @escaping RuntimeLifecycleRecoveryCoordinator.ScheduledOperation
+      ) {
+        self.delay = delay
+        self.operation = operation
+      }
+    }
+
+    var now: TimeInterval = 0
+    private(set) var jobs: [Job] = []
+
+    func schedule(
+      delay: TimeInterval,
+      operation: @escaping RuntimeLifecycleRecoveryCoordinator.ScheduledOperation
+    ) -> () -> Void {
+      let job = Job(delay: delay, operation: operation)
+      jobs.append(job)
+      return { job.cancelled = true }
+    }
+
+    func fire(_ index: Int, includingCancelled: Bool = false) {
+      let job = jobs[index]
+      now += job.delay
+      if includingCancelled || !job.cancelled {
+        job.operation()
+      }
+    }
+  }
+
+  @MainActor
+  func testLifecycleCoordinatorUsesExactSevenAttemptScheduleAndExhausts() {
+    let scheduler = RecoveryScheduler()
+    var attempts = 0
+    let coordinator = RuntimeLifecycleRecoveryCoordinator(
+      clock: { scheduler.now },
+      scheduler: scheduler.schedule,
+      launcher: {},
+      attempt: {
+        attempts += 1
+        return .retryable
+      }
     )
-    XCTAssertTrue(plan.exhausted)
-    XCTAssertNil(plan.claimRetryDelay())
+
+    coordinator.beginEpisode()
+    for index in RuntimeLifecycleRecoveryCoordinator.retryDelays.indices {
+      scheduler.fire(index)
+    }
+
+    XCTAssertEqual(attempts, 7)
+    XCTAssertEqual(coordinator.attemptCount, 7)
+    XCTAssertEqual(scheduler.jobs.map(\.delay), [0.010, 0.020, 0.040, 0.080, 0.160, 0.250])
+    XCTAssertEqual(coordinator.state.stage, .exhausted)
+    XCTAssertFalse(coordinator.hasScheduledAttempt)
   }
 
-  func testRuntimeRecoveryAttemptPlanResetsForASeparateForegroundEpisode() {
-    var plan = RuntimeRecoveryAttemptPlan()
-    plan.beginEpisode()
-    XCTAssertTrue(plan.claimImmediateAttempt())
-    while plan.claimRetryDelay() != nil {}
-    XCTAssertTrue(plan.exhausted)
+  @MainActor
+  func testLifecycleCoordinatorLaunchesOnceAndControllerBusyNeverLaunches() {
+    let missingScheduler = RecoveryScheduler()
+    var launches = 0
+    let missing = RuntimeLifecycleRecoveryCoordinator(
+      clock: { missingScheduler.now },
+      scheduler: missingScheduler.schedule,
+      launcher: { launches += 1 },
+      attempt: { .endpointMissing }
+    )
+    missing.beginEpisode()
+    for index in RuntimeLifecycleRecoveryCoordinator.retryDelays.indices {
+      missingScheduler.fire(index)
+    }
+    XCTAssertEqual(launches, 1)
+    XCTAssertEqual(missing.state.stage, .exhausted)
 
-    plan.beginEpisode()
-    XCTAssertFalse(plan.exhausted)
-    XCTAssertTrue(plan.claimImmediateAttempt())
-    XCTAssertEqual(plan.claimRetryDelay(), RuntimeRecoveryAttemptPlan.retryDelays[0])
+    let busyScheduler = RecoveryScheduler()
+    let busy = RuntimeLifecycleRecoveryCoordinator(
+      clock: { busyScheduler.now },
+      scheduler: busyScheduler.schedule,
+      launcher: { launches += 1 },
+      attempt: { .controllerBusy }
+    )
+    busy.beginEpisode()
+    XCTAssertEqual(busy.state.stage, .waitingForController)
+    for index in RuntimeLifecycleRecoveryCoordinator.retryDelays.indices {
+      busyScheduler.fire(index)
+    }
+    XCTAssertEqual(launches, 1)
+    XCTAssertEqual(busy.attemptCount, 7)
+    XCTAssertEqual(busy.state.stage, .exhausted)
   }
 
-  func testRuntimeRecoveryStateRequiresExplicitRetryAfterExhaustion() {
-    var state = RuntimeRecoveryState()
-    state.begin()
-    XCTAssertEqual(state.stage, .discovering)
-    state.transition(to: .exhausted)
-    let exhaustedGeneration = state.generation
-    XCTAssertEqual(state.stage, .exhausted)
+  @MainActor
+  func testLifecycleCoordinatorDeadlineCancellationAndGenerationReplacement() {
+    let scheduler = RecoveryScheduler()
+    var attempts = 0
+    let coordinator = RuntimeLifecycleRecoveryCoordinator(
+      clock: { scheduler.now },
+      scheduler: scheduler.schedule,
+      launcher: {},
+      attempt: {
+        attempts += 1
+        return .retryable
+      }
+    )
 
-    state.retry()
-    XCTAssertEqual(state.stage, .discovering)
-    XCTAssertGreaterThan(state.generation, exhaustedGeneration)
+    coordinator.beginEpisode()
+    let firstGeneration = coordinator.state.generation
+    coordinator.beginEpisode()
+    XCTAssertGreaterThan(coordinator.state.generation, firstGeneration)
+    XCTAssertEqual(attempts, 2)
+    scheduler.fire(0, includingCancelled: true)
+    XCTAssertEqual(attempts, 2, "stale generation callback must not attempt")
+
+    scheduler.now = 1.0
+    scheduler.fire(1)
+    XCTAssertEqual(attempts, 2, "deadline must stop before another attempt")
+    XCTAssertEqual(coordinator.state.stage, .exhausted)
+    XCTAssertFalse(coordinator.hasScheduledAttempt)
+
+    let exhaustedGeneration = coordinator.state.generation
+    coordinator.retry()
+    XCTAssertGreaterThan(coordinator.state.generation, exhaustedGeneration)
+    XCTAssertEqual(attempts, 3)
+    coordinator.cancel()
+    XCTAssertEqual(coordinator.state.stage, .disconnected)
+    XCTAssertFalse(coordinator.hasScheduledAttempt)
+  }
+
+  @MainActor
+  func testLifecycleCoordinatorSuccessCancelsOutstandingRecovery() {
+    let scheduler = RecoveryScheduler()
+    var outcomes: [RuntimeRecoveryAttemptOutcome] = [.retryable, .connected]
+    let coordinator = RuntimeLifecycleRecoveryCoordinator(
+      clock: { scheduler.now },
+      scheduler: scheduler.schedule,
+      launcher: {},
+      attempt: { outcomes.removeFirst() }
+    )
+
+    coordinator.beginEpisode()
+    scheduler.fire(0)
+    XCTAssertEqual(coordinator.state.stage, .reconstructing)
+    XCTAssertFalse(coordinator.hasScheduledAttempt)
+    XCTAssertFalse(coordinator.isActive)
   }
 
   func testRuntimeBlockMetadataKeepsOpaqueExecutionIdentityAnchorAndState() {

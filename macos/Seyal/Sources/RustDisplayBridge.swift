@@ -307,7 +307,6 @@ final class RustDisplayBridge {
   private(set) var attachmentIdentityWords: (low: UInt64, high: UInt64) = (0, 0)
   private(set) var runtimeBlockMetadata: RuntimeBlockMetadata?
   private var reconnectRequested = false
-  private var runtimeLaunchAttempted = false
   private var runtimeProcess: Process?
   private var lastTimelineRevision: UInt64 = 0
   private let paneID: String
@@ -395,15 +394,6 @@ final class RustDisplayBridge {
     }
     guard handle != 0 else {
       lastRecoveryResult = RecoveryResult.current()
-      // Only a classified endpoint-missing discovery result may launch the
-      // bundled helper. Refusals and transient I/O remain retryable but must
-      // converge on an already-starting external Runtime.
-      if lastRecoveryResult.retryable,
-         lastRecoveryResult.failureClass == 1,
-         !runtimeLaunchAttempted {
-        runtimeLaunchAttempted = true
-        launchBundledRuntimeIfNeeded()
-      }
       onError(-6)
       onStatusChanged()
       return false
@@ -417,7 +407,6 @@ final class RustDisplayBridge {
     clientHandle = handle
     handleBox.value = handle
     lastRecoveryResult = RecoveryResult.current()
-    runtimeLaunchAttempted = false
     runtimeIdentityWords = (seyal_bridge_runtime_id_low(), seyal_bridge_runtime_id_high())
     attachmentIdentityWords = (seyal_bridge_attachment_id_low(), seyal_bridge_attachment_id_high())
 
@@ -451,9 +440,9 @@ final class RustDisplayBridge {
     return true
   }
 
-  /// Starts only the trusted helper packaged inside Seyal.app. The helper is
-  /// launched at most once for this bridge's foreground recovery episode.
-  private func launchBundledRuntimeIfNeeded() {
+  /// Starts only the trusted helper packaged inside Seyal.app. Episode-level
+  /// launch-once ownership belongs to RuntimeLifecycleRecoveryCoordinator.
+  func launchBundledRuntime() {
     guard runtimeProcess?.isRunning != true else { return }
     let executableURL = Bundle.main.bundleURL
       .appendingPathComponent("Contents/Helpers/seyal-runtime")

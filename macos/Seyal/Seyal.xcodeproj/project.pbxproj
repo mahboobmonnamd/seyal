@@ -32,6 +32,7 @@
 		A10000000000000000000014 /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000017 /* CoreGraphics.framework */; };
 		A10000000000000000000015 /* TerminalInputSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000018 /* TerminalInputSurface.swift */; };
 		A10000000000000000000017 /* CommandBlockBodyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001A /* CommandBlockBodyView.swift */; };
+		A10000000000000000000018 /* RuntimeLifecycleRecoveryCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001B /* RuntimeLifecycleRecoveryCoordinator.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -82,6 +83,7 @@
 		A20000000000000000000018 /* TerminalInputSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalInputSurface.swift; sourceTree = "<group>"; };
 		A20000000000000000000019 /* SeyalShellProductionFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeyalShellProductionFactory.swift; sourceTree = "<group>"; };
 		A2000000000000000000001A /* CommandBlockBodyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandBlockBodyView.swift; sourceTree = "<group>"; };
+		A2000000000000000000001B /* RuntimeLifecycleRecoveryCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeLifecycleRecoveryCoordinator.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -140,6 +142,7 @@
 				A2000000000000000000000F /* SeyalShellPreviewFactory.swift */,
 				A20000000000000000000019 /* SeyalShellProductionFactory.swift */,
 				A2000000000000000000001A /* CommandBlockBodyView.swift */,
+				A2000000000000000000001B /* RuntimeLifecycleRecoveryCoordinator.swift */,
 				A20000000000000000000018 /* TerminalInputSurface.swift */,
 				A20000000000000000000010 /* RustDisplayBridge.swift */,
 				A20000000000000000000011 /* GlyphAtlas.swift */,
@@ -314,6 +317,7 @@
 				A10000000000000000000001 /* Main.swift in Sources */,
 				A10000000000000000000002 /* AppDelegate.swift in Sources */,
 				A10000000000000000000003 /* MetalSurfaceView.swift in Sources */,
+				A10000000000000000000018 /* RuntimeLifecycleRecoveryCoordinator.swift in Sources */,
 				A10000000000000000000007 /* SeyalDesignTokens.swift in Sources */,
 				A10000000000000000000008 /* SeyalShellModel.swift in Sources */,
 				A10000000000000000000009 /* BlockView.swift in Sources */,

@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import XCTest
 
 @testable import Seyal
@@ -58,6 +59,152 @@ final class SeyalShellComponentTests: XCTestCase {
       XCTAssertEqual($0 as? BundledRuntimeLaunchError, .helperPathInvalid)
     }
     try? FileManager.default.removeItem(at: root)
+  }
+
+  /// SPEC-009 8.1.1 requires canary evidence that `spawn()` genuinely closes
+  /// every descriptor >= 3 and runs the helper in its own process group, and
+  /// requires `validateCodeSignature()` to accept a correctly ad-hoc-signed
+  /// helper/app pair (the Debug-only trust path this host can produce without
+  /// a paid Apple Developer signing identity). No prior test in this diff
+  /// exercised `validateCodeSignature()` or `spawn()` at all; both were only
+  /// unit-tested for `validateHelperPath`/`launchEnvironment` in isolation.
+  func testBundledRuntimeSpawnClosesInheritedDescriptorsAndUsesOwnProcessGroup() throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let bundle = root.appendingPathComponent("Seyal.app", isDirectory: true)
+    let macOS = bundle.appendingPathComponent("Contents/MacOS", isDirectory: true)
+    let helpers = bundle.appendingPathComponent("Contents/Helpers", isDirectory: true)
+    let helper = helpers.appendingPathComponent("seyal-runtime")
+    try FileManager.default.createDirectory(at: helpers, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: macOS, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    // codesign refuses to treat a directory as a bundle unless it looks like
+    // one: a recognizable Info.plist and a main executable under
+    // Contents/MacOS. Neither needs real content for an ad-hoc signature.
+    let infoPlist: [String: Any] = [
+      "CFBundleIdentifier": "dev.seyal.Seyal.test-fixture-app",
+      "CFBundleExecutable": "Seyal",
+      "CFBundlePackageType": "APPL",
+    ]
+    let plistData = try PropertyListSerialization.data(
+      fromPropertyList: infoPlist, format: .xml, options: 0)
+    try plistData.write(to: bundle.appendingPathComponent("Contents/Info.plist"))
+    try FileManager.default.copyItem(
+      at: URL(fileURLWithPath: "/bin/echo"),
+      to: macOS.appendingPathComponent("Seyal"))
+
+    let marker = FileManager.default.temporaryDirectory
+      .appendingPathComponent("seyal-canary-\(UUID().uuidString).txt")
+    defer { try? FileManager.default.removeItem(at: marker) }
+
+    // The helper never receives arguments (spawn() uses an empty argv), so
+    // the probe logic must live in the executed file itself. /dev/fd lets a
+    // plain shell script enumerate its own open descriptors without needing
+    // a second interpreter or a channel outside the closed environment
+    // allowlist: the marker path is baked into the script text, not passed
+    // through the environment.
+    let script = """
+      #!/bin/sh
+      OUT="\(marker.path)"
+      : > "$OUT"
+      echo "pid=$$" >> "$OUT"
+      echo "pgid=$(ps -o pgid= -p $$ | tr -d ' ')" >> "$OUT"
+      for fd in $(seq 3 768); do
+        if [ -e "/dev/fd/$fd" ]; then
+          echo "open_fd=$fd" >> "$OUT"
+        fi
+      done
+      exit 0
+      """
+    try script.write(to: helper, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helper.path)
+
+    // Sign the helper with its own identity before sealing the app (non-deep,
+    // so the app's own ad-hoc signature does not overwrite the helper's
+    // distinct dev.seyal.Seyal.runtime identifier).
+    try adHocSign(helper, identifier: BundledRuntimeLauncher.helperIdentifier)
+    try adHocSign(bundle, identifier: "dev.seyal.Seyal.test-fixture-app")
+
+    // Hold open several descriptors at fd numbers a live GUI process would
+    // plausibly have in real use (sockets/log files stand-in). posix_spawn's
+    // close-all default must exclude every one of these from the child
+    // regardless of which numbers the kernel happened to assign them.
+    let canaries = (0..<6).map { _ in Pipe() }
+    let canaryDescriptors = Set(
+      canaries.flatMap {
+        [$0.fileHandleForReading.fileDescriptor, $0.fileHandleForWriting.fileDescriptor]
+      }
+    )
+    defer {
+      canaries.forEach {
+        $0.fileHandleForReading.closeFile()
+        $0.fileHandleForWriting.closeFile()
+      }
+    }
+
+    let result = BundledRuntimeLauncher().launch(bundleURL: bundle)
+    guard case .success(let pid) = result else {
+      XCTFail("expected an ad-hoc-signed Debug helper/app pair to launch, got \(result)")
+      return
+    }
+
+    let deadline = Date().addingTimeInterval(5)
+    while !FileManager.default.fileExists(atPath: marker.path), Date() < deadline {
+      RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+    }
+    // BundledRuntimeLauncher's own reaper runs asynchronously on a background
+    // queue; this test reaps independently so it does not depend on that
+    // timing, matching how any other same-UID waiter could observe the PID.
+    var status: Int32 = 0
+    while waitpid(pid, &status, 0) == -1 && errno == EINTR {}
+
+    let contents = try String(contentsOf: marker, encoding: .utf8)
+    let lines = contents.split(separator: "\n").map(String.init)
+
+    guard let pidLine = lines.first(where: { $0.hasPrefix("pid=") }),
+      let reportedPID = pid_t(pidLine.dropFirst("pid=".count))
+    else {
+      XCTFail("canary helper did not report its own pid; raw output: \(contents)")
+      return
+    }
+    XCTAssertEqual(reportedPID, pid)
+
+    guard let pgidLine = lines.first(where: { $0.hasPrefix("pgid=") }),
+      let reportedPGID = pid_t(pgidLine.dropFirst("pgid=".count))
+    else {
+      XCTFail("canary helper did not report its process group; raw output: \(contents)")
+      return
+    }
+    XCTAssertEqual(
+      reportedPGID, pid,
+      "helper must run in its own process group, never the GUI's"
+    )
+
+    let openInChild = Set(
+      lines.filter { $0.hasPrefix("open_fd=") }
+        .compactMap { Int($0.dropFirst("open_fd=".count)) }
+    )
+    let leaked = openInChild.intersection(canaryDescriptors.map(Int.init))
+    XCTAssertTrue(
+      leaked.isEmpty,
+      "posix_spawn must close every inherited descriptor >= 3; leaked \(leaked) into the helper"
+    )
+  }
+
+  private func adHocSign(_ url: URL, identifier: String) throws {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+    process.arguments = ["--force", "--sign", "-", "--identifier", identifier, url.path]
+    let stderrPipe = Pipe()
+    process.standardError = stderrPipe
+    try process.run()
+    process.waitUntilExit()
+    if process.terminationStatus != 0 {
+      let output = String(
+        data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+      XCTFail("ad-hoc codesign of \(url.path) failed: \(output)")
+    }
   }
 
   @MainActor

@@ -272,6 +272,57 @@ None of this closes the independent-review gate or produces the accepted
 five-cohort performance artifact — both remain open for the reasons stated in
 their respective sections.
 
+**Correction to the claim above that `make test` "all pass at the exact head
+below"**: that was true of the *local* run only. Hosted CI (`native-macos-smoke`)
+subsequently failed on the same head, and failed again identically on a rerun.
+See the next section.
+
+## CI-only reproducible test failure discovered post-push (2026-09-02)
+
+After pushing the second fix session's commit, hosted CI's `native-macos-smoke`
+failed: `detached_output_is_in_authoritative_snapshot_and_exited_child_is_not_recreated`
+(`pass8_runtime_matrix.rs`, added by this PR) times out after 3s, having
+captured only `"before-detach"` and never `"after-detach"` — the child writes
+`before-detach\n`, sleeps 50ms, writes `after-detach\n`, then exits(23).
+
+- **Reproduced 2/2 in CI**, including an explicit rerun of the same job on the
+  same head — the failure is deterministic on that runner class, not a one-off.
+- **Not reproduced locally**: 160/160 passes (100 plain runs + 60 runs under
+  artificial CPU contention from 8 concurrent `yes` processes) on this
+  session's Apple Silicon host.
+- The code path this test exercises — `Runtime::finalize`, `enter_drain`,
+  `observe_primary_exit`, `process_deadlines`'s `DrainingAfterPrimaryExit`
+  handling, all in `crates/seyal-runtime/src/runtime.rs` — is **pre-existing**
+  and untouched by this PR's diff (the diff's only change to `runtime.rs` is
+  inside `Runtime::new`'s endpoint-ownership logic). This PR's new test is the
+  first thing in the repository's history to probe this exact "output written
+  immediately before a fast child exit, then read back after detach" timing
+  shape.
+- Working hypothesis, not confirmed: `finalize()` unconditionally removes the
+  execution once the fixed `final_drain` window (`Duration::from_millis(250)`,
+  in `RuntimeConfig::default()`) elapses, regardless of what the deadline-driven
+  `service_reads()` call immediately before it returned. Every code path that
+  enters `DrainingAfterPrimaryExit` also does one immediate `service_reads()`
+  call, which should normally capture already-buffered PTY output before
+  `finalize()` could remove the entry — but if the kernel's process-exit
+  notification (`EVFILT_PROC`) and its readability notification
+  (`EVFILT_READ`) for the same PTY are not delivered together on this runner
+  class, the immediate read could return `WouldBlock` before the trailing
+  bytes become visible, leaving only the 250ms deadline-driven read as a
+  backstop — one that this evidence suggests is sometimes not enough.
+- **Deliberately not fixed blind**: this is core, pre-existing Runtime
+  lifecycle/timing code with no local reproduction and a slow (~15 minute)
+  CI-only feedback loop per attempt. Widening `final_drain` without confirming
+  this is really a timing-budget problem (versus a logic bug that a wider
+  window would only make rarer, not fix) risks masking a genuine correctness
+  gap rather than closing it. This needs either CI-runner-level diagnostic
+  access (e.g. instrumented tracing on that exact runner) or a maintainer
+  decision on acceptable risk before a production timing constant is changed.
+
+**This is currently the PR's most concrete blocker**: independent of every
+other gap recorded in this document, `make test` does not pass in hosted CI on
+the current head.
+
 ## Current status
 
 Production fixes from the closure rebaseline are implemented on the PR branch,
@@ -287,11 +338,14 @@ host, one new production-code test closing the
 `validateCodeSignature()`/`spawn()` coverage gap (independently verified to
 catch a real regression), a real-hardware renderer-resource diagnostic, and
 local packaging/signing verification for the Debug ad-hoc path. Still open:
-the accepted five-cohort performance/resource artifact (no measurement harness
+a CI-reproducible (2/2) `native-macos-smoke` test failure with no confirmed
+root cause (see above — this is the most concrete, immediate blocker), the
+accepted five-cohort performance/resource artifact (no measurement harness
 exists yet — a substantial separate effort), VoiceOver/dead-key/real-IME
 validation, Release-path signing verification, durable CI-retained package
 inspection, and — the gate no code change can satisfy — a review from an
 identity independent of the implementer.
 
 **Merge status: BLOCKED until every unchecked acceptance/review item above is
-satisfied with exact-head evidence.**
+satisfied with exact-head evidence, including a currently-failing hosted-CI
+test.**

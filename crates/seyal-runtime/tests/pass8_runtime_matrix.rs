@@ -123,9 +123,22 @@ fn detached_output_is_in_authoritative_snapshot_and_exited_child_is_not_recreate
     let mut runtime = Runtime::new(config("detached-output-child-exit")).expect("runtime");
     let execution_id = runtime
         .create_execution(
+            // The 1s sleep after the final write is deliberate, not padding:
+            // Runtime::finalize can legitimately run inside the very same
+            // service_reads() call that just read "after-detach" (confirmed
+            // via CI-only investigation -- the read and the following EOF can
+            // land in the same internal drain pass once the child has fully
+            // exited), which races this test's own poll_once-then-check loop
+            // out of ever observing a live snapshot. That race is about test
+            // observability, not about whether the canonical TerminalState
+            // was updated: draining happens before finalize either way. Keep
+            // the child alive after its last write so there is a
+            // non-racy window to assert against a live execution, and let the
+            // second block below exercise the actual exit/finalize path with
+            // full fidelity.
             CommandSpec::new("/bin/sh").args([
                 "-c",
-                "printf 'before-detach\\n'; sleep 0.05; printf 'after-detach\\n'; exit 23",
+                "printf 'before-detach\\n'; sleep 0.05; printf 'after-detach\\n'; sleep 1; exit 23",
             ]),
             size(80, 24),
         )

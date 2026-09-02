@@ -358,8 +358,12 @@ requires.
   (4/4 pass), full `cargo test -p seyal-runtime --lib --tests` (0 failures),
   `cargo fmt --check` and `cargo clippy -D warnings` both clean.
 
-**This was the PR's most concrete blocker** and is now believed fixed, pending
-CI confirmation on the pushed head (see below for the result).
+**This was the PR's most concrete blocker.** Confirmed fixed: hosted CI passed
+on head `c893132` and passed again on an explicit rerun of the same job/head
+(2/2, matching the same rigor used to confirm the original failure). This
+blocker is resolved; the items in the sections above (independent review,
+performance artifact, VoiceOver/IME validation, Release signing, packaging
+inspection) remain open.
 
 ## Current status
 
@@ -369,21 +373,23 @@ verification-only and Runtime directory creation singleton-owned. Because that
 late correction changes lifecycle/security behavior, all exact-head automated,
 native, performance, packaging, and specialist-review evidence must be rerun.
 
-Across both fix sessions this document now records: one closed automated
+Across all fix sessions this document now records: one closed automated
 Rust-level evidence gap, one corrected over-statement, real native
 build/test/check evidence from an interactive (non-headless) Apple Silicon
 host, one new production-code test closing the
 `validateCodeSignature()`/`spawn()` coverage gap (independently verified to
-catch a real regression), a real-hardware renderer-resource diagnostic, and
-local packaging/signing verification for the Debug ad-hoc path. Still open:
-a CI-reproducible (2/2) `native-macos-smoke` test failure with no confirmed
-root cause (see above — this is the most concrete, immediate blocker), the
-accepted five-cohort performance/resource artifact (no measurement harness
-exists yet — a substantial separate effort), VoiceOver/dead-key/real-IME
-validation, Release-path signing verification, durable CI-retained package
-inspection, and — the gate no code change can satisfy — a review from an
-identity independent of the implementer.
+catch a real regression), a real-hardware renderer-resource diagnostic, local
+packaging/signing verification for the Debug ad-hoc path, and a CI-only
+test-observability race root-caused (via a temporary, since-reverted CI trace)
+and fixed at exact head `c893132`, confirmed by two independent green CI runs.
+CI is fully green on the current head. Still open: the accepted five-cohort
+performance/resource artifact (no measurement harness exists yet — a
+substantial separate effort), VoiceOver/dead-key/real-IME validation,
+Release-path signing verification, durable CI-retained package inspection,
+and — the gate no code change can satisfy — a review from an identity
+independent of the implementer.
 
-**Merge status: BLOCKED until every unchecked acceptance/review item above is
-satisfied with exact-head evidence, including a currently-failing hosted-CI
-test.**
+**Merge status: BLOCKED** — CI is green and the concrete test-failure blocker
+is resolved, but the independent-review gate and the remaining evidence items
+above are unmet. This is now a documentation/evidence-collection blocker, not
+a known-broken-code blocker.

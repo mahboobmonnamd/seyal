@@ -59,6 +59,18 @@ item does not waive any exact-head evidence or independent-review gate.
   accessibility state, IME reset, and geometry behavior.
 - [x] Runtime production-path tests cover output while detached and naturally
   exited children without creating replacement executions.
+- [x] `two_simultaneous_runtime_starters_produce_exactly_one_canonical_endpoint`
+  (`crates/seyal-runtime/tests/local_ipc_adversarial.rs`) proves the SPEC-009
+  §8.1/§15 "two simultaneous Runtime starters" requirement under a real
+  multi-thread race (8 contenders on a shared `Barrier`, `Runtime::new` never
+  crosses a thread boundary so the assertion holds without depending on
+  `Runtime: Send`): exactly one contender binds the canonical endpoint, every
+  loser fails with `RuntimeError::AlreadyRunning` before ever reaching
+  directory/socket creation, and the winner's own canonical socket answers
+  `ClientHello` with its own `RuntimeId`. Ran 16 consecutive times locally with
+  no flake. The prior claim that "singleton races" were covered referred only
+  to the pre-existing *sequential* `singleton_uses_live_lock_not_stale_file_metadata`
+  test in `macos_runtime.rs`; this closes the true-concurrency gap.
 - [ ] Freeze the final implementation head and pass exact-head `make bootstrap`,
   `make build`, `make test`, `make check`, and `make bench`.
 - [ ] Exact final head passes `repository-policy`, `rust-and-harness-quality`,
@@ -122,6 +134,56 @@ item does not waive any exact-head evidence or independent-review gate.
   relationship. Use a closing relationship only if every Done gate is proven.
 - [ ] Ask for explicit user confirmation before merging PR #734.
 
+## Independent review findings and fixes (2026-09-02)
+
+An independent review of this PR at head `05ed5df` (documented separately)
+found the closure checklist above accurately BLOCKED, and additionally found:
+
+1. every "independent" architecture/security/performance disposition recorded
+   on Issue #719 was authored by the same account as the implementer, so the
+   independent-review gate has never actually been satisfied at any head, let
+   alone the exact final one — this is not resolved by the fixes below, which
+   were produced by the same reviewing session and therefore cannot themselves
+   count as the required independent review either;
+2. the two-simultaneous-Runtime-starters race required by SPEC-009 §8.1/§15
+   was untested under real concurrency (fixed, see Automated evidence above);
+3. "malformed/stale reconnect frames remain bounded" was under-credited: the
+   pre-existing `fuzz/fuzz_targets/local_binary_protocol_decode.rs` target
+   already feeds truncated/partial payloads into the production
+   `FrameHeader::decode`/`decode_message` path for every message type
+   (including `Attach`) and runs in the passing `candidate-d-libfuzzer` CI
+   job — no new test was needed for this item, only this correction;
+4. `BundledRuntimeLauncher.validateCodeSignature()`/`spawn()` (including the
+   `POSIX_SPAWN_CLOEXEC_DEFAULT` close-all-fd claim) remain untested by any
+   file in the diff — **not fixed this session**: the fix session ran on an
+   Apple Silicon host with only Xcode Command Line Tools installed, so no
+   Swift/Xcode build, XCTest, or XCUITest could be run or verified here, and
+   no Swift source was therefore touched;
+5. VoiceOver/dead-key/real-IME validation, the controlled-host Apple-Silicon
+   performance cohorts, and the packaging/signing inspection remain
+   unaddressed for the same reason — the CI `make bench` run inspected during
+   review self-labels every sample `performance_claim=false` because hosted
+   macOS runners lack `CAMetalDisplayLink`, and that has not changed;
+6. a true "endpoint disappears between the socket-leaf check and `connect()`"
+   integration test was scoped but not added: on macOS, `UnixStream::connect`
+   to a path whose listener has gone away typically yields `ECONNREFUSED`
+   (`ConnectionRefused`), not the `ECONNRESET`/`ENOTCONN` that
+   `classify_connect_error` maps to `EndpointDisappeared` — those kinds
+   normally arise from a read/write on an already-established connection, not
+   from the initial `connect()` syscall on AF_UNIX. Reproducing the exact
+   `EndpointDisappeared` branch deterministically needs either a different
+   injection point than `connect()` or a documented rationale for why it is
+   unreachable there; this needs a decision, not a test, before it can be
+   closed;
+7. a real different-effective-UID wrong-owner-socket test remains impractical
+   without a multi-user CI runner; the existing coverage
+   (`connected_peer_requires_the_effective_user` in `discovery.rs`) is a
+   synthetic pure-function check only.
+
+The pre-Ready governance violation recorded above is unchanged by this
+session: the commits that violated it remain in history rather than being
+discarded and re-authored, per the existing rebaseline record.
+
 ## Current status
 
 Production fixes from the closure rebaseline are implemented on the PR branch,
@@ -129,6 +191,13 @@ including the late security ownership correction that makes client discovery
 verification-only and Runtime directory creation singleton-owned. Because that
 late correction changes lifecycle/security behavior, all exact-head automated,
 native, performance, packaging, and specialist-review evidence must be rerun.
+
+This session closed one automated-evidence gap (item 2 above) and corrected
+one over-stated finding (item 3), verified with `cargo test`/`cargo fmt --check`/
+`cargo clippy -D warnings` on the pinned `1.98.0` toolchain. It did not, and in
+this environment could not, touch native/Swift code, produce native or
+performance evidence, or supply the independent review the Definition of Done
+requires.
 
 **Merge status: BLOCKED until every unchecked acceptance/review item above is
 satisfied with exact-head evidence.**

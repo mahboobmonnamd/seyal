@@ -28,6 +28,31 @@ use crate::{
 #[cfg(target_os = "macos")]
 use seyal_exec::{ShellIntegrationEvent, ShellIntegrationToken};
 
+// TEMPORARY diagnostic instrumentation for investigating a CI-only,
+// non-locally-reproducible failure in
+// detached_output_is_in_authoritative_snapshot_and_exited_child_is_not_recreated
+// (pass8_runtime_matrix.rs). Silent unless SEYAL_DEBUG_DRAIN is set; zero
+// runtime cost otherwise beyond one relaxed env lookup cached in a OnceLock.
+// Must be removed before this PR is considered done -- tracked in
+// docs/pass9-merge-todo.md.
+fn debug_drain_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("SEYAL_DEBUG_DRAIN").is_some())
+}
+
+fn debug_drain_epoch() -> Instant {
+    static EPOCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    *EPOCH.get_or_init(Instant::now)
+}
+
+macro_rules! debug_drain {
+    ($($arg:tt)*) => {
+        if debug_drain_enabled() {
+            eprintln!("[drain-debug t={:?}] {}", debug_drain_epoch().elapsed(), format!($($arg)*));
+        }
+    };
+}
+
 #[cfg(target_os = "macos")]
 mod local;
 #[cfg(target_os = "macos")]
@@ -909,6 +934,10 @@ impl Runtime {
                 let generation_after = entry.execution.terminal().damage_generation();
                 (outcome, generation_before, generation_after)
             };
+            debug_drain!(
+                "service_reads id={id:?} outcome={outcome:?} lifecycle={:?}",
+                self.entries.get(&id).map(|entry| entry.lifecycle)
+            );
             match outcome {
                 ReadOutcome::Eof => {
                     // PTY EOF proves only that terminal I/O is gone. A child
@@ -1094,6 +1123,7 @@ impl Runtime {
     }
 
     fn observe_primary_exit(&mut self, id: ExecutionId) -> Result<(), RuntimeError> {
+        debug_drain!("observe_primary_exit id={id:?}");
         let exit = {
             let entry = self
                 .entries
@@ -1102,9 +1132,12 @@ impl Runtime {
             entry.pty_eof_reap_probe = None;
             entry.execution.try_wait()?
         };
+        debug_drain!("observe_primary_exit id={id:?} try_wait={exit:?}");
         if let Some(exit) = exit {
             self.enter_drain(id, exit)?;
+            debug_drain!("observe_primary_exit id={id:?} post-enter_drain pre-service_reads");
             self.service_reads(id)?;
+            debug_drain!("observe_primary_exit id={id:?} post-service_reads");
         } else if let Some(entry) = self.entries.get_mut(&id)
             && matches!(entry.lifecycle, Lifecycle::Running)
         {
@@ -1132,6 +1165,10 @@ impl Runtime {
             deadline: Instant::now() + self.config.final_drain,
             exit,
         };
+        debug_drain!(
+            "enter_drain id={id:?} exit={exit:?} final_drain={:?}",
+            self.config.final_drain
+        );
         Ok(())
     }
 
@@ -1247,6 +1284,7 @@ impl Runtime {
                 }
                 Some(Lifecycle::DrainingAfterPrimaryExit { exit, .. }) => {
                     let _ = exit;
+                    debug_drain!("process_deadlines: drain deadline fired id={id:?}");
                     // Close the final-drain race: readiness and the deadline may
                     // become observable in the same scheduling turn. Give the PTY
                     // one last bounded production read before publishing the final
@@ -1255,6 +1293,9 @@ impl Runtime {
                     // upper bound and finalize retires the execution below.
                     self.service_reads(id)?;
                     if self.entries.contains_key(&id) {
+                        debug_drain!(
+                            "process_deadlines: finalizing after deadline (not already finalized inside service_reads) id={id:?}"
+                        );
                         self.finalize(id)?;
                     }
                 }
@@ -1268,6 +1309,7 @@ impl Runtime {
     }
 
     fn finalize(&mut self, id: ExecutionId) -> Result<(), RuntimeError> {
+        debug_drain!("finalize id={id:?}");
         // The final PTY drain may have changed canonical state in this same
         // scheduling turn. Publish that state before completing Pass 8 Block
         // metadata and before any lifecycle-finalized notification.

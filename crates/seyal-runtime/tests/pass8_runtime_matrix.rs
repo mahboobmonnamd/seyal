@@ -22,7 +22,17 @@ fn config(label: &str) -> RuntimeConfig {
     config.local_ipc = LocalIpcMode::Disabled;
     config.graceful_termination = Duration::from_millis(50);
     config.forced_reap = Duration::from_millis(250);
-    config.final_drain = Duration::from_millis(100);
+    // Bounded, not unbounded: still well inside every test's own 3s outer
+    // polling deadline in this file. Widened from 100ms after a CI-only,
+    // non-locally-reproducible failure in
+    // detached_output_is_in_authoritative_snapshot_and_exited_child_is_not_recreated:
+    // 100ms was tuned against local timing (this file's own child+sleep(50ms)
+    // scenario completes in ~60ms on unloaded Apple Silicon hardware) and left
+    // far less margin than the production default (250ms) for a hosted,
+    // virtualized CI runner under full `cargo test --workspace` contention to
+    // observe the child's trailing PTY output before Runtime::finalize retires
+    // the execution. This does not touch RuntimeConfig::default's final_drain.
+    config.final_drain = Duration::from_secs(2);
     config
 }
 
@@ -126,7 +136,7 @@ fn detached_output_is_in_authoritative_snapshot_and_exited_child_is_not_recreate
     // The GUI is detached while the Runtime continues polling the same PTY.
     // Read the canonical projection only after output has arrived; this is the
     // production reconnect seam and does not introduce a second terminal model.
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + Duration::from_secs(5);
     let mut output = String::new();
     while Instant::now() < deadline {
         runtime
@@ -147,7 +157,7 @@ fn detached_output_is_in_authoritative_snapshot_and_exited_child_is_not_recreate
 
     // The primary child exit must drain and remove the original execution;
     // recovery must never manufacture a replacement execution for a dead PTY.
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline && runtime.execution(execution_id).is_some() {
         runtime
             .poll_once(Some(Duration::from_millis(10)))

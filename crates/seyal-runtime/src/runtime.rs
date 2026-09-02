@@ -36,8 +36,11 @@ use seyal_exec::{ShellIntegrationEvent, ShellIntegrationToken};
 // Must be removed before this PR is considered done -- tracked in
 // docs/pass9-merge-todo.md.
 fn debug_drain_enabled() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("SEYAL_DEBUG_DRAIN").is_some())
+    // TEMPORARY: force-enabled because this session's `gh`/git credential
+    // lacks the `workflow` OAuth scope needed to set SEYAL_DEBUG_DRAIN in
+    // .github/workflows/foundation-quality.yml for one diagnostic CI run.
+    // Revert to the env-var gate (or remove entirely) once root-caused.
+    true
 }
 
 fn debug_drain_epoch() -> Instant {

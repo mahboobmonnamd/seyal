@@ -16,6 +16,14 @@ The universal design language is **Seyal Adaptive Depth**.
 
 Seyal is not permanently flat, permanently glass, or permanently elevated. The terminal content remains optically stable while surrounding utility surfaces gain or lose restrained material depth according to focus, relevance, and attention.
 
+The recognizable Seyal identity is the combination of:
+
+- **Zero-Chrome at Rest** — structure disappears until it carries meaning;
+- **Adaptive Depth** — utility material appears in proportion to relevance;
+- **Semantic Seams** — thin boundaries communicate execution/context/state instead of decorative cards;
+- **Focus Gravity** — the active object gains perceptual presence while surrounding chrome recedes;
+- **Terminal Truth** — terminal and TUI content remain crisp and absolute.
+
 This document defines presentation only. It does not change PTY, VT, terminal-state, Block, Pane, execution, or renderer authority.
 
 ## 2. Universal composition
@@ -43,7 +51,20 @@ Use the following as a design budget, not literal screen-area percentages:
 
 The previous 70/20/10 exploration is refined to 75/15/10 to keep the product terminal-first and reduce persistent decorative material.
 
-## 4. Depth model
+## 4. Zero-Chrome at Rest
+
+Zero-Chrome does not mean removing functionality or hiding navigation unpredictably. It means the resting presentation should not draw boxes around every object.
+
+Rules:
+
+- terminal/work content owns the strongest surface;
+- persistent chrome uses alignment, typography and low-contrast seams before borders/backgrounds;
+- action affordances appear on focus, hover, keyboard invocation or attention rather than being permanently repeated;
+- a region should not receive its own visible container merely because it exists in the object hierarchy;
+- empty space remains empty instead of being filled with decorative cards;
+- when labels/branding are removed, Seyal should still be recognizable through continuous work surfaces, semantic seams and context emerging only when operationally relevant.
+
+## 5. Depth model
 
 Adaptive Depth uses four semantic depth levels.
 
@@ -112,7 +133,21 @@ Properties:
 - never use pulsing neon, glow, gamer lighting, or continuous distracting animation;
 - once resolved, the surface returns to its normal depth.
 
-## 5. Focus gravity
+## 6. Semantic Seams
+
+Semantic Seams are Seyal's primary boundary language.
+
+A seam may separate Blocks, Panes or contextual regions, but it should also communicate a relationship or state when useful.
+
+Rules:
+
+- seams are thin and nearly invisible at rest;
+- hover/focus may reveal compact actions or metadata associated with the adjacent object;
+- focus/running/attention changes the seam token rather than wrapping the entire object in a card;
+- the same seam grammar is reused across Blocks, Pane splits, Inspector relationships, agent context and attention edges;
+- seams never glow, pulse or become thick decorative borders.
+
+## 7. Focus gravity
 
 The active work target should have the strongest perceptual gravity without changing layout.
 
@@ -127,7 +162,7 @@ Rules:
 
 Avoid large opacity swings. Adaptive Depth should usually be perceived rather than consciously noticed.
 
-## 6. Transparency and frost
+## 8. Transparency and frost
 
 Transparency is allowed only when it improves layering and context.
 
@@ -150,7 +185,7 @@ Do not use transparency for:
 
 Frost should remain subtle enough that a developer can work for hours without noticing visual noise behind text.
 
-## 7. Blocks
+## 9. Blocks
 
 Blocks remain a fundamental Seyal presentation primitive, but Adaptive Depth explicitly rejects card-heavy Block styling.
 
@@ -165,7 +200,7 @@ Default Block presentation:
 
 A selected Block may temporarily gain D1/D2 definition for inspection, but the terminal transcript remains visually continuous.
 
-## 8. Pane-scoped composer
+## 10. Pane-scoped composer
 
 The composer is the strongest persistent candidate for frosted material because it is an application editing surface layered over terminal execution.
 
@@ -180,7 +215,9 @@ Rules:
 - disappear during canonical full-screen TUI takeover;
 - each Pane owns independent composer state.
 
-## 9. Left context/navigation
+The same composer component anatomy and geometry must be used across every reference screen and terminal Pane. Only documented state/content variants may change.
+
+## 11. Left context/navigation
 
 The left region keeps Workspace, active-Workspace navigation and compact agent inventory.
 
@@ -195,7 +232,7 @@ Adaptive Depth treatment:
 
 The panel must feel like a thin utility layer beside the terminal, not an IDE project explorer competing for attention.
 
-## 10. Right contextual Inspector
+## 12. Right contextual Inspector
 
 The Inspector is retained as a core Seyal value-add surface.
 
@@ -208,20 +245,20 @@ Adaptive Depth treatment:
 - normal sections should not become nested cards;
 - agent details may be shown when an agent is selected, but the full left-side agent inventory is not duplicated.
 
-## 11. Multipane
+## 13. Multipane
 
 Multipane must remain readable without becoming a grid of cards.
 
 Rules:
 
-- Pane boundaries use minimal separators;
+- Pane boundaries use minimal semantic seams;
 - focused Pane receives subtle focus gravity;
 - inactive Pane chrome recedes while terminal content remains readable;
 - each Pane preserves its own Blocks, transcript, composer state and TUI state;
 - avoid thick outlines, rounded Pane containers, or per-Pane toolbars that visually fragment the workspace;
 - split handles/actions appear contextually where possible.
 
-## 12. Typography-led hierarchy
+## 14. Typography-led hierarchy
 
 Hierarchy should come primarily from:
 
@@ -236,7 +273,7 @@ Do not solve hierarchy first with cards, shadows, gradients or heavy backgrounds
 
 Terminal typography remains independent from application utility typography where necessary. User-configured terminal fonts must not be overridden to satisfy application chrome aesthetics.
 
-## 13. Colour discipline
+## 15. Colour discipline
 
 Colour is operational, not decorative.
 
@@ -260,7 +297,7 @@ Avoid:
 
 Light and dark themes must preserve the same semantic hierarchy rather than being independently designed skins.
 
-## 14. Motion
+## 16. Motion
 
 Motion communicates state change; it is not ambient decoration.
 
@@ -280,7 +317,7 @@ Avoid:
 
 Reduced-motion accessibility preference must be respected.
 
-## 15. Platform mapping
+## 17. Platform mapping
 
 Adaptive Depth is universal. Native material implementation is platform-specific.
 
@@ -300,7 +337,7 @@ Use compositor-supported translucency/blur where reliable. Fall back to carefull
 
 A platform material is an implementation of Seyal Adaptive Depth, not the design authority itself. Seyal must remain recognizably the same product when frost/blur is unavailable.
 
-## 16. Performance rules
+## 18. Performance rules
 
 Adaptive Depth must never compromise terminal performance.
 
@@ -313,7 +350,7 @@ Adaptive Depth must never compromise terminal performance.
 
 If a material effect threatens latency, CPU, GPU or memory targets, remove/degrade the effect rather than weakening terminal performance.
 
-## 17. Accessibility
+## 19. Accessibility
 
 - honour reduced-transparency and reduced-motion settings;
 - all states represented by colour must also have shape/icon/text or another non-colour cue;
@@ -322,7 +359,7 @@ If a material effect threatens latency, CPU, GPU or memory targets, remove/degra
 - font scaling must not depend on fixed-height decorative containers;
 - transparency fallbacks must preserve hierarchy.
 
-## 18. Anti-patterns
+## 20. Anti-patterns
 
 Seyal UI should reject:
 
@@ -336,9 +373,10 @@ Seyal UI should reject:
 - duplicated UI solely for visual balance;
 - low-contrast terminal text for aesthetic reasons;
 - visual effects that create additional terminal/runtime state ownership;
-- platform-specific redesigns that break universal parity.
+- platform-specific redesigns that break universal parity;
+- screen-specific redesign of a shared component such as the composer, Inspector, sidebar row, tabs or attention item.
 
-## 19. Design acceptance checklist
+## 21. Design acceptance checklist
 
 A screen using Adaptive Depth is acceptable only if:
 
@@ -351,14 +389,18 @@ A screen using Adaptive Depth is acceptable only if:
 - multipane does not become visually fragmented;
 - raw/TUI takeover removes application treatment from the terminal viewport;
 - reduced-transparency mode remains fully usable;
-- the design does not add synchronous work to terminal I/O/render paths.
+- the design does not add synchronous work to terminal I/O/render paths;
+- shared components match `SEYAL-UNIVERSAL-COMPONENT-CONTRACT.md` rather than drifting per screen;
+- the complete replacement set satisfies `SEYAL-REFERENCE-SCREEN-CONTRACTS.md`.
 
-## 20. Relationship to existing M001 references
+## 22. Relationship to existing M001 references
 
 Existing M001 Core Terminal documents remain authoritative for information architecture, behavior, state ownership, Block semantics, multipane, composer, TUI takeover, Inspector context and implementation ordering.
 
 **Seyal Adaptive Depth is the authority for visual material, depth, transparency, focus hierarchy, colour discipline and cross-platform visual consistency.**
 
-Where the previously frozen generated reference image conflicts only in visual heaviness, cards, borders, material treatment or colour/depth, follow this document. Where a visual reference conflicts with terminal behavior or architecture, the existing architecture/specification remains authoritative.
+`SEYAL-UNIVERSAL-COMPONENT-CONTRACT.md` is the authority for shared component anatomy/state consistency. `SEYAL-REFERENCE-SCREEN-CONTRACTS.md` defines the replacement visual coverage for the nine historical reference states.
+
+Where the previously frozen generated reference image conflicts only in visual heaviness, cards, borders, material treatment or colour/depth, follow these design authorities. Where a visual reference conflicts with terminal behavior or architecture, the existing architecture/specification remains authoritative.
 
 This document does not authorize implementation ahead of the accepted M001 pass frontier.

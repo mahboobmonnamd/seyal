@@ -520,6 +520,46 @@ final class SeyalShellUITests: XCTestCase {
         XCTAssertEqual(workspace.label, "Payments Platform")
     }
 
+    func testWorkspaceRowDragAwayCancelsSelectionCommit() {
+        let workspaceBefore = app.staticTexts["inspector.workspace-name"]
+        XCTAssertTrue(workspaceBefore.waitForExistence(timeout: 2))
+        let initialWorkspaceLabel = workspaceBefore.label
+
+        let payments = app.buttons["workspace.workspace-payments"]
+        XCTAssertTrue(payments.waitForExistence(timeout: 5))
+
+        let start = payments.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let dragTarget = payments.coordinate(withNormalizedOffset: CGVector(dx: -1.5, dy: 0.5))
+        start.press(forDuration: 0.25, thenDragTo: dragTarget)
+
+        let workspaceAfter = app.staticTexts["inspector.workspace-name"]
+        XCTAssertTrue(workspaceAfter.waitForExistence(timeout: 2))
+        XCTAssertEqual(workspaceAfter.label, initialWorkspaceLabel)
+
+        XCTAssertTrue(app.buttons["tab.tab-terminal"].waitForExistence(timeout: 2))
+        XCTAssertFalse(app.buttons["tab.tab-payments-api"].exists)
+    }
+
+    func testTopTabChipDragAwayCancelsTabCommit() {
+        let inspectorTabBefore = app.staticTexts["inspector.tab-name"]
+        XCTAssertTrue(inspectorTabBefore.waitForExistence(timeout: 2))
+        let initialTabLabel = inspectorTabBefore.label
+
+        let target = app.buttons["tab.tab-agent"]
+        XCTAssertTrue(target.waitForExistence(timeout: 5))
+
+        let start = target.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let dragTarget = target.coordinate(withNormalizedOffset: CGVector(dx: -1.5, dy: 0.5))
+        start.press(forDuration: 0.25, thenDragTo: dragTarget)
+
+        let inspectorTabAfter = app.staticTexts["inspector.tab-name"]
+        XCTAssertTrue(inspectorTabAfter.waitForExistence(timeout: 2))
+        XCTAssertEqual(inspectorTabAfter.label, initialTabLabel)
+
+        XCTAssertTrue(app.textViews["composer.pane-1"].waitForExistence(timeout: 2))
+        XCTAssertFalse(app.textViews["composer.pane-agent"].exists)
+    }
+
     func testInspectorRailAndBothSidebarsAreFunctional() {
         let inspectorTabMode = app.buttons["inspector-mode.tab"]
         XCTAssertTrue(inspectorTabMode.waitForExistence(timeout: 5))

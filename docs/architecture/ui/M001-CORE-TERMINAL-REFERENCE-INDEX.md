@@ -45,6 +45,7 @@ Until that asset exists in the repository, the UI container must be checked agai
 | Composer history | `M001-COMPOSER-HISTORY-FUZZY-SEARCH.md` | Multiline Pane composer and contextual fuzzy history retrieval |
 | Live tail | `M001-LIVE-TAIL-BEHAVIOR.md` | Long-running output with growing Block + Pane-level follow/scroll-away/return-to-live |
 | Pre-Pass-6 shell scaffold | `M001-UI-SHELL-SCAFFOLD.md` | Native UI-container decomposition boundary that preserves M001 pass ordering and terminal ownership |
+| Left context implementation spec (C03+C05) | `M001-LEFT-CONTEXT-IMAGE-TO-CODE.md` | Implementation-oriented component inventory + runtime/state mapping for the left pane and shared Tab selection |
 
 ## Cross-screen invariants
 

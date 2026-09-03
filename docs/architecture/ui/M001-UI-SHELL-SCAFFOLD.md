@@ -62,6 +62,8 @@ At the canonical `1280x800` preview size:
 - the Inspector retains the frozen design's slim vertical tool rail on its far-right edge;
 - the Inspector rail is functional rather than decorative: current preview modes filter existing context into **Context**, **Workspace**, **Tab**, and **Pane** views only;
 - both the left context panel and right Inspector can be hidden and reopened; when either is hidden the center Pane reclaims that width rather than preserving an empty gutter;
+- left-pane hide/reopen must be immediate on press (no input delay/lockout) and must cancel/redirect any in-flight emphasis preview without changing Workspace/Tab/Pane selection state;
+- reduced-motion must be respected for any emphasis/visibility state changes associated with side-panel collapse/expand.
 - persistent top-chrome toggles reopen a hidden side panel, while each visible side panel also exposes its own collapse control;
 - each Pane has compact, functional Pane-local split and close controls in its header;
 - the Pane contains its own minimal composer at the bottom;

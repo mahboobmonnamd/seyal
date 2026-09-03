@@ -147,6 +147,93 @@ Rules:
 - remote, detached, reconnecting, degraded, or disconnected state must be clearly surfaced;
 - connection state must come from real Runtime/session state, never decorative telemetry.
 
+### 5.5 C03 runtime state mapping (Workspaces / Agents / Tabs)
+The left context panel (`C03`) is presentation chrome over the same underlying Workspace/Tab/Pane navigation model.
+
+This section documents the runtime/state inputs that drive *visible* left-pane row content and selection/attention emphasis:
+
+#### 5.5.1 Workspaces rows (C04 rows under C03)
+- Primary label: workspace name (`Workspace.name`).
+- Secondary context: workspace path/root detail when helpful (`Workspace.detail`).
+- Compact meta: tab count (`Workspace.tabs.count`), expressed as `1 tab` vs `N tabs`.
+- Status/attention: use the workspace attention flag when backed by real state (`Workspace.attention`), and use real connection/context backing for any additional status/attention markers.
+- Selected row emphasis: the active workspace identity (`activeWorkspaceID`).
+
+#### 5.5.2 Agents rows (C04 rows under C03)
+- Row set scope: current active workspace only (the left panel is a compact, current-Workspace inventory).
+- Provider/session label: agent name (`Agent.name`) as displayed.
+- State label: Running / Waiting / Attention / Idle as backed by real agent session state (`Agent.state`).
+- Compact meta/status: any compact “activity status” visible in the row, driven by the same agent session state model.
+- Attention marker: the row may show a semantic marker when the agent is in Attention state, but must not duplicate the full agent inventory elsewhere (the Inspector is contextual; it must not repeat the full list).
+- Selected row emphasis: the selected agent identity (`selectedAgentID`) when an agent is explicitly focused/selected.
+
+#### 5.5.3 Tabs — active Workspace rows (C04 rows under C03)
+- Row set scope: active workspace only.
+- Tab label: tab title (`Tab.title`).
+- Compact meta: pane count (`Tab.paneCount`), expressed as `1 pane` vs `N panes`.
+- Attention marker: may show a semantic marker when the tab has attention (`Tab.attention`), but must not recolor the whole row.
+- Selected row emphasis: active tab identity (`activeTabID`).
+
+#### 5.5.4 Left panel mode switcher and collapse/hide (C03 container)
+- Left panel mode switcher:
+  - `Workspaces` mode shows the Workspace inventory plus the current-Workspace compact agent inventory.
+  - `Tabs` mode shows the active-Workspace tab inventory.
+- Collapse/hide:
+  - Hiding the left context panel must reclaim the center Pane width (no empty gutter).
+  - Hiding/reopening must not change Workspace/Tab/Pane focus, drafts, selection identities, or execution identity.
+  - The selected mode and selection emphasis must be preserved across hide/reopen operations.
+
+### 5.6 C05 shared Tab identity rule (top strip <-> left list)
+The “Tabs — active Workspace” rows in the left panel (`C03`) and the active tab selection in the top tab strip (`C05`) represent the same Tab identity.
+
+Selecting a Tab in either location must update the same underlying tab selection identity (active tab) and must not create a second, parallel tab model.
+
+### 5.7 Existing contract guarantees vs remaining gaps
+The left pane is constrained by the shared component contracts:
+
+- `C03` guarantees: D1/receded material at rest; optional subtle frost/transparency; dense lists not cards; panel gains only slight D2 definition when actively navigated; may collapse to a thin rail without changing the content model.
+- `C04` guarantees: no rounded card per row; one-row/two-line dense variant; hover exposes secondary actions; selected row uses restrained tint/edge/typographic emphasis; attention state may add one semantic marker without recolouring the whole row.
+- `C05` guarantees: one row only; active Tab stays visible; tabs compress to documented minimum then scroll/overflow; active state primarily typography + thin seam/indicator; no individual pill cards; `+` and layout actions remain compact; same geometry in single-pane and multipane screens.
+
+Remaining gaps (implementation detail still to be decided):
+- Exact activation hysteresis/cancel threshold for left-pane emphasis preview (e.g. pixel distance and/or pointer-up bounds) remains an implementation choice, but must preserve the contract semantics.
+- The exact allowed transition shape/duration for emphasis changes (when motion is allowed) is an implementation detail as long as it does not delay input and respects reduced-motion.
+
+### 5.8 Implementation evidence: stable accessibility IDs + emphasis inputs (doc-only mapping)
+The current Swift/AppKit implementation (preview scaffold) exposes stable accessibility identifiers and uses explicit state fields to compute “emphasized/active” styling.
+
+#### 5.8.1 Left context panel container controls (C03)
+- Left mode switcher: `left-mode` (Workspaces vs Tabs list)
+- Left sidebar collapse/hide control: `left-sidebar-collapse`
+
+#### 5.8.2 Left “Workspaces” / “Agents” / “Tabs” rows (C04)
+Each row is implemented as a context button produced by `makeContextButton(...)`:
+- Workspace row
+  - `accessibilityIdentifier`: `workspace.<workspaceID>`
+  - Emphasis input: `workspace.id == snapshot.activeWorkspaceID`
+  - Dot/status semantics: uses `workspace.attention` for attention coloration; uses an active-workspace success/status color when active
+- Agent row
+  - `accessibilityIdentifier`: `agent.<agentID>`
+  - Emphasis input: `agent.id == state.selectedAgentID`
+  - Dot/state semantics: Running/Waiting/Attention/Idle is expressed via the trailing field, with attention coloration driven by `agent.state`
+- Tab row in left list (“Tabs — active Workspace”)
+  - `accessibilityIdentifier`: `left-tab.<tabID>`
+  - Emphasis input: `tab.id == snapshot.activeTabID`
+  - Dot semantics: attention coloration is driven by `tab.attention`
+
+Left-list “new tab” action:
+- `accessibilityIdentifier`: `left-new-tab`
+
+#### 5.8.3 Top tab strip chips (C05)
+The top strip uses tab chips created by `makeTabChip(...)`:
+- Tab chip
+  - `accessibilityIdentifier`: `tab.<tabID>`
+  - Active emphasis input: `tab.id == snapshot.activeTabID`
+- Tab close control
+  - `accessibilityIdentifier`: `tab.close.<tabID>`
+- Top-strip “new tab” action (+)
+  - `accessibilityIdentifier`: `new-tab`
+
 ## 6. Pane scroll ownership and Block sizing
 
 This section supersedes earlier mockup language that suggested a fixed maximum Block height with internal Block scrolling.

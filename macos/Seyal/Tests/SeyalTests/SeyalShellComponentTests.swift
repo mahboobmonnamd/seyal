@@ -1018,7 +1018,8 @@ final class SeyalShellComponentTests: XCTestCase {
   @MainActor
   func testProductionTerminalSurfaceExposesSafeAccessibilityAndInputContract() throws {
     let shell = SeyalShellProductionFactory.make(
-      frame: NSRect(x: 0, y: 0, width: 960, height: 600)
+      frame: NSRect(x: 0, y: 0, width: 960, height: 600),
+      visual: previewVisual()
     )
     shell.layoutSubtreeIfNeeded()
 
@@ -1030,7 +1031,7 @@ final class SeyalShellComponentTests: XCTestCase {
     // intentionally limited to role/label/state; terminal cells and command
     // text must never be exposed through the accessibility value.
     XCTAssertTrue(surface.isAccessibilityElement())
-    XCTAssertEqual(surface.accessibilityRole(), .group)
+    XCTAssertEqual(surface.accessibilityRole(), NSAccessibility.Role.group)
     XCTAssertEqual(surface.accessibilityRoleDescription(), "Terminal")
     XCTAssertEqual(surface.accessibilityLabel(), "Seyal Terminal")
     XCTAssertTrue(surface.acceptsFirstResponder)

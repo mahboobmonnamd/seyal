@@ -382,6 +382,8 @@ Rules:
 
 This Issue preserves the seam only. M001 still defers the production configuration system and production Lua runtime.
 
+The native host now implements the typed UI snapshot described by `M001-UI-DESIGN-SYSTEM.md`: TOML is parsed at cold load into `SeyalUserUISettings`, an optional Lua overlay may only produce `SeyalConfigPatch`, and UI/renderer consume `SeyalResolvedVisualConfiguration`. The production Lua VM remains deferred.
+
 ## 10. Native macOS behavior
 
 Use the repository's native UI skills for implementation.

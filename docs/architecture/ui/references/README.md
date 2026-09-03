@@ -1,21 +1,54 @@
 # Historical UI visual references
 
-The images in this directory are **historical design inputs**, not current implementation visual authority.
+The images in this directory are **historical functional-design inputs**, not current visual implementation authority.
 
-The current frozen Core Terminal direction is defined by:
+The current Core Terminal direction is defined by:
 
 - `../M001-CORE-TERMINAL-REFERENCE-SCREEN.md`
 - `../M001-CORE-TERMINAL-REFERENCE-INDEX.md`
-- the companion state specifications linked from that index
-- the frozen Core Terminal reference image owned by the current design PR
+- `../SEYAL-ADAPTIVE-DEPTH-DESIGN-LANGUAGE.md`
+- `../SEYAL-UNIVERSAL-COMPONENT-CONTRACT.md`
+- `../SEYAL-REFERENCE-SCREEN-CONTRACTS.md`
+- the companion state specifications linked from the index
 
 Product constitution, accepted architecture/ADRs/specifications, milestone contracts, terminal correctness, and pass ordering remain higher authority than any mockup.
 
 ## Why these references remain
 
-The earlier references helped establish useful interaction ideas, but the later Core Terminal design changed the information architecture and removed some earlier visual/behavioral choices.
+The nine historical images are retained because together they cover important product states that must not be lost during visual redesign:
 
-Do **not** implement these screenshots literally. Non-conflicting capabilities have been carried forward into the current textual specifications.
+1. `1-full view terminal.png` — Core Terminal, Blocks, navigation and Inspector composition.
+2. `2-session dashboard.png` — session inventory/reconnect management.
+3. `3-agent dashboard.png` — cross-workspace agent inventory/orchestration.
+4. `4-metrics dashboard.png` — resources/operations/metrics concepts.
+5. `5-multi pane view.png` — multipane composition.
+6. `6-notifications.png` — global attention/notification stack.
+7. `7-TUI.png` — full-screen TUI takeover.
+8. `8-TUI within block.png` — historical TUI/Block relationship input; stale behavior is superseded by current TUI specs.
+9. `9-search.png` — global search/command and command-history discovery concepts.
+
+Do **not** implement these screenshots literally. Their useful non-conflicting capabilities are carried into the current textual specifications and the replacement reference contracts.
+
+## Replacement reference program
+
+New Adaptive Depth visual references must be generated for all nine states in both dark and light themes.
+
+Target paths are defined in `../SEYAL-REFERENCE-SCREEN-CONTRACTS.md` under `references/adaptive-depth/`.
+
+All replacements must use the same shared component kit from `../SEYAL-UNIVERSAL-COMPONENT-CONTRACT.md`.
+
+In particular:
+
+- the Pane composer must be the same component everywhere;
+- top Tabs must retain one treatment everywhere;
+- sidebar/context rows must retain one anatomy everywhere;
+- Inspector width/section grammar must remain consistent;
+- Blocks must use the same Semantic Block + Semantic Seam language;
+- attention items must share one anatomy;
+- split dividers must use the same Seam state grammar;
+- light/dark variants change tokens, not geometry.
+
+If a mockup generator produces a visually attractive screen by redesigning a shared component for that screen, reject the image.
 
 ## Retained capabilities from the earlier references
 
@@ -76,7 +109,10 @@ The following old-reference details are **not current authority**:
 - a fully active composer while its foreground shell is occupied;
 - permanent split-control clusters repeated inside every Pane;
 - duplicate full agent lists in left and right sidebars;
-- large utility/control rows added only for visual completeness.
+- large utility/control rows added only for visual completeness;
+- card-heavy visual framing;
+- screen-specific component variations;
+- neon/glow/gamer visual treatment.
 
 ### Current Block scrolling rule
 

@@ -5,11 +5,15 @@ import AppKit
 /// debug preview entry point.
 @MainActor
 enum SeyalShellProductionFactory {
-    static func make(frame: NSRect) -> SeyalShellView {
+    static func make(
+        frame: NSRect,
+        visual: SeyalResolvedVisualConfiguration
+    ) -> SeyalShellView {
         let shell = SeyalShellView(
             frame: frame,
             state: SeyalShellState.makeProduction(),
-            productionShell: true
+            productionShell: true,
+            visual: visual
         )
         shell.translatesAutoresizingMaskIntoConstraints = true
         shell.autoresizingMask = [.width, .height]

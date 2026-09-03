@@ -4,18 +4,25 @@ import AppKit
 final class BlockView: NSView {
     private var presentation: BlockPresentation
     private let bodyView: NSView
+    private var visual: SeyalResolvedVisualConfiguration
     private var stateMark: NSTextField?
     private var commandField: NSTextField?
     private var elapsedField: NSTextField?
     private weak var chromeHeader: NSView?
-    private weak var chromeDivider: NSView?
+    private weak var seam: SeyalSemanticSeamView?
     private weak var contentStack: NSStackView?
 
-    init(presentation: BlockPresentation, bodyView: NSView) {
+    init(
+        presentation: BlockPresentation,
+        bodyView: NSView,
+        visual: SeyalResolvedVisualConfiguration
+    ) {
         self.presentation = presentation
         self.bodyView = bodyView
+        self.visual = visual
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
+        setAccessibilityIdentifier("block.\(presentation.id)")
         buildUI()
     }
 
@@ -26,9 +33,16 @@ final class BlockView: NSView {
 
     var presentationState: BlockPresentationState { presentation.state }
 
-    /// Applies a Runtime-authoritative lifecycle snapshot in place. The Block
-    /// identity and body remain stable, so a completion cannot leave stale
-    /// running chrome behind or discard the canonical history projection.
+    func applyVisual(_ visual: SeyalResolvedVisualConfiguration) {
+        self.visual = visual
+        applyPresentationChrome()
+        commandField?.font = visual.typography[.composer]
+        commandField?.textColor = visual.colors.ns(.textPrimary)
+        elapsedField?.font = visual.typography[.metadata]
+        elapsedField?.textColor = visual.colors.ns(.textSecondary)
+        seam?.apply(visual: visual, role: seamRole)
+    }
+
     func apply(presentation: BlockPresentation) {
         guard presentation.id == self.presentation.id else { return }
         self.presentation = presentation
@@ -36,25 +50,23 @@ final class BlockView: NSView {
         stateMark?.toolTip = presentation.state.rawValue
         commandField?.stringValue = presentation.command
         elapsedField?.stringValue = presentation.elapsed
-        layer?.borderWidth = presentation.isSelected ? 0.75 : 0.5
-        layer?.borderColor = (presentation.isSelected
-            ? SeyalDesignTokens.Palette.focus
-            : SeyalDesignTokens.Palette.separator).cgColor
-        layer?.backgroundColor = (presentation.isSelected
-            ? SeyalDesignTokens.Palette.blockSelectedBackground
-            : SeyalDesignTokens.Palette.blockBackground).cgColor
+        applyPresentationChrome()
+        seam?.apply(role: seamRole)
+    }
+
+    private var seamRole: SeyalSeamRole {
+        if presentation.isSelected { return .focus }
+        switch presentation.state {
+        case .running: return .running
+        case .failed: return .attention
+        case .completed: return .rest
+        }
     }
 
     private func buildUI() {
         wantsLayer = true
-        layer?.cornerRadius = SeyalDesignTokens.Layout.blockCornerRadius
-        layer?.borderWidth = presentation.isSelected ? 0.75 : 0.5
-        layer?.borderColor = (presentation.isSelected
-            ? SeyalDesignTokens.Palette.focus
-            : SeyalDesignTokens.Palette.separator).cgColor
-        layer?.backgroundColor = (presentation.isSelected
-            ? SeyalDesignTokens.Palette.blockSelectedBackground
-            : SeyalDesignTokens.Palette.blockBackground).cgColor
+        layer?.cornerRadius = visual.metrics.blockCornerRadius
+        applyPresentationChrome()
 
         let stateMark = NSTextField(labelWithString: "●")
         stateMark.font = NSFont.systemFont(ofSize: 9, weight: .bold)
@@ -63,8 +75,8 @@ final class BlockView: NSView {
         self.stateMark = stateMark
 
         let commandField = NSTextField(labelWithString: presentation.command)
-        commandField.font = SeyalDesignTokens.Typography.command
-        commandField.textColor = SeyalDesignTokens.Palette.textPrimary
+        commandField.font = visual.typography[.composer]
+        commandField.textColor = visual.colors.ns(.textPrimary)
         commandField.lineBreakMode = .byTruncatingMiddle
         commandField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         self.commandField = commandField
@@ -72,51 +84,52 @@ final class BlockView: NSView {
         let commandStack = NSStackView(views: [stateMark, commandField])
         commandStack.orientation = .horizontal
         commandStack.alignment = .centerY
-        commandStack.spacing = 7
+        commandStack.spacing = visual.metrics.controlSpacing - 1
         commandStack.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         let actions = makeActions()
-        let elapsedField = metadataField(presentation.elapsed, color: SeyalDesignTokens.Palette.textSecondary)
+        let elapsedField = metadataField(presentation.elapsed, color: visual.colors.ns(.textSecondary))
         self.elapsedField = elapsedField
         var metadataViews: [NSView] = [elapsedField]
         if let timestamp = presentation.timestamp {
-            metadataViews.append(metadataField(timestamp, color: SeyalDesignTokens.Palette.textTertiary))
+            metadataViews.append(metadataField(timestamp, color: visual.colors.ns(.textMuted)))
         }
 
         let metadataStack = NSStackView(views: metadataViews)
         metadataStack.orientation = .horizontal
         metadataStack.alignment = .centerY
-        metadataStack.spacing = 8
+        metadataStack.spacing = visual.metrics.sm
 
         let rightStack = NSStackView(views: [actions, metadataStack])
         rightStack.orientation = .horizontal
         rightStack.alignment = .centerY
-        rightStack.spacing = 12
+        rightStack.spacing = visual.metrics.md
 
         let header = NSStackView(views: [commandStack, rightStack])
         header.orientation = .horizontal
         header.alignment = .centerY
         header.distribution = .fill
-        header.spacing = SeyalDesignTokens.Layout.standardSpacing
+        header.spacing = visual.metrics.sm
         header.translatesAutoresizingMaskIntoConstraints = false
 
-        let divider = NSView()
-        divider.translatesAutoresizingMaskIntoConstraints = false
-        divider.wantsLayer = true
-        divider.layer?.backgroundColor = SeyalDesignTokens.Palette.subtleSeparator.cgColor
-        divider.heightAnchor.constraint(equalToConstant: 1).isActive = true
+        let seam = SeyalSemanticSeamView(visual: visual, role: seamRole)
+        self.seam = seam
 
         bodyView.translatesAutoresizingMaskIntoConstraints = false
 
-        let stack = NSStackView(views: [header, divider, bodyView])
+        let stack = NSStackView(views: [header, bodyView, seam])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = SeyalDesignTokens.Layout.compactSpacing
-        stack.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 12, right: 12)
+        stack.spacing = visual.metrics.blockSeamSpacing / 2
+        stack.edgeInsets = NSEdgeInsets(
+            top: visual.metrics.contentPaddingVertical,
+            left: visual.metrics.contentPaddingHorizontal,
+            bottom: visual.metrics.xs,
+            right: visual.metrics.contentPaddingHorizontal
+        )
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         chromeHeader = header
-        chromeDivider = divider
         contentStack = stack
 
         NSLayoutConstraint.activate([
@@ -126,50 +139,57 @@ final class BlockView: NSView {
             stack.bottomAnchor.constraint(equalTo: bottomAnchor),
             header.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
             header.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
-            divider.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
-            divider.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
+            seam.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
+            seam.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
             bodyView.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
             bodyView.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
         ])
     }
 
-    /// TUI takeover changes presentation chrome only. The body remains the
-    /// same bridge-backed surface and keeps native input/focus ownership.
     func setTUITakeover(_ active: Bool) {
         chromeHeader?.isHidden = active
-        chromeDivider?.isHidden = active
-        contentStack?.spacing = active ? 0 : SeyalDesignTokens.Layout.compactSpacing
+        seam?.isHidden = active
+        contentStack?.spacing = active ? 0 : visual.metrics.blockSeamSpacing / 2
         contentStack?.edgeInsets = active
             ? NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
-            : NSEdgeInsets(top: 10, left: 12, bottom: 12, right: 12)
+            : NSEdgeInsets(
+                top: visual.metrics.contentPaddingVertical,
+                left: visual.metrics.contentPaddingHorizontal,
+                bottom: visual.metrics.xs,
+                right: visual.metrics.contentPaddingHorizontal
+            )
         layer?.backgroundColor = active
             ? NSColor.clear.cgColor
-            : (presentation.isSelected
-                ? SeyalDesignTokens.Palette.blockSelectedBackground
-                : SeyalDesignTokens.Palette.blockBackground).cgColor
-        layer?.borderWidth = active ? 0 : (presentation.isSelected ? 0.75 : 0.5)
+            : (presentation.isSelected ? visual.colors.cg(.selection) : NSColor.clear.cgColor)
+        layer?.borderWidth = 0
     }
 
-    /// Action labels remain a presentation seam. Runtime-dependent actions are
-    /// intentionally empty until their authoritative backing exists.
+    private func applyPresentationChrome() {
+        layer?.borderWidth = 0
+        layer?.cornerRadius = visual.metrics.blockCornerRadius
+        layer?.backgroundColor = presentation.isSelected
+            ? visual.colors.cg(.selection)
+            : NSColor.clear.cgColor
+    }
+
     private func makeActions() -> NSView {
         let actionViews = presentation.actions.map { action -> NSTextField in
             let field = NSTextField(labelWithString: action)
-            field.font = SeyalDesignTokens.Typography.metadataEmphasized
-            field.textColor = SeyalDesignTokens.Palette.textTertiary
+            field.font = visual.typography[.metadata]
+            field.textColor = visual.colors.ns(.textMuted)
             return field
         }
 
         let stack = NSStackView(views: actionViews)
         stack.orientation = .horizontal
         stack.alignment = .centerY
-        stack.spacing = 9
+        stack.spacing = visual.metrics.sm + 1
         return stack
     }
 
     private func metadataField(_ value: String, color: NSColor) -> NSTextField {
         let field = NSTextField(labelWithString: value)
-        field.font = SeyalDesignTokens.Typography.metadata
+        field.font = visual.typography[.metadata]
         field.textColor = color
         field.alignment = .right
         return field
@@ -178,11 +198,11 @@ final class BlockView: NSView {
     private func stateColor(for state: BlockPresentationState) -> NSColor {
         switch state {
         case .running:
-            SeyalDesignTokens.Palette.warning
+            visual.colors.ns(.warning)
         case .completed:
-            SeyalDesignTokens.Palette.success
+            visual.colors.ns(.success)
         case .failed:
-            SeyalDesignTokens.Palette.failure
+            visual.colors.ns(.danger)
         }
     }
 }

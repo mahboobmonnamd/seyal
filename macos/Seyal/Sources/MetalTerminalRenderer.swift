@@ -243,7 +243,7 @@ final class MetalTerminalRenderer {
     var onNeedsCurrentFrame: (() -> Void)?
     var onPersistentDisplayFailure: ((MetalTerminalRendererError) -> Void)?
 
-    init(device: MTLDevice) throws {
+    init(device: MTLDevice, terminalFont: SeyalResolvedFontSpec = .canonicalTerminal) throws {
         self.device = device
         guard MemoryLayout<TerminalInstance>.stride == 48 else {
             throw MetalTerminalRendererError.invalidInstanceLayout
@@ -285,7 +285,10 @@ final class MetalTerminalRenderer {
             throw MetalTerminalRendererError.unavailableSampler
         }
         self.sampler = sampler
-        glyphAtlas = GlyphAtlas(device: device)
+        glyphAtlas = GlyphAtlas(
+            device: device,
+            fontResolver: TerminalFontResolver(spec: terminalFont)
+        )
     }
 
     var hasDedicatedSurfaceResources: Bool {

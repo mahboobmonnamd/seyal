@@ -30,6 +30,7 @@ Until that asset exists in the repository, the UI container must be checked agai
 | Mockup/state | Specification | Purpose |
 |---|---|---|
 | Universal visual language | `SEYAL-ADAPTIVE-DEPTH-DESIGN-LANGUAGE.md` | Terminal-first Adaptive Depth, transparency, focus gravity, light/dark parity, cross-platform material rules |
+| Typed UI design system | `M001-UI-DESIGN-SYSTEM.md` | Token/theme resolver, user TOML subset, Lua overlay boundary |
 | Universal component contract | `SEYAL-UNIVERSAL-COMPONENT-CONTRACT.md` | Shared C01-C17 component anatomy/state rules; prevents screen-by-screen redesign |
 | Nine-screen reference contract | `SEYAL-REFERENCE-SCREEN-CONTRACTS.md` | Maps historical references 1-9 to consistent dark/light Adaptive Depth replacements |
 | Core Terminal | `M001-CORE-TERMINAL-REFERENCE-SCREEN.md` | Canonical UI container, Workspaces/Agents/Tabs, Blocks, composer, inspector, placement rules |

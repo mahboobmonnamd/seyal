@@ -53,11 +53,65 @@ final class TerminalFontResolver {
     private let pointSize: CGFloat
     private let regular: CTFont
     private let bold: CTFont
+    let resolvedFamily: String
 
-    init(pointSize: CGFloat = 14) {
-        self.pointSize = pointSize
-        regular = CTFontCreateWithName("Menlo" as CFString, pointSize, nil)
-        bold = CTFontCreateWithName("Menlo-Bold" as CFString, pointSize, nil)
+    init(spec: SeyalResolvedFontSpec = .canonicalTerminal) {
+        self.pointSize = spec.pointSize
+        let resolved = Self.makeFonts(spec: spec)
+        regular = resolved.regular
+        bold = resolved.bold
+        resolvedFamily = resolved.family
+    }
+
+    convenience init(pointSize: CGFloat) {
+        self.init(
+            spec: SeyalResolvedFontSpec(
+                family: SeyalResolvedFontSpec.canonicalTerminal.family,
+                fallbacks: SeyalResolvedFontSpec.canonicalTerminal.fallbacks,
+                pointSize: pointSize
+            )
+        )
+    }
+
+    private static func makeFonts(spec: SeyalResolvedFontSpec) -> (
+        regular: CTFont,
+        bold: CTFont,
+        family: String
+    ) {
+        let candidates = ([spec.family] + spec.fallbacks)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        for family in candidates {
+            if let regular = font(named: family, size: spec.pointSize, bold: false) {
+                let bold = font(named: family, size: spec.pointSize, bold: true) ?? regular
+                return (regular, bold, family)
+            }
+        }
+        let fallback = CTFontCreateWithName("Menlo" as CFString, spec.pointSize, nil)
+        let bold = CTFontCreateWithName("Menlo-Bold" as CFString, spec.pointSize, nil)
+        return (fallback, bold, "Menlo")
+    }
+
+    private static func font(named family: String, size: CGFloat, bold: Bool) -> CTFont? {
+        let descriptor = CTFontDescriptorCreateWithAttributes(
+            [
+                kCTFontFamilyNameAttribute: family,
+                kCTFontSizeAttribute: size,
+                kCTFontTraitsAttribute: [
+                    kCTFontSymbolicTrait: bold
+                        ? CTFontSymbolicTraits.boldTrait.rawValue
+                        : 0,
+                ],
+            ] as CFDictionary
+        )
+        let font = CTFontCreateWithFontDescriptor(descriptor, size, nil)
+        let resolvedFamily = CTFontCopyFamilyName(font) as String
+        guard resolvedFamily.compare(family, options: [.caseInsensitive, .diacriticInsensitive])
+            == .orderedSame
+        else {
+            return nil
+        }
+        return font
     }
 
     func metrics(backingScale: CGFloat) -> TerminalFontMetrics {

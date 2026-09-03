@@ -31,6 +31,7 @@ final class PaneComposerShellView: NSView, NSTextViewDelegate {
 
     private let mode: Mode
     private let draft: String
+    private var visual: SeyalResolvedVisualConfiguration
     private let accessibilityID: String?
     private let onFocus: (() -> Void)?
     private let onDraftChange: ((String) -> Void)?
@@ -40,6 +41,7 @@ final class PaneComposerShellView: NSView, NSTextViewDelegate {
     init(
         mode: Mode,
         draft: String,
+        visual: SeyalResolvedVisualConfiguration,
         accessibilityID: String? = nil,
         onFocus: (() -> Void)? = nil,
         onDraftChange: ((String) -> Void)? = nil,
@@ -47,6 +49,7 @@ final class PaneComposerShellView: NSView, NSTextViewDelegate {
     ) {
         self.mode = mode
         self.draft = draft
+        self.visual = visual
         self.accessibilityID = accessibilityID
         self.onFocus = onFocus
         self.onDraftChange = onDraftChange
@@ -61,6 +64,24 @@ final class PaneComposerShellView: NSView, NSTextViewDelegate {
         fatalError("PaneComposerShellView is programmatic")
     }
 
+    func applyVisual(_ visual: SeyalResolvedVisualConfiguration) {
+        self.visual = visual
+        let depth: SeyalDepthLevel
+        switch mode {
+        case .available: depth = .activeUtility
+        case .busy, .hiddenForTUI: depth = .recededUtility
+        }
+        SeyalMaterialPresenter.apply(
+            depth,
+            to: self,
+            visual: visual,
+            cornerRadius: visual.metrics.composerCornerRadius
+        )
+        editor?.font = visual.typography[.composer]
+        editor?.textColor = visual.colors.ns(.textPrimary)
+        editor?.insertionPointColor = visual.colors.ns(.focus)
+    }
+
     private func buildUI() {
         switch mode {
         case .hiddenForTUI:
@@ -73,16 +94,16 @@ final class PaneComposerShellView: NSView, NSTextViewDelegate {
     }
 
     private func buildAvailableComposer() {
-        SeyalDesignTokens.configureRoundedPanel(
-            self,
-            radius: 10,
-            background: SeyalDesignTokens.Palette.elevatedBackground
+        SeyalMaterialPresenter.apply(
+            .activeUtility,
+            to: self,
+            visual: visual,
+            cornerRadius: visual.metrics.composerCornerRadius
         )
-        layer?.borderColor = SeyalDesignTokens.Palette.focus.cgColor
 
         let prompt = NSTextField(labelWithString: "›")
-        prompt.font = NSFont.monospacedSystemFont(ofSize: 18, weight: .semibold)
-        prompt.textColor = SeyalDesignTokens.Palette.focus
+        prompt.font = visual.typography[.composer]
+        prompt.textColor = visual.colors.ns(.focus)
         prompt.setContentHuggingPriority(.required, for: .horizontal)
 
         let editor = PaneComposerTextView(frame: .zero)
@@ -90,9 +111,9 @@ final class PaneComposerShellView: NSView, NSTextViewDelegate {
         editor.isRichText = false
         editor.importsGraphics = false
         editor.drawsBackground = false
-        editor.font = SeyalDesignTokens.Typography.command
-        editor.textColor = SeyalDesignTokens.Palette.textPrimary
-        editor.insertionPointColor = SeyalDesignTokens.Palette.focus
+        editor.font = visual.typography[.composer]
+        editor.textColor = visual.colors.ns(.textPrimary)
+        editor.insertionPointColor = visual.colors.ns(.focus)
         editor.string = draft
         editor.delegate = self
         editor.onSubmit = { [weak self, weak editor] command in
@@ -112,32 +133,33 @@ final class PaneComposerShellView: NSView, NSTextViewDelegate {
         self.editor = editor
 
         let hint = NSTextField(labelWithString: "Shift+Return newline")
-        hint.font = SeyalDesignTokens.Typography.metadata
-        hint.textColor = SeyalDesignTokens.Palette.textTertiary
+        hint.font = visual.typography[.metadata]
+        hint.textColor = visual.colors.ns(.textMuted)
         hint.alignment = .right
         hint.setContentHuggingPriority(.required, for: .horizontal)
 
         let row = NSStackView(views: [prompt, editor, hint])
         row.orientation = .horizontal
         row.alignment = .centerY
-        row.spacing = 9
+        row.spacing = visual.metrics.sm + 1
         row.translatesAutoresizingMaskIntoConstraints = false
         addSubview(row)
 
         NSLayoutConstraint.activate([
-            row.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            row.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            row.topAnchor.constraint(equalTo: topAnchor, constant: 8),
-            row.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            row.leadingAnchor.constraint(
+                equalTo: leadingAnchor, constant: visual.metrics.composerInsetHorizontal),
+            row.trailingAnchor.constraint(
+                equalTo: trailingAnchor, constant: -visual.metrics.composerInsetHorizontal),
+            row.topAnchor.constraint(
+                equalTo: topAnchor, constant: visual.metrics.composerInsetVertical),
+            row.bottomAnchor.constraint(
+                equalTo: bottomAnchor, constant: -visual.metrics.composerInsetVertical),
             editor.heightAnchor.constraint(greaterThanOrEqualToConstant: 38),
-            heightAnchor.constraint(greaterThanOrEqualToConstant: SeyalDesignTokens.Layout.composerMinHeight),
-            heightAnchor.constraint(lessThanOrEqualToConstant: SeyalDesignTokens.Layout.composerMaxPreviewHeight),
+            heightAnchor.constraint(greaterThanOrEqualToConstant: visual.metrics.composerMinHeight),
+            heightAnchor.constraint(lessThanOrEqualToConstant: visual.metrics.composerMaxHeight),
         ])
     }
 
-    /// Restores keyboard focus after the shell rebuilds its block timeline.
-    /// The composer is pane-owned, so every accepted command must return
-    /// focus to this editor before the next command is typed.
     func focusEditor() {
         guard let editor, let window else { return }
         window.makeFirstResponder(editor)
@@ -150,41 +172,43 @@ final class PaneComposerShellView: NSView, NSTextViewDelegate {
         editor.setAccessibilityValue(busy ? "Busy: \(process)" : "Available")
     }
 
-    /// Clears the editor only after Runtime has projected the submitted command
-    /// into the authoritative Block timeline. Transport queueing alone is not
-    /// acceptance, so rejected commands retain their draft.
     func clearAcceptedDraft() {
         editor?.string = ""
     }
 
     private func buildBusyState(process: String) {
-        SeyalDesignTokens.configureRoundedPanel(
-            self,
-            radius: 10,
-            background: SeyalDesignTokens.Palette.elevatedBackground
+        SeyalMaterialPresenter.apply(
+            .recededUtility,
+            to: self,
+            visual: visual,
+            cornerRadius: visual.metrics.composerCornerRadius
         )
 
         let dot = NSTextField(labelWithString: "●")
         dot.font = NSFont.systemFont(ofSize: 9, weight: .bold)
-        dot.textColor = SeyalDesignTokens.Palette.warning
+        dot.textColor = visual.colors.ns(.warning)
 
-        let status = NSTextField(labelWithString: "\(process) is using this shell · open another Pane to run in parallel")
-        status.font = SeyalDesignTokens.Typography.bodyEmphasized
-        status.textColor = SeyalDesignTokens.Palette.textSecondary
+        let status = NSTextField(
+            labelWithString: "\(process) is using this shell · open another Pane to run in parallel")
+        status.font = visual.typography[.action]
+        status.textColor = visual.colors.ns(.textSecondary)
         status.lineBreakMode = .byTruncatingTail
 
         let row = NSStackView(views: [dot, status])
         row.orientation = .horizontal
         row.alignment = .centerY
-        row.spacing = 8
+        row.spacing = visual.metrics.sm
         row.translatesAutoresizingMaskIntoConstraints = false
         addSubview(row)
 
         NSLayoutConstraint.activate([
-            row.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            row.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -12),
+            row.leadingAnchor.constraint(
+                equalTo: leadingAnchor, constant: visual.metrics.composerInsetHorizontal),
+            row.trailingAnchor.constraint(
+                lessThanOrEqualTo: trailingAnchor,
+                constant: -visual.metrics.composerInsetHorizontal),
             row.centerYAnchor.constraint(equalTo: centerYAnchor),
-            heightAnchor.constraint(equalToConstant: SeyalDesignTokens.Layout.composerMinHeight),
+            heightAnchor.constraint(equalToConstant: visual.metrics.composerMinHeight),
         ])
     }
 

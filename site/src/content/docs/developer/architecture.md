@@ -21,7 +21,7 @@ PTY
 → Metal renderer
 ```
 
-Rust owns portable terminal/runtime logic. The native macOS layer stays as small as practical and owns AppKit, Metal, input, accessibility, and platform APIs.
+Native AppKit owns windowing, input, accessibility, and the Adaptive Depth token/theme snapshot. Configuration is parsed once into typed settings; it does not join the terminal path above.
 
 ## State ownership
 

@@ -1,7 +1,11 @@
 import AppKit
 import XCTest
-
 @testable import Seyal
+
+@MainActor
+private func previewVisual() -> SeyalResolvedVisualConfiguration {
+  SeyalThemeResolver.canonical(.dark)
+}
 
 final class SeyalShellComponentTests: XCTestCase {
 
@@ -88,13 +92,15 @@ final class SeyalShellComponentTests: XCTestCase {
       paneID: left.id,
       installSurface: false,
       executionIdentity: left.executionIdentity,
-      allowsImplicitExecutionBootstrap: left.allowsImplicitExecutionBootstrap
+      allowsImplicitExecutionBootstrap: left.allowsImplicitExecutionBootstrap,
+      visual: previewVisual()
     )
     let rightTranscript = PaneTranscriptView(
       paneID: right.id,
       installSurface: false,
       executionIdentity: right.executionIdentity,
-      allowsImplicitExecutionBootstrap: right.allowsImplicitExecutionBootstrap
+      allowsImplicitExecutionBootstrap: right.allowsImplicitExecutionBootstrap,
+      visual: previewVisual()
     )
     XCTAssertEqual(leftTranscript.terminalSurface.requestedExecutionIdentity, left.executionIdentity)
     XCTAssertEqual(rightTranscript.terminalSurface.requestedExecutionIdentity, right.executionIdentity)
@@ -150,8 +156,10 @@ final class SeyalShellComponentTests: XCTestCase {
 
   @MainActor
   func testPaneTranscriptCachesKeepIdenticalBlockAndAnchorRangesIndependent() {
-    let left = PaneTranscriptView(paneID: "pane-left", installSurface: false)
-    let right = PaneTranscriptView(paneID: "pane-right", installSurface: false)
+    let left = PaneTranscriptView(
+      paneID: "pane-left", installSurface: false, visual: previewVisual())
+    let right = PaneTranscriptView(
+      paneID: "pane-right", installSurface: false, visual: previewVisual())
     let leftBody = CommandBlockBodyView()
     let rightBody = CommandBlockBodyView()
     left.registerBlockBody(leftBody, blockID: 7)
@@ -190,7 +198,7 @@ final class SeyalShellComponentTests: XCTestCase {
       isSelected: true,
       actions: ["Copy", "Pin"]
     )
-    let block = BlockView(presentation: presentation, bodyView: body)
+    let block = BlockView(presentation: presentation, bodyView: body, visual: previewVisual())
 
     XCTAssertTrue(descendants(of: NSScrollView.self, in: block).isEmpty)
     XCTAssertTrue(block.subviewsRecursively.contains { $0 === body })
@@ -231,7 +239,7 @@ final class SeyalShellComponentTests: XCTestCase {
 
   @MainActor
   func testHistoryRangeGrowthNotifiesPaneForCompleteOrderedFrame() {
-    let transcript = PaneTranscriptView(installSurface: false)
+    let transcript = PaneTranscriptView(installSurface: false, visual: previewVisual())
     let body = CommandBlockBodyView()
     var refreshes = 0
     transcript.onBlockBodySizeChanged = { refreshes += 1 }
@@ -274,7 +282,7 @@ final class SeyalShellComponentTests: XCTestCase {
         id: "stable", command: "echo old", state: .running, elapsed: "Live",
         timestamp: nil, isSelected: true, actions: []
       ),
-      bodyView: body
+      bodyView: body, visual: previewVisual()
     )
 
     let originalBody = block.subviewsRecursively.first { $0 === body }
@@ -291,7 +299,7 @@ final class SeyalShellComponentTests: XCTestCase {
 
   @MainActor
   func testPaneTranscriptOwnsOneDocumentAndOneSurface() {
-    let transcript = PaneTranscriptView()
+    let transcript = PaneTranscriptView(visual: previewVisual())
     transcript.layoutSubtreeIfNeeded()
 
     XCTAssertNotNil(transcript.documentView)
@@ -301,7 +309,7 @@ final class SeyalShellComponentTests: XCTestCase {
 
   @MainActor
   func testPaneTranscriptRegistersAllBlockRegionsOnOneSurfaceInLifecycleOrder() {
-    let transcript = PaneTranscriptView(installSurface: false)
+    let transcript = PaneTranscriptView(installSurface: false, visual: previewVisual())
     let first = CommandBlockBodyView()
     let second = CommandBlockBodyView()
     transcript.registerBlockBody(first, blockID: 11)
@@ -381,19 +389,20 @@ final class SeyalShellComponentTests: XCTestCase {
 
   @MainActor
   func testVisualHierarchyKeepsSecondaryChromeQuietAndCompact() {
-    XCTAssertLessThanOrEqual(SeyalDesignTokens.Layout.leftContextWidth, 220)
-    XCTAssertLessThanOrEqual(SeyalDesignTokens.Layout.inspectorWidth, 248)
-    XCTAssertLessThanOrEqual(SeyalDesignTokens.Layout.blockCornerRadius, 8)
+    XCTAssertLessThanOrEqual(previewVisual().metrics.leftContextWidth, 220)
+    XCTAssertLessThanOrEqual(previewVisual().metrics.inspectorWidth, 248)
+    XCTAssertEqual(previewVisual().metrics.blockCornerRadius, 0)
 
     let block = BlockView(
       presentation: BlockPresentation(
         id: "quiet", command: "pwd", state: .completed, elapsed: "Done",
         timestamp: nil, isSelected: false, actions: []
       ),
-      bodyView: NSView()
+      bodyView: NSView(), visual: previewVisual()
     )
 
-    XCTAssertEqual(block.layer?.borderWidth ?? -1, CGFloat(0.5), accuracy: CGFloat(0.01))
+    XCTAssertEqual(block.layer?.borderWidth ?? -1, 0, accuracy: CGFloat(0.01))
+    XCTAssertTrue(block.subviewsRecursively.contains { $0 is SeyalSemanticSeamView })
   }
 
   @MainActor
@@ -406,7 +415,7 @@ final class SeyalShellComponentTests: XCTestCase {
         id: "tui", command: "nvim", state: .running, elapsed: "Live",
         timestamp: nil, isSelected: true, actions: []
       ),
-      bodyView: body
+      bodyView: body, visual: previewVisual()
     )
 
     block.setTUITakeover(true)
@@ -418,9 +427,9 @@ final class SeyalShellComponentTests: XCTestCase {
 
   @MainActor
   func testComposerModesRespectPaneOwnershipRules() {
-    let available = PaneComposerShellView(mode: .available, draft: "git status")
-    let busy = PaneComposerShellView(mode: .busy(process: "vite"), draft: "")
-    let tui = PaneComposerShellView(mode: .hiddenForTUI, draft: "")
+    let available = PaneComposerShellView(mode: .available, draft: "git status", visual: previewVisual())
+    let busy = PaneComposerShellView(mode: .busy(process: "vite"), draft: "", visual: previewVisual())
+    let tui = PaneComposerShellView(mode: .hiddenForTUI, draft: "", visual: previewVisual())
 
     XCTAssertFalse(available.isHidden)
     XCTAssertFalse(busy.isHidden)
@@ -439,6 +448,7 @@ final class SeyalShellComponentTests: XCTestCase {
     let composer = PaneComposerShellView(
       mode: .available,
       draft: "echo from composer",
+      visual: previewVisual(),
       onSubmit: {
         submitted = $0
         return true
@@ -458,6 +468,7 @@ final class SeyalShellComponentTests: XCTestCase {
     let composer = PaneComposerShellView(
       mode: .available,
       draft: "pwd",
+      visual: previewVisual(),
       onSubmit: {
         submitted = $0
         return true
@@ -476,6 +487,7 @@ final class SeyalShellComponentTests: XCTestCase {
     let composer = PaneComposerShellView(
       mode: .available,
       draft: "echo while disconnected",
+      visual: previewVisual(),
       onSubmit: { _ in false }
     )
     let editor = try! XCTUnwrap(descendants(of: NSTextView.self, in: composer).first)
@@ -487,7 +499,7 @@ final class SeyalShellComponentTests: XCTestCase {
 
   @MainActor
   func testComposerBusyStateDisablesExistingEditorWithoutReplacingPaneView() throws {
-    let composer = PaneComposerShellView(mode: .available, draft: "echo busy")
+    let composer = PaneComposerShellView(mode: .available, draft: "echo busy", visual: previewVisual())
     let editor = try XCTUnwrap(descendants(of: NSTextView.self, in: composer).first)
     composer.setBusy(true, process: "echo busy")
     XCTAssertFalse(editor.isEditable)
@@ -497,7 +509,7 @@ final class SeyalShellComponentTests: XCTestCase {
 
   @MainActor
   func testComposerCanRestoreFirstResponderAfterBlockTimelineRebuild() throws {
-    let composer = PaneComposerShellView(mode: .available, draft: "")
+    let composer = PaneComposerShellView(mode: .available, draft: "", visual: previewVisual())
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 640, height: 120),
       styleMask: .borderless,
@@ -529,7 +541,8 @@ final class SeyalShellComponentTests: XCTestCase {
   @MainActor
   func testProductionShellUsesOneRealSurfaceBeforeFirstRuntimeBlock() throws {
     let shell = SeyalShellProductionFactory.make(
-      frame: NSRect(x: 0, y: 0, width: 960, height: 600)
+      frame: NSRect(x: 0, y: 0, width: 960, height: 600),
+      visual: previewVisual()
     )
     shell.layoutSubtreeIfNeeded()
 
@@ -539,7 +552,7 @@ final class SeyalShellComponentTests: XCTestCase {
     XCTAssertEqual(transcripts.count, 1)
     let surface = try XCTUnwrap(surfaces.first)
     let transcript = try XCTUnwrap(transcripts.first)
-    XCTAssertTrue(transcript.subviewsRecursively.contains { $0 === surface })
+    XCTAssertTrue(descendants(of: InteractiveMetalSurfaceView.self, in: transcript).contains { $0 === surface })
     XCTAssertEqual(descendants(of: BlockView.self, in: shell).count, 0)
     XCTAssertEqual(descendants(of: PaneComposerShellView.self, in: shell).count, 1)
     XCTAssertTrue(descendants(of: TerminalSurfaceHostView.self, in: shell).isEmpty)
@@ -709,8 +722,8 @@ final class SeyalShellComponentTests: XCTestCase {
     XCTAssertGreaterThan(
       collapsed.pane.width,
       expanded.pane.width
-        + SeyalDesignTokens.Layout.leftContextWidth
-        + SeyalDesignTokens.Layout.inspectorWidth
+        + previewVisual().metrics.leftContextWidth
+        + previewVisual().metrics.inspectorWidth
         - 4
     )
 
@@ -718,8 +731,8 @@ final class SeyalShellComponentTests: XCTestCase {
     shell.layoutSubtreeIfNeeded()
     let restored = try XCTUnwrap(shell.debugLayoutContract())
     XCTAssertEqual(
-      restored.leftContext.width, SeyalDesignTokens.Layout.leftContextWidth, accuracy: 1)
-    XCTAssertEqual(restored.inspector.width, SeyalDesignTokens.Layout.inspectorWidth, accuracy: 1)
+      restored.leftContext.width, previewVisual().metrics.leftContextWidth, accuracy: 1)
+    XCTAssertEqual(restored.inspector.width, previewVisual().metrics.inspectorWidth, accuracy: 1)
     XCTAssertEqual(restored.pane.width, expanded.pane.width, accuracy: 1)
   }
 
@@ -959,17 +972,17 @@ final class SeyalShellComponentTests: XCTestCase {
     XCTAssertEqual(contract.topChrome.width, 1280, accuracy: 1)
     XCTAssertEqual(
       contract.topChrome.height,
-      SeyalDesignTokens.Layout.topChromeHeight,
+      previewVisual().metrics.topChromeHeight,
       accuracy: 1
     )
     XCTAssertEqual(
       contract.leftContext.width,
-      SeyalDesignTokens.Layout.leftContextWidth,
+      previewVisual().metrics.leftContextWidth,
       accuracy: 1
     )
     XCTAssertEqual(
       contract.inspector.width,
-      SeyalDesignTokens.Layout.inspectorWidth,
+      previewVisual().metrics.inspectorWidth,
       accuracy: 1
     )
     XCTAssertEqual(contract.inspector.maxX, shell.bounds.maxX, accuracy: 1)
@@ -978,13 +991,13 @@ final class SeyalShellComponentTests: XCTestCase {
     XCTAssertGreaterThan(contract.composer.width, 650)
     XCTAssertGreaterThanOrEqual(
       contract.composer.height,
-      SeyalDesignTokens.Layout.composerMinHeight - 1
+      previewVisual().metrics.composerMinHeight - 1
     )
   }
 
   @MainActor
   func testFrozenReferencePaletteIsDarkAndNotSystemAdaptive() {
-    let background = SeyalDesignTokens.Palette.windowBackground.usingColorSpace(.deviceRGB)
+    let background = previewVisual().colors.ns(.container).usingColorSpace(.deviceRGB)
     let components = background?.cgColor.components ?? []
     XCTAssertGreaterThanOrEqual(components.count, 3)
     if components.count >= 3 {

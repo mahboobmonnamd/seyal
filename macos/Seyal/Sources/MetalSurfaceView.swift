@@ -186,7 +186,8 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     frame frameRect: NSRect,
     paneID: String,
     executionIdentity: String? = nil,
-    allowsImplicitExecutionBootstrap: Bool = true
+    allowsImplicitExecutionBootstrap: Bool = true,
+    terminalFont: SeyalResolvedFontSpec = .canonicalTerminal
   ) {
     self.paneID = paneID
     self.requestedExecutionIdentity = executionIdentity
@@ -196,7 +197,7 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     }
     let renderer: MetalTerminalRenderer
     do {
-      renderer = try MetalTerminalRenderer(device: device)
+      renderer = try MetalTerminalRenderer(device: device, terminalFont: terminalFont)
     } catch {
       fatalError("Seyal permanent Metal renderer initialization failed: \(error)")
     }

@@ -25,7 +25,9 @@ SOURCES="macos/Seyal/Sources"
 [[ -f "$SOURCES/SeyalBridge.h" ]] || fail "missing coarse Rust/native bridge header"
 
 for required in \
-  SeyalDesignTokens.swift \
+  SeyalThemeResolver.swift \
+  SeyalUIConfiguration.swift \
+  SeyalMetrics.swift \
   SeyalShellModel.swift \
   BlockView.swift \
   PaneComposerShellView.swift \

@@ -89,6 +89,7 @@ final class SeyalShellView: NSView {
 
   private let state: SeyalShellState
   private let productionShell: Bool
+  private var visual: SeyalResolvedVisualConfiguration
   private var attentionPopover: NSPopover?
   private var paneContainers: [String: NSView] = [:]
   private var composerViews: [String: PaneComposerShellView] = [:]
@@ -119,14 +120,37 @@ final class SeyalShellView: NSView {
   init(
     frame frameRect: NSRect,
     state: SeyalShellState,
-    productionShell: Bool = false
+    productionShell: Bool = false,
+    visual: SeyalResolvedVisualConfiguration
   ) {
     self.state = state
     self.productionShell = productionShell
+    self.visual = visual
     super.init(frame: frameRect)
     wantsLayer = true
-    layer?.backgroundColor = SeyalDesignTokens.Palette.windowBackground.cgColor
+    layer?.backgroundColor = visual.colors.cg(.container)
     buildUI()
+  }
+
+  /// Re-resolve chrome from the authoritative visual snapshot.
+  ///
+  /// Presentation views are rebuilt so typography/colour/material stay
+  /// consistent with the snapshot. This does not recreate TerminalExecution,
+  /// VT, PTY, or Runtime ownership — only AppKit chrome/surfaces that consume
+  /// the already-resolved tokens.
+  func applyVisualConfiguration(_ visual: SeyalResolvedVisualConfiguration) {
+    let appearanceChanged = self.visual.appearance != visual.appearance
+      || self.visual.reduceTransparency != visual.reduceTransparency
+      || self.visual.colors[.textPrimary] != visual.colors[.textPrimary]
+      || self.visual.colors[.canvas] != visual.colors[.canvas]
+      || self.visual.metrics != visual.metrics
+      || self.visual.uiFont != visual.uiFont
+      || self.visual.terminalFont != visual.terminalFont
+    self.visual = visual
+    layer?.backgroundColor = visual.colors.cg(.container)
+    guard appearanceChanged else { return }
+    rebuildUI()
+    layer?.backgroundColor = visual.colors.cg(.container)
   }
 
   @available(*, unavailable)
@@ -170,8 +194,8 @@ final class SeyalShellView: NSView {
 
     [topChrome, leftContext, pane, inspector].forEach(addSubview)
 
-    let leftWidth = isLeftContextVisible ? SeyalDesignTokens.Layout.leftContextWidth : 0
-    let inspectorWidth = isInspectorVisible ? SeyalDesignTokens.Layout.inspectorWidth : 0
+    let leftWidth = isLeftContextVisible ? visual.metrics.leftContextWidth : 0
+    let inspectorWidth = isInspectorVisible ? visual.metrics.inspectorWidth : 0
     let leftSeparator: CGFloat = isLeftContextVisible ? 1 : 0
     let rightSeparator: CGFloat = isInspectorVisible ? 1 : 0
 
@@ -179,7 +203,7 @@ final class SeyalShellView: NSView {
       topChrome.leadingAnchor.constraint(equalTo: leadingAnchor),
       topChrome.trailingAnchor.constraint(equalTo: trailingAnchor),
       topChrome.topAnchor.constraint(equalTo: topAnchor),
-      topChrome.heightAnchor.constraint(equalToConstant: SeyalDesignTokens.Layout.topChromeHeight),
+      topChrome.heightAnchor.constraint(equalToConstant: visual.metrics.topChromeHeight),
 
       leftContext.leadingAnchor.constraint(equalTo: leadingAnchor),
       leftContext.topAnchor.constraint(equalTo: topChrome.bottomAnchor, constant: 1),
@@ -203,7 +227,7 @@ final class SeyalShellView: NSView {
     let container = NSView()
     container.translatesAutoresizingMaskIntoConstraints = false
     container.wantsLayer = true
-    container.layer?.backgroundColor = SeyalDesignTokens.Palette.chromeBackground.cgColor
+    container.layer?.backgroundColor = visual.colors.ns(.utilityReceded).cgColor
 
     let leftSidebarToggle = makeToolbarButton(
       symbol: "sidebar.left",
@@ -214,14 +238,14 @@ final class SeyalShellView: NSView {
     )
 
     let workspaceField = NSTextField(labelWithString: state.activeWorkspace.name)
-    workspaceField.font = SeyalDesignTokens.Typography.chromeEmphasized
-    workspaceField.textColor = SeyalDesignTokens.Palette.textPrimary
+    workspaceField.font = visual.typography[.windowTitle]
+    workspaceField.textColor = visual.colors.ns(.textPrimary)
     workspaceField.lineBreakMode = .byTruncatingTail
     workspaceField.translatesAutoresizingMaskIntoConstraints = false
 
     let slash = NSTextField(labelWithString: "/")
-    slash.font = SeyalDesignTokens.Typography.chrome
-    slash.textColor = SeyalDesignTokens.Palette.textTertiary
+    slash.font = visual.typography[.tab]
+    slash.textColor = visual.colors.ns(.textMuted)
     slash.translatesAutoresizingMaskIntoConstraints = false
 
     let tabs = makeTabStrip()
@@ -310,7 +334,7 @@ final class SeyalShellView: NSView {
     if button.image == nil {
       button.title = fallback
     }
-    button.contentTintColor = SeyalDesignTokens.Palette.textSecondary
+    button.contentTintColor = visual.colors.ns(.textSecondary)
     button.toolTip = accessibilityLabel
     button.setAccessibilityLabel(accessibilityLabel)
     button.setAccessibilityIdentifier(accessibilityID)
@@ -373,12 +397,12 @@ final class SeyalShellView: NSView {
     button.isBordered = false
     button.font =
       isActive
-      ? SeyalDesignTokens.Typography.chromeEmphasized
-      : SeyalDesignTokens.Typography.chrome
+      ? visual.typography[.windowTitle]
+      : visual.typography[.tab]
     button.contentTintColor =
       isActive
-      ? SeyalDesignTokens.Palette.textPrimary
-      : SeyalDesignTokens.Palette.textSecondary
+      ? visual.colors.ns(.textPrimary)
+      : visual.colors.ns(.textSecondary)
     button.alignment = .left
     button.image = NSImage(systemSymbolName: "circle.fill", accessibilityDescription: nil)
     button.imagePosition = .imageLeading
@@ -392,7 +416,7 @@ final class SeyalShellView: NSView {
     close.bezelStyle = .inline
     close.isBordered = false
     close.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close")
-    close.contentTintColor = SeyalDesignTokens.Palette.textTertiary
+    close.contentTintColor = visual.colors.ns(.textMuted)
     close.isHidden = snapshot.tabs.count <= 1
     close.translatesAutoresizingMaskIntoConstraints = false
     close.widthAnchor.constraint(equalToConstant: 18).isActive = true
@@ -409,7 +433,7 @@ final class SeyalShellView: NSView {
     container.layer?.cornerRadius = 7
     container.layer?.backgroundColor =
       isActive
-      ? SeyalDesignTokens.Palette.elevatedBackground.cgColor
+      ? visual.colors.ns(.utilityActive).cgColor
       : NSColor.clear.cgColor
     container.addSubview(row)
 
@@ -417,7 +441,7 @@ final class SeyalShellView: NSView {
       let accent = NSView()
       accent.translatesAutoresizingMaskIntoConstraints = false
       accent.wantsLayer = true
-      accent.layer?.backgroundColor = SeyalDesignTokens.Palette.focus.cgColor
+      accent.layer?.backgroundColor = visual.colors.ns(.focus).cgColor
       container.addSubview(accent)
       NSLayoutConstraint.activate([
         accent.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 10),
@@ -432,9 +456,9 @@ final class SeyalShellView: NSView {
       row.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -6),
       row.centerYAnchor.constraint(equalTo: container.centerYAnchor),
       button.widthAnchor.constraint(
-        greaterThanOrEqualToConstant: SeyalDesignTokens.Layout.tabMinWidth - 30),
+        greaterThanOrEqualToConstant: visual.metrics.tabMinWidth - 30),
       container.widthAnchor.constraint(
-        lessThanOrEqualToConstant: SeyalDesignTokens.Layout.tabMaxWidth),
+        lessThanOrEqualToConstant: visual.metrics.tabMaxWidth),
     ])
     return container
   }
@@ -443,7 +467,7 @@ final class SeyalShellView: NSView {
     let panel = NSView()
     panel.translatesAutoresizingMaskIntoConstraints = false
     panel.wantsLayer = true
-    panel.layer?.backgroundColor = SeyalDesignTokens.Palette.panelBackground.cgColor
+    panel.layer?.backgroundColor = visual.colors.ns(.utilityReceded).cgColor
 
     let modeControl = SeyalPreviewModeControl(
       labels: ["Workspaces", "Tabs"],
@@ -465,7 +489,7 @@ final class SeyalShellView: NSView {
       accessibilityID: "left-sidebar-collapse",
       action: #selector(toggleLeftSidebar(_:))
     )
-    collapse.contentTintColor = SeyalDesignTokens.Palette.textTertiary
+    collapse.contentTintColor = visual.colors.ns(.textMuted)
 
     let header = NSStackView(views: [modeControl, collapse])
     header.orientation = .horizontal
@@ -500,11 +524,11 @@ final class SeyalShellView: NSView {
       stack.topAnchor.constraint(equalTo: panel.topAnchor),
       stack.bottomAnchor.constraint(lessThanOrEqualTo: panel.bottomAnchor),
       header.widthAnchor.constraint(
-        equalToConstant: SeyalDesignTokens.Layout.leftContextWidth - 24),
+        equalToConstant: visual.metrics.leftContextWidth - 24),
       modeControl.widthAnchor.constraint(
-        equalToConstant: SeyalDesignTokens.Layout.leftContextWidth - 56),
+        equalToConstant: visual.metrics.leftContextWidth - 56),
       content.widthAnchor.constraint(
-        equalToConstant: SeyalDesignTokens.Layout.leftContextWidth - 24),
+        equalToConstant: visual.metrics.leftContextWidth - 24),
     ])
     return panel
   }
@@ -521,7 +545,7 @@ final class SeyalShellView: NSView {
           emphasized: workspace.id == snapshot.activeWorkspaceID,
           attention: workspace.attention,
           statusColor: workspace.id == snapshot.activeWorkspaceID
-            ? SeyalDesignTokens.Palette.success
+            ? visual.colors.ns(.success)
             : nil,
           itemID: workspace.id,
           accessibilityID: "workspace.\(workspace.id)",
@@ -568,7 +592,7 @@ final class SeyalShellView: NSView {
           trailing: paneDetail,
           emphasized: tab.id == snapshot.activeTabID,
           attention: tab.attention,
-          statusColor: tab.attention ? SeyalDesignTokens.Palette.warning : nil,
+          statusColor: tab.attention ? visual.colors.ns(.warning) : nil,
           itemID: tab.id,
           accessibilityID: "left-tab.\(tab.id)",
           action: #selector(selectTab(_:))
@@ -579,11 +603,11 @@ final class SeyalShellView: NSView {
     newTab.bezelStyle = .inline
     newTab.isBordered = false
     newTab.alignment = .left
-    newTab.font = SeyalDesignTokens.Typography.bodyEmphasized
-    newTab.contentTintColor = SeyalDesignTokens.Palette.focus
+    newTab.font = visual.typography[.action]
+    newTab.contentTintColor = visual.colors.ns(.focus)
     newTab.setAccessibilityIdentifier("left-new-tab")
     newTab.translatesAutoresizingMaskIntoConstraints = false
-    newTab.widthAnchor.constraint(equalToConstant: SeyalDesignTokens.Layout.leftContextWidth - 24)
+    newTab.widthAnchor.constraint(equalToConstant: visual.metrics.leftContextWidth - 24)
       .isActive = true
     stack.addArrangedSubview(newTab)
   }
@@ -605,10 +629,10 @@ final class SeyalShellView: NSView {
     container.layer?.cornerRadius = 7
     container.layer?.backgroundColor =
       emphasized
-      ? SeyalDesignTokens.Palette.focusSoft.cgColor
+      ? visual.colors.ns(.selection).cgColor
       : NSColor.clear.cgColor
     container.widthAnchor.constraint(
-      equalToConstant: SeyalDesignTokens.Layout.leftContextWidth - 24
+      equalToConstant: visual.metrics.leftContextWidth - 24
     ).isActive = true
 
     let dot = NSTextField(labelWithString: "●")
@@ -616,8 +640,8 @@ final class SeyalShellView: NSView {
     dot.textColor =
       statusColor
       ?? (attention
-        ? SeyalDesignTokens.Palette.warning
-        : SeyalDesignTokens.Palette.textTertiary)
+        ? visual.colors.ns(.warning)
+        : visual.colors.ns(.textMuted))
     dot.translatesAutoresizingMaskIntoConstraints = false
     dot.setContentHuggingPriority(.required, for: .horizontal)
 
@@ -630,20 +654,20 @@ final class SeyalShellView: NSView {
     button.alignment = .left
     button.font =
       emphasized
-      ? SeyalDesignTokens.Typography.bodyEmphasized
-      : SeyalDesignTokens.Typography.body
+      ? visual.typography[.action]
+      : visual.typography[.uiBody]
     button.contentTintColor =
       emphasized
-      ? SeyalDesignTokens.Palette.textPrimary
-      : SeyalDesignTokens.Palette.textSecondary
+      ? visual.colors.ns(.textPrimary)
+      : visual.colors.ns(.textSecondary)
     button.translatesAutoresizingMaskIntoConstraints = false
 
     let trailingField = NSTextField(labelWithString: trailing ?? "")
-    trailingField.font = SeyalDesignTokens.Typography.metadata
+    trailingField.font = visual.typography[.metadata]
     trailingField.textColor =
       attention
-      ? SeyalDesignTokens.Palette.warning
-      : SeyalDesignTokens.Palette.textTertiary
+      ? visual.colors.ns(.warning)
+      : visual.colors.ns(.textMuted)
     trailingField.alignment = .right
     trailingField.translatesAutoresizingMaskIntoConstraints = false
     trailingField.setContentHuggingPriority(.required, for: .horizontal)
@@ -665,8 +689,8 @@ final class SeyalShellView: NSView {
 
     if let secondary {
       let secondaryField = NSTextField(labelWithString: secondary)
-      secondaryField.font = SeyalDesignTokens.Typography.metadata
-      secondaryField.textColor = SeyalDesignTokens.Palette.textTertiary
+      secondaryField.font = visual.typography[.metadata]
+      secondaryField.textColor = visual.colors.ns(.textMuted)
       secondaryField.lineBreakMode = .byTruncatingMiddle
       secondaryField.translatesAutoresizingMaskIntoConstraints = false
       container.addSubview(secondaryField)
@@ -687,8 +711,8 @@ final class SeyalShellView: NSView {
 
   private func makeEmptyStateRow(_ text: String) -> NSView {
     let field = NSTextField(labelWithString: text)
-    field.font = SeyalDesignTokens.Typography.body
-    field.textColor = SeyalDesignTokens.Palette.textTertiary
+    field.font = visual.typography[.uiBody]
+    field.textColor = visual.colors.ns(.textMuted)
     field.lineBreakMode = .byTruncatingMiddle
     field.translatesAutoresizingMaskIntoConstraints = false
 
@@ -696,7 +720,7 @@ final class SeyalShellView: NSView {
     container.translatesAutoresizingMaskIntoConstraints = false
     container.addSubview(field)
     container.widthAnchor.constraint(
-      equalToConstant: SeyalDesignTokens.Layout.leftContextWidth - 24
+      equalToConstant: visual.metrics.leftContextWidth - 24
     ).isActive = true
     NSLayoutConstraint.activate([
       field.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 7),
@@ -711,7 +735,7 @@ final class SeyalShellView: NSView {
     let container = NSView()
     container.translatesAutoresizingMaskIntoConstraints = false
     container.wantsLayer = true
-    container.layer?.backgroundColor = SeyalDesignTokens.Palette.paneBackground.cgColor
+    container.layer?.backgroundColor = visual.colors.ns(.canvas).cgColor
 
     let tree = makePaneTree(state.activeTab.root)
     tree.translatesAutoresizingMaskIntoConstraints = false
@@ -738,7 +762,7 @@ final class SeyalShellView: NSView {
       stack.spacing = 1
       stack.translatesAutoresizingMaskIntoConstraints = false
       stack.wantsLayer = true
-      stack.layer?.backgroundColor = SeyalDesignTokens.Palette.separator.cgColor
+      stack.layer?.backgroundColor = visual.colors.ns(.seamHover).cgColor
       if axis == .right {
         firstView.heightAnchor.constraint(equalTo: stack.heightAnchor).isActive = true
         secondView.heightAnchor.constraint(equalTo: stack.heightAnchor).isActive = true
@@ -759,13 +783,8 @@ final class SeyalShellView: NSView {
     let pane = NSView()
     pane.translatesAutoresizingMaskIntoConstraints = false
     pane.wantsLayer = true
-    pane.layer?.cornerRadius = SeyalDesignTokens.Layout.paneCornerRadius
-    pane.layer?.borderWidth = isFocused ? 0.75 : 0.5
-    pane.layer?.borderColor =
-      (isFocused
-      ? SeyalDesignTokens.Palette.focus
-      : SeyalDesignTokens.Palette.separator).cgColor
-    pane.layer?.backgroundColor = SeyalDesignTokens.Palette.paneBackground.cgColor
+    pane.layer?.backgroundColor = visual.colors.cg(.canvas)
+    SeyalFocusTreatment.apply(isFocused, to: pane, visual: visual)
     paneContainers[paneID] = pane
 
     let focusButton = NSButton(
@@ -777,11 +796,11 @@ final class SeyalShellView: NSView {
     focusButton.isBordered = false
     focusButton.alignment = .left
     focusButton.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
-    focusButton.contentTintColor = SeyalDesignTokens.Palette.textPrimary
+    focusButton.contentTintColor = visual.colors.ns(.textPrimary)
 
     let type = NSTextField(labelWithString: "Terminal")
-    type.font = SeyalDesignTokens.Typography.metadata
-    type.textColor = SeyalDesignTokens.Palette.textTertiary
+    type.font = visual.typography[.metadata]
+    type.textColor = visual.colors.ns(.textMuted)
 
     let titleStack = NSStackView(views: [focusButton, type])
     titleStack.orientation = .vertical
@@ -795,8 +814,8 @@ final class SeyalShellView: NSView {
     spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
     let focusState = NSTextField(labelWithString: isFocused ? "Focused" : "")
-    focusState.font = SeyalDesignTokens.Typography.metadata
-    focusState.textColor = SeyalDesignTokens.Palette.focus
+    focusState.font = visual.typography[.metadata]
+    focusState.textColor = visual.colors.ns(.focus)
     focusState.setContentHuggingPriority(.required, for: .horizontal)
     paneFocusLabels[paneID] = focusState
 
@@ -846,6 +865,7 @@ final class SeyalShellView: NSView {
     let composer = PaneComposerShellView(
       mode: composerMode,
       draft: paneState.draft,
+      visual: visual,
       accessibilityID: "composer.\(paneID)",
       onFocus: { [weak self] in
         self?.focusPaneWithoutRebuild(paneID)
@@ -914,7 +934,7 @@ final class SeyalShellView: NSView {
     if button.image == nil {
       button.title = fallback
     }
-    button.contentTintColor = SeyalDesignTokens.Palette.textTertiary
+    button.contentTintColor = visual.colors.ns(.textMuted)
     button.toolTip = accessibilityLabel
     button.setAccessibilityLabel(accessibilityLabel)
     button.setAccessibilityIdentifier(accessibilityID)
@@ -999,7 +1019,8 @@ final class SeyalShellView: NSView {
               isSelected: index == blocks.count - 1,
               actions: []
             ),
-            bodyView: body
+            bodyView: body,
+            visual: visual
           )
           block.setAccessibilityIdentifier(key.accessibilityIdentifier)
           blockViews[key] = block
@@ -1054,7 +1075,8 @@ final class SeyalShellView: NSView {
       paneID: paneID,
       installSurface: productionShell,
       executionIdentity: paneState?.executionIdentity,
-      allowsImplicitExecutionBootstrap: paneState?.allowsImplicitExecutionBootstrap ?? false
+      allowsImplicitExecutionBootstrap: paneState?.allowsImplicitExecutionBootstrap ?? false,
+      visual: visual
     )
     transcript.setAccessibilityIdentifier("transcript.\(paneID)")
     let document = transcript.transcriptDocument
@@ -1139,14 +1161,14 @@ final class SeyalShellView: NSView {
       document.addSubview(host)
 
       let title = NSTextField(labelWithString: "No TerminalExecution attached")
-      title.font = SeyalDesignTokens.Typography.bodyEmphasized
-      title.textColor = SeyalDesignTokens.Palette.textSecondary
+      title.font = visual.typography[.action]
+      title.textColor = visual.colors.ns(.textSecondary)
       title.alignment = .center
 
       let detail = NSTextField(
         labelWithString: "UI preview only · terminal authority remains unwired until Pass 6")
-      detail.font = SeyalDesignTokens.Typography.metadata
-      detail.textColor = SeyalDesignTokens.Palette.textTertiary
+      detail.font = visual.typography[.metadata]
+      detail.textColor = visual.colors.ns(.textMuted)
       detail.alignment = .center
 
       let empty = NSStackView(views: [title, detail])
@@ -1173,12 +1195,12 @@ final class SeyalShellView: NSView {
     let panel = NSView()
     panel.translatesAutoresizingMaskIntoConstraints = false
     panel.wantsLayer = true
-    panel.layer?.backgroundColor = SeyalDesignTokens.Palette.panelBackground.cgColor
+    panel.layer?.backgroundColor = visual.colors.ns(.utilityReceded).cgColor
 
     let detail = NSView()
     detail.translatesAutoresizingMaskIntoConstraints = false
     detail.wantsLayer = true
-    detail.layer?.backgroundColor = SeyalDesignTokens.Palette.panelBackground.cgColor
+    detail.layer?.backgroundColor = visual.colors.ns(.utilityReceded).cgColor
     populateInspector(detail)
 
     let rail = makeInspectorRail()
@@ -1194,7 +1216,7 @@ final class SeyalShellView: NSView {
       rail.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
       rail.topAnchor.constraint(equalTo: panel.topAnchor),
       rail.bottomAnchor.constraint(equalTo: panel.bottomAnchor),
-      rail.widthAnchor.constraint(equalToConstant: SeyalDesignTokens.Layout.inspectorRailWidth),
+      rail.widthAnchor.constraint(equalToConstant: visual.metrics.inspectorRailWidth),
     ])
     rail.constraints.first(where: { $0.firstAttribute == .width })?.priority = .defaultHigh
     return panel
@@ -1204,12 +1226,12 @@ final class SeyalShellView: NSView {
     let rail = NSView()
     rail.translatesAutoresizingMaskIntoConstraints = false
     rail.wantsLayer = true
-    rail.layer?.backgroundColor = SeyalDesignTokens.Palette.chromeBackground.cgColor
+    rail.layer?.backgroundColor = visual.colors.ns(.utilityReceded).cgColor
 
     let separator = NSView()
     separator.translatesAutoresizingMaskIntoConstraints = false
     separator.wantsLayer = true
-    separator.layer?.backgroundColor = SeyalDesignTokens.Palette.separator.cgColor
+    separator.layer?.backgroundColor = visual.colors.ns(.seamHover).cgColor
     rail.addSubview(separator)
 
     let stack = NSStackView()
@@ -1232,14 +1254,14 @@ final class SeyalShellView: NSView {
       }
       button.contentTintColor =
         mode == inspectorMode
-        ? SeyalDesignTokens.Palette.focus
-        : SeyalDesignTokens.Palette.textTertiary
+        ? visual.colors.ns(.focus)
+        : visual.colors.ns(.textMuted)
       button.translatesAutoresizingMaskIntoConstraints = false
       button.wantsLayer = true
       button.layer?.cornerRadius = 6
       button.layer?.backgroundColor =
         mode == inspectorMode
-        ? SeyalDesignTokens.Palette.focusSoft.cgColor
+        ? visual.colors.ns(.selection).cgColor
         : NSColor.clear.cgColor
       button.widthAnchor.constraint(equalToConstant: 28).isActive = true
       button.heightAnchor.constraint(equalToConstant: 28).isActive = true
@@ -1263,7 +1285,7 @@ final class SeyalShellView: NSView {
 
     let title = NSTextField(labelWithString: "Inspector")
     title.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
-    title.textColor = SeyalDesignTokens.Palette.textPrimary
+    title.textColor = visual.colors.ns(.textPrimary)
 
     let spacer = NSView()
     spacer.translatesAutoresizingMaskIntoConstraints = false
@@ -1277,7 +1299,7 @@ final class SeyalShellView: NSView {
       accessibilityID: "inspector-collapse",
       action: #selector(toggleInspector(_:))
     )
-    collapse.contentTintColor = SeyalDesignTokens.Palette.textTertiary
+    collapse.contentTintColor = visual.colors.ns(.textMuted)
 
     let titleRow = NSStackView(views: [title, spacer, collapse])
     titleRow.orientation = .horizontal
@@ -1286,8 +1308,8 @@ final class SeyalShellView: NSView {
     titleRow.translatesAutoresizingMaskIntoConstraints = false
 
     let mode = NSTextField(labelWithString: inspectorMode.title.uppercased())
-    mode.font = SeyalDesignTokens.Typography.section
-    mode.textColor = SeyalDesignTokens.Palette.focus
+    mode.font = visual.typography[.sectionLabel]
+    mode.textColor = visual.colors.ns(.focus)
     mode.setAccessibilityIdentifier("inspector-mode-label")
     mode.setAccessibilityLabel(inspectorMode.title.uppercased())
 
@@ -1315,8 +1337,8 @@ final class SeyalShellView: NSView {
       let empty = NSTextField(
         wrappingLabelWithString:
           "No \(inspectorMode.title.lowercased()) context for the current selection")
-      empty.font = SeyalDesignTokens.Typography.body
-      empty.textColor = SeyalDesignTokens.Palette.textTertiary
+      empty.font = visual.typography[.uiBody]
+      empty.textColor = visual.colors.ns(.textMuted)
       empty.maximumNumberOfLines = 3
       empty.setAccessibilityIdentifier("inspector-empty")
       stack.addArrangedSubview(empty)
@@ -1333,7 +1355,7 @@ final class SeyalShellView: NSView {
   }
 
   private var inspectorDetailWidth: CGFloat {
-    SeyalDesignTokens.Layout.inspectorWidth - SeyalDesignTokens.Layout.inspectorRailWidth
+    visual.metrics.inspectorWidth - visual.metrics.inspectorRailWidth
   }
 
   private func visibleInspectorRows() -> [SeyalShellSnapshot.InspectorRow] {
@@ -1351,13 +1373,13 @@ final class SeyalShellView: NSView {
 
   private func makeInspectorRow(_ row: SeyalShellSnapshot.InspectorRow) -> NSView {
     let label = NSTextField(labelWithString: row.label)
-    label.font = SeyalDesignTokens.Typography.metadata
-    label.textColor = SeyalDesignTokens.Palette.textTertiary
+    label.font = visual.typography[.metadata]
+    label.textColor = visual.colors.ns(.textMuted)
     label.setContentCompressionResistancePriority(.required, for: .horizontal)
 
     let value = NSTextField(labelWithString: row.value)
-    value.font = SeyalDesignTokens.Typography.body
-    value.textColor = SeyalDesignTokens.Palette.textPrimary
+    value.font = visual.typography[.uiBody]
+    value.textColor = visual.colors.ns(.textPrimary)
     value.lineBreakMode = .byTruncatingMiddle
     value.alignment = .right
     value.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -1376,21 +1398,21 @@ final class SeyalShellView: NSView {
 
   private func appendSectionTitle(_ title: String, to stack: NSStackView) {
     let field = NSTextField(labelWithString: title.uppercased())
-    field.font = SeyalDesignTokens.Typography.section
-    field.textColor = SeyalDesignTokens.Palette.textTertiary
+    field.font = visual.typography[.sectionLabel]
+    field.textColor = visual.colors.ns(.textMuted)
     stack.addArrangedSubview(field)
   }
 
   private func agentColor(_ agentState: SeyalShellSnapshot.Agent.State) -> NSColor {
     switch agentState {
     case .running:
-      SeyalDesignTokens.Palette.success
+      visual.colors.ns(.success)
     case .waiting:
-      SeyalDesignTokens.Palette.info
+      visual.colors.ns(.information)
     case .attention:
-      SeyalDesignTokens.Palette.warning
+      visual.colors.ns(.warning)
     case .idle:
-      SeyalDesignTokens.Palette.textTertiary
+      visual.colors.ns(.textMuted)
     }
   }
 
@@ -1405,11 +1427,7 @@ final class SeyalShellView: NSView {
     state.focusPane(id: paneID)
     for (id, pane) in paneContainers {
       let focused = id == state.activeTab.focusedPaneID
-      pane.layer?.borderWidth = focused ? 0.75 : 0.5
-      pane.layer?.borderColor =
-        (focused
-        ? SeyalDesignTokens.Palette.focus
-        : SeyalDesignTokens.Palette.separator).cgColor
+      SeyalFocusTreatment.apply(focused, to: pane, visual: visual)
       paneFocusLabels[id]?.stringValue = focused ? "Focused" : ""
     }
     composerView = composerViews[paneID]
@@ -1573,13 +1591,13 @@ final class SeyalShellView: NSView {
     stack.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
     stack.translatesAutoresizingMaskIntoConstraints = false
     stack.wantsLayer = true
-    stack.layer?.backgroundColor = SeyalDesignTokens.Palette.elevatedBackground.cgColor
+    stack.layer?.backgroundColor = visual.colors.ns(.utilityActive).cgColor
 
     appendSectionTitle("Attention", to: stack)
     if snapshot.attentionItems.isEmpty {
       let empty = NSTextField(labelWithString: "No attention items")
-      empty.font = SeyalDesignTokens.Typography.body
-      empty.textColor = SeyalDesignTokens.Palette.textTertiary
+      empty.font = visual.typography[.uiBody]
+      empty.textColor = visual.colors.ns(.textMuted)
       stack.addArrangedSubview(empty)
     } else {
       snapshot.attentionItems.forEach { item in
@@ -1590,12 +1608,12 @@ final class SeyalShellView: NSView {
         button.bezelStyle = .inline
         button.isBordered = false
         button.alignment = .left
-        button.font = SeyalDesignTokens.Typography.bodyEmphasized
-        button.contentTintColor = SeyalDesignTokens.Palette.textPrimary
+        button.font = visual.typography[.action]
+        button.contentTintColor = visual.colors.ns(.textPrimary)
 
         let detail = NSTextField(wrappingLabelWithString: item.detail)
-        detail.font = SeyalDesignTokens.Typography.body
-        detail.textColor = SeyalDesignTokens.Palette.textSecondary
+        detail.font = visual.typography[.uiBody]
+        detail.textColor = visual.colors.ns(.textSecondary)
         detail.maximumNumberOfLines = 2
 
         let itemStack = NSStackView(views: [button, detail])
@@ -1670,14 +1688,17 @@ final class SeyalShellView: NSView {
   }
 
   static func smokeTest() -> Bool {
+    let visual = SeyalThemeResolver.canonical(.dark)
     let shell = SeyalShellProductionFactory.make(
-      frame: NSRect(x: 0, y: 0, width: 1280, height: 800))
+      frame: NSRect(x: 0, y: 0, width: 1280, height: 800),
+      visual: visual
+    )
     shell.layoutSubtreeIfNeeded()
     guard let contract = shell.debugLayoutContract() else { return false }
     return shell.subviews.count == 4
-      && abs(contract.topChrome.height - SeyalDesignTokens.Layout.topChromeHeight) < 1
-      && abs(contract.leftContext.width - SeyalDesignTokens.Layout.leftContextWidth) < 1
-      && abs(contract.inspector.width - SeyalDesignTokens.Layout.inspectorWidth) < 1
+      && abs(contract.topChrome.height - visual.metrics.topChromeHeight) < 1
+      && abs(contract.leftContext.width - visual.metrics.leftContextWidth) < 1
+      && abs(contract.inspector.width - visual.metrics.inspectorWidth) < 1
       && abs(contract.inspector.maxX - shell.bounds.maxX) < 1
       && abs(contract.pane.maxX - contract.inspector.minX + 1) < 1
       && contract.pane.width > 600

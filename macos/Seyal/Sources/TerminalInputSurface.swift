@@ -295,13 +295,15 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @MainActor NSTextInpu
     frame frameRect: NSRect,
     paneID: String,
     executionIdentity: String? = nil,
-    allowsImplicitExecutionBootstrap: Bool = true
+    allowsImplicitExecutionBootstrap: Bool = true,
+    terminalFont: SeyalResolvedFontSpec = .canonicalTerminal
   ) {
     super.init(
       frame: frameRect,
       paneID: paneID,
       executionIdentity: executionIdentity,
-      allowsImplicitExecutionBootstrap: allowsImplicitExecutionBootstrap
+      allowsImplicitExecutionBootstrap: allowsImplicitExecutionBootstrap,
+      terminalFont: terminalFont
     )
     configureInteractiveSurface()
   }

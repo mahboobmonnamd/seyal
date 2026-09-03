@@ -91,14 +91,16 @@ final class PaneTranscriptView: NSScrollView {
     surface: InteractiveMetalSurfaceView? = nil,
     installSurface: Bool = true,
     executionIdentity: String? = nil,
-    allowsImplicitExecutionBootstrap: Bool = true
+    allowsImplicitExecutionBootstrap: Bool = true,
+    visual: SeyalResolvedVisualConfiguration
   ) {
     self.paneID = paneID
     terminalSurface = surface ?? InteractiveMetalSurfaceView(
       frame: .zero,
       paneID: paneID,
       executionIdentity: executionIdentity,
-      allowsImplicitExecutionBootstrap: allowsImplicitExecutionBootstrap
+      allowsImplicitExecutionBootstrap: allowsImplicitExecutionBootstrap,
+      terminalFont: visual.terminalFont
     )
     super.init(frame: .zero)
     translatesAutoresizingMaskIntoConstraints = false
@@ -109,7 +111,7 @@ final class PaneTranscriptView: NSScrollView {
     borderType = .noBorder
     transcriptDocument.translatesAutoresizingMaskIntoConstraints = false
     transcriptDocument.wantsLayer = true
-    transcriptDocument.layer?.backgroundColor = SeyalDesignTokens.Palette.paneBackground.cgColor
+    transcriptDocument.layer?.backgroundColor = visual.colors.cg(.canvas)
     documentView = transcriptDocument
 
     if installSurface {
@@ -127,6 +129,10 @@ final class PaneTranscriptView: NSScrollView {
 
   @available(*, unavailable)
   required init?(coder: NSCoder) { fatalError("PaneTranscriptView is programmatic") }
+
+  func applyVisual(_ visual: SeyalResolvedVisualConfiguration) {
+    transcriptDocument.layer?.backgroundColor = visual.colors.cg(.canvas)
+  }
 
   func installBlockStack(_ stack: NSStackView) {
     stack.translatesAutoresizingMaskIntoConstraints = false

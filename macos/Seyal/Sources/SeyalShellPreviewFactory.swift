@@ -5,12 +5,17 @@ import AppKit
 enum SeyalShellPreviewFactory {
     static func make(
         frame: NSRect,
-        state: SeyalShellState? = nil
+        state: SeyalShellState? = nil,
+        visual: SeyalResolvedVisualConfiguration = SeyalThemeResolver.canonical(.dark)
     ) -> SeyalShellView {
         let resolvedState = state ?? SeyalShellState.makePreview(
             includeTestAttention: ProcessInfo.processInfo.environment["SEYAL_UI_TEST_FIXTURES"] == "1"
         )
-        let shell = SeyalShellView(frame: frame, state: resolvedState)
+        let shell = SeyalShellView(
+            frame: frame,
+            state: resolvedState,
+            visual: visual
+        )
         shell.translatesAutoresizingMaskIntoConstraints = true
         shell.autoresizingMask = [.width, .height]
         return shell
@@ -36,6 +41,8 @@ final class SeyalShortcutHintOverlay: NSView {
         let text: String
         let id: String
     }
+
+    private let visual = SeyalThemeResolver.canonical(.dark)
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         nil
@@ -78,8 +85,8 @@ final class SeyalShortcutHintOverlay: NSView {
         guard targetRect.width > 0, targetRect.height > 0 else { return }
 
         let label = NSTextField(labelWithString: hint.text)
-        label.font = NSFont.monospacedSystemFont(ofSize: 9.5, weight: .semibold)
-        label.textColor = SeyalDesignTokens.Palette.textPrimary
+        label.font = visual.typography[.metadata]
+        label.textColor = visual.colors.ns(.textPrimary)
         label.alignment = .center
         label.setAccessibilityIdentifier("shortcut-hint.\(hint.id)")
         label.setAccessibilityLabel(hint.text)
@@ -99,10 +106,10 @@ final class SeyalShortcutHintOverlay: NSView {
 
         let badge = NSView(frame: NSRect(origin: NSPoint(x: x, y: y), size: badgeSize))
         badge.wantsLayer = true
-        badge.layer?.cornerRadius = 5
-        badge.layer?.backgroundColor = SeyalDesignTokens.Palette.elevatedBackground.withAlphaComponent(0.97).cgColor
-        badge.layer?.borderWidth = 1
-        badge.layer?.borderColor = SeyalDesignTokens.Palette.focus.cgColor
+        badge.layer?.cornerRadius = visual.metrics.overlayCornerRadius / 2
+        badge.layer?.backgroundColor = visual.colors.ns(.utilityElevated).withAlphaComponent(0.97).cgColor
+        badge.layer?.borderWidth = visual.metrics.seamWidth
+        badge.layer?.borderColor = visual.colors.cg(.focus)
 
         label.frame.origin = NSPoint(x: horizontalPadding, y: verticalPadding)
         badge.addSubview(label)

@@ -447,6 +447,21 @@ final class SeyalShellUITests: XCTestCase {
         XCTAssertTrue(app.textViews["composer.pane-1"].exists)
     }
 
+    func testLightAppearanceStillExposesTokenBackedShellChrome() {
+        app.terminate()
+        app = XCUIApplication()
+        app.launchArguments = ["--ui-shell-preview"]
+        app.launchEnvironment["SEYAL_UI_TEST_FIXTURES"] = "1"
+        app.launchEnvironment["SEYAL_UI_APPEARANCE"] = "light"
+        app.launch()
+
+        let window = app.windows["Seyal — UI Shell Preview"]
+        XCTAssertTrue(window.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["tab.tab-terminal"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.textViews["composer.pane-1"].exists)
+        XCTAssertTrue(app.buttons["toggle-left-sidebar"].exists)
+    }
+
     func testAttentionItemNavigatesInsteadOfBeingDecorative() {
         let attentionButton = app.buttons["attention"]
         XCTAssertTrue(attentionButton.waitForExistence(timeout: 5))

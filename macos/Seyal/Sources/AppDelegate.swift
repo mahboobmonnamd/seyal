@@ -5,6 +5,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let buildConfigurationKey = "SeyalBuildConfiguration"
 
     private var window: NSWindow?
+    private var appearance: SeyalAppearanceController?
     #if DEBUG
     private var previewShortcutController: SeyalPreviewShortcutController?
     #endif
@@ -53,36 +54,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             defer: false
         )
 
+        let loaded = SeyalUIConfiguration.loadFromDisk()
+        let appearance = SeyalAppearanceController(
+            settings: loaded.settings,
+            diagnostics: loaded.diagnostics
+        )
+        self.appearance = appearance
+        let snapshot = appearance.snapshot
+
         if useShellPreview {
             #if DEBUG
-            // The frozen reference is a deliberate dark workspace independent of
-            // the developer's current macOS appearance. Production theme selection
-            // will replace this preview-only choice behind a real theme model.
-            window.appearance = NSAppearance(named: .darkAqua)
-            window.backgroundColor = SeyalDesignTokens.Palette.windowBackground
+            window.appearance = snapshot.nsAppearance
+            window.backgroundColor = snapshot.colors.ns(.container)
             window.title = "Seyal — UI Shell Preview"
 
             let previewState = SeyalShellState.makePreview(
                 includeTestAttention: environment["SEYAL_UI_TEST_FIXTURES"] == "1"
             )
-            window.contentView = SeyalShellPreviewFactory.make(
+            let shell = SeyalShellPreviewFactory.make(
                 frame: contentRect,
-                state: previewState
+                state: previewState,
+                visual: snapshot
             )
+            window.contentView = shell
             window.minSize = NSSize(width: 1050, height: 680)
 
             let shortcuts = SeyalPreviewShortcutController(window: window, state: previewState)
             shortcuts.installMenus()
             previewShortcutController = shortcuts
             #else
-            // shouldUseShellPreview is false for non-Debug builds. Keep this branch
-            // self-contained so Release compilation never depends on preview types.
             window.title = "Seyal"
-            window.contentView = MetalSurfaceView(frame: contentRect)
+            window.contentView = MetalSurfaceView(
+                frame: contentRect,
+                paneID: "unbound",
+                terminalFont: snapshot.terminalFont
+            )
             #endif
         } else {
+            window.appearance = snapshot.nsAppearance
+            window.backgroundColor = snapshot.colors.ns(.container)
             window.title = "Seyal"
-            window.contentView = SeyalShellProductionFactory.make(frame: contentRect)
+            window.contentView = SeyalShellProductionFactory.make(
+                frame: contentRect,
+                visual: snapshot
+            )
+        }
+        appearance.onChange = { [weak self] next in
+            guard let window = self?.window else { return }
+            window.appearance = next.nsAppearance
+            window.backgroundColor = next.colors.ns(.container)
+            (window.contentView as? SeyalShellView)?.applyVisualConfiguration(next)
         }
         window.center()
         window.makeKeyAndOrderFront(nil)

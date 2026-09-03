@@ -11,10 +11,15 @@ private final class Pass9AcceptanceTimerBox: @unchecked Sendable {
   }
 }
 
-/// Production-path Pass 9 merge-acceptance soak. Drives the same
-/// RustDisplayBridge + RuntimeLifecycleRecoveryCoordinator topology used by
-/// Seyal.app, samples resources only at quiescent points, and emits
-/// `seyal.pass9.merge-acceptance.v1` JSON for the companion validator.
+/// Pass 9 merge-acceptance soak for Issue #735.
+///
+/// Drives the production recovery ownership path
+/// (`RuntimeLifecycleRecoveryCoordinator` + `RustDisplayBridge`) and the
+/// production Metal renderer update/release boundary used by
+/// `MetalSurfaceView.consumeBridgeFrame`. This is not a full AppKit window /
+/// CAMetalLayer present path; evidence must not claim Seyal.app shell topology.
+/// Abrupt mode injects owned socket loss (`shutdown` + disconnect), not
+/// GUI-process death.
 @MainActor
 enum Pass9MergeAcceptance {
   struct Options {
@@ -23,6 +28,19 @@ enum Pass9MergeAcceptance {
     var geometry: String = "120x40"
     var outputPath: String?
     var commit: String?
+  }
+
+  struct GeometrySpec: Equatable {
+    var columns: Int
+    var rows: Int
+  }
+
+  /// Holds the renderer for bridge frame callbacks without capturing `self`
+  /// before initialization completes.
+  private final class RendererBox {
+    var renderer: MetalTerminalRenderer?
+    var lastColumns: Int = 0
+    var lastRows: Int = 0
   }
 
   struct ResourceSample: Equatable {
@@ -97,13 +115,30 @@ enum Pass9MergeAcceptance {
   }
 
   private static func execute(options: Options, device: any MTLDevice) throws -> Artifact {
+    let geometry = try parseGeometry(options.geometry)
+    let rendererBox = RendererBox()
+    let renderer = try MetalTerminalRenderer(device: device)
+    rendererBox.renderer = renderer
+    renderer.setVisible(false)
+
     let bridge = RustDisplayBridge(
-      onFrame: { _ in },
+      onFrame: { frame in
+        MainActor.assumeIsolated {
+          guard let renderer = rendererBox.renderer,
+            let native = NativePreparedFrame(bridgeFrame: frame)
+          else { return }
+          rendererBox.lastColumns = native.columns
+          rendererBox.lastRows = native.rows
+          _ = try? renderer.update(
+            frame: native,
+            backingScale: 2.0,
+            forceFullRebuild: true
+          )
+        }
+      },
       onError: { _ in },
       paneID: "pass9-merge-acceptance"
     )
-    let renderer = try MetalTerminalRenderer(device: device)
-    renderer.setVisible(false)
 
     let coordinator = RuntimeLifecycleRecoveryCoordinator(
       clock: { CACurrentMediaTime() },
@@ -135,22 +170,27 @@ enum Pass9MergeAcceptance {
     let graceful = try runCohort(
       mode: .gracefulDetach,
       options: options,
+      geometry: geometry,
       bridge: bridge,
       coordinator: coordinator,
       renderer: renderer,
+      rendererBox: rendererBox,
       runtimePid: runtimePid
     )
     let abrupt = try runCohort(
       mode: .abruptSocketLoss,
       options: options,
+      geometry: geometry,
       bridge: bridge,
       coordinator: coordinator,
       renderer: renderer,
+      rendererBox: rendererBox,
       runtimePid: runtimePid
     )
 
     bridge.stop()
-    waitQuiescent(bridge: bridge, coordinator: coordinator, timeout: 2)
+    coordinator.cancel()
+    waitQuiescent(bridge: bridge, coordinator: coordinator, renderer: renderer, timeout: 2)
     renderer.setVisible(false)
 
     let commit = options.commit
@@ -177,16 +217,29 @@ enum Pass9MergeAcceptance {
   private static func runCohort(
     mode: Mode,
     options: Options,
+    geometry: GeometrySpec,
     bridge: RustDisplayBridge,
     coordinator: RuntimeLifecycleRecoveryCoordinator,
     renderer: MetalTerminalRenderer,
+    rendererBox: RendererBox,
     runtimePid: Int32?
   ) throws -> Cohort {
     try awaitConnected(bridge: bridge, coordinator: coordinator, timeout: 5)
+    try presentConnectedSurface(
+      bridge: bridge,
+      coordinator: coordinator,
+      renderer: renderer,
+      rendererBox: rendererBox,
+      geometry: geometry
+    )
     // Detach to the SPEC quiescent point before baseline sampling.
-    bridge.stop()
-    waitQuiescent(bridge: bridge, coordinator: coordinator, timeout: 2)
-    renderer.setVisible(false)
+    detach(
+      mode: .gracefulDetach,
+      bridge: bridge,
+      coordinator: coordinator,
+      renderer: renderer
+    )
+    waitQuiescent(bridge: bridge, coordinator: coordinator, renderer: renderer, timeout: 2)
     let baseline = sample(
       bridge: bridge,
       coordinator: coordinator,
@@ -200,37 +253,62 @@ enum Pass9MergeAcceptance {
     var attachmentIDs = Set<String>()
     var runtimeID: String?
     var executionID: String?
+    var peakSurfaces = 0
+    var peakGpu = 0
+    var geometryApplied = false
 
     for _ in 0..<options.warmups {
       _ = try cycle(
         mode: mode,
+        geometry: geometry,
         bridge: bridge,
         coordinator: coordinator,
         renderer: renderer,
+        rendererBox: rendererBox,
         measure: false,
         attachmentIDs: &attachmentIDs,
         runtimeID: &runtimeID,
-        executionID: &executionID
+        executionID: &executionID,
+        peakSurfaces: &peakSurfaces,
+        peakGpu: &peakGpu,
+        geometryApplied: &geometryApplied
       )
     }
 
     for _ in 0..<options.cycles {
       let elapsed = try cycle(
         mode: mode,
+        geometry: geometry,
         bridge: bridge,
         coordinator: coordinator,
         renderer: renderer,
+        rendererBox: rendererBox,
         measure: true,
         attachmentIDs: &attachmentIDs,
         runtimeID: &runtimeID,
-        executionID: &executionID
+        executionID: &executionID,
+        peakSurfaces: &peakSurfaces,
+        peakGpu: &peakGpu,
+        geometryApplied: &geometryApplied
       )
       reconnectSamplesNs.append(elapsed)
     }
 
-    bridge.stop()
-    waitQuiescent(bridge: bridge, coordinator: coordinator, timeout: 2)
-    renderer.setVisible(false)
+    guard peakSurfaces >= 1, peakGpu >= 1, geometryApplied else {
+      throw AcceptanceError.vacuousRendererEvidence(
+        surfaces: peakSurfaces,
+        gpu: peakGpu,
+        geometryApplied: geometryApplied
+      )
+    }
+
+    detach(
+      mode: .gracefulDetach,
+      bridge: bridge,
+      coordinator: coordinator,
+      renderer: renderer
+    )
+    waitQuiescent(bridge: bridge, coordinator: coordinator, renderer: renderer, timeout: 2)
     let finalSample = sample(
       bridge: bridge,
       coordinator: coordinator,
@@ -257,6 +335,9 @@ enum Pass9MergeAcceptance {
     return Cohort(
       mode: mode.rawValue,
       geometry: options.geometry,
+      geometryColumns: geometry.columns,
+      geometryRows: geometry.rows,
+      geometryApplied: geometryApplied,
       cohort: 1,
       cycles: options.cycles,
       warmupCycles: options.warmups,
@@ -279,8 +360,10 @@ enum Pass9MergeAcceptance {
       socketsFinal: finalSample.sockets,
       rendererSurfacesBaseline: baseline.rendererSurfaces,
       rendererSurfacesFinal: finalSample.rendererSurfaces,
+      rendererSurfacesPeakConnected: peakSurfaces,
       rendererGpuResourcesBaseline: baseline.rendererGpuResources,
       rendererGpuResourcesFinal: finalSample.rendererGpuResources,
+      rendererGpuResourcesPeakConnected: peakGpu,
       retryTimersBaseline: baseline.retryTimers,
       retryTimersFinal: finalSample.retryTimers,
       runtimeRssKibBaselineMedian: baseline.runtimeRssKib,
@@ -290,26 +373,44 @@ enum Pass9MergeAcceptance {
       runtimeRssDeltaKib: finalSample.runtimeRssKib - baseline.runtimeRssKib,
       clientRssDeltaKib: finalSample.clientRssKib - baseline.clientRssKib,
       reconnectP99Us: percentile(reconnectUs, 99),
+      abruptFaultInjection: mode == .abruptSocketLoss
+        ? "socket_shutdown_owned_disconnect"
+        : "none",
       failures: 0
     )
   }
 
   private static func cycle(
     mode: Mode,
+    geometry: GeometrySpec,
     bridge: RustDisplayBridge,
     coordinator: RuntimeLifecycleRecoveryCoordinator,
     renderer: MetalTerminalRenderer,
+    rendererBox: RendererBox,
     measure: Bool,
     attachmentIDs: inout Set<String>,
     runtimeID: inout String?,
-    executionID: inout String?
+    executionID: inout String?,
+    peakSurfaces: inout Int,
+    peakGpu: inout Int,
+    geometryApplied: inout Bool
   ) throws -> UInt64 {
     let started = DispatchTime.now().uptimeNanoseconds
     coordinator.beginEpisode()
     try awaitConnected(bridge: bridge, coordinator: coordinator, timeout: 2)
     let finished = DispatchTime.now().uptimeNanoseconds
 
-    renderer.setVisible(true)
+    let applied = try presentConnectedSurface(
+      bridge: bridge,
+      coordinator: coordinator,
+      renderer: renderer,
+      rendererBox: rendererBox,
+      geometry: geometry
+    )
+    geometryApplied = geometryApplied || applied
+    peakSurfaces = max(peakSurfaces, renderer.hasDedicatedSurfaceResources ? 1 : 0)
+    peakGpu = max(peakGpu, renderer.estimatedDedicatedGPUBytes > 0 ? 1 : 0)
+
     let diag = seyal_bridge_pass9_diag_snapshot()
     guard diag.connected == 1 else { throw AcceptanceError.notConnected }
     let attachment = hexID(diag.attachment_id_low, diag.attachment_id_high)
@@ -333,16 +434,84 @@ enum Pass9MergeAcceptance {
       executionID = execution
     }
 
+    detach(mode: mode, bridge: bridge, coordinator: coordinator, renderer: renderer)
+    waitQuiescent(bridge: bridge, coordinator: coordinator, renderer: renderer, timeout: 2)
+    guard measure else { return 0 }
+    return finished &- started
+  }
+
+  @discardableResult
+  private static func presentConnectedSurface(
+    bridge: RustDisplayBridge,
+    coordinator: RuntimeLifecycleRecoveryCoordinator,
+    renderer: MetalTerminalRenderer,
+    rendererBox: RendererBox,
+    geometry: GeometrySpec
+  ) throws -> Bool {
+    try autoreleasepool {
+      renderer.setVisible(true)
+      let metrics = renderer.cellPixelSize(backingScale: 2.0)
+      let propose = bridge.proposeGeometry(
+        viewportWidth: Double(geometry.columns * metrics.width),
+        viewportHeight: Double(geometry.rows * metrics.height),
+        horizontalInsets: 0,
+        verticalInsets: 0,
+        cellWidth: Double(metrics.width),
+        cellHeight: Double(metrics.height),
+        meaningfulLayoutEpoch: true
+      )
+      guard propose == 0 || propose == 1 else {
+        throw AcceptanceError.geometryRejected(code: propose)
+      }
+
+      let deadline = Date().addingTimeInterval(1.0)
+      var sawGeometry = false
+      while Date() < deadline {
+        bridge.publishCurrentFrame()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        if rendererBox.lastColumns == geometry.columns,
+          rendererBox.lastRows == geometry.rows
+        {
+          sawGeometry = true
+        }
+        if renderer.hasDedicatedSurfaceResources,
+          renderer.estimatedDedicatedGPUBytes > 0,
+          sawGeometry
+        {
+          // Mirror MetalSurfaceView presentation-stage advance after a successful
+          // CPU prepare so quiescence is not stuck on `.reconstructing`.
+          if coordinator.state.stage == .reconstructing {
+            coordinator.transition(to: .restoringInteraction)
+            coordinator.transition(to: .usable)
+          }
+          return true
+        }
+      }
+      throw AcceptanceError.rendererNotArmed(
+        surfaces: renderer.hasDedicatedSurfaceResources,
+        gpuBytes: renderer.estimatedDedicatedGPUBytes,
+        columns: rendererBox.lastColumns,
+        rows: rendererBox.lastRows
+      )
+    }
+  }
+
+  private static func detach(
+    mode: Mode,
+    bridge: RustDisplayBridge,
+    coordinator: RuntimeLifecycleRecoveryCoordinator,
+    renderer: MetalTerminalRenderer
+  ) {
     switch mode {
     case .gracefulDetach:
       bridge.stop()
     case .abruptSocketLoss:
       bridge.forceAbruptSocketLossForAcceptance()
     }
-    waitQuiescent(bridge: bridge, coordinator: coordinator, timeout: 2)
+    // Intentional soak detach must not leave a foreground recovery episode
+    // latched in `.reconstructing`; production window teardown cancels too.
+    coordinator.cancel()
     renderer.setVisible(false)
-    guard measure else { return 0 }
-    return finished &- started
   }
 
   private static func sample(
@@ -357,6 +526,9 @@ enum Pass9MergeAcceptance {
     precondition(connected == connectedExpectation)
     let clientRss = medianRssKib(pid: getpid())
     let runtimeRss = runtimePid.map { medianRssKib(pid: $0) } ?? 0
+    // attachments/controllers/sockets are connected-boolean proxies for the
+    // merge-acceptance soft gate. Exact handle proof is live_handles /
+    // pending_handles from the diag FFI snapshot.
     return ResourceSample(
       attachments: connected ? 1 : 0,
       controllers: connected ? 1 : 0,
@@ -393,6 +565,7 @@ enum Pass9MergeAcceptance {
   private static func waitQuiescent(
     bridge: RustDisplayBridge,
     coordinator: RuntimeLifecycleRecoveryCoordinator,
+    renderer: MetalTerminalRenderer,
     timeout: TimeInterval
   ) {
     let deadline = Date().addingTimeInterval(timeout)
@@ -402,15 +575,29 @@ enum Pass9MergeAcceptance {
       if !bridge.isConnected,
         !coordinator.isActive,
         !coordinator.hasScheduledAttempt,
-        stage != .discovering,
-        stage != .startingRuntime,
-        stage != .waitingForController,
-        stage != .reconstructing,
+        stage == .disconnected || stage == .exhausted || stage == .blocked,
+        !renderer.hasDedicatedSurfaceResources,
+        renderer.estimatedDedicatedGPUBytes == 0,
         seyal_bridge_pass9_diag_snapshot().live_handles == 0
       {
         return
       }
     }
+  }
+
+  private static func parseGeometry(_ text: String) throws -> GeometrySpec {
+    let parts = text.lowercased().split(separator: "x")
+    guard parts.count == 2,
+      let columns = Int(parts[0]),
+      let rows = Int(parts[1]),
+      columns > 0,
+      rows > 0,
+      columns <= 512,
+      rows <= 256
+    else {
+      throw AcceptanceError.invalidGeometry(text)
+    }
+    return GeometrySpec(columns: columns, rows: rows)
   }
 
   private static func openFdCount() -> Int {
@@ -489,6 +676,10 @@ enum Pass9MergeAcceptance {
     case runtimeChanged
     case executionChanged
     case resourceLeak(mode: String, baseline: ResourceSample, final: ResourceSample)
+    case invalidGeometry(String)
+    case geometryRejected(code: Int32)
+    case rendererNotArmed(surfaces: Bool, gpuBytes: Int, columns: Int, rows: Int)
+    case vacuousRendererEvidence(surfaces: Int, gpu: Int, geometryApplied: Bool)
 
     var description: String {
       switch self {
@@ -500,6 +691,12 @@ enum Pass9MergeAcceptance {
       case .executionChanged: return "execution_changed"
       case .resourceLeak(let mode, let baseline, let final):
         return "resource_leak:\(mode):\(baseline):\(final)"
+      case .invalidGeometry(let text): return "invalid_geometry:\(text)"
+      case .geometryRejected(let code): return "geometry_rejected:\(code)"
+      case .rendererNotArmed(let surfaces, let gpuBytes, let columns, let rows):
+        return "renderer_not_armed:surfaces=\(surfaces):gpu=\(gpuBytes):cols=\(columns):rows=\(rows)"
+      case .vacuousRendererEvidence(let surfaces, let gpu, let geometryApplied):
+        return "vacuous_renderer_evidence:surfaces=\(surfaces):gpu=\(gpu):geometry_applied=\(geometryApplied)"
       }
     }
   }
@@ -549,6 +746,9 @@ enum Pass9MergeAcceptance {
   struct Cohort: Encodable {
     let mode: String
     let geometry: String
+    let geometryColumns: Int
+    let geometryRows: Int
+    let geometryApplied: Bool
     let cohort: Int
     let cycles: Int
     let warmupCycles: Int
@@ -567,8 +767,10 @@ enum Pass9MergeAcceptance {
     let socketsFinal: Int
     let rendererSurfacesBaseline: Int
     let rendererSurfacesFinal: Int
+    let rendererSurfacesPeakConnected: Int
     let rendererGpuResourcesBaseline: Int
     let rendererGpuResourcesFinal: Int
+    let rendererGpuResourcesPeakConnected: Int
     let retryTimersBaseline: Int
     let retryTimersFinal: Int
     let runtimeRssKibBaselineMedian: Int
@@ -578,10 +780,14 @@ enum Pass9MergeAcceptance {
     let runtimeRssDeltaKib: Int
     let clientRssDeltaKib: Int
     let reconnectP99Us: Double
+    let abruptFaultInjection: String
     let failures: Int
 
     enum CodingKeys: String, CodingKey {
       case mode, geometry, cohort, cycles
+      case geometryColumns = "geometry_columns"
+      case geometryRows = "geometry_rows"
+      case geometryApplied = "geometry_applied"
       case warmupCycles = "warmup_cycles"
       case continuity
       case attachmentsBaseline = "attachments_baseline"
@@ -598,8 +804,10 @@ enum Pass9MergeAcceptance {
       case socketsFinal = "sockets_final"
       case rendererSurfacesBaseline = "renderer_surfaces_baseline"
       case rendererSurfacesFinal = "renderer_surfaces_final"
+      case rendererSurfacesPeakConnected = "renderer_surfaces_peak_connected"
       case rendererGpuResourcesBaseline = "renderer_gpu_resources_baseline"
       case rendererGpuResourcesFinal = "renderer_gpu_resources_final"
+      case rendererGpuResourcesPeakConnected = "renderer_gpu_resources_peak_connected"
       case retryTimersBaseline = "retry_timers_baseline"
       case retryTimersFinal = "retry_timers_final"
       case runtimeRssKibBaselineMedian = "runtime_rss_kib_baseline_median"
@@ -609,6 +817,7 @@ enum Pass9MergeAcceptance {
       case runtimeRssDeltaKib = "runtime_rss_delta_kib"
       case clientRssDeltaKib = "client_rss_delta_kib"
       case reconnectP99Us = "reconnect_p99_us"
+      case abruptFaultInjection = "abrupt_fault_injection"
       case failures
     }
   }

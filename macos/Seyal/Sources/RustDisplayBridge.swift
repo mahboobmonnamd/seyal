@@ -531,9 +531,10 @@ final class RustDisplayBridge {
   }
 
   /// Abrupt client-loss path for merge-acceptance soak. Shuts the live socket
-  /// down without a graceful detach handshake so Runtime observes EOF/reset,
-  /// then disposes the local handle once. Replacement opening remains
-  /// coordinator-owned.
+  /// then owns a single disconnect. This is fault injection for socket-loss
+  /// recovery, not GUI-process death or the production poll→-18 observation
+  /// path; do not treat it as full abrupt-GUI-death coverage. Runtime observes
+  /// EOF/reset; replacement opening remains coordinator-owned.
   func forceAbruptSocketLossForAcceptance() {
     guard isConnected || socketFileDescriptor >= 0 || clientHandle != 0 else { return }
     if socketFileDescriptor >= 0 {

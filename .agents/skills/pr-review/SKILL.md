@@ -23,6 +23,7 @@ Apply only these Seyal-specific rules on top of the generic procedure:
 10. Verify the PR's `Closes`/`Refs` relationship and Issue checklist/Done state are truthful for the post-merge outcome. `READY_TO_MERGE` must not silently close an Issue with unmet gates.
 11. Core/high-risk work must retain the independent-review requirement in `docs/engineering/ISSUE-PROTOCOL.md`; implementers do not self-approve.
 12. OSS must remain independent of commercial code. Inspect `seyal-commercial` only when needed to validate the edition boundary; never make it an OSS authority.
+13. Prove that every claimed production capability has a reviewable permanent implementation in the changed or explicitly depended-on production path. Trace mandatory acceptance criteria to concrete production entrypoints and behavior tests; specifications, ADRs, interfaces, mocks, benchmarks, calibration harnesses, documentation, or POC/spike code alone do not satisfy the implementation gate. If the required production path is absent or cannot be inspected, return `CHANGES_REQUIRED` or `INCONCLUSIVE` rather than accepting the PR.
 
 For a narrower request that asks only for implementation/diff defects or regressions and does not ask for merge readiness, use the separate `code-review` skill.
 

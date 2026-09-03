@@ -9,23 +9,29 @@ This index maps the current Core Terminal design into implementation-oriented sp
 
 `SEYAL-ADAPTIVE-DEPTH-DESIGN-LANGUAGE.md` is the universal visual-design authority for material, transparency, focus hierarchy, colour discipline and cross-platform visual consistency.
 
-It does **not** change the Core Terminal information architecture or terminal/runtime ownership rules. The existing M001 references remain authoritative for placement, behavior, state and pass ordering.
+`SEYAL-UNIVERSAL-COMPONENT-CONTRACT.md` freezes the reusable visual/component grammar so shared components such as the Pane composer, Block seam, sidebar row, Inspector, attention item, tabs and split dividers do not drift between reference images.
+
+`SEYAL-REFERENCE-SCREEN-CONTRACTS.md` maps all nine historical functional-reference states to replacement Adaptive Depth references using that same component kit in dark and light themes.
+
+These documents do **not** change the Core Terminal information architecture or terminal/runtime ownership rules. The existing M001 references remain authoritative for placement, behavior, state and pass ordering.
 
 ## Exact frozen visual source
 
 The visual explicitly selected and frozen during M001 design review is **`Seyal Developer Workspace Dashboard.png`**.
 
-The frozen image remains a composition/density reference, but `SEYAL-ADAPTIVE-DEPTH-DESIGN-LANGUAGE.md` supersedes it for visual heaviness, card treatment, borders, material, transparency, focus depth and colour/depth behavior.
+The frozen image remains a composition/density reference, but `SEYAL-ADAPTIVE-DEPTH-DESIGN-LANGUAGE.md`, `SEYAL-UNIVERSAL-COMPONENT-CONTRACT.md`, and `SEYAL-REFERENCE-SCREEN-CONTRACTS.md` supersede it for visual heaviness, card treatment, borders, material, transparency, focus depth, colour/depth behavior and shared-component consistency.
 
 Do not substitute an older neon/core-experience/generated concept merely because it is visually similar. The approved image itself is not added by this shell PR. When the approved asset is supplied manually to the repository, it must occupy the reference path declared by `M001-CORE-TERMINAL-REFERENCE-SCREEN.md` and become the source for pixel-level composition regression subject to the Adaptive Depth visual rules.
 
-Until that asset exists in the repository, the shell must be checked against the visual composition recorded in `M001-UI-SHELL-SCAFFOLD.md`, the XCTest geometry contract, the XCUI hierarchy/ordering assertions, and the rendered screenshot retained in the XCUI result bundle. Do not claim pixel-golden equivalence without the approved source asset.
+Until that asset exists in the repository, the UI container must be checked against the visual composition recorded in `M001-UI-SHELL-SCAFFOLD.md`, the XCTest geometry contract, the XCUI hierarchy/ordering assertions, and the rendered screenshot retained in the XCUI result bundle. Do not claim pixel-golden equivalence without the approved source asset.
 
 ## Reference specifications
 
 | Mockup/state | Specification | Purpose |
 |---|---|---|
 | Universal visual language | `SEYAL-ADAPTIVE-DEPTH-DESIGN-LANGUAGE.md` | Terminal-first Adaptive Depth, transparency, focus gravity, light/dark parity, cross-platform material rules |
+| Universal component contract | `SEYAL-UNIVERSAL-COMPONENT-CONTRACT.md` | Shared C01-C17 component anatomy/state rules; prevents screen-by-screen redesign |
+| Nine-screen reference contract | `SEYAL-REFERENCE-SCREEN-CONTRACTS.md` | Maps historical references 1-9 to consistent dark/light Adaptive Depth replacements |
 | Core Terminal | `M001-CORE-TERMINAL-REFERENCE-SCREEN.md` | Canonical UI container, Workspaces/Agents/Tabs, Blocks, composer, inspector, placement rules |
 | Earlier first-UI reconciliation | `M001-FIRST-UI-DESIGN-AMENDMENT.md` | Explicitly supersedes stale fixed-height/nested-scroll and old placement details |
 | Sessions | `M001-SESSIONS-VIEW.md` | Attached/detached session inventory, reconnect and lifecycle inspection |
@@ -58,8 +64,10 @@ Until that asset exists in the repository, the shell must be checked against the
 15. Design is optimized for terminal power users on a 15-inch display: dense, contextual, minimal permanent chrome and no gamer-oriented styling.
 16. Adaptive Depth is the universal visual language across light/dark themes and future platform hosts; native material is an implementation detail, not the design authority.
 17. Terminal/grid/TUI content remains perceptually dominant and must not sacrifice readability for transparency or material effects.
-18. These documents freeze design/information architecture only and do not authorize Pass 6+ implementation ahead of M001 ordering.
-19. Before Pass 6, any native UI-container preview is fixture-only and must not become an alternate live terminal/runtime path.
+18. Shared components must retain one anatomy and geometry across all reference screens; only documented state/content variations are permitted.
+19. The replacement reference set must cover all nine historical functional states and render each in both light and dark themes using the same component kit.
+20. These documents freeze design/information architecture only and do not authorize Pass 6+ implementation ahead of M001 ordering.
+21. Before Pass 6, any native UI-container preview is fixture-only and must not become an alternate live terminal/runtime path.
 
 ## Old-reference precedence
 
@@ -70,9 +78,11 @@ If an old screenshot or `M001-FIRST-UI-DESIGN.md` conflicts with current behavio
 1. accepted architecture / ADR / implementation spec / milestone authority;
 2. `M001-CORE-TERMINAL-REFERENCE-SCREEN.md` and companion state specs for information architecture and behavior;
 3. `SEYAL-ADAPTIVE-DEPTH-DESIGN-LANGUAGE.md` for material, transparency, focus hierarchy, colour/depth and universal visual treatment;
-4. `M001-FIRST-UI-DESIGN-AMENDMENT.md` for explicit older-document reconciliation;
-5. the frozen `Seyal Developer Workspace Dashboard.png` for composition and density where it does not conflict with 1–4;
-6. historical visual references only as non-binding inspiration.
+4. `SEYAL-UNIVERSAL-COMPONENT-CONTRACT.md` for shared component anatomy/state consistency;
+5. `SEYAL-REFERENCE-SCREEN-CONTRACTS.md` for replacement reference-screen composition and functional coverage;
+6. `M001-FIRST-UI-DESIGN-AMENDMENT.md` for explicit older-document reconciliation;
+7. the frozen `Seyal Developer Workspace Dashboard.png` for composition and density where it does not conflict with 1–6;
+8. historical visual references only as non-binding inspiration/functionality coverage.
 
 Important superseded old details include:
 
@@ -85,8 +95,9 @@ Important superseded old details include:
 - card-heavy Blocks;
 - thick Pane framing;
 - transparency/blur applied to terminal truth surfaces;
-- neon/glow/gamer-oriented state styling.
+- neon/glow/gamer-oriented state styling;
+- screen-specific redesign of shared components.
 
 ## Mockup-vs-spec rule
 
-The frozen mockup remains a composition reference. If it or an older generated mockup contains decorative, stale, architecturally invalid, or visually heavy treatment, the corresponding current specification and Adaptive Depth design language are authoritative. Visual references do not override terminal correctness, performance, accessibility, universal design parity, or product behavior.
+The frozen mockup remains a composition reference. If it or an older generated mockup contains decorative, stale, architecturally invalid, visually heavy, or component-inconsistent treatment, the corresponding current specification and Adaptive Depth/component contracts are authoritative. Visual references do not override terminal correctness, performance, accessibility, universal design parity, or product behavior.

@@ -180,6 +180,65 @@ final class SeyalDesignSystemTests: XCTestCase {
     )
   }
 
+  func testApplyVisualConfigurationRestylesChromeForLightAppearance() {
+    let dark = SeyalThemeResolver.canonical(.dark)
+    let light = SeyalThemeResolver.canonical(.light)
+    let shell = SeyalShellPreviewFactory.make(
+      frame: NSRect(x: 0, y: 0, width: 1280, height: 800),
+      visual: dark
+    )
+    shell.layoutSubtreeIfNeeded()
+    shell.applyVisualConfiguration(light)
+    shell.layoutSubtreeIfNeeded()
+
+    let labels = descendants(of: NSTextField.self, in: shell)
+    XCTAssertFalse(labels.isEmpty)
+    let primary = light.colors.ns(.textPrimary)
+    let matching = labels.contains { field in
+      guard let color = field.textColor else { return false }
+      return colorsApproximatelyEqual(color, primary)
+    }
+    XCTAssertTrue(matching, "light apply must restyle chrome text to light primary")
+    let bg = shell.layer?.backgroundColor.flatMap { NSColor(cgColor: $0)?.usingColorSpace(.sRGB) }
+    let expected = light.colors.ns(.container).usingColorSpace(.sRGB)
+    XCTAssertNotNil(bg)
+    XCTAssertNotNil(expected)
+    if let bg, let expected {
+      XCTAssertEqual(bg.redComponent, expected.redComponent, accuracy: 0.02)
+      XCTAssertEqual(bg.greenComponent, expected.greenComponent, accuracy: 0.02)
+      XCTAssertEqual(bg.blueComponent, expected.blueComponent, accuracy: 0.02)
+    }
+  }
+
+  func testIncreaseContrastRefreshEmitsUpdatedSnapshot() {
+    let controller = SeyalAppearanceController(
+      settings: {
+        var settings = SeyalUserUISettings.default
+        settings.appearance = .dark
+        return settings
+      }(),
+      accessibility: SeyalAccessibilitySignals(
+        reduceTransparency: false,
+        reduceMotion: false,
+        increaseContrast: false
+      )
+    )
+    var received: SeyalResolvedVisualConfiguration?
+    controller.onChange = { received = $0 }
+    controller.refresh(
+      accessibility: SeyalAccessibilitySignals(
+        reduceTransparency: false,
+        reduceMotion: false,
+        increaseContrast: true
+      )
+    )
+    XCTAssertNotNil(received)
+    XCTAssertGreaterThan(
+      received!.colors[.textPrimary].luminance,
+      SeyalThemeResolver.canonical(.dark).colors[.textPrimary].luminance
+    )
+  }
+
   func testLuaBoundaryDocumentsColdOverlayOnly() {
     XCTAssertEqual(SeyalLuaConfigurationBoundary.acceptedInput, "SeyalConfigPatch")
     XCTAssertTrue(
@@ -196,5 +255,14 @@ final class SeyalDesignSystemTests: XCTestCase {
     }
     walk(root)
     return found
+  }
+
+  private func colorsApproximatelyEqual(_ lhs: NSColor, _ rhs: NSColor) -> Bool {
+    guard let a = lhs.usingColorSpace(.sRGB), let b = rhs.usingColorSpace(.sRGB) else {
+      return false
+    }
+    return abs(a.redComponent - b.redComponent) < 0.02
+      && abs(a.greenComponent - b.greenComponent) < 0.02
+      && abs(a.blueComponent - b.blueComponent) < 0.02
   }
 }

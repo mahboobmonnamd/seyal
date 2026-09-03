@@ -112,6 +112,7 @@ final class SeyalAppearanceController: NSObject {
     private(set) var snapshot: SeyalResolvedVisualConfiguration
     private var settings: SeyalUserUISettings
     private var diagnostics: SeyalConfigurationDiagnostics
+    private var accessibility: SeyalAccessibilitySignals
     var onChange: ((SeyalResolvedVisualConfiguration) -> Void)?
     private var observers: [NSObjectProtocol] = []
 
@@ -122,6 +123,7 @@ final class SeyalAppearanceController: NSObject {
     ) {
         self.settings = settings
         self.diagnostics = diagnostics
+        self.accessibility = accessibility
         snapshot = SeyalThemeResolver.resolve(
             settings: settings,
             platformAppearance: SeyalAppearanceController.platformAppearance(),
@@ -147,7 +149,10 @@ final class SeyalAppearanceController: NSObject {
             || next.reduceTransparency != snapshot.reduceTransparency
             || next.motion != snapshot.motion
             || next.settings != snapshot.settings
+            || accessibility != self.accessibility
+            || next.colors[.textPrimary] != snapshot.colors[.textPrimary]
         else { return }
+        self.accessibility = accessibility
         snapshot = next
         onChange?(next)
     }

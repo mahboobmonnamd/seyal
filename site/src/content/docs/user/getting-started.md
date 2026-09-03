@@ -58,6 +58,14 @@ fallbacks = ["SF Mono", "Menlo"]
 
 Invalid keys or values are ignored or clamped; Seyal always starts from a complete snapshot. This is not a shipped settings product yet.
 
+For a one-off override without editing a file, launch with `open --env` (shell `VAR=value open …` does not pass environment into the app):
+
+```sh
+open --env SEYAL_UI_APPEARANCE=light target/macos-derived-data/Build/Products/Debug/Seyal.app
+```
+
+Or run the binary directly so the shell environment is inherited.
+
 ## Next
 
 See **What is available now?** before relying on a feature described in product plans or architecture documents.

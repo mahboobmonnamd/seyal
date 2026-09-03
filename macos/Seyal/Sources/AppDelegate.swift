@@ -73,9 +73,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             let shell = SeyalShellPreviewFactory.make(
                 frame: contentRect,
-                state: previewState
+                state: previewState,
+                visual: snapshot
             )
-            shell.applyVisualConfiguration(snapshot)
             window.contentView = shell
             window.minSize = NSSize(width: 1050, height: 680)
 

@@ -132,34 +132,25 @@ final class SeyalShellView: NSView {
     buildUI()
   }
 
+  /// Re-resolve chrome from the authoritative visual snapshot.
+  ///
+  /// Presentation views are rebuilt so typography/colour/material stay
+  /// consistent with the snapshot. This does not recreate TerminalExecution,
+  /// VT, PTY, or Runtime ownership — only AppKit chrome/surfaces that consume
+  /// the already-resolved tokens.
   func applyVisualConfiguration(_ visual: SeyalResolvedVisualConfiguration) {
+    let appearanceChanged = self.visual.appearance != visual.appearance
+      || self.visual.reduceTransparency != visual.reduceTransparency
+      || self.visual.colors[.textPrimary] != visual.colors[.textPrimary]
+      || self.visual.colors[.canvas] != visual.colors[.canvas]
+      || self.visual.metrics != visual.metrics
+      || self.visual.uiFont != visual.uiFont
+      || self.visual.terminalFont != visual.terminalFont
     self.visual = visual
     layer?.backgroundColor = visual.colors.cg(.container)
-    for composer in composerViews.values {
-      composer.applyVisual(visual)
-    }
-    for block in blockViews.values {
-      block.applyVisual(visual)
-    }
-    for transcript in transcriptDocuments.values {
-      transcript.applyVisual(visual)
-    }
-    if let topChromeView {
-      SeyalMaterialPresenter.apply(.recededUtility, to: topChromeView, visual: visual)
-    }
-    if let leftContextView {
-      SeyalMaterialPresenter.apply(.recededUtility, to: leftContextView, visual: visual)
-    }
-    if let inspectorView {
-      SeyalMaterialPresenter.apply(.recededUtility, to: inspectorView, visual: visual)
-    }
-    if let paneView {
-      paneView.layer?.backgroundColor = visual.colors.cg(.canvas)
-    }
-    for (id, pane) in paneContainers {
-      SeyalFocusTreatment.apply(id == state.activeTab.focusedPaneID, to: pane, visual: visual)
-      pane.layer?.backgroundColor = visual.colors.cg(.canvas)
-    }
+    guard appearanceChanged else { return }
+    rebuildUI()
+    layer?.backgroundColor = visual.colors.cg(.container)
   }
 
   @available(*, unavailable)

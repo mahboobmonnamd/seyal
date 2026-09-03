@@ -5,7 +5,8 @@ import AppKit
 enum SeyalShellPreviewFactory {
     static func make(
         frame: NSRect,
-        state: SeyalShellState? = nil
+        state: SeyalShellState? = nil,
+        visual: SeyalResolvedVisualConfiguration = SeyalThemeResolver.canonical(.dark)
     ) -> SeyalShellView {
         let resolvedState = state ?? SeyalShellState.makePreview(
             includeTestAttention: ProcessInfo.processInfo.environment["SEYAL_UI_TEST_FIXTURES"] == "1"
@@ -13,7 +14,7 @@ enum SeyalShellPreviewFactory {
         let shell = SeyalShellView(
             frame: frame,
             state: resolvedState,
-            visual: SeyalThemeResolver.canonical(.dark)
+            visual: visual
         )
         shell.translatesAutoresizingMaskIntoConstraints = true
         shell.autoresizingMask = [.width, .height]

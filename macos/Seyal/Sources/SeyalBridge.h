@@ -100,6 +100,23 @@ typedef struct SeyalRecoveryResult {
     uint64_t attachment_id_high;
 } SeyalRecoveryResult;
 
+/// Read-only Pass 9 merge-acceptance diagnostic. Never called from PTY/VT/render
+/// hot paths; sampled only at quiescent lifecycle points by the soak harness.
+typedef struct SeyalPass9DiagSnapshot {
+    uint8_t connected;
+    uint8_t reserved0[7];
+    int32_t socket_fd;
+    uint32_t live_handles;
+    uint32_t pending_handles;
+    uint64_t active_handle;
+    uint64_t runtime_id_low;
+    uint64_t runtime_id_high;
+    uint64_t execution_id_low;
+    uint64_t execution_id_high;
+    uint64_t attachment_id_low;
+    uint64_t attachment_id_high;
+} SeyalPass9DiagSnapshot;
+
 enum SeyalTerminalKeyKind {
     SEYAL_KEY_ENTER = 1,
     SEYAL_KEY_TAB = 2,
@@ -150,6 +167,7 @@ SeyalHistoryRow seyal_bridge_history_range_row_for(uint64_t block_id, uint64_t r
 uint8_t seyal_bridge_history_range_consume(uint64_t block_id, uint64_t request_id);
 SeyalComposerResult seyal_bridge_composer_result(void);
 SeyalRecoveryResult seyal_bridge_last_recovery_result(void);
+SeyalPass9DiagSnapshot seyal_bridge_pass9_diag_snapshot(void);
 int32_t seyal_bridge_submit_key(uint16_t kind, uint32_t scalar);
 int32_t seyal_bridge_propose_geometry(
     double viewport_width,

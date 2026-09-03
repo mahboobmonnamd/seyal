@@ -244,6 +244,81 @@ pub extern "C" fn seyal_bridge_last_recovery_result() -> SeyalRecoveryResult {
     LAST_RECOVERY_RESULT.with(Cell::get)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C)]
+pub struct SeyalPass9DiagSnapshot {
+    pub connected: u8,
+    pub reserved0: [u8; 7],
+    pub socket_fd: i32,
+    pub live_handles: u32,
+    pub pending_handles: u32,
+    pub active_handle: u64,
+    pub runtime_id_low: u64,
+    pub runtime_id_high: u64,
+    pub execution_id_low: u64,
+    pub execution_id_high: u64,
+    pub attachment_id_low: u64,
+    pub attachment_id_high: u64,
+}
+
+impl SeyalPass9DiagSnapshot {
+    const fn empty() -> Self {
+        Self {
+            connected: 0,
+            reserved0: [0; 7],
+            socket_fd: -1,
+            live_handles: 0,
+            pending_handles: 0,
+            active_handle: 0,
+            runtime_id_low: 0,
+            runtime_id_high: 0,
+            execution_id_low: 0,
+            execution_id_high: 0,
+            attachment_id_low: 0,
+            attachment_id_high: 0,
+        }
+    }
+}
+
+/// Quiescent-only Pass 9 diagnostic. Callers must not invoke this from poll,
+/// input, resize, or render hot paths.
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_pass9_diag_snapshot() -> SeyalPass9DiagSnapshot {
+    let live_handles = CLIENTS.with(|clients| clients.borrow().len() as u32);
+    let pending_handles = pending_clients()
+        .lock()
+        .map(|pending| pending.len() as u32)
+        .unwrap_or(0);
+    let active_handle = ACTIVE_HANDLE.with(Cell::get);
+    let Some(client) = with_active_client(|client| {
+        let (runtime_id_low, runtime_id_high) = identity_words(client.runtime_id());
+        let execution = client.execution_id().to_bytes();
+        let attachment = client.attachment_id().to_bytes();
+        SeyalPass9DiagSnapshot {
+            connected: 1,
+            reserved0: [0; 7],
+            socket_fd: client.socket_fd(),
+            live_handles,
+            pending_handles,
+            active_handle,
+            runtime_id_low,
+            runtime_id_high,
+            execution_id_low: u64::from_le_bytes(execution[..8].try_into().unwrap()),
+            execution_id_high: u64::from_le_bytes(execution[8..].try_into().unwrap()),
+            attachment_id_low: u64::from_le_bytes(attachment[..8].try_into().unwrap()),
+            attachment_id_high: u64::from_le_bytes(attachment[8..].try_into().unwrap()),
+        }
+    }) else {
+        return SeyalPass9DiagSnapshot {
+            live_handles,
+            pending_handles,
+            active_handle,
+            ..SeyalPass9DiagSnapshot::empty()
+        };
+    };
+    client
+}
+
 fn identity_words(value: u128) -> (u64, u64) {
     let bytes = value.to_le_bytes();
     (

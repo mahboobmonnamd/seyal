@@ -57,6 +57,7 @@ case "$cmd" in
     python3 scripts/check-pass7-benchmark-coverage.py --self-test
     python3 scripts/check-pass7-validation-matrix.py --self-test
     python3 scripts/check-pass9-production-budget.py --self-test
+    python3 scripts/check-pass9-merge-acceptance.py --self-test
     python3 scripts/check-ui-test-policy.py
     bash scripts/test-tooling.sh
     python3 scripts/test-workspace.py

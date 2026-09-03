@@ -196,6 +196,70 @@ final class SeyalShellComponentTests: XCTestCase {
     )
   }
 
+  func testReleaseTrustRulesRejectAdHocHelpers() throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let bundle = root.appendingPathComponent("Seyal.app", isDirectory: true)
+    let macOS = bundle.appendingPathComponent("Contents/MacOS", isDirectory: true)
+    let helpers = bundle.appendingPathComponent("Contents/Helpers", isDirectory: true)
+    let helper = helpers.appendingPathComponent("seyal-runtime")
+    try FileManager.default.createDirectory(at: helpers, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: macOS, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let infoPlist: [String: Any] = [
+      "CFBundleIdentifier": "dev.seyal.Seyal.test-fixture-app",
+      "CFBundleExecutable": "Seyal",
+      "CFBundlePackageType": "APPL",
+    ]
+    let plistData = try PropertyListSerialization.data(
+      fromPropertyList: infoPlist, format: .xml, options: 0)
+    try plistData.write(to: bundle.appendingPathComponent("Contents/Info.plist"))
+    try FileManager.default.copyItem(
+      at: URL(fileURLWithPath: "/bin/echo"),
+      to: macOS.appendingPathComponent("Seyal"))
+    try FileManager.default.copyItem(at: URL(fileURLWithPath: "/bin/echo"), to: helper)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helper.path)
+
+    try adHocSign(helper, identifier: BundledRuntimeLauncher.helperIdentifier)
+    try adHocSign(bundle, identifier: "dev.seyal.Seyal.test-fixture-app")
+
+    XCTAssertNoThrow(
+      try BundledRuntimeLauncher.evaluateHelperTrust(
+        bundleURL: bundle,
+        helperURL: helper,
+        enforceReleaseRules: false
+      )
+    )
+    XCTAssertThrowsError(
+      try BundledRuntimeLauncher.evaluateHelperTrust(
+        bundleURL: bundle,
+        helperURL: helper,
+        enforceReleaseRules: true
+      )
+    ) {
+      XCTAssertEqual($0 as? BundledRuntimeLaunchError, .helperTrustInvalid)
+    }
+  }
+
+  @MainActor
+  func testNativeStaleHandleAdoptionIsRejected() {
+    // A fabricated pending-handle ID must fail closed at the native adopt
+    // boundary. Protocol-level stale identity coverage lives in Rust; this
+    // proves the Swift/C adopt seam does not resurrect an unknown handle.
+    let bridge = RustDisplayBridge(
+      onFrame: { _ in },
+      onError: { _ in },
+      paneID: "pass9-stale-adopt"
+    )
+    XCTAssertFalse(bridge.adoptRecoveredHandle(UInt64.max - 17))
+    XCTAssertFalse(bridge.isConnected)
+    let diag = seyal_bridge_pass9_diag_snapshot()
+    XCTAssertEqual(diag.connected, 0)
+    XCTAssertEqual(diag.live_handles, 0)
+    XCTAssertEqual(diag.pending_handles, 0)
+  }
+
   private func adHocSign(_ url: URL, identifier: String) throws {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")

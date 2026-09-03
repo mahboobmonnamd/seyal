@@ -72,6 +72,14 @@ enum SeyalMain {
             return
         }
 
+        if CommandLine.arguments.contains("--pass9-merge-acceptance") {
+            guard Pass9MergeAcceptance.run() else {
+                print("Seyal Pass 9 merge-acceptance soak failed.")
+                exit(1)
+            }
+            return
+        }
+
         if CommandLine.arguments.contains("--renderer-benchmark") {
             guard RendererValidation.runBenchmark() else {
                 print("Seyal native renderer benchmark failed.")

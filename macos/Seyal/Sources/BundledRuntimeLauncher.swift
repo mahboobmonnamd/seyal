@@ -203,15 +203,34 @@ final class BundledRuntimeLauncher {
   }
 
   private static func validateCodeSignature(bundleURL: URL, helperURL: URL) throws {
+    try evaluateHelperTrust(
+      bundleURL: bundleURL,
+      helperURL: helperURL,
+      enforceReleaseRules: {
+        #if DEBUG
+          false
+        #else
+          true
+        #endif
+      }()
+    )
+  }
+
+  /// Merge-acceptance / security-minimum seam. Production callers use
+  /// `validateCodeSignature`; tests may force Release rules to prove ad-hoc
+  /// helpers are rejected outside Debug.
+  static func evaluateHelperTrust(
+    bundleURL: URL,
+    helperURL: URL,
+    enforceReleaseRules: Bool
+  ) throws {
     let app = try signatureFacts(for: bundleURL.resolvingSymlinksInPath())
     let helper = try signatureFacts(for: helperURL)
     guard helper.identifier == helperIdentifier, !helper.hasEntitlements else {
       throw BundledRuntimeLaunchError.helperTrustInvalid
     }
 
-    #if DEBUG
-      if app.isAdHoc && helper.isAdHoc { return }
-    #endif
+    if !enforceReleaseRules, app.isAdHoc && helper.isAdHoc { return }
 
     guard !app.isAdHoc, !helper.isAdHoc,
       let appTeam = app.teamIdentifier,

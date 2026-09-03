@@ -294,7 +294,7 @@ final class RustDisplayBridge {
   private let onHistory: HistoryHandler
   private let onComposerResult: ComposerResultHandler
   private let onError: ErrorHandler
-  private let onStatusChanged: StatusHandler
+  var onStatusChanged: StatusHandler
   private var readSource: DispatchSourceRead?
   private var writeSource: DispatchSourceWrite?
   private var socketFileDescriptor: Int32 = -1
@@ -528,6 +528,44 @@ final class RustDisplayBridge {
       let low = UInt64(normalized.suffix(16), radix: 16)
     else { return nil }
     return (low, high)
+  }
+
+  /// Abrupt client-loss path for merge-acceptance soak. Shuts the live socket
+  /// down without a graceful detach handshake so Runtime observes EOF/reset,
+  /// then disposes the local handle once. Replacement opening remains
+  /// coordinator-owned.
+  func forceAbruptSocketLossForAcceptance() {
+    guard isConnected || socketFileDescriptor >= 0 || clientHandle != 0 else { return }
+    if socketFileDescriptor >= 0 {
+      // shutdown (not close): Runtime sees EOF while Rust still owns the fd and
+      // can drop it safely exactly once in disconnect_handle.
+      _ = Darwin.shutdown(socketFileDescriptor, SHUT_RDWR)
+    }
+    isConnected = false
+    reconstructionState.disconnect()
+    runtimeBlockMetadata = nil
+    requestedHistoryRanges.removeAll(keepingCapacity: false)
+    historyRevisions.removeAll(keepingCapacity: false)
+    lastTimelineRevision = 0
+    lastComposerResultRequestID = 0
+    runtimeIdentityWords = (0, 0)
+    attachmentIdentityWords = (0, 0)
+    if let readSource {
+      self.readSource = nil
+      readSource.cancel()
+    }
+    if let writeSource {
+      self.writeSource = nil
+      writeSource.cancel()
+    }
+    socketFileDescriptor = -1
+    if clientHandle != 0 {
+      let handle = clientHandle
+      clientHandle = 0
+      handleBox.value = 0
+      seyal_bridge_disconnect_handle(handle)
+    }
+    onStatusChanged()
   }
 
   /// Tears down only the disposable socket/client side of the Pane. The

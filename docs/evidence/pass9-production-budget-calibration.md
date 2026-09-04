@@ -15,7 +15,7 @@ Keep optimizing the permanent production reconnect path **and** recalibrate abso
 | `reconnect_p99_us` | Lifecycle-queue `open_execution` attempt body: hello/attach + authoritative snapshot commit into `DisplayCache` |
 | `prepared_surface_p99_us` | Deferred `prepare_cache` / `ensurePreparedSurface` + first `MetalTerminalRenderer.update` (cold after dedicated-resource release) |
 | `cleanup_p99_us` | Bridge stop/cancel until `live_handles == 0` (Metal release excluded) |
-| `native_ready_p99_us` | Coordinator transition to `.usable` |
+| `native_ready_p99_us` | SPEC-009 §10: production `InteractiveMetalSurfaceView` restore (key window + first-responder + accessibilityFocused + empty marked text + IME activate) before coordinator `.usable` |
 
 ## Product changes informing this calibration
 
@@ -41,7 +41,7 @@ Derived as `ceil(measured_p99 × 1.30)` then rounded up for multi-cohort / dual-
 | reconnect_p99 | 4000 |
 | cleanup_p99 | 250 |
 | prepared_surface_p99 | 1500 |
-| native_ready_p99 | 2000 (unchanged) |
+| native_ready_p99 | 6000 (SPEC §10 interactive restore; recalibrated from ~4.0–4.1 ms p99) |
 
 Resource exact-return, detached CPU, and Pass 8 paired attribution policy are unchanged.
 

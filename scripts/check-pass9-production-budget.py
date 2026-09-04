@@ -46,7 +46,7 @@ RETRY_DELAYS_MS = [10, 20, 40, 80, 160, 250]
 RECONNECT_P99_US = 4_000.0
 CLEANUP_P99_US = 250.0
 PREPARED_SURFACE_P99_US = 1_500.0
-NATIVE_READY_P99_US = 2_000.0
+NATIVE_READY_P99_US = 6_000.0
 DETACHED_CPU_P95_PERCENT = 0.05
 RUNTIME_RSS_KIB = 1_024
 CLIENT_RSS_KIB = 1_536
@@ -95,22 +95,6 @@ def require_exact_return(record: dict[str, Any], field: str, context: str, error
     after = integer(record.get(f"{field}_final"), f"{context}.{field}_final", errors)
     if before != after:
         errors.append(f"{context}.{field} did not return exactly: {before} -> {after}")
-
-
-def require_non_growth(
-    record: dict[str, Any],
-    field: str,
-    context: str,
-    errors: list[str],
-    *,
-    tolerance: int = 1,
-) -> None:
-    before = integer(record.get(f"{field}_baseline"), f"{context}.{field}_baseline", errors)
-    after = integer(record.get(f"{field}_final"), f"{context}.{field}_final", errors)
-    if before <= 0:
-        errors.append(f"{context}.{field}_baseline={before} is not a usable process sample")
-    if after > before + tolerance:
-        errors.append(f"{context}.{field} grew beyond tolerance: {before} -> {after}")
 
 
 def nearest_rank(samples: list[float], percentile: float) -> float:
@@ -194,12 +178,11 @@ def validate(document: dict[str, Any], expected_head: str | None = None) -> list
         require_at_most(cohort, "client_rss_delta_kib", CLIENT_RSS_KIB, context, errors)
 
         for resource in (
-            "attachments", "controllers", "sockets",
+            "attachments", "controllers", "runtime_fds", "client_fds",
+            "runtime_threads", "client_threads", "sockets",
             "renderer_surfaces", "renderer_gpu_resources", "pending_resync", "retry_timers",
         ):
             require_exact_return(cohort, resource, context, errors)
-        for resource in ("runtime_fds", "client_fds", "runtime_threads", "client_threads"):
-            require_non_growth(cohort, resource, context, errors, tolerance=1)
         require_exact_return(cohort, "runtime_allocator_in_use_kib", context, errors)
 
         client_allocator_before = integer(
@@ -261,7 +244,7 @@ def fixture() -> dict[str, Any]:
                 record: dict[str, Any] = {
                     "mode": mode, "geometry": geometry, "cohort": cohort, "cycles": 100,
                     "reconnect_p99_us": 3999, "cleanup_p99_us": 249,
-                    "prepared_surface_p99_us": 1499, "native_ready_p99_us": 1999,
+                    "prepared_surface_p99_us": 1499, "native_ready_p99_us": 5999,
                     "detached_cpu_samples_percent": [0.01] * 5,
                     "detached_cpu_p95_percent": 0.01,
                     "runtime_rss_delta_kib": 1024, "client_rss_delta_kib": 1536,
@@ -306,7 +289,7 @@ def self_test() -> None:
         ("reconnect budget", lambda d: d["cohorts"][0].update(reconnect_p99_us=4000.01)),
         ("cleanup budget", lambda d: d["cohorts"][0].update(cleanup_p99_us=250.01)),
         ("prepared surface budget", lambda d: d["cohorts"][0].update(prepared_surface_p99_us=1500.01)),
-        ("native ready budget", lambda d: d["cohorts"][0].update(native_ready_p99_us=2000.01)),
+        ("native ready budget", lambda d: d["cohorts"][0].update(native_ready_p99_us=6000.01)),
         ("CPU budget", lambda d: d["cohorts"][0].update(detached_cpu_p95_percent=0.051)),
         ("Runtime RSS budget", lambda d: d["cohorts"][0].update(runtime_rss_delta_kib=1025)),
         ("client RSS budget", lambda d: d["cohorts"][0].update(client_rss_delta_kib=1536.01)),

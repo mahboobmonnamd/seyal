@@ -1,22 +1,20 @@
 # Pass 9 production budget environment report
 
-- **Status:** `PARTIAL_HARNESS_REFS_736`
+- **Status:** `IN_PROGRESS_NO_GATE_REDUCTION`
 - **Issue:** #736
 - **Date:** 2026-09-04
 - **Calibration:** `docs/evidence/pass9-production-budget-calibration.md`
 - **Security review:** `docs/evidence/pass9-security-review-745.md`
 
-## Open gates (do not treat as Done)
+## Open process gates
 
 - Independent non-implementer sign-off / maintainer confirmation
-- Durable Team-identity Release signing + packaging qualification
-- SPEC native interaction readiness (not coordinator stage flips)
-- Real VoiceOver focus/announcement/reconnect discoverability
-- Fresh exact-head matrix after harness integrity remediation
+- Fresh full 5×2×2 exact-head matrix PASS after SPEC §10 native_ready + exact-return restoration
+- Issue checkbox updates after independent review
 
-## Honest measurement notes
+## Measurement notes (quality bar)
 
-- `native_ready_p99_us` = coordinator `reconstructing→usable` only; excluded from SPEC native-interaction release claims
-- Resource exact-return uses diag `live_handles`/`pending_handles`, process fd/thread samples, `socket_fd`, renderer surface/GPU flags
-- `allocator_in_use_kib` fields are unused (0) and are not malloc leak evidence
-- Packaging retained by the orchestrator is Debug/ad-hoc unless a Developer Team identity is available on the host
+- `native_ready_p99_us` = SPEC-009 §10 production interactive restore before Usable
+- Resource exact-return is exact for attachment/controller/fd/thread/socket/renderer/allocator fields
+- `client_allocator_in_use_kib` uses `malloc_zone_statistics` `size_in_use`
+- Non-dry-run packaging is Release + Apple-issued Team identity

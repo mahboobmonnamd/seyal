@@ -351,6 +351,14 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     startAutomaticBridgeRecoveryIfNeeded()
   }
 
+  /// SPEC-009 §10: renderer-ready → native interaction before `Usable`.
+  /// Base Metal surface has no text-input/first-responder seam; subclasses that
+  /// own `NSTextInputClient` must restore focus/AX/IME here.
+  @discardableResult
+  func restoreNativeInteractionAfterRendererReady() -> Bool {
+    true
+  }
+
   /// Presentation-only notification. Runtime/Metal remains authoritative;
   /// AppKit uses this to switch the surrounding Pane chrome.
   var onAlternateScreenChanged: ((Bool) -> Void)?
@@ -773,6 +781,11 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
           hasPreparedState,
           !presentationState.exhausted
         {
+          // SPEC-009 §10: first-responder / accessibility / IME must be restored
+          // before Usable when this surface owns the native interaction seam.
+          guard restoreNativeInteractionAfterRendererReady() else {
+            return
+          }
           bridgeRecoveryCoordinator.transition(to: .usable)
         }
         if shouldRender,

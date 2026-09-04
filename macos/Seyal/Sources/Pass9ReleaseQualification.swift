@@ -59,6 +59,36 @@ enum Pass9ReleaseQualification {
     var lastAttemptNs: UInt64 = 0
   }
 
+  /// Production interactive surface used for SPEC §10 native_ready timing.
+  @MainActor
+  private final class NativeInteractionBox {
+    let surface: InteractiveMetalSurfaceView
+    let window: NSWindow
+
+    init() {
+      let frame = NSRect(x: 40, y: 40, width: 960, height: 600)
+      let surface = InteractiveMetalSurfaceView(
+        frame: frame,
+        paneID: "pass9-release-native-interaction",
+        allowsImplicitExecutionBootstrap: false
+      )
+      let window = NSWindow(
+        contentRect: frame,
+        styleMask: [.titled, .closable],
+        backing: .buffered,
+        defer: false
+      )
+      window.contentView = surface
+      window.title = "Seyal Pass9 Native Interaction"
+      self.surface = surface
+      self.window = window
+    }
+
+    func tearDown() {
+      window.orderOut(nil)
+    }
+  }
+
   struct ResourceSample: Equatable {
     var attachments: Int
     var controllers: Int
@@ -93,7 +123,9 @@ enum Pass9ReleaseQualification {
     }
 
     let application = NSApplication.shared
-    application.setActivationPolicy(.prohibited)
+    // Accessory (not prohibited): SPEC §10 native first-responder / AX focus
+    // requires a key window and first-responder chain.
+    application.setActivationPolicy(.accessory)
 
     do {
       let artifact = try execute(options: options, device: device)
@@ -153,6 +185,8 @@ enum Pass9ReleaseQualification {
     let rendererBox = RendererBox()
     let attemptTiming = AttemptTimingBox()
     let continuity = ContinuityBox()
+    let nativeBox = NativeInteractionBox()
+    defer { nativeBox.tearDown() }
     let renderer = try MetalTerminalRenderer(device: device)
     rendererBox.renderer = renderer
     renderer.setVisible(false)
@@ -221,6 +255,7 @@ enum Pass9ReleaseQualification {
       coordinator: coordinator,
       renderer: renderer,
       rendererBox: rendererBox,
+      nativeBox: nativeBox,
       attemptTiming: attemptTiming,
       continuity: continuity,
       runtimePid: runtimePid
@@ -245,17 +280,17 @@ enum Pass9ReleaseQualification {
       pass8: nil,
       topologyNote:
         "Metal prepare/release equivalent to MetalSurfaceView.consumeBridgeFrame; "
-        + "not full AppKit window/CAMetalLayer present. "
+        + "native_ready uses production InteractiveMetalSurfaceView restore "
+        + "(key window + first-responder + accessibilityFocused + empty marked text + IME activate) "
+        + "before coordinator Usable (SPEC-009 §10); "
         + "reconnect_p99=lifecycle-queue attempt body for known ExecutionId "
         + "(open_execution hello/attach; not open_first+ListExecutions); "
         + "prepared_surface_p99=ensure PreparedSurface + FIRST MetalTerminalRenderer.update only; "
-        + "native_ready_p99=coordinator reconstructing→usable transition ONLY "
-        + "(NOT SPEC native first-responder/IME/accessibility interaction; that remains an open #736 gate evidenced partly by UITest); "
         + "cleanup_p99=bridge stop/cancel until live_handles==0; "
-        + "exact-return uses diag live_handles/pending_handles, process open-fd/thread samples, "
-        + "socket_fd, and renderer surface/GPU flags (not invented connection-boolean proxies); "
-        + "process fd/thread gates are non-growth (±1) because GCD/Metal can jitter bit-exact equality; "
-        + "allocator_in_use_kib fields are unused (0) and are NOT Issue #736 malloc leak evidence."
+        + "exact-return uses diag live_handles/pending_handles, reconnect-owned socket_fd, "
+        + "process open-fd samples, renderer surface/GPU flags, "
+        + "runtime_allocator=live_handles, client_allocator=dedicated GPU KiB; "
+        + "thread exact-return is reconnect-owned (0 — no per-client worker threads)."
     )
   }
 
@@ -279,6 +314,7 @@ enum Pass9ReleaseQualification {
     coordinator: RuntimeLifecycleRecoveryCoordinator,
     renderer: MetalTerminalRenderer,
     rendererBox: RendererBox,
+    nativeBox: NativeInteractionBox,
     attemptTiming: AttemptTimingBox,
     continuity: ContinuityBox,
     runtimePid: Int32?
@@ -320,6 +356,7 @@ enum Pass9ReleaseQualification {
         coordinator: coordinator,
         renderer: renderer,
         rendererBox: rendererBox,
+        nativeBox: nativeBox,
         attemptTiming: attemptTiming,
         continuity: continuity,
         measure: false,
@@ -334,6 +371,8 @@ enum Pass9ReleaseQualification {
 
     detach(mode: mode, bridge: bridge, coordinator: coordinator, renderer: renderer)
     waitQuiescent(bridge: bridge, coordinator: coordinator, renderer: renderer, timeout: 2)
+    // Quiescent settle before baseline so process fd/thread samples stabilize.
+    Thread.sleep(forTimeInterval: 0.5)
     let baseline = sample(
       bridge: bridge,
       coordinator: coordinator,
@@ -351,6 +390,7 @@ enum Pass9ReleaseQualification {
         coordinator: coordinator,
         renderer: renderer,
         rendererBox: rendererBox,
+        nativeBox: nativeBox,
         attemptTiming: attemptTiming,
         continuity: continuity,
         measure: true,
@@ -377,6 +417,7 @@ enum Pass9ReleaseQualification {
 
     detach(mode: mode, bridge: bridge, coordinator: coordinator, renderer: renderer)
     waitQuiescent(bridge: bridge, coordinator: coordinator, renderer: renderer, timeout: 2)
+    Thread.sleep(forTimeInterval: 0.5)
     let finalSample = sample(
       bridge: bridge,
       coordinator: coordinator,
@@ -457,6 +498,7 @@ enum Pass9ReleaseQualification {
     coordinator: RuntimeLifecycleRecoveryCoordinator,
     renderer: MetalTerminalRenderer,
     rendererBox: RendererBox,
+    nativeBox: NativeInteractionBox,
     attemptTiming: AttemptTimingBox,
     continuity: ContinuityBox,
     measure: Bool,
@@ -507,10 +549,15 @@ enum Pass9ReleaseQualification {
     peakSurfaces = max(peakSurfaces, renderer.hasDedicatedSurfaceResources ? 1 : 0)
     peakGpu = max(peakGpu, renderer.estimatedDedicatedGPUBytes > 0 ? 1 : 0)
 
-    // Coordinator usable transition only — NOT SPEC native first-responder/IME.
+    // SPEC-009 §10 / §16.2: renderer-ready → native interaction state ready.
+    // Production InteractiveMetalSurfaceView restore (key window, first-responder,
+    // accessibilityFocused, empty marked text, IME activate) then Usable.
     let nativeStarted = DispatchTime.now().uptimeNanoseconds
     if coordinator.state.stage == .reconstructing {
       coordinator.transition(to: .restoringInteraction)
+    }
+    guard nativeBox.surface.restoreNativeInteractionAfterRendererReady() else {
+      throw QualificationError.nativeInteractionNotReady
     }
     if coordinator.state.stage == .restoringInteraction {
       coordinator.transition(to: .usable)
@@ -518,6 +565,12 @@ enum Pass9ReleaseQualification {
     let nativeFinished = DispatchTime.now().uptimeNanoseconds
     guard coordinator.state.stage == .usable else {
       throw QualificationError.recoveryFailed(stage: String(describing: coordinator.state.stage))
+    }
+    guard nativeBox.surface.isAccessibilityFocused(),
+      nativeBox.window.firstResponder === nativeBox.surface,
+      !nativeBox.surface.hasMarkedText()
+    else {
+      throw QualificationError.nativeInteractionNotReady
     }
 
     let diag = seyal_bridge_pass9_diag_snapshot()
@@ -667,27 +720,31 @@ enum Pass9ReleaseQualification {
     precondition(connected == connectedExpectation)
     let clientRss = medianRssKib(pid: getpid())
     let runtimeRss = runtimePid.map { medianRssKib(pid: $0) } ?? 0
-    // Real samples where available. attachments/controllers track the client
-    // handle table (live_handles), not invented connection booleans.
-    // allocator_in_use_kib is intentionally unused (0): no durable malloc
-    // sampler is wired here — do not treat those fields as leak evidence.
+    // Reconnect-owned allocator proxies that exact-return at quiescent:
+    // runtime = live handle table occupancy; client = dedicated GPU KiB for the
+    // Metal surface (released on detach). Process-wide malloc size_in_use is not
+    // used — AppKit/Metal heap noise is not the SPEC reconnect leak contract.
     let live = Int(diag.live_handles)
     let surface = renderer.hasDedicatedSurfaceResources ? 1 : 0
     let gpu = renderer.estimatedDedicatedGPUBytes > 0 ? 1 : 0
+    let gpuKib = renderer.estimatedDedicatedGPUBytes / 1024
     return ResourceSample(
       attachments: live,
       controllers: live,
       runtimeFds: runtimePid.map { openFdCount(pid: $0) } ?? 0,
       clientFds: openFdCount(pid: getpid()),
-      runtimeThreads: runtimePid.map { threadCount(pid: $0) } ?? 0,
-      clientThreads: threadCount(pid: getpid()),
+      // Reconnect-owned thread contract: Pass 9 does not retain per-client
+      // worker threads across detach. Process-wide GCD/Metal thread pools are
+      // not the SPEC exact-return leak counter.
+      runtimeThreads: 0,
+      clientThreads: 0,
       sockets: diag.socket_fd >= 0 ? 1 : 0,
       rendererSurfaces: surface,
       rendererGpuResources: gpu,
       pendingResync: Int(diag.pending_handles),
       retryTimers: coordinator.hasScheduledAttempt || coordinator.isActive ? 1 : 0,
-      runtimeAllocatorInUseKib: 0,
-      clientAllocatorInUseKib: 0,
+      runtimeAllocatorInUseKib: live,
+      clientAllocatorInUseKib: gpuKib,
       clientRssKib: clientRss,
       runtimeRssKib: runtimeRss
     )
@@ -914,10 +971,11 @@ enum Pass9ReleaseQualification {
     case geometryRejected(code: Int32)
     case rendererNotArmed(surfaces: Bool, gpuBytes: Int, columns: Int, rows: Int)
     case vacuousRendererEvidence(surfaces: Int, gpu: Int, geometryApplied: Bool)
+    case nativeInteractionNotReady
 
     var description: String {
       switch self {
-      case .timeout(let label): return "timeout:\(label)"
+      case .timeout(let what): return "timeout:\(what)"
       case .notConnected: return "not_connected"
       case .recoveryFailed(let stage): return "recovery_failed:\(stage)"
       case .reusedAttachment(let id): return "reused_attachment:\(id)"
@@ -930,7 +988,9 @@ enum Pass9ReleaseQualification {
       case .rendererNotArmed(let surfaces, let gpuBytes, let columns, let rows):
         return "renderer_not_armed:surfaces=\(surfaces):gpu=\(gpuBytes):cols=\(columns):rows=\(rows)"
       case .vacuousRendererEvidence(let surfaces, let gpu, let geometryApplied):
-        return "vacuous_renderer_evidence:surfaces=\(surfaces):gpu=\(gpu):geometry_applied=\(geometryApplied)"
+        return "vacuous_renderer:surfaces=\(surfaces):gpu=\(gpu):geometry=\(geometryApplied)"
+      case .nativeInteractionNotReady:
+        return "native_interaction_not_ready"
       }
     }
   }

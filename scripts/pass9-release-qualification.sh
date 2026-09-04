@@ -36,12 +36,19 @@ ARTIFACT="$OUT_DIR/pass9-release-qualification-${COMMIT:0:12}.json"
 REPORT="$OUT_DIR/pass9-release-qualification-${COMMIT:0:12}.md"
 PACKAGING="$OUT_DIR/pass9-release-packaging-${COMMIT:0:12}.md"
 
-echo "[pass9-release-qualification] building Debug app + Runtime helper"
+echo "[pass9-release-qualification] building Release app + Runtime helper (Team identity)"
 unset CARGO_TARGET_DIR
 export CARGO_TARGET_DIR="$ROOT/target"
+export SEYAL_MACOS_CONFIGURATION="${SEYAL_MACOS_CONFIGURATION:-Release}"
+export SEYAL_CODESIGN_IDENTITY="${SEYAL_CODESIGN_IDENTITY:-Apple Development: mahboobmonnamd@hotmail.com (Z5U4L6M9BC)}"
+if [[ "$DRY_RUN" == "1" && "${SEYAL_PASS9_FORCE_RELEASE:-0}" != "1" ]]; then
+  echo "[pass9-release-qualification] DRY_RUN defaults to Debug ad-hoc unless SEYAL_PASS9_FORCE_RELEASE=1"
+  export SEYAL_MACOS_CONFIGURATION=Debug
+  unset SEYAL_CODESIGN_IDENTITY
+fi
 bash scripts/build-macos.sh
 
-APP="$ROOT/target/macos-derived-data/Build/Products/Debug/Seyal.app"
+APP="$ROOT/target/macos-derived-data/Build/Products/${SEYAL_MACOS_CONFIGURATION}/Seyal.app"
 BIN="$APP/Contents/MacOS/Seyal"
 RUNTIME_HELPER="$APP/Contents/Helpers/seyal-runtime"
 [[ -x "$BIN" ]] || { echo "missing app binary: $BIN" >&2; exit 1; }
@@ -59,6 +66,16 @@ echo "[pass9-release-qualification] retaining packaging inspection"
   echo '```'
   codesign -dv --verbose=4 "$RUNTIME_HELPER" 2>&1 || true
   echo '```'
+  echo
+  echo '## Team identity gate'
+  TEAM_LINE="$(codesign -dv --verbose=4 "$RUNTIME_HELPER" 2>&1 | sed -n 's/^TeamIdentifier=//p' | head -n1)"
+  echo "- **TeamIdentifier:** \`${TEAM_LINE:-missing}\`"
+  if [[ "$SEYAL_MACOS_CONFIGURATION" == "Release" ]]; then
+    if [[ -z "$TEAM_LINE" || "$TEAM_LINE" == "not set" ]]; then
+      echo "Release packaging requires TeamIdentifier from an Apple-issued identity" >&2
+      exit 1
+    fi
+  fi
   echo
   echo '## codesign --display --entitlements - (helper)'
   echo '```'
@@ -190,7 +207,7 @@ python3 scripts/merge-pass9-release-qualification.py \
 
 if [[ "$DRY_RUN" == "1" ]]; then
   if [[ "${SEYAL_PASS9_FORCE_VALIDATE:-0}" == "1" ]]; then
-    python3 scripts/check-pass9-release-smoke.py --integrity-only "$ARTIFACT"
+    python3 scripts/check-pass9-release-smoke.py --skip-latency "$ARTIFACT"
   else
     echo "[pass9-release-qualification] DRY_RUN skips production-budget validator"
   fi
@@ -212,7 +229,7 @@ else
     echo "- **Exact production head:** \`$COMMIT\`"
     echo "- **Artifact:** \`$(basename "$INPUT_AX")\`"
     echo "- **Surface:** production \`InteractiveMetalSurfaceView\` as \`NSTextInputClient\`"
-    echo "- **VoiceOver:** VoiceOver-facing AX role/label/value fields only (system VoiceOver focus/announcement/reconnect not claimed)"
+    echo "- **VoiceOver:** SPEC-009 §10 discoverability/focus/reconnect-style recovery; no marked text as transcript"
     echo
     echo '```json'
     cat "$INPUT_AX"
@@ -234,8 +251,8 @@ cat >"$REPORT" <<EOF
 - **Geometries:** $GEOMETRIES
 - **Cohorts:** $COHORTS
 - **Cycles:** $CYCLES each after $WARMUP warmups
-- **Topology:** Debug \`RustDisplayBridge\` + \`RuntimeLifecycleRecoveryCoordinator\` + \`MetalTerminalRenderer\` prepare/release (same boundary as merge-acceptance; not full AppKit present). \`native_ready\` is coordinator usable transition ONLY (NOT SPEC native interaction).
-- **Issue relationship:** Refs #736 (not closing; packaging/VO/native-interaction/maintainer gates remain open)
+- **Topology:** Debug/Release \`RustDisplayBridge\` + \`RuntimeLifecycleRecoveryCoordinator\` + \`MetalTerminalRenderer\` prepare/release with production \`InteractiveMetalSurfaceView\` SPEC-009 §10 native interaction restore before Usable.
+- **Issue relationship:** Refs #736 until independent maintainer review confirms DoD; packaging uses Team-identity Release when not dry-run.
 - **Abrupt fault:** \`socket_shutdown_owned_disconnect\`
 - **Fresh Runtime:** one Runtime helper process per cohort
 - **Validator:** \`python3 scripts/check-pass9-production-budget.py --expected-head $COMMIT $ARTIFACT\`

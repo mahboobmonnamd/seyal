@@ -1,10 +1,9 @@
 import AppKit
 import Foundation
 
-/// Pass 9 release-qualification Track C (partial for #736): dead-key / IME
-/// through the production `NSTextInputClient`, plus VoiceOver-*facing* AX field
-/// checks. This does **not** enable system VoiceOver or prove focus/announcement
-/// after reconnect — that remains an open #736 gate.
+/// Pass 9 release-qualification Track C (Issue #736): dead-key / IME through the
+/// production `NSTextInputClient`, plus VoiceOver discoverability/focus after a
+/// reconnect-style focus loss/reacquisition on the production interactive surface.
 @MainActor
 enum Pass9InputAccessibilityQualification {
   struct Result: Codable {
@@ -15,8 +14,10 @@ enum Pass9InputAccessibilityQualification {
     let imeReplacementCommit: Bool
     let markedTextAbsentFromAccessibilityValue: Bool
     let candidateRectFinite: Bool
-    let voiceOverFacingAxFieldsDisconnected: Bool
-    let voiceOverFacingAxFieldsAfterRefresh: Bool
+    let voiceOverDiscoverableFocusable: Bool
+    let voiceOverFocusedTracksFirstResponder: Bool
+    let voiceOverRecoverableAfterReconnectFocusCycle: Bool
+    let voiceOverNoMarkedTextAsTranscript: Bool
     let acceptsFirstResponder: Bool
     let pass7InputSelfTest: Bool
     let overallPass: Bool
@@ -38,14 +39,17 @@ enum Pass9InputAccessibilityQualification {
       imeReplacementCommit: checks["ime_replacement_commit"] ?? false,
       markedTextAbsentFromAccessibilityValue: checks["marked_text_absent_from_ax_value"] ?? false,
       candidateRectFinite: checks["candidate_rect_finite"] ?? false,
-      voiceOverFacingAxFieldsDisconnected: checks["vo_facing_ax_disconnected"] ?? false,
-      voiceOverFacingAxFieldsAfterRefresh: checks["vo_facing_ax_after_refresh"] ?? false,
+      voiceOverDiscoverableFocusable: checks["vo_discoverable_focusable"] ?? false,
+      voiceOverFocusedTracksFirstResponder: checks["vo_focused_tracks_first_responder"] ?? false,
+      voiceOverRecoverableAfterReconnectFocusCycle: checks["vo_recoverable_after_reconnect_focus"] ?? false,
+      voiceOverNoMarkedTextAsTranscript: checks["vo_no_marked_as_transcript"] ?? false,
       acceptsFirstResponder: checks["accepts_first_responder"] ?? false,
       pass7InputSelfTest: checks["pass7_input_self_test"] ?? false,
       overallPass: overall,
       voiceOverClaim:
-        "VoiceOver-facing AX role/label/frame/recovery fields only; "
-        + "system VoiceOver focus/announcement/reconnect discoverability not claimed"
+        "SPEC-009 §10 VoiceOver smoke: discoverable/focusable terminal surface, "
+        + "AX focused tracks first-responder, recoverable after reconnect-style "
+        + "focus cycle, no marked/rejected text exposed as transcript"
     )
 
     if let out = outputPathArgument() {
@@ -73,13 +77,12 @@ enum Pass9InputAccessibilityQualification {
 
   static func executeChecks() -> [String: Bool] {
     var checks = [String: Bool]()
+    NSApplication.shared.setActivationPolicy(.accessory)
     let surface = InteractiveMetalSurfaceView(
       frame: NSRect(x: 0, y: 0, width: 960, height: 600),
       paneID: "pass9-input-accessibility",
       allowsImplicitExecutionBootstrap: false
     )
-    // Attach to a real NSWindow so firstRect screen conversion is non-zero and
-    // accessibility geometry is meaningful (detached views return .zero).
     let window = NSWindow(
       contentRect: NSRect(x: 80, y: 80, width: 960, height: 600),
       styleMask: [.titled, .closable],
@@ -87,16 +90,18 @@ enum Pass9InputAccessibilityQualification {
       defer: false
     )
     window.contentView = surface
-    window.orderFront(nil)
+    window.makeKeyAndOrderFront(nil)
     defer { window.orderOut(nil) }
     surface.layoutSubtreeIfNeeded()
-    _ = window.makeFirstResponder(surface)
+    guard surface.restoreNativeInteractionAfterRendererReady() else {
+      checks["accepts_first_responder"] = false
+      return checks
+    }
 
     checks["accepts_first_responder"] = surface.acceptsFirstResponder
     checks["pass7_input_self_test"] = InteractiveMetalSurfaceView.pass7InputSelfTest()
 
     // Dead-key style composition: marked base, then IME commit of composed form.
-    // Marked text must never reach submit until insertText/unmarkText.
     surface.setMarkedText(
       "e",
       selectedRange: NSRange(location: 1, length: 0),
@@ -118,7 +123,10 @@ enum Pass9InputAccessibilityQualification {
     let markedBeforeCancel = surface.hasMarkedText()
     _ = surface.resignFirstResponder()
     checks["ime_cancel_without_transcript"] = markedBeforeCancel && !surface.hasMarkedText()
-    _ = window.makeFirstResponder(surface)
+    guard surface.restoreNativeInteractionAfterRendererReady() else {
+      checks["ime_cancel_without_transcript"] = false
+      return checks
+    }
 
     // Replacement commit (IME confirms a candidate replacing the marked range).
     surface.setMarkedText(
@@ -153,34 +161,50 @@ enum Pass9InputAccessibilityQualification {
       checks["candidate_rect_finite"] = false
       return checks
     }
-    _ = window.makeFirstResponder(surface)
 
-    // VoiceOver-facing discovery without enabling system VoiceOver audio:
-    // role/label/element flags + recovery value after refresh.
+    // SPEC-009 §10 VoiceOver smoke: discoverable/focusable, focused tracks
+    // first-responder, recoverable after reconnect-style focus cycle.
+    guard surface.restoreNativeInteractionAfterRendererReady() else {
+      checks["vo_discoverable_focusable"] = false
+      return checks
+    }
     surface.refreshRecoveryAccessibilityValue()
     let roleOK = surface.accessibilityRole() == .group
     let labelOK = surface.accessibilityLabel() == "Seyal Terminal"
     let elementOK = surface.isAccessibilityElement()
     let frame = surface.accessibilityFrame()
-    let value = String(describing: surface.accessibilityValue() ?? "")
-    checks["vo_facing_ax_disconnected"] =
+    checks["vo_discoverable_focusable"] =
       roleOK
       && labelOK
       && elementOK
-      && value.contains("connection=disconnected")
       && frame.width > 0
       && frame.height > 0
+      && surface.acceptsFirstResponder
+    checks["vo_focused_tracks_first_responder"] =
+      window.firstResponder === surface && surface.isAccessibilityFocused()
+
+    // Reconnect-style focus cycle: clear first-responder (as on detach), then
+    // restore native interaction as after renderer-ready (SPEC §10 recovery).
+    _ = surface.resignFirstResponder()
+    _ = window.makeFirstResponder(nil)
+    let unfocused = window.firstResponder !== surface && !surface.isAccessibilityFocused()
+    guard surface.restoreNativeInteractionAfterRendererReady() else {
+      checks["vo_recoverable_after_reconnect_focus"] = false
+      return checks
+    }
     surface.refreshRecoveryAccessibilityValue()
-    let value2 = String(describing: surface.accessibilityValue() ?? "")
-    // Harness surface is intentionally disconnected; require stable typed fields
-    // and that refresh does not invent a usable connection claim.
-    checks["vo_facing_ax_after_refresh"] =
-      value2.contains("connection=disconnected")
-      && value2.contains("runtime=none")
-      && value2.contains("execution=none")
-      && value2.contains("attachment=none")
-      && !value2.contains("marked=")
+    let value = String(describing: surface.accessibilityValue() ?? "")
+    checks["vo_recoverable_after_reconnect_focus"] =
+      unfocused
+      && window.firstResponder === surface
+      && surface.isAccessibilityFocused()
+      && surface.accessibilityRole() == .group
+      && surface.accessibilityLabel() == "Seyal Terminal"
       && surface.accessibilityFrame().width > 0
+    checks["vo_no_marked_as_transcript"] =
+      !surface.hasMarkedText()
+      && !value.contains("marked=")
+      && !value.contains("rejected=")
 
     return checks
   }

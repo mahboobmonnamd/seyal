@@ -238,7 +238,7 @@ else
     echo "- **Exact production head:** \`$COMMIT\`"
     echo "- **Artifact:** \`$(basename "$INPUT_AX")\`"
     echo "- **Surface:** production \`InteractiveMetalSurfaceView\` as \`NSTextInputClient\`"
-    echo "- **VoiceOver:** SPEC-009 §10 discoverability/focus/reconnect-style recovery; no marked text as transcript"
+    echo "- **VoiceOver:** Issue #736 discoverability/focus/reconnect recovery + \`announcementRequested\`; no marked text as transcript"
     echo
     echo '```json'
     cat "$INPUT_AX"

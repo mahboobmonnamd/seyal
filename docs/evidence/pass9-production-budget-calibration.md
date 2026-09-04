@@ -19,7 +19,7 @@ Keep optimizing the permanent production reconnect path **and** recalibrate abso
 
 ## Product changes informing this calibration
 
-1. Startup UDS `WouldBlock` waits use exponential sleep backoff **10 µs → 100 µs cap** (prefer sleeping over a yield-spin; removed the earlier 1 ms sleep floor that made multi-RTT attach ≥ several ms by construction).
+1. Startup UDS `WouldBlock` waits use `poll(2)` with readable/writable interest until the attach deadline (kernel park; no sleep-backoff or yield-spin).
 2. `prepare_cache` is deferred until first poll/frame/`ensurePreparedSurface`, so reconnect is not charged for renderer-facing prepare work (SPEC split vs prepared_surface).
 
 ## Anchor measurement

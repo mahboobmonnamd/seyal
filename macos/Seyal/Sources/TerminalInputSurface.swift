@@ -371,7 +371,16 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @MainActor NSTextInpu
     if !suppressesAutomaticBridgeRecovery {
       refreshRecoveryAccessibilityValue()
     }
+    announceNativeInteractionReady()
     return true
+  }
+
+  /// Issue #736 / SPEC-009 §10: VoiceOver-visible announcement when native
+  /// interaction is restored after renderer-ready (Usable seam).
+  func announceNativeInteractionReady() {
+    refreshRecoveryAccessibilityValue()
+    let status = terminalBridgeIsConnected ? "reconnected and ready" : "ready for input"
+    SeyalAccessibilityAnnouncement.post("Seyal Terminal \(status)", element: self)
   }
 
   override func mouseDown(with event: NSEvent) {

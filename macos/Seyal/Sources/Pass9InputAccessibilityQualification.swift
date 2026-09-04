@@ -2,8 +2,8 @@ import AppKit
 import Foundation
 
 /// Pass 9 release-qualification Track C (Issue #736): dead-key / IME through the
-/// production `NSTextInputClient`, plus VoiceOver discoverability/focus after a
-/// reconnect-style focus loss/reacquisition on the production interactive surface.
+/// production `NSTextInputClient`, plus VoiceOver discoverability/focus/announcement
+/// after a reconnect-style focus loss/reacquisition on the production interactive surface.
 @MainActor
 enum Pass9InputAccessibilityQualification {
   struct Result: Codable {
@@ -17,6 +17,7 @@ enum Pass9InputAccessibilityQualification {
     let voiceOverDiscoverableFocusable: Bool
     let voiceOverFocusedTracksFirstResponder: Bool
     let voiceOverRecoverableAfterReconnectFocusCycle: Bool
+    let voiceOverAnnouncementAfterReconnect: Bool
     let voiceOverNoMarkedTextAsTranscript: Bool
     let acceptsFirstResponder: Bool
     let pass7InputSelfTest: Bool
@@ -32,7 +33,7 @@ enum Pass9InputAccessibilityQualification {
     let checks = executeChecks()
     let overall = checks.values.allSatisfy { $0 }
     let artifact = Result(
-      schema: "seyal.pass9.input-accessibility.v1",
+      schema: "seyal.pass9.input-accessibility.v2",
       commit: resolvedCommit,
       deadKeyMarkedThenCommit: checks["dead_key_marked_then_commit"] ?? false,
       imeCancelWithoutTranscript: checks["ime_cancel_without_transcript"] ?? false,
@@ -42,14 +43,16 @@ enum Pass9InputAccessibilityQualification {
       voiceOverDiscoverableFocusable: checks["vo_discoverable_focusable"] ?? false,
       voiceOverFocusedTracksFirstResponder: checks["vo_focused_tracks_first_responder"] ?? false,
       voiceOverRecoverableAfterReconnectFocusCycle: checks["vo_recoverable_after_reconnect_focus"] ?? false,
+      voiceOverAnnouncementAfterReconnect: checks["vo_announcement_after_reconnect"] ?? false,
       voiceOverNoMarkedTextAsTranscript: checks["vo_no_marked_as_transcript"] ?? false,
       acceptsFirstResponder: checks["accepts_first_responder"] ?? false,
       pass7InputSelfTest: checks["pass7_input_self_test"] ?? false,
       overallPass: overall,
       voiceOverClaim:
-        "SPEC-009 §10 VoiceOver smoke: discoverable/focusable terminal surface, "
+        "Issue #736 VoiceOver: discoverable/focusable terminal surface, "
         + "AX focused tracks first-responder, recoverable after reconnect-style "
-        + "focus cycle, no marked/rejected text exposed as transcript"
+        + "focus cycle with NSAccessibility announcementRequested, "
+        + "no marked/rejected text exposed as transcript"
     )
 
     if let out = outputPathArgument() {
@@ -67,7 +70,7 @@ enum Pass9InputAccessibilityQualification {
 
     print(
       "pass9_input_accessibility result=\(overall ? "ok" : "fail") "
-        + "schema=seyal.pass9.input-accessibility.v1 commit=\(resolvedCommit.prefix(12))"
+        + "schema=seyal.pass9.input-accessibility.v2 commit=\(resolvedCommit.prefix(12))"
     )
     for (key, value) in checks.sorted(by: { $0.key < $1.key }) {
       print("pass9_input_accessibility check=\(key) pass=\(value)")
@@ -77,6 +80,12 @@ enum Pass9InputAccessibilityQualification {
 
   static func executeChecks() -> [String: Bool] {
     var checks = [String: Bool]()
+    var announcements = [String]()
+    SeyalAccessibilityAnnouncement.qualificationSink = { message in
+      announcements.append(message)
+    }
+    defer { SeyalAccessibilityAnnouncement.qualificationSink = nil }
+
     NSApplication.shared.setActivationPolicy(.accessory)
     let surface = InteractiveMetalSurfaceView(
       frame: NSRect(x: 0, y: 0, width: 960, height: 600),
@@ -162,8 +171,8 @@ enum Pass9InputAccessibilityQualification {
       return checks
     }
 
-    // SPEC-009 §10 VoiceOver smoke: discoverable/focusable, focused tracks
-    // first-responder, recoverable after reconnect-style focus cycle.
+    // Issue #736 VoiceOver: discoverable/focusable, focused tracks first-responder,
+    // recoverable after reconnect-style focus cycle with announcement.
     guard surface.restoreNativeInteractionAfterRendererReady() else {
       checks["vo_discoverable_focusable"] = false
       return checks
@@ -188,8 +197,10 @@ enum Pass9InputAccessibilityQualification {
     _ = surface.resignFirstResponder()
     _ = window.makeFirstResponder(nil)
     let unfocused = window.firstResponder !== surface && !surface.isAccessibilityFocused()
+    let announcementCountBeforeReconnect = announcements.count
     guard surface.restoreNativeInteractionAfterRendererReady() else {
       checks["vo_recoverable_after_reconnect_focus"] = false
+      checks["vo_announcement_after_reconnect"] = false
       return checks
     }
     surface.refreshRecoveryAccessibilityValue()
@@ -201,6 +212,12 @@ enum Pass9InputAccessibilityQualification {
       && surface.accessibilityRole() == .group
       && surface.accessibilityLabel() == "Seyal Terminal"
       && surface.accessibilityFrame().width > 0
+    let reconnectAnnouncements = Array(announcements.dropFirst(announcementCountBeforeReconnect))
+    checks["vo_announcement_after_reconnect"] =
+      reconnectAnnouncements.contains { message in
+        message.contains("Seyal Terminal")
+          && (message.contains("ready") || message.contains("reconnected"))
+      }
     checks["vo_no_marked_as_transcript"] =
       !surface.hasMarkedText()
       && !value.contains("marked=")

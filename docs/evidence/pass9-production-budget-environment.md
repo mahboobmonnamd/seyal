@@ -16,7 +16,7 @@
 - Independent non-implementer sign-off / maintainer confirmation
 - Issue checkbox updates after independent review
 - Keep `Refs #736` until DoD is confirmed (then `Closes` only if every checkbox is evidenced)
-- Issue #736 “VoiceOver announcement” wording remains **out of scope** for Track C until DoD is narrowed or a system-VO announcement gate is added (current proof is SPEC §10 AX smoke only)
+- Re-soak + Track C v2 announcement evidence on the tip that lands `poll(2)` startup waits and production `announcementRequested`
 
 ## Measurement notes (quality bar)
 
@@ -27,4 +27,5 @@
   - `client_allocator_in_use_kib` = dedicated Metal GPU KiB for the soak presenter
 - `client_rss_delta_kib` remains a supporting `ps` RSS signal with a calibrated absolute gate
 - Non-dry-run packaging is Release + Apple-issued Team identity
-- Startup `WouldBlock` path: exponential sleep backoff 10 µs → 100 µs (see calibration)
+- Startup `WouldBlock` path: `poll(2)` readable/writable wait until attach deadline (see calibration)
+- VoiceOver announcement: production `NSAccessibility.post(.announcementRequested)` on native-interaction restore; Track C asserts via qualification sink (`seyal.pass9.input-accessibility.v2`)

@@ -41,11 +41,6 @@ use crate::block::{BlockApply, BlockCache, is_epoch_quarantined, quarantine_epoc
 /// Pass 9 owns one wall-clock second for discovery, handshake, attach and the
 /// initial authoritative snapshot.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(1);
-/// Cap busy-yield avoidance on WouldBlock without inflating reconnect latency.
-/// Short sleeps (10–100µs) beat a yield-spin for stalled peers and stay within
-/// the Pass 9 reconnect budget under multi-RTT startup.
-const STARTUP_BACKOFF_INITIAL: Duration = Duration::from_micros(10);
-const STARTUP_BACKOFF_CAP: Duration = Duration::from_micros(100);
 const READ_CHUNK_BYTES: usize = 64 * 1024;
 const MAX_BUFFERED_BYTES: usize = (MAX_FRAME_PAYLOAD as usize + HEADER_LEN) * 2;
 const MAX_FRAMES_PER_POLL: usize = 64;
@@ -1701,17 +1696,63 @@ fn configure_startup_timeout(stream: &UnixStream, deadline: Instant) -> Result<(
     stream.set_nonblocking(true).map_err(|_| ClientError::Io)
 }
 
-fn wait_startup_peer(deadline: Instant, wait_count: &mut u32) -> Result<(), ClientError> {
-    startup_remaining(deadline)?;
-    *wait_count = wait_count.saturating_add(1);
-    // Exponential backoff (10µs → 100µs cap). Prefer sleeping over yield-spin so a
-    // stalled peer cannot pin a core for the full STARTUP_TIMEOUT.
-    let shift = (*wait_count - 1).min(4);
-    let delay = STARTUP_BACKOFF_INITIAL
-        .saturating_mul(1u32 << shift)
-        .min(STARTUP_BACKOFF_CAP);
-    std::thread::sleep(delay);
-    Ok(())
+#[derive(Clone, Copy)]
+enum StartupWaitInterest {
+    Readable,
+    Writable,
+}
+
+/// Block until the peer is ready for the requested interest or the startup
+/// deadline elapses. Uses `poll(2)` so a stalled peer cannot pin a core and we
+/// do not invent sleep backoff that either burns CPU or inflates reconnect.
+fn wait_startup_peer(
+    stream: &UnixStream,
+    deadline: Instant,
+    interest: StartupWaitInterest,
+) -> Result<(), ClientError> {
+    let events = match interest {
+        StartupWaitInterest::Readable => libc::POLLIN,
+        StartupWaitInterest::Writable => libc::POLLOUT,
+    };
+    loop {
+        let remaining = startup_remaining(deadline)?;
+        // poll(2) timeout is whole milliseconds; keep at least 1ms so a sub-ms
+        // remainder still parks in the kernel instead of busy-spinning.
+        let timeout_ms = i32::try_from(remaining.as_millis().max(1)).unwrap_or(i32::MAX);
+        let mut fds = [libc::pollfd {
+            fd: stream.as_raw_fd(),
+            events,
+            revents: 0,
+        }];
+        // SAFETY: poll with one stack-local pollfd and a bounded timeout.
+        let rc = {
+            #[allow(unsafe_code)]
+            unsafe {
+                libc::poll(fds.as_mut_ptr(), 1, timeout_ms)
+            }
+        };
+        match rc {
+            -1 => {
+                let err = std::io::Error::last_os_error();
+                if err.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(ClientError::Io);
+            }
+            0 => return Err(ClientError::StartupDeadlineExceeded),
+            _ => {
+                let revents = fds[0].revents;
+                if revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+                    // Let the subsequent read/write surface the concrete I/O error.
+                    return Ok(());
+                }
+                if revents & events != 0 {
+                    return Ok(());
+                }
+                // Spurious wake with no matching interest; retry while deadline remains.
+            }
+        }
+    }
 }
 
 fn read_exact_until(
@@ -1720,18 +1761,16 @@ fn read_exact_until(
     deadline: Instant,
 ) -> Result<(), ClientError> {
     let mut offset = 0;
-    let mut yields = 0u32;
     while offset < buffer.len() {
         configure_startup_timeout(stream, deadline)?;
         match stream.read(&mut buffer[offset..]) {
             Ok(0) => return Err(ClientError::Io),
             Ok(read) => {
-                yields = 0;
                 offset += read;
             }
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                wait_startup_peer(deadline, &mut yields)?;
+                wait_startup_peer(stream, deadline, StartupWaitInterest::Readable)?;
             }
             Err(_) => return Err(ClientError::Io),
         }
@@ -1892,17 +1931,15 @@ fn send_control_until(
     configure_startup_timeout(stream, deadline)?;
     let frame = encode_frame(message_type, payload);
     let mut offset = 0;
-    let mut yields = 0u32;
     while offset < frame.len() {
         match stream.write(&frame[offset..]) {
             Ok(0) => return Err(ClientError::Io),
             Ok(written) => {
-                yields = 0;
                 offset += written;
             }
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                wait_startup_peer(deadline, &mut yields)?;
+                wait_startup_peer(stream, deadline, StartupWaitInterest::Writable)?;
             }
             Err(_) => return Err(ClientError::Io),
         }

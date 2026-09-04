@@ -1702,6 +1702,33 @@ enum StartupWaitInterest {
     Writable,
 }
 
+/// Minimal POSIX `poll(2)` surface for startup waits. Kept local so the
+/// portable `seyal-client` dependency frontier stays
+/// `seyal-protocol` + `seyal-render` only (no `libc` Cargo dep).
+#[repr(C)]
+struct StartupPollFd {
+    fd: std::os::raw::c_int,
+    events: i16,
+    revents: i16,
+}
+
+const STARTUP_POLLIN: i16 = 0x0001;
+const STARTUP_POLLOUT: i16 = 0x0004;
+const STARTUP_POLLERR: i16 = 0x0008;
+const STARTUP_POLLHUP: i16 = 0x0010;
+const STARTUP_POLLNVAL: i16 = 0x0020;
+
+#[allow(unsafe_code)]
+unsafe extern "C" {
+    /// POSIX poll; `nfds` is `nfds_t` (unsigned int on Darwin, unsigned long on
+    /// glibc). Passing `1` is ABI-safe for both register widths.
+    fn poll(
+        fds: *mut StartupPollFd,
+        nfds: std::os::raw::c_ulong,
+        timeout: std::os::raw::c_int,
+    ) -> std::os::raw::c_int;
+}
+
 /// Block until the peer is ready for the requested interest or the startup
 /// deadline elapses. Uses `poll(2)` so a stalled peer cannot pin a core and we
 /// do not invent sleep backoff that either burns CPU or inflates reconnect.
@@ -1711,24 +1738,24 @@ fn wait_startup_peer(
     interest: StartupWaitInterest,
 ) -> Result<(), ClientError> {
     let events = match interest {
-        StartupWaitInterest::Readable => libc::POLLIN,
-        StartupWaitInterest::Writable => libc::POLLOUT,
+        StartupWaitInterest::Readable => STARTUP_POLLIN,
+        StartupWaitInterest::Writable => STARTUP_POLLOUT,
     };
     loop {
         let remaining = startup_remaining(deadline)?;
         // poll(2) timeout is whole milliseconds; keep at least 1ms so a sub-ms
         // remainder still parks in the kernel instead of busy-spinning.
         let timeout_ms = i32::try_from(remaining.as_millis().max(1)).unwrap_or(i32::MAX);
-        let mut fds = [libc::pollfd {
+        let mut fds = [StartupPollFd {
             fd: stream.as_raw_fd(),
             events,
             revents: 0,
         }];
-        // SAFETY: poll with one stack-local pollfd and a bounded timeout.
+        // SAFETY: one stack-local pollfd; owned stream fd remains live for the call.
         let rc = {
             #[allow(unsafe_code)]
             unsafe {
-                libc::poll(fds.as_mut_ptr(), 1, timeout_ms)
+                poll(fds.as_mut_ptr(), 1, timeout_ms)
             }
         };
         match rc {
@@ -1742,7 +1769,7 @@ fn wait_startup_peer(
             0 => return Err(ClientError::StartupDeadlineExceeded),
             _ => {
                 let revents = fds[0].revents;
-                if revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+                if revents & (STARTUP_POLLERR | STARTUP_POLLHUP | STARTUP_POLLNVAL) != 0 {
                     // Let the subsequent read/write surface the concrete I/O error.
                     return Ok(());
                 }

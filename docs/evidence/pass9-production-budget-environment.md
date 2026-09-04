@@ -4,7 +4,7 @@
 - **Issue:** #736
 - **Date:** 2026-09-04
 - **Qualification head (matrix under test):** `ed5650ce2dec4b278562fe00dcc73e41bc6e227d`
-- **Branch tip:** same as qualification head (poll startup waits + VoiceOver announcement)
+- **Branch tip:** docs/policy fixes may sit above that head; matrix/Track C claims bind to `ed5650c` unless a production-code tip re-soaks
 - **Artifact:** `docs/evidence/pass9-release-qualification-ed5650ce2dec.json`
 - **Calibration:** `docs/evidence/pass9-production-budget-calibration.md`
 - **Security review:** `docs/evidence/pass9-security-review-745.md`

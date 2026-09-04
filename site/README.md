@@ -22,7 +22,7 @@ make docs-build    # build the static documentation site
 make docs-check    # validate Starlight/Astro content
 ```
 
-`make docs` is the normal way to view the documentation locally. The development server prints the local URL after startup.
+`make docs` is the normal way to view the documentation locally. The development server prints the local URL after startup. Docs dependencies are installed with `npm ci` against the committed `site/package-lock.json`; update the lockfile in the same change when adding or bumping site packages.
 
 Direct `npm` commands inside `site/` remain implementation details of these Make targets and should not become a competing documented workflow.
 

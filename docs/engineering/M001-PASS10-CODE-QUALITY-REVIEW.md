@@ -299,20 +299,22 @@ Coverage percentage alone is not an acceptance metric. Risk and state-transition
 
 Audit:
 
-- `Cargo.lock` and toolchain policy;
+- `Cargo.lock` (production workspace) and `fuzz/Cargo.lock` (fuzz workspace) plus toolchain policy;
+- `site/package-lock.json` and Docs workflow SHA pins;
 - Swift/Xcode project determinism where applicable;
 - build scripts and code generation;
 - warnings/lints and denied classes;
 - feature combinations that can compile unsupported authority paths;
 - deterministic/reproducible build expectations;
 - CI parity with documented local commands;
+- honesty of CI vs controlled-host vs `PLATFORM_LIMITED` evidence classes (see `GITHUB-WORKFLOW.md` / Pass 10 validation);
 - security-sensitive dependency updates and provenance;
 - dependency licenses and OSS compatibility;
 - workflow permissions and untrusted-input handling;
 - artifacts/logs for accidental secret or terminal-content retention;
 - quality gates that can be bypassed or silently skipped.
 
-A green workflow with a skipped mandatory gate is not a Pass 10 success.
+A green workflow with a skipped mandatory gate is not a Pass 10 success. Green Foundation CI with display-link-off benches or path-filtered-only fuzz is also not complete Pass 10 presentation/fuzz proof.
 
 ## 14. Architecture reconciliation and diagrams
 

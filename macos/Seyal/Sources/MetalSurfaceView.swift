@@ -2,6 +2,49 @@ import AppKit
 import Metal
 @preconcurrency import QuartzCore
 
+private final class RuntimeRecoveryTimerBox: @unchecked Sendable {
+  let timer: Timer
+
+  init(timer: Timer) {
+    self.timer = timer
+  }
+}
+
+enum RuntimeRecoveryStage: UInt8, Equatable {
+  case disconnected = 0
+  case discovering = 1
+  case startingRuntime = 2
+  case waitingForController = 3
+  case reconstructing = 4
+  case restoringInteraction = 5
+  case usable = 6
+  case exhausted = 7
+  case blocked = 8
+}
+
+struct RuntimeRecoveryState: Equatable {
+  private(set) var stage: RuntimeRecoveryStage = .disconnected
+  private(set) var generation: UInt64 = 0
+
+  mutating func begin() {
+    generation &+= 1
+    stage = .discovering
+  }
+
+  mutating func transition(to next: RuntimeRecoveryStage) {
+    stage = next
+  }
+
+  mutating func cancel() {
+    generation &+= 1
+    stage = .disconnected
+  }
+
+  mutating func retry() {
+    begin()
+  }
+}
+
 struct PresentationRetryBudget: Equatable {
   private static let delays: [TimeInterval] = [1.0 / 60.0, 0.05, 0.20, 0.75]
   static let maximumAutomaticRetries = 4
@@ -159,8 +202,27 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
   private let metalDevice: any MTLDevice
   private let renderer: MetalTerminalRenderer
   private var bridge: RustDisplayBridge?
-  private var bridgeReconnectTimer: Timer?
-  private var bridgeReconnectGeneration: UInt64 = 0
+  private lazy var bridgeRecoveryCoordinator = RuntimeLifecycleRecoveryCoordinator(
+    clock: { CACurrentMediaTime() },
+    scheduler: { delay, operation in
+      let timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { _ in
+        MainActor.assumeIsolated { operation() }
+      }
+      let timerBox = RuntimeRecoveryTimerBox(timer: timer)
+      return { timerBox.timer.invalidate() }
+    },
+    launcher: { [weak self] in self?.bridge?.launchBundledRuntime() },
+    attempt: { [requestedExecutionIdentity, allowsImplicitExecutionBootstrap] in
+      openRuntimeRecoveryHandle(
+        executionIdentity: requestedExecutionIdentity,
+        allowsImplicitExecutionBootstrap: allowsImplicitExecutionBootstrap
+      )
+    },
+    handleAdopter: { [weak self] handle in
+      self?.bridge?.adoptRecoveredHandle(handle) ?? false
+    }
+  )
+  var runtimeRecoveryState: RuntimeRecoveryState { bridgeRecoveryCoordinator.state }
   private var forceNextFrame = false
   private var hasPreparedState = false
   private var presentationState = PresentationRecoveryState()
@@ -256,7 +318,11 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
       allowsImplicitExecutionBootstrap: allowsImplicitExecutionBootstrap
     )
     self.bridge = bridge
-    _ = bridge.start()
+    // A production surface must not perform a synchronous pre-attempt on the
+    // AppKit thread. Visibility starts the one authoritative recovery episode
+    // so startup, retries and cancellation share the exact seven-attempt/
+    // one-second contract instead of creating an eighth attempt with a fresh
+    // timeout before the lifecycle coordinator begins.
   }
 
   @available(*, unavailable)
@@ -274,7 +340,16 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     _ = code
   }
 
-  func terminalBridgeStatusDidChange() {}
+  func terminalBridgeStatusDidChange() {
+    refreshRecoveryAccessibilityValue()
+    guard bridge?.isConnected != true else { return }
+    // History/composer/display correlations are disposable connection state;
+    // logical pane and Block identity remain owned by Runtime and are not
+    // cleared here.
+    historyRanges.removeAll(keepingCapacity: false)
+    invalidatePreparedPresentation()
+    startAutomaticBridgeRecoveryIfNeeded()
+  }
 
   /// Presentation-only notification. Runtime/Metal remains authoritative;
   /// AppKit uses this to switch the surrounding Pane chrome.
@@ -288,14 +363,20 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     bridge?.isConnected == true
   }
 
-  /// Reconnects the pane's existing PTY bridge at the command boundary.
-  /// Block timeline updates may recreate presentation views, but a command
-  /// must never be rejected merely because that view has just re-entered the
-  /// window hierarchy.
+  /// A command entered while disconnected is an explicit recovery action, but
+  /// it must never synchronously connect/handshake/attach on the AppKit thread.
+  /// The Pane composer keeps the draft when this returns false; the coordinator
+  /// owns the bounded episode and the user can submit once the surface is usable.
   @discardableResult
   func ensureTerminalBridgeConnected() -> Bool {
     guard bridge?.isConnected != true else { return true }
-    return bridge?.start() == true
+    guard shouldRender, bridge?.clientHandle == 0 else { return false }
+    if !bridgeRecoveryCoordinator.isActive,
+      runtimeRecoveryState.stage != .blocked
+    {
+      bridgeRecoveryCoordinator.retry()
+    }
+    return false
   }
 
   @discardableResult
@@ -447,12 +528,44 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
   }
 
   var terminalExecutionIdentity: String? {
-    guard terminalBridgeIsConnected else { return nil }
-    return String(
-      format: "%016llx%016llx",
-      seyal_bridge_execution_id_high(),
-      seyal_bridge_execution_id_low()
+    guard terminalBridgeIsConnected, let bridge else { return nil }
+    return Self.identityString((
+      low: bridge.lastRecoveryResult.executionIDLow,
+      high: bridge.lastRecoveryResult.executionIDHigh
+    ))
+  }
+
+  var terminalRuntimeIdentity: String? {
+    guard terminalBridgeIsConnected, let bridge else { return nil }
+    return Self.identityString(bridge.runtimeIdentityWords)
+  }
+
+  var terminalAttachmentIdentity: String? {
+    guard terminalBridgeIsConnected, let bridge else { return nil }
+    return Self.identityString(bridge.attachmentIdentityWords)
+  }
+
+  /// Makes the authoritative recovery state observable to VoiceOver and to
+  /// native acceptance automation without introducing a second terminal
+  /// model or changing the Runtime protocol.
+  func refreshRecoveryAccessibilityValue() {
+    let connection = terminalBridgeIsConnected ? "usable" : "disconnected"
+    let runtime = terminalRuntimeIdentity ?? "none"
+    let execution = terminalExecutionIdentity ?? "none"
+    let attachment = terminalAttachmentIdentity ?? "none"
+    let alternate = lastAlternateScreen == true ? "true" : "false"
+    setAccessibilityValue(
+      "process=\(ProcessInfo.processInfo.processIdentifier) connection=\(connection) "
+        + "runtime=\(runtime) execution=\(execution) "
+        + "attachment=\(attachment) alternate-screen=\(alternate)"
     )
+  }
+
+  private static func identityString(
+    _ words: (low: UInt64, high: UInt64)
+  ) -> String? {
+    guard words.low != 0 || words.high != 0 else { return nil }
+    return String(format: "%016llx%016llx", words.high, words.low)
   }
 
   /// Logical cell metrics come from the permanent renderer's font/atlas metric
@@ -513,6 +626,10 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
       )
     }
     if newWindow == nil {
+      // Suppress status-driven reconnect before stop() publishes its
+      // disconnected transition. Teardown is detach-only and must not create
+      // a replacement foreground recovery episode.
+      renderable = false
       renderer.setVisible(false)
       invalidatePreparedPresentation()
       invalidateMetalDisplayLink()
@@ -547,36 +664,35 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
       && !isHiddenOrHasHiddenAncestor
   }
 
-  private func scheduleBridgeReconnect() {
-    guard shouldRender, bridge?.isConnected == false, bridgeReconnectTimer == nil else { return }
-    bridgeReconnectGeneration &+= 1
-    let generation = bridgeReconnectGeneration
-    bridgeReconnectTimer = Timer.scheduledTimer(
-      timeInterval: 0.1,
-      target: self,
-      selector: #selector(bridgeReconnectTimerFired(_:)),
-      userInfo: generation,
-      repeats: false
-    )
-  }
-
-  @objc private func bridgeReconnectTimerFired(_ timer: Timer) {
-    guard let generation = timer.userInfo as? UInt64,
-          generation == bridgeReconnectGeneration
-    else { return }
-    bridgeReconnectTimer = nil
-    guard shouldRender, bridge?.isConnected == false else { return }
-    if bridge?.start() == true {
-      cancelBridgeReconnect()
-    } else {
-      scheduleBridgeReconnect()
-    }
-  }
-
   private func cancelBridgeReconnect() {
-    bridgeReconnectTimer?.invalidate()
-    bridgeReconnectTimer = nil
-    bridgeReconnectGeneration &+= 1
+    bridgeRecoveryCoordinator.cancel()
+  }
+
+  private func startAutomaticBridgeRecoveryIfNeeded() {
+    guard renderable,
+      bridge?.isConnected == false,
+      // stop() keeps the old clientHandle until both dispatch-source cancel
+      // handlers complete. Waiting for zero prevents consuming a retry on our
+      // own in-progress detach/controller cleanup.
+      bridge?.clientHandle == 0,
+      !bridgeRecoveryCoordinator.isActive,
+      runtimeRecoveryState.stage != .exhausted,
+      runtimeRecoveryState.stage != .blocked
+    else { return }
+    bridgeRecoveryCoordinator.beginEpisode()
+  }
+
+  /// Explicit user retry starts a new bounded foreground recovery episode.
+  /// Automatic exhaustion never invokes this method recursively.
+  @discardableResult
+  func retryRuntimeConnection() -> Bool {
+    guard shouldRender,
+      bridge?.isConnected != true,
+      bridge?.clientHandle == 0,
+      runtimeRecoveryState.stage != .blocked
+    else { return bridge?.isConnected == true }
+    bridgeRecoveryCoordinator.retry()
+    return bridge?.isConnected == true
   }
 
   private func updateVisibility() {
@@ -588,13 +704,7 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
         installMetalDisplayLink(on: metalLayer)
       }
       forceNextFrame = true
-      if bridge?.isConnected == false {
-        if bridge?.start() == true {
-          cancelBridgeReconnect()
-        } else {
-          scheduleBridgeReconnect()
-        }
-      }
+      startAutomaticBridgeRecoveryIfNeeded()
     } else {
       invalidateMetalDisplayLink()
       invalidatePreparedPresentation()
@@ -637,6 +747,7 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
       lastAlternateScreen = frame.alternateScreen
       onAlternateScreenChanged?(frame.alternateScreen)
     }
+    refreshRecoveryAccessibilityValue()
     let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
     do {
       let result = try renderer.update(
@@ -647,6 +758,7 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
       if result == .updated {
         forceNextFrame = false
         hasPreparedState = true
+        bridgeRecoveryCoordinator.transition(to: .restoringInteraction)
         // Candidate-D can continue advancing while an exhausted GPU
         // display failure is latched. A successful CPU preparation must
         // not erase that asynchronous display diagnostic.
@@ -656,6 +768,13 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
           lastRenderError = nil
         }
         resetPreparationRecovery()
+        if shouldRender,
+          bridge?.isConnected == true,
+          hasPreparedState,
+          !presentationState.exhausted
+        {
+          bridgeRecoveryCoordinator.transition(to: .usable)
+        }
         if shouldRender,
           renderer.persistentDisplayFailure == nil,
           !presentationState.exhausted
@@ -766,6 +885,8 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
 
     guard shouldRender,
       hasPreparedState,
+      renderer.persistentDisplayFailure == nil,
+      !presentationState.exhausted,
       presentationState.consumeOpportunity()
     else {
       return

@@ -258,12 +258,43 @@ final class RustDisplayBridge {
   typealias ErrorHandler = (Int32) -> Void
   typealias StatusHandler = () -> Void
 
+  struct RecoveryResult: Equatable {
+    let stage: UInt8
+    let failureClass: UInt8
+    let retryable: Bool
+    let connectionOrigin: UInt8
+    let handle: UInt64
+    let runtimeIDLow: UInt64
+    let runtimeIDHigh: UInt64
+    let executionIDLow: UInt64
+    let executionIDHigh: UInt64
+    let attachmentIDLow: UInt64
+    let attachmentIDHigh: UInt64
+
+    static func current() -> RecoveryResult {
+      let result = seyal_bridge_last_recovery_result()
+      return RecoveryResult(
+        stage: result.stage,
+        failureClass: result.failure_class,
+        retryable: result.retryable != 0,
+        connectionOrigin: result.connection_origin,
+        handle: result.handle,
+        runtimeIDLow: result.runtime_id_low,
+        runtimeIDHigh: result.runtime_id_high,
+        executionIDLow: result.execution_id_low,
+        executionIDHigh: result.execution_id_high,
+        attachmentIDLow: result.attachment_id_low,
+        attachmentIDHigh: result.attachment_id_high
+      )
+    }
+  }
+
   private let onFrame: FrameHandler
   private let onTimeline: TimelineHandler
   private let onHistory: HistoryHandler
   private let onComposerResult: ComposerResultHandler
   private let onError: ErrorHandler
-  private let onStatusChanged: StatusHandler
+  var onStatusChanged: StatusHandler
   private var readSource: DispatchSourceRead?
   private var writeSource: DispatchSourceWrite?
   private var socketFileDescriptor: Int32 = -1
@@ -271,8 +302,15 @@ final class RustDisplayBridge {
   private var teardown: RustBridgeTeardownCoordinator!
   private(set) var clientHandle: UInt64 = 0
   private(set) var isConnected = false
+  private(set) var lastRecoveryResult = RecoveryResult.current()
+  /// The last bundled-helper failure is retained for the recovery coordinator
+  /// to classify as blocked. Do not silently discard trust or spawn errors.
+  private(set) var lastLaunchError: BundledRuntimeLaunchError?
+  private(set) var runtimeIdentityWords: (low: UInt64, high: UInt64) = (0, 0)
+  private(set) var attachmentIdentityWords: (low: UInt64, high: UInt64) = (0, 0)
+  private(set) var reconstructionState = ReconnectReconstructionState()
   private(set) var runtimeBlockMetadata: RuntimeBlockMetadata?
-  private var reconnectRequested = false
+  private let runtimeLauncher = BundledRuntimeLauncher()
   private var lastTimelineRevision: UInt64 = 0
   private let paneID: String
   private let requestedExecutionIdentity: String?
@@ -335,17 +373,19 @@ final class RustDisplayBridge {
   @discardableResult
   func start() -> Bool {
     guard !isConnected else { return true }
-    if teardown.disconnectPending {
-      reconnectRequested = true
-      return false
-    }
-    reconnectRequested = false
+    // Explicit self-test seams may still call start(), but production recovery
+    // never queues a second open while the previous socket is tearing down.
+    guard !teardown.disconnectPending else { return false }
+    lastLaunchError = nil
+    reconstructionState.beginAttempt()
 
     let handle: UInt64
     if let executionIdentity = requestedExecutionIdentity,
       let (low, high) = Self.executionWords(from: executionIdentity)
     {
       handle = seyal_bridge_open_execution(low, high)
+    } else if let execution = reconstructionState.expectedExecution {
+      handle = seyal_bridge_open_execution(execution.low, execution.high)
     } else if allowsImplicitExecutionBootstrap {
       handle = seyal_bridge_open_first()
     } else {
@@ -358,18 +398,81 @@ final class RustDisplayBridge {
       return false
     }
     guard handle != 0 else {
+      lastRecoveryResult = RecoveryResult.current()
       onError(-6)
       onStatusChanged()
       return false
     }
-    guard seyal_bridge_select(handle) == 0 else {
+    lastRecoveryResult = RecoveryResult.current()
+    return adoptOpenedHandle(handle, recoveryResult: lastRecoveryResult)
+  }
+
+  /// Called only on the MainActor after the lifecycle executor has completed
+  /// the disposable Rust connection. Adoption moves the client into this
+  /// Pane's executor-local registry before AppKit registers socket sources.
+  @discardableResult
+  func adoptRecoveredHandle(_ handle: UInt64) -> Bool {
+    guard !isConnected, !teardown.disconnectPending else {
+      seyal_bridge_disconnect_handle(handle)
+      return false
+    }
+    lastLaunchError = nil
+    reconstructionState.beginAttempt()
+    guard seyal_bridge_adopt_handle(handle) == 0 else {
       seyal_bridge_disconnect_handle(handle)
       onError(-1)
       onStatusChanged()
       return false
     }
+    lastRecoveryResult = RecoveryResult.current()
+    return finishAdoptedHandle(handle, recoveryResult: lastRecoveryResult)
+  }
+
+  @discardableResult
+  private func adoptOpenedHandle(_ handle: UInt64, recoveryResult: RecoveryResult) -> Bool {
+    guard seyal_bridge_adopt_handle(handle) == 0 else {
+      seyal_bridge_disconnect_handle(handle)
+      onError(-1)
+      onStatusChanged()
+      return false
+    }
+    return finishAdoptedHandle(handle, recoveryResult: recoveryResult)
+  }
+
+  @discardableResult
+  private func finishAdoptedHandle(_ handle: UInt64, recoveryResult: RecoveryResult) -> Bool {
+    let runtime = RuntimeContinuityIdentity(
+      low: recoveryResult.runtimeIDLow,
+      high: recoveryResult.runtimeIDHigh
+    )
+    let execution = RuntimeContinuityIdentity(
+      low: recoveryResult.executionIDLow,
+      high: recoveryResult.executionIDHigh
+    )
+    let attachment = RuntimeContinuityIdentity(
+      low: recoveryResult.attachmentIDLow,
+      high: recoveryResult.attachmentIDHigh
+    )
+    // A Rust client handle is published only after finish_attach has validated
+    // Controller authority and atomically committed the complete initial
+    // snapshot. Identity drift or attachment reuse fails closed here before
+    // AppKit can submit input or expose stale presentation.
+    guard reconstructionState.commit(
+      runtime: runtime,
+      execution: execution,
+      attachment: attachment,
+      controllerAuthorityCommitted: true,
+      authoritativeSnapshotCommitted: true
+    ) else {
+      seyal_bridge_disconnect_handle(handle)
+      onError(-4)
+      onStatusChanged()
+      return false
+    }
     clientHandle = handle
     handleBox.value = handle
+    runtimeIdentityWords = (runtime.low, runtime.high)
+    attachmentIdentityWords = (attachment.low, attachment.high)
 
     let fileDescriptor = seyal_bridge_socket_fd()
     guard fileDescriptor >= 0 else {
@@ -401,6 +504,21 @@ final class RustDisplayBridge {
     return true
   }
 
+  /// Starts only the trusted helper packaged inside Seyal.app. Episode-level
+  /// launch-once ownership belongs to RuntimeLifecycleRecoveryCoordinator.
+  @discardableResult
+  func launchBundledRuntime() -> Bool {
+    let result = runtimeLauncher.launch()
+    if case let .failure(error) = result {
+      lastLaunchError = error
+      onError(error.nativeCode)
+      onStatusChanged()
+      return false
+    }
+    lastLaunchError = nil
+    return true
+  }
+
   static func executionWords(from value: String) -> (UInt64, UInt64)? {
     let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
       .lowercased()
@@ -412,13 +530,65 @@ final class RustDisplayBridge {
     return (low, high)
   }
 
-  func stop(reconnect: Bool = false) {
-    reconnectRequested = reconnect
+  /// Abrupt client-loss path for merge-acceptance soak. Shuts the live socket
+  /// then owns a single disconnect. This is fault injection for socket-loss
+  /// recovery, not GUI-process death or the production poll→-18 observation
+  /// path; do not treat it as full abrupt-GUI-death coverage. Runtime observes
+  /// EOF/reset; replacement opening remains coordinator-owned.
+  func forceAbruptSocketLossForAcceptance() {
+    guard isConnected || socketFileDescriptor >= 0 || clientHandle != 0 else { return }
+    if socketFileDescriptor >= 0 {
+      // shutdown (not close): Runtime sees EOF while Rust still owns the fd and
+      // can drop it safely exactly once in disconnect_handle.
+      _ = Darwin.shutdown(socketFileDescriptor, SHUT_RDWR)
+    }
+    isConnected = false
+    reconstructionState.disconnect()
+    runtimeBlockMetadata = nil
+    requestedHistoryRanges.removeAll(keepingCapacity: false)
+    historyRevisions.removeAll(keepingCapacity: false)
+    lastTimelineRevision = 0
+    lastComposerResultRequestID = 0
+    runtimeIdentityWords = (0, 0)
+    attachmentIdentityWords = (0, 0)
+    if let readSource {
+      self.readSource = nil
+      readSource.cancel()
+    }
+    if let writeSource {
+      self.writeSource = nil
+      writeSource.cancel()
+    }
+    socketFileDescriptor = -1
+    if clientHandle != 0 {
+      let handle = clientHandle
+      clientHandle = 0
+      handleBox.value = 0
+      seyal_bridge_disconnect_handle(handle)
+    }
+    onStatusChanged()
+  }
+
+  /// Tears down only the disposable socket/client side of the Pane. The
+  /// `reconnect` spelling is retained for source compatibility with older
+  /// callers, but replacement scheduling/opening belongs exclusively to
+  /// RuntimeLifecycleRecoveryCoordinator.
+  func stop(reconnect _: Bool = false) {
     guard isConnected || socketFileDescriptor >= 0 else { return }
     guard !teardown.disconnectPending else { return }
 
     isConnected = false
+    reconstructionState.disconnect()
     runtimeBlockMetadata = nil
+    // All request/display correlations are connection-local. A reconnect
+    // receives a fresh attachment and must never reuse pending history,
+    // composer, timeline, or generation state from the dead socket.
+    requestedHistoryRanges.removeAll(keepingCapacity: false)
+    historyRevisions.removeAll(keepingCapacity: false)
+    lastTimelineRevision = 0
+    lastComposerResultRequestID = 0
+    runtimeIdentityWords = (0, 0)
+    attachmentIdentityWords = (0, 0)
     socketFileDescriptor = -1
     _ = seyal_bridge_select(clientHandle)
     teardown.requestDisconnect()
@@ -435,10 +605,10 @@ final class RustDisplayBridge {
   }
 
   private func teardownCompleted() {
+    // Completion only releases the old executor-local handle. It intentionally
+    // never opens a replacement; the owning surface observes disconnected
+    // status and starts one bounded coordinator episode if still renderable.
     onStatusChanged()
-    guard reconnectRequested else { return }
-    reconnectRequested = false
-    _ = start()
   }
 
   @discardableResult
@@ -448,7 +618,7 @@ final class RustDisplayBridge {
   }
 
   func currentFrame() -> SeyalPreparedFrame? {
-    guard isConnected, selectClient() else { return nil }
+    guard isConnected, reconstructionState.canMutate, selectClient() else { return nil }
     let frame = seyal_bridge_frame()
     guard frame.cells != nil, frame.cell_count > 0 else { return nil }
     return frame
@@ -462,7 +632,7 @@ final class RustDisplayBridge {
   /// Minimal read-only Pass 8 presentation seam. The rich command transcript
   /// remains the independent Pass 7.1 timeline above.
   func currentBlockMetadata() -> RuntimeBlockMetadata? {
-    guard isConnected, selectClient() else { return nil }
+    guard isConnected, reconstructionState.canMutate, selectClient() else { return nil }
     let value = seyal_bridge_execution_block_metadata()
     guard value.revision > 0,
       value.start_line_id > 0,
@@ -478,7 +648,7 @@ final class RustDisplayBridge {
   }
 
   func currentTimeline() -> [NativeBlockRecord] {
-    guard selectClient() else { return [] }
+    guard isConnected, reconstructionState.canMutate, selectClient() else { return [] }
     let count = Int(seyal_bridge_block_count())
     return (0..<count).compactMap { index in
       let record = seyal_bridge_block_record(UInt32(index))
@@ -503,12 +673,12 @@ final class RustDisplayBridge {
   }
 
   func nextComposerRequestID() -> UInt64 {
-    guard selectClient() else { return 0 }
+    guard isConnected, reconstructionState.canMutate, selectClient() else { return 0 }
     return seyal_bridge_next_composer_request_id()
   }
 
   private func publishComposerResult() {
-    guard selectClient() else { return }
+    guard isConnected, reconstructionState.canMutate, selectClient() else { return }
     let result = seyal_bridge_composer_result()
     guard result.request_id != 0,
       result.request_id != lastComposerResultRequestID
@@ -532,7 +702,9 @@ final class RustDisplayBridge {
 
   @discardableResult
   func requestHistoryRange(startLine: UInt64, endLine: UInt64, blockID: UInt64) -> Int32 {
-    guard isConnected, selectClient(), blockID > 0, startLine > 0, endLine >= startLine else { return -4 }
+    guard isConnected, reconstructionState.canMutate, selectClient(),
+      blockID > 0, startLine > 0, endLine >= startLine
+    else { return -4 }
     let requestID = seyal_bridge_next_history_request_id()
     guard requestID != 0 else { return -4 }
     let result = finishMutation(
@@ -552,7 +724,7 @@ final class RustDisplayBridge {
   }
 
   private func publishHistoryRanges() {
-    guard selectClient() else { return }
+    guard isConnected, reconstructionState.canMutate, selectClient() else { return }
     for (requestKey, request) in Array(requestedHistoryRanges) {
       let metadata = seyal_bridge_history_range_peek_for(request.blockID, requestKey.requestID)
       guard metadata.block_id != 0,
@@ -599,7 +771,7 @@ final class RustDisplayBridge {
 
   @discardableResult
   func submitCommittedText(_ text: String) -> Int32 {
-    guard isConnected, selectClient() else {
+    guard isConnected, reconstructionState.canMutate, selectClient() else {
       onStatusChanged()
       return -10
     }
@@ -621,7 +793,7 @@ final class RustDisplayBridge {
 
   @discardableResult
   func submitComposerCommand(_ text: String) -> Int32 {
-    guard isConnected, selectClient() else {
+    guard isConnected, reconstructionState.canMutate, selectClient() else {
       onStatusChanged()
       return -10
     }
@@ -643,7 +815,7 @@ final class RustDisplayBridge {
 
   @discardableResult
   func submitKey(kind: UInt16, scalar: UInt32) -> Int32 {
-    guard isConnected, selectClient() else {
+    guard isConnected, reconstructionState.canMutate, selectClient() else {
       onStatusChanged()
       return -10
     }
@@ -660,7 +832,7 @@ final class RustDisplayBridge {
     cellHeight: Double,
     meaningfulLayoutEpoch: Bool
   ) -> Int32 {
-    guard isConnected, selectClient() else {
+    guard isConnected, reconstructionState.canMutate, selectClient() else {
       onStatusChanged()
       return -10
     }
@@ -679,7 +851,7 @@ final class RustDisplayBridge {
 
   @discardableResult
   func retryResize() -> Int32 {
-    guard isConnected, selectClient() else {
+    guard isConnected, reconstructionState.canMutate, selectClient() else {
       onStatusChanged()
       return -10
     }
@@ -687,12 +859,12 @@ final class RustDisplayBridge {
   }
 
   func inputFailureCode() -> Int32 {
-    guard isConnected, selectClient() else { return 4 }
+    guard isConnected, reconstructionState.canMutate, selectClient() else { return 4 }
     return seyal_bridge_input_failure()
   }
 
   func resizeFailureCode() -> Int32 {
-    guard isConnected, selectClient() else { return 201 }
+    guard isConnected, reconstructionState.canMutate, selectClient() else { return 201 }
     return seyal_bridge_resize_failure()
   }
 
@@ -781,7 +953,6 @@ final class RustDisplayBridge {
   deinit {
     // The coordinator is retained by cancellation handlers, so teardown
     // completes even if the owning surface destroys this bridge first.
-    reconnectRequested = false
     teardown.requestDisconnect()
     readSource?.cancel()
     writeSource?.cancel()

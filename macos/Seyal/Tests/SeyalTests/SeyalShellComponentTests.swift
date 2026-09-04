@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import XCTest
 @testable import Seyal
 
@@ -8,6 +9,526 @@ private func previewVisual() -> SeyalResolvedVisualConfiguration {
 }
 
 final class SeyalShellComponentTests: XCTestCase {
+
+  func testBundledRuntimeEnvironmentIsExactAllowlistAndRejectsPoisonedValues() throws {
+    let environment = try BundledRuntimeLauncher.launchEnvironment(inherited: [
+      "LANG": "en_US.UTF-8",
+      "LC_CTYPE": "bad\nvalue",
+      "DYLD_INSERT_LIBRARIES": "/tmp/injected.dylib",
+      "SSH_AUTH_SOCK": "/tmp/agent.sock",
+      "SEYAL_SECRET": "secret",
+    ])
+
+    XCTAssertEqual(
+      Set(environment.keys),
+      Set(["HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "PATH", "LANG"])
+    )
+    XCTAssertEqual(environment["PATH"], "/usr/bin:/bin:/usr/sbin:/sbin")
+    XCTAssertEqual(environment["USER"], environment["LOGNAME"])
+    XCTAssertEqual(environment["LANG"], "en_US.UTF-8")
+    XCTAssertNil(environment["LC_CTYPE"])
+    XCTAssertNil(environment["DYLD_INSERT_LIBRARIES"])
+    XCTAssertNil(environment["SSH_AUTH_SOCK"])
+    XCTAssertNil(environment["SEYAL_SECRET"])
+  }
+
+  func testBundledRuntimeLocaleValidationIsBoundedAndControlFree() {
+    XCTAssertTrue(BundledRuntimeLauncher.isValidLocale("en_US.UTF-8"))
+    XCTAssertFalse(BundledRuntimeLauncher.isValidLocale(""))
+    XCTAssertFalse(BundledRuntimeLauncher.isValidLocale("en_US\nUTF-8"))
+    XCTAssertFalse(BundledRuntimeLauncher.isValidLocale(String(repeating: "x", count: 129)))
+  }
+
+  func testBundledRuntimePathAcceptsOnlyExactRegularExecutableHelper() throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let bundle = root.appendingPathComponent("Seyal.app", isDirectory: true)
+    let helpers = bundle.appendingPathComponent("Contents/Helpers", isDirectory: true)
+    let helper = helpers.appendingPathComponent("seyal-runtime")
+    try FileManager.default.createDirectory(at: helpers, withIntermediateDirectories: true)
+    XCTAssertThrowsError(try BundledRuntimeLauncher.validateHelperPath(bundleURL: bundle)) {
+      XCTAssertEqual($0 as? BundledRuntimeLaunchError, .helperMissing)
+    }
+
+    XCTAssertTrue(FileManager.default.createFile(atPath: helper.path, contents: Data("runtime".utf8)))
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helper.path)
+    XCTAssertEqual(
+      try BundledRuntimeLauncher.validateHelperPath(bundleURL: bundle),
+      helper.standardizedFileURL
+    )
+
+    try FileManager.default.removeItem(at: helper)
+    try FileManager.default.createSymbolicLink(at: helper, withDestinationURL: URL(fileURLWithPath: "/bin/true"))
+    XCTAssertThrowsError(try BundledRuntimeLauncher.validateHelperPath(bundleURL: bundle)) {
+      XCTAssertEqual($0 as? BundledRuntimeLaunchError, .helperPathInvalid)
+    }
+    try? FileManager.default.removeItem(at: root)
+  }
+
+  /// SPEC-009 8.1.1 requires canary evidence that `spawn()` genuinely closes
+  /// every descriptor >= 3 and runs the helper in its own process group, and
+  /// requires `validateCodeSignature()` to accept a correctly ad-hoc-signed
+  /// helper/app pair (the Debug-only trust path this host can produce without
+  /// a paid Apple Developer signing identity). No prior test in this diff
+  /// exercised `validateCodeSignature()` or `spawn()` at all; both were only
+  /// unit-tested for `validateHelperPath`/`launchEnvironment` in isolation.
+  func testBundledRuntimeSpawnClosesInheritedDescriptorsAndUsesOwnProcessGroup() throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let bundle = root.appendingPathComponent("Seyal.app", isDirectory: true)
+    let macOS = bundle.appendingPathComponent("Contents/MacOS", isDirectory: true)
+    let helpers = bundle.appendingPathComponent("Contents/Helpers", isDirectory: true)
+    let helper = helpers.appendingPathComponent("seyal-runtime")
+    try FileManager.default.createDirectory(at: helpers, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: macOS, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    // codesign refuses to treat a directory as a bundle unless it looks like
+    // one: a recognizable Info.plist and a main executable under
+    // Contents/MacOS. Neither needs real content for an ad-hoc signature.
+    let infoPlist: [String: Any] = [
+      "CFBundleIdentifier": "dev.seyal.Seyal.test-fixture-app",
+      "CFBundleExecutable": "Seyal",
+      "CFBundlePackageType": "APPL",
+    ]
+    let plistData = try PropertyListSerialization.data(
+      fromPropertyList: infoPlist, format: .xml, options: 0)
+    try plistData.write(to: bundle.appendingPathComponent("Contents/Info.plist"))
+    try FileManager.default.copyItem(
+      at: URL(fileURLWithPath: "/bin/echo"),
+      to: macOS.appendingPathComponent("Seyal"))
+
+    let marker = FileManager.default.temporaryDirectory
+      .appendingPathComponent("seyal-canary-\(UUID().uuidString).txt")
+    defer { try? FileManager.default.removeItem(at: marker) }
+
+    // The helper never receives arguments (spawn() uses an empty argv), so
+    // the probe logic must live in the executed file itself. /dev/fd lets a
+    // plain shell script enumerate its own open descriptors without needing
+    // a second interpreter or a channel outside the closed environment
+    // allowlist: the marker path is baked into the script text, not passed
+    // through the environment.
+    let script = """
+      #!/bin/sh
+      OUT="\(marker.path)"
+      : > "$OUT"
+      echo "pid=$$" >> "$OUT"
+      echo "pgid=$(ps -o pgid= -p $$ | tr -d ' ')" >> "$OUT"
+      for fd in $(seq 3 768); do
+        if [ -e "/dev/fd/$fd" ]; then
+          echo "open_fd=$fd" >> "$OUT"
+        fi
+      done
+      exit 0
+      """
+    try script.write(to: helper, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helper.path)
+
+    // Sign the helper with its own identity before sealing the app (non-deep,
+    // so the app's own ad-hoc signature does not overwrite the helper's
+    // distinct dev.seyal.Seyal.runtime identifier).
+    try adHocSign(helper, identifier: BundledRuntimeLauncher.helperIdentifier)
+    try adHocSign(bundle, identifier: "dev.seyal.Seyal.test-fixture-app")
+
+    // Hold open several descriptors at fd numbers a live GUI process would
+    // plausibly have in real use (sockets/log files stand-in). posix_spawn's
+    // close-all default must exclude every one of these from the child
+    // regardless of which numbers the kernel happened to assign them.
+    let canaries = (0..<6).map { _ in Pipe() }
+    let canaryDescriptors = Set(
+      canaries.flatMap {
+        [$0.fileHandleForReading.fileDescriptor, $0.fileHandleForWriting.fileDescriptor]
+      }
+    )
+    defer {
+      canaries.forEach {
+        $0.fileHandleForReading.closeFile()
+        $0.fileHandleForWriting.closeFile()
+      }
+    }
+
+    let result = BundledRuntimeLauncher().launch(bundleURL: bundle)
+    guard case .success(let pid) = result else {
+      XCTFail("expected an ad-hoc-signed Debug helper/app pair to launch, got \(result)")
+      return
+    }
+
+    let deadline = Date().addingTimeInterval(5)
+    while !FileManager.default.fileExists(atPath: marker.path), Date() < deadline {
+      RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+    }
+    // BundledRuntimeLauncher's own reaper runs asynchronously on a background
+    // queue; this test reaps independently so it does not depend on that
+    // timing, matching how any other same-UID waiter could observe the PID.
+    var status: Int32 = 0
+    while waitpid(pid, &status, 0) == -1 && errno == EINTR {}
+
+    let contents = try String(contentsOf: marker, encoding: .utf8)
+    let lines = contents.split(separator: "\n").map(String.init)
+
+    guard let pidLine = lines.first(where: { $0.hasPrefix("pid=") }),
+      let reportedPID = pid_t(pidLine.dropFirst("pid=".count))
+    else {
+      XCTFail("canary helper did not report its own pid; raw output: \(contents)")
+      return
+    }
+    XCTAssertEqual(reportedPID, pid)
+
+    guard let pgidLine = lines.first(where: { $0.hasPrefix("pgid=") }),
+      let reportedPGID = pid_t(pgidLine.dropFirst("pgid=".count))
+    else {
+      XCTFail("canary helper did not report its process group; raw output: \(contents)")
+      return
+    }
+    XCTAssertEqual(
+      reportedPGID, pid,
+      "helper must run in its own process group, never the GUI's"
+    )
+
+    let openInChild = Set(
+      lines.filter { $0.hasPrefix("open_fd=") }
+        .compactMap { Int($0.dropFirst("open_fd=".count)) }
+    )
+    let leaked = openInChild.intersection(canaryDescriptors.map(Int.init))
+    XCTAssertTrue(
+      leaked.isEmpty,
+      "posix_spawn must close every inherited descriptor >= 3; leaked \(leaked) into the helper"
+    )
+  }
+
+  func testReleaseTrustRulesRejectAdHocHelpers() throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let bundle = root.appendingPathComponent("Seyal.app", isDirectory: true)
+    let macOS = bundle.appendingPathComponent("Contents/MacOS", isDirectory: true)
+    let helpers = bundle.appendingPathComponent("Contents/Helpers", isDirectory: true)
+    let helper = helpers.appendingPathComponent("seyal-runtime")
+    try FileManager.default.createDirectory(at: helpers, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: macOS, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let infoPlist: [String: Any] = [
+      "CFBundleIdentifier": "dev.seyal.Seyal.test-fixture-app",
+      "CFBundleExecutable": "Seyal",
+      "CFBundlePackageType": "APPL",
+    ]
+    let plistData = try PropertyListSerialization.data(
+      fromPropertyList: infoPlist, format: .xml, options: 0)
+    try plistData.write(to: bundle.appendingPathComponent("Contents/Info.plist"))
+    try FileManager.default.copyItem(
+      at: URL(fileURLWithPath: "/bin/echo"),
+      to: macOS.appendingPathComponent("Seyal"))
+    try FileManager.default.copyItem(at: URL(fileURLWithPath: "/bin/echo"), to: helper)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helper.path)
+
+    try adHocSign(helper, identifier: BundledRuntimeLauncher.helperIdentifier)
+    try adHocSign(bundle, identifier: "dev.seyal.Seyal.test-fixture-app")
+
+    XCTAssertNoThrow(
+      try BundledRuntimeLauncher.evaluateHelperTrust(
+        bundleURL: bundle,
+        helperURL: helper,
+        enforceReleaseRules: false
+      )
+    )
+    XCTAssertThrowsError(
+      try BundledRuntimeLauncher.evaluateHelperTrust(
+        bundleURL: bundle,
+        helperURL: helper,
+        enforceReleaseRules: true
+      )
+    ) {
+      XCTAssertEqual($0 as? BundledRuntimeLaunchError, .helperTrustInvalid)
+    }
+  }
+
+  @MainActor
+  func testNativeStaleHandleAdoptionIsRejected() {
+    // A fabricated pending-handle ID must fail closed at the native adopt
+    // boundary. Protocol-level stale identity coverage lives in Rust; this
+    // proves the Swift/C adopt seam does not resurrect an unknown handle.
+    let bridge = RustDisplayBridge(
+      onFrame: { _ in },
+      onError: { _ in },
+      paneID: "pass9-stale-adopt"
+    )
+    XCTAssertFalse(bridge.adoptRecoveredHandle(UInt64.max - 17))
+    XCTAssertFalse(bridge.isConnected)
+    let diag = seyal_bridge_pass9_diag_snapshot()
+    XCTAssertEqual(diag.connected, 0)
+    XCTAssertEqual(diag.live_handles, 0)
+    XCTAssertEqual(diag.pending_handles, 0)
+  }
+
+  private func adHocSign(_ url: URL, identifier: String) throws {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+    process.arguments = ["--force", "--sign", "-", "--identifier", identifier, url.path]
+    let stderrPipe = Pipe()
+    process.standardError = stderrPipe
+    try process.run()
+    process.waitUntilExit()
+    if process.terminationStatus != 0 {
+      let output = String(
+        data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+      XCTFail("ad-hoc codesign of \(url.path) failed: \(output)")
+    }
+  }
+
+  @MainActor
+  private final class RecoveryScheduler {
+    final class Job: @unchecked Sendable {
+      let delay: TimeInterval
+      let operation: RuntimeLifecycleRecoveryCoordinator.ScheduledOperation
+      var cancelled = false
+
+      init(
+        delay: TimeInterval,
+        operation: @escaping RuntimeLifecycleRecoveryCoordinator.ScheduledOperation
+      ) {
+        self.delay = delay
+        self.operation = operation
+      }
+    }
+
+    var now: TimeInterval = 0
+    private(set) var jobs: [Job] = []
+
+    func schedule(
+      delay: TimeInterval,
+      operation: @escaping RuntimeLifecycleRecoveryCoordinator.ScheduledOperation
+    ) -> @Sendable () -> Void {
+      let job = Job(delay: delay, operation: operation)
+      jobs.append(job)
+      return { job.cancelled = true }
+    }
+
+    func fire(_ index: Int, includingCancelled: Bool = false) {
+      let job = jobs[index]
+      now += job.delay
+      if includingCancelled || !job.cancelled {
+        job.operation()
+      }
+    }
+  }
+
+  @MainActor
+  func testLifecycleCoordinatorUsesExactSevenAttemptScheduleAndExhausts() {
+    let scheduler = RecoveryScheduler()
+    var attempts = 0
+    let coordinator = RuntimeLifecycleRecoveryCoordinator(
+      clock: { scheduler.now },
+      scheduler: { delay, operation in
+        MainActor.assumeIsolated {
+          scheduler.schedule(delay: delay, operation: operation)
+        }
+      },
+      launcher: {},
+      attempt: {
+        attempts += 1
+        return .retryable
+      },
+      attemptExecution: .inline
+    )
+
+    coordinator.beginEpisode()
+    for index in RuntimeLifecycleRecoveryCoordinator.retryDelays.indices {
+      scheduler.fire(index)
+    }
+
+    XCTAssertEqual(attempts, 7)
+    XCTAssertEqual(coordinator.attemptCount, 7)
+    XCTAssertEqual(scheduler.jobs.map(\.delay), [0.010, 0.020, 0.040, 0.080, 0.160, 0.250])
+    XCTAssertEqual(coordinator.state.stage, .exhausted)
+    XCTAssertFalse(coordinator.hasScheduledAttempt)
+  }
+
+  @MainActor
+  func testLifecycleCoordinatorLaunchesOnceAndControllerBusyNeverLaunches() {
+    let missingScheduler = RecoveryScheduler()
+    var launches = 0
+    let missing = RuntimeLifecycleRecoveryCoordinator(
+      clock: { missingScheduler.now },
+      scheduler: { delay, operation in
+        MainActor.assumeIsolated {
+          missingScheduler.schedule(delay: delay, operation: operation)
+        }
+      },
+      launcher: { launches += 1 },
+      attempt: { .endpointMissing },
+      attemptExecution: .inline
+    )
+    missing.beginEpisode()
+    for index in RuntimeLifecycleRecoveryCoordinator.retryDelays.indices {
+      missingScheduler.fire(index)
+    }
+    XCTAssertEqual(launches, 1)
+    XCTAssertEqual(missing.state.stage, .exhausted)
+
+    let busyScheduler = RecoveryScheduler()
+    let busy = RuntimeLifecycleRecoveryCoordinator(
+      clock: { busyScheduler.now },
+      scheduler: { delay, operation in
+        MainActor.assumeIsolated {
+          busyScheduler.schedule(delay: delay, operation: operation)
+        }
+      },
+      launcher: { launches += 1 },
+      attempt: { .controllerBusy },
+      attemptExecution: .inline
+    )
+    busy.beginEpisode()
+    XCTAssertEqual(busy.state.stage, .waitingForController)
+    for index in RuntimeLifecycleRecoveryCoordinator.retryDelays.indices {
+      busyScheduler.fire(index)
+    }
+    XCTAssertEqual(launches, 1)
+    XCTAssertEqual(busy.attemptCount, 7)
+    XCTAssertEqual(busy.state.stage, .exhausted)
+  }
+
+  @MainActor
+  func testLifecycleCoordinatorDeadlineCancellationAndGenerationReplacement() {
+    let scheduler = RecoveryScheduler()
+    var attempts = 0
+    let coordinator = RuntimeLifecycleRecoveryCoordinator(
+      clock: { scheduler.now },
+      scheduler: { delay, operation in
+        MainActor.assumeIsolated {
+          scheduler.schedule(delay: delay, operation: operation)
+        }
+      },
+      launcher: {},
+      attempt: {
+        attempts += 1
+        return .retryable
+      },
+      attemptExecution: .inline
+    )
+
+    coordinator.beginEpisode()
+    let firstGeneration = coordinator.state.generation
+    coordinator.beginEpisode()
+    XCTAssertGreaterThan(coordinator.state.generation, firstGeneration)
+    XCTAssertEqual(attempts, 2)
+    scheduler.fire(0, includingCancelled: true)
+    XCTAssertEqual(attempts, 2, "stale generation callback must not attempt")
+
+    scheduler.now = 1.0
+    scheduler.fire(1)
+    XCTAssertEqual(attempts, 2, "deadline must stop before another attempt")
+    XCTAssertEqual(coordinator.state.stage, .exhausted)
+    XCTAssertFalse(coordinator.hasScheduledAttempt)
+
+    let exhaustedGeneration = coordinator.state.generation
+    coordinator.retry()
+    XCTAssertGreaterThan(coordinator.state.generation, exhaustedGeneration)
+    XCTAssertEqual(attempts, 3)
+    coordinator.cancel()
+    XCTAssertEqual(coordinator.state.stage, .disconnected)
+    XCTAssertFalse(coordinator.hasScheduledAttempt)
+  }
+
+  @MainActor
+  func testLifecycleCoordinatorSuccessCancelsOutstandingRecovery() {
+    let scheduler = RecoveryScheduler()
+    var outcomes: [RuntimeRecoveryAttemptOutcome] = [.retryable, .connected]
+    let coordinator = RuntimeLifecycleRecoveryCoordinator(
+      clock: { scheduler.now },
+      scheduler: { delay, operation in
+        MainActor.assumeIsolated {
+          scheduler.schedule(delay: delay, operation: operation)
+        }
+      },
+      launcher: {},
+      attempt: { outcomes.removeFirst() },
+      attemptExecution: .inline
+    )
+
+    coordinator.beginEpisode()
+    scheduler.fire(0)
+    XCTAssertEqual(coordinator.state.stage, .reconstructing)
+    XCTAssertFalse(coordinator.hasScheduledAttempt)
+    XCTAssertFalse(coordinator.isActive)
+  }
+
+  func testReconnectReconstructionPinsRuntimeExecutionAndRequiresFreshAttachment() {
+    let runtime = RuntimeContinuityIdentity(low: 1, high: 2)
+    let execution = RuntimeContinuityIdentity(low: 3, high: 4)
+    let firstAttachment = RuntimeContinuityIdentity(low: 5, high: 6)
+    let secondAttachment = RuntimeContinuityIdentity(low: 7, high: 8)
+    var state = ReconnectReconstructionState()
+
+    state.beginAttempt()
+    XCTAssertFalse(state.canMutate)
+    XCTAssertTrue(state.commit(
+      runtime: runtime,
+      execution: execution,
+      attachment: firstAttachment,
+      controllerAuthorityCommitted: true,
+      authoritativeSnapshotCommitted: true
+    ))
+    XCTAssertTrue(state.canMutate)
+    state.disconnect()
+    state.beginAttempt()
+    XCTAssertFalse(state.canMutate)
+    XCTAssertTrue(state.commit(
+      runtime: runtime,
+      execution: execution,
+      attachment: secondAttachment,
+      controllerAuthorityCommitted: true,
+      authoritativeSnapshotCommitted: true
+    ))
+
+    state.disconnect()
+    state.beginAttempt()
+    XCTAssertFalse(state.commit(
+      runtime: RuntimeContinuityIdentity(low: 99, high: 2),
+      execution: execution,
+      attachment: RuntimeContinuityIdentity(low: 9, high: 10),
+      controllerAuthorityCommitted: true,
+      authoritativeSnapshotCommitted: true
+    ))
+    XCTAssertEqual(state.stage, .blockedIdentityMismatch)
+    XCTAssertFalse(state.canMutate)
+  }
+
+  func testReconnectReconstructionRejectsInterruptedSnapshotAndOldAttachment() {
+    let runtime = RuntimeContinuityIdentity(low: 1, high: 2)
+    let execution = RuntimeContinuityIdentity(low: 3, high: 4)
+    let attachment = RuntimeContinuityIdentity(low: 5, high: 6)
+    var state = ReconnectReconstructionState()
+
+    state.beginAttempt()
+    XCTAssertFalse(state.commit(
+      runtime: runtime,
+      execution: execution,
+      attachment: attachment,
+      controllerAuthorityCommitted: true,
+      authoritativeSnapshotCommitted: false
+    ))
+    XCTAssertEqual(state.stage, .awaitingAuthoritativeSnapshot)
+    XCTAssertFalse(state.canMutate)
+
+    XCTAssertTrue(state.commit(
+      runtime: runtime,
+      execution: execution,
+      attachment: attachment,
+      controllerAuthorityCommitted: true,
+      authoritativeSnapshotCommitted: true
+    ))
+    state.disconnect()
+    state.beginAttempt()
+    XCTAssertFalse(state.commit(
+      runtime: runtime,
+      execution: execution,
+      attachment: attachment,
+      controllerAuthorityCommitted: true,
+      authoritativeSnapshotCommitted: true
+    ))
+    XCTAssertEqual(state.stage, .blockedIdentityMismatch)
+    XCTAssertFalse(state.canMutate)
+  }
 
   func testRuntimeBlockMetadataKeepsOpaqueExecutionIdentityAnchorAndState() {
     let current = RuntimeBlockMetadata(
@@ -556,6 +1077,29 @@ final class SeyalShellComponentTests: XCTestCase {
     XCTAssertEqual(descendants(of: BlockView.self, in: shell).count, 0)
     XCTAssertEqual(descendants(of: PaneComposerShellView.self, in: shell).count, 1)
     XCTAssertTrue(descendants(of: TerminalSurfaceHostView.self, in: shell).isEmpty)
+  }
+
+  @MainActor
+  func testProductionTerminalSurfaceExposesSafeAccessibilityAndInputContract() throws {
+    let shell = SeyalShellProductionFactory.make(
+      frame: NSRect(x: 0, y: 0, width: 960, height: 600),
+      visual: previewVisual()
+    )
+    shell.layoutSubtreeIfNeeded()
+
+    let surface = try XCTUnwrap(
+      descendants(of: InteractiveMetalSurfaceView.self, in: shell).first
+    )
+
+    // The custom Metal surface is the accessibility element. Its metadata is
+    // intentionally limited to role/label/state; terminal cells and command
+    // text must never be exposed through the accessibility value.
+    XCTAssertTrue(surface.isAccessibilityElement())
+    XCTAssertEqual(surface.accessibilityRole(), NSAccessibility.Role.group)
+    XCTAssertEqual(surface.accessibilityRoleDescription(), "Terminal")
+    XCTAssertEqual(surface.accessibilityLabel(), "Seyal Terminal")
+    XCTAssertTrue(surface.acceptsFirstResponder)
+    XCTAssertTrue(InteractiveMetalSurfaceView.pass7InputSelfTest())
   }
 
   @MainActor

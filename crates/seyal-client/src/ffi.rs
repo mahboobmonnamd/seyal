@@ -1,35 +1,361 @@
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
+    path::PathBuf,
     ptr, slice, str,
+    sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, Instant},
 };
 
 use seyal_render::PreparedCell;
 use seyal_runtime::{
     ExecutionId,
-    local_ipc::framing::{ComposerResultCode, Role, TerminalKeyKind},
+    local_ipc::{
+        discovery::{
+            DiscoveryError, control_socket_path, darwin_user_runtime_dir, verify_connected_peer_fd,
+            verify_control_socket_leaf, verify_runtime_dir,
+        },
+        framing::{ComposerResultCode, ErrorCode, Role, TerminalKeyKind},
+    },
 };
 
 use crate::{
-    ClientError, LocalDisplayClient,
+    ClientError, DiscoveryFailure, LocalDisplayClient,
     local::{InputAdmissionFailure, ResizeFailure, derive_grid_geometry},
 };
 
+/// A completed lifecycle connection crosses executors exactly once, before it
+/// becomes a Pane's nonblocking event-loop client. The mutex is never used by
+/// poll, input, resize or rendering: those paths use the executor-local map.
+struct PendingClient {
+    client: Box<LocalDisplayClient>,
+    origin: u8,
+}
+
+static PENDING_CLIENTS: OnceLock<Mutex<HashMap<u64, PendingClient>>> = OnceLock::new();
+static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
+const DEFAULT_RECOVERY_BUDGET_MICROS: u64 = 1_000_000;
+
 thread_local! {
-    /// Each native Pane owns one entry. Values are boxed so borrowed C
-    /// pointers remain stable when another Pane opens or closes a client.
+    // A Pane's live Runtime client belongs to its AppKit executor. It is never
+    // shared with the lifecycle queue after adoption, keeping all steady-state
+    // terminal calls free of cross-pane locks.
     static CLIENTS: RefCell<HashMap<u64, Box<LocalDisplayClient>>> = RefCell::new(HashMap::new());
     static ACTIVE_HANDLE: Cell<u64> = const { Cell::new(0) };
-    static NEXT_HANDLE: Cell<u64> = const { Cell::new(1) };
+    static LAST_RECOVERY_RESULT: Cell<SeyalRecoveryResult> = const { Cell::new(SeyalRecoveryResult::empty()) };
+}
+
+fn pending_clients() -> &'static Mutex<HashMap<u64, PendingClient>> {
+    PENDING_CLIENTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C)]
+pub struct SeyalRecoveryResult {
+    pub stage: u8,
+    pub failure_class: u8,
+    pub retryable: u8,
+    pub connection_origin: u8,
+    pub handle: u64,
+    pub runtime_id_low: u64,
+    pub runtime_id_high: u64,
+    pub execution_id_low: u64,
+    pub execution_id_high: u64,
+    pub attachment_id_low: u64,
+    pub attachment_id_high: u64,
+}
+
+impl SeyalRecoveryResult {
+    const fn empty() -> Self {
+        Self {
+            stage: 0,
+            failure_class: 0,
+            retryable: 0,
+            connection_origin: 0,
+            handle: 0,
+            runtime_id_low: 0,
+            runtime_id_high: 0,
+            execution_id_low: 0,
+            execution_id_high: 0,
+            attachment_id_low: 0,
+            attachment_id_high: 0,
+        }
+    }
+}
+
+#[cfg(test)]
+mod recovery_result_tests {
+    use super::{
+        SeyalRecoveryResult, classify_bridge_discovery_error, recovery_deadline,
+        set_recovery_failure,
+    };
+    use crate::{ClientError, DiscoveryFailure};
+    use seyal_runtime::local_ipc::{discovery::DiscoveryError, framing::ErrorCode};
+    use std::io;
+
+    #[test]
+    fn retryable_discovery_failure_is_typed() {
+        set_recovery_failure(ClientError::Discovery(DiscoveryFailure::EndpointMissing));
+        let result = super::LAST_RECOVERY_RESULT.with(std::cell::Cell::get);
+        assert_eq!(result.failure_class, 1);
+        assert_eq!(result.retryable, 1);
+        assert_eq!(result.stage, 1);
+    }
+
+    #[test]
+    fn refusal_retries_without_claiming_a_missing_endpoint_or_launch_path() {
+        set_recovery_failure(ClientError::Discovery(DiscoveryFailure::ConnectionRefused));
+        let refused = super::LAST_RECOVERY_RESULT.with(std::cell::Cell::get);
+        assert_eq!(refused.failure_class, 2);
+        assert_eq!(refused.retryable, 1);
+
+        set_recovery_failure(ClientError::Discovery(
+            DiscoveryFailure::EndpointDisappeared,
+        ));
+        let disappeared = super::LAST_RECOVERY_RESULT.with(std::cell::Cell::get);
+        assert_eq!(disappeared.failure_class, 2);
+        assert_eq!(disappeared.retryable, 1);
+    }
+
+    #[test]
+    fn untrusted_or_invalid_endpoint_is_never_retryable_or_launchable() {
+        for failure in [
+            DiscoveryFailure::UntrustedEndpoint,
+            DiscoveryFailure::InvalidPath,
+        ] {
+            set_recovery_failure(ClientError::Discovery(failure));
+            let result = super::LAST_RECOVERY_RESULT.with(std::cell::Cell::get);
+            assert_eq!(result.failure_class, 4);
+            assert_eq!(result.retryable, 0);
+        }
+    }
+
+    #[test]
+    fn security_and_controller_failures_are_not_retryable() {
+        set_recovery_failure(ClientError::Protocol);
+        let protocol = super::LAST_RECOVERY_RESULT.with(std::cell::Cell::get);
+        assert_eq!(protocol.failure_class, 4);
+        assert_eq!(protocol.retryable, 0);
+
+        set_recovery_failure(ClientError::Server(ErrorCode::ControllerBusy));
+        let busy = super::LAST_RECOVERY_RESULT.with(std::cell::Cell::get);
+        assert_eq!(busy.failure_class, 3);
+        assert_eq!(busy.retryable, 1);
+        set_recovery_failure(ClientError::Server(ErrorCode::CapacityExceeded));
+        let capacity = super::LAST_RECOVERY_RESULT.with(std::cell::Cell::get);
+        assert_eq!(capacity.failure_class, 4);
+        assert_eq!(capacity.retryable, 0);
+        set_recovery_failure(ClientError::StartupDeadlineExceeded);
+        let deadline = super::LAST_RECOVERY_RESULT.with(std::cell::Cell::get);
+        assert_eq!(deadline.failure_class, 4);
+        assert_eq!(deadline.retryable, 0);
+        let _ = SeyalRecoveryResult::empty();
+    }
+
+    #[test]
+    fn zero_budget_and_insecure_leaf_classification_fail_closed() {
+        assert_eq!(
+            recovery_deadline(0),
+            Err(ClientError::StartupDeadlineExceeded)
+        );
+        assert_eq!(
+            classify_bridge_discovery_error(DiscoveryError::NotOwnedByEffectiveUser),
+            ClientError::Discovery(DiscoveryFailure::UntrustedEndpoint)
+        );
+        assert_eq!(
+            classify_bridge_discovery_error(DiscoveryError::Io(io::Error::from(
+                io::ErrorKind::NotFound,
+            ))),
+            ClientError::Discovery(DiscoveryFailure::EndpointMissing)
+        );
+    }
+}
+
+fn set_recovery_failure(error: ClientError) {
+    let (failure_class, retryable) = match error {
+        // Only an absent verified canonical endpoint permits the one helper
+        // launch action. Refusal/disappearance remain bounded retries of that
+        // same endpoint; trust/path failures fail closed.
+        ClientError::Discovery(DiscoveryFailure::EndpointMissing) => (1, 1),
+        ClientError::Discovery(
+            DiscoveryFailure::ConnectionRefused | DiscoveryFailure::EndpointDisappeared,
+        ) => (2, 1),
+        ClientError::Discovery(
+            DiscoveryFailure::UntrustedEndpoint | DiscoveryFailure::InvalidPath,
+        ) => (4, 0),
+        // The deadline is the caller's episode budget, not a transient I/O
+        // failure. Retrying it would permit a recovery episode to outlive its
+        // specified wall-clock bound.
+        ClientError::StartupDeadlineExceeded => (4, 0),
+        ClientError::Io | ClientError::Disconnected => (2, 1),
+        ClientError::NoRunningExecution => (2, 0),
+        ClientError::AmbiguousExecutions => (6, 0),
+        ClientError::Server(ErrorCode::ControllerBusy) => (3, 1),
+        ClientError::UnsupportedDisplayCapability
+        | ClientError::UnsupportedInteractiveCapability
+        | ClientError::Protocol
+        | ClientError::InvalidAttachment
+        | ClientError::Display
+        | ClientError::Prepare
+        | ClientError::Capacity
+        | ClientError::CommitTooLarge
+        | ClientError::LostController
+        | ClientError::ResizeProtocolFailure
+        | ClientError::InvalidGeometry
+        | ClientError::BlockMetadataConflict
+        | ClientError::Server(_) => (4, 0),
+        ClientError::ClientBackpressure => (5, 1),
+    };
+    LAST_RECOVERY_RESULT.with(|result| {
+        result.set(SeyalRecoveryResult {
+            stage: 1,
+            failure_class,
+            retryable,
+            ..SeyalRecoveryResult::empty()
+        });
+    });
+}
+
+fn set_recovery_success(client: &LocalDisplayClient, handle: u64, origin: u8) {
+    let (runtime_id_low, runtime_id_high) = identity_words(client.runtime_id());
+    let execution = client.execution_id().to_bytes();
+    let attachment = client.attachment_id().to_bytes();
+    LAST_RECOVERY_RESULT.with(|result| {
+        result.set(SeyalRecoveryResult {
+            stage: 2,
+            connection_origin: origin,
+            handle,
+            runtime_id_low,
+            runtime_id_high,
+            execution_id_low: u64::from_le_bytes(execution[..8].try_into().unwrap()),
+            execution_id_high: u64::from_le_bytes(execution[8..].try_into().unwrap()),
+            attachment_id_low: u64::from_le_bytes(attachment[..8].try_into().unwrap()),
+            attachment_id_high: u64::from_le_bytes(attachment[8..].try_into().unwrap()),
+            ..SeyalRecoveryResult::empty()
+        })
+    });
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_last_recovery_result() -> SeyalRecoveryResult {
+    LAST_RECOVERY_RESULT.with(Cell::get)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C)]
+pub struct SeyalPass9DiagSnapshot {
+    pub connected: u8,
+    pub reserved0: [u8; 7],
+    pub socket_fd: i32,
+    pub live_handles: u32,
+    pub pending_handles: u32,
+    pub active_handle: u64,
+    pub runtime_id_low: u64,
+    pub runtime_id_high: u64,
+    pub execution_id_low: u64,
+    pub execution_id_high: u64,
+    pub attachment_id_low: u64,
+    pub attachment_id_high: u64,
+}
+
+impl SeyalPass9DiagSnapshot {
+    const fn empty() -> Self {
+        Self {
+            connected: 0,
+            reserved0: [0; 7],
+            socket_fd: -1,
+            live_handles: 0,
+            pending_handles: 0,
+            active_handle: 0,
+            runtime_id_low: 0,
+            runtime_id_high: 0,
+            execution_id_low: 0,
+            execution_id_high: 0,
+            attachment_id_low: 0,
+            attachment_id_high: 0,
+        }
+    }
+}
+
+/// Quiescent-only Pass 9 diagnostic. Callers must not invoke this from poll,
+/// input, resize, or render hot paths.
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_pass9_diag_snapshot() -> SeyalPass9DiagSnapshot {
+    let live_handles = CLIENTS.with(|clients| clients.borrow().len() as u32);
+    let pending_handles = pending_clients()
+        .lock()
+        .map(|pending| pending.len() as u32)
+        .unwrap_or(0);
+    let active_handle = ACTIVE_HANDLE.with(Cell::get);
+    let Some(client) = with_active_client(|client| {
+        let (runtime_id_low, runtime_id_high) = identity_words(client.runtime_id());
+        let execution = client.execution_id().to_bytes();
+        let attachment = client.attachment_id().to_bytes();
+        SeyalPass9DiagSnapshot {
+            connected: 1,
+            reserved0: [0; 7],
+            socket_fd: client.socket_fd(),
+            live_handles,
+            pending_handles,
+            active_handle,
+            runtime_id_low,
+            runtime_id_high,
+            execution_id_low: u64::from_le_bytes(execution[..8].try_into().unwrap()),
+            execution_id_high: u64::from_le_bytes(execution[8..].try_into().unwrap()),
+            attachment_id_low: u64::from_le_bytes(attachment[..8].try_into().unwrap()),
+            attachment_id_high: u64::from_le_bytes(attachment[8..].try_into().unwrap()),
+        }
+    }) else {
+        return SeyalPass9DiagSnapshot {
+            live_handles,
+            pending_handles,
+            active_handle,
+            ..SeyalPass9DiagSnapshot::empty()
+        };
+    };
+    client
+}
+
+fn identity_words(value: u128) -> (u64, u64) {
+    let bytes = value.to_le_bytes();
+    (
+        u64::from_le_bytes(bytes[..8].try_into().unwrap()),
+        u64::from_le_bytes(bytes[8..].try_into().unwrap()),
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_runtime_id_low() -> u64 {
+    with_active_client(|client| identity_words(client.runtime_id()).0).unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_runtime_id_high() -> u64 {
+    with_active_client(|client| identity_words(client.runtime_id()).1).unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_attachment_id_low() -> u64 {
+    with_active_client(|client| {
+        identity_words(u128::from_le_bytes(client.attachment_id().to_bytes())).0
+    })
+    .unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_attachment_id_high() -> u64 {
+    with_active_client(|client| {
+        identity_words(u128::from_le_bytes(client.attachment_id().to_bytes())).1
+    })
+    .unwrap_or(0)
 }
 
 fn allocate_handle() -> u64 {
-    NEXT_HANDLE.with(|next| {
-        let handle = next.get();
-        let next_handle = handle.wrapping_add(1);
-        next.set(if next_handle == 0 { 1 } else { next_handle });
-        if handle == 0 { 1 } else { handle }
-    })
+    let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
+    if handle == 0 { 1 } else { handle }
 }
 
 fn active_handle() -> u64 {
@@ -395,12 +721,86 @@ impl SeyalPreparedFrame {
     }
 }
 
+fn recovery_deadline(budget_micros: u64) -> Result<Instant, ClientError> {
+    if budget_micros == 0 {
+        return Err(ClientError::StartupDeadlineExceeded);
+    }
+    Instant::now()
+        .checked_add(Duration::from_micros(budget_micros))
+        .ok_or(ClientError::StartupDeadlineExceeded)
+}
+
+fn ensure_recovery_deadline(deadline: Instant) -> Result<(), ClientError> {
+    if Instant::now() < deadline {
+        Ok(())
+    } else {
+        Err(ClientError::StartupDeadlineExceeded)
+    }
+}
+
+fn classify_bridge_discovery_error(error: DiscoveryError) -> ClientError {
+    match error {
+        DiscoveryError::Io(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            ClientError::Discovery(DiscoveryFailure::EndpointMissing)
+        }
+        DiscoveryError::NotADirectory
+        | DiscoveryError::NotOwnedByEffectiveUser
+        | DiscoveryError::GroupOrWorldWritable
+        | DiscoveryError::ActiveEndpoint => {
+            ClientError::Discovery(DiscoveryFailure::UntrustedEndpoint)
+        }
+        DiscoveryError::ConfstrFailed
+        | DiscoveryError::PathTooLongForSocket
+        | DiscoveryError::Io(_) => ClientError::Discovery(DiscoveryFailure::InvalidPath),
+    }
+}
+
+fn verified_recovery_socket_path() -> Result<PathBuf, ClientError> {
+    let runtime_dir = darwin_user_runtime_dir().map_err(classify_bridge_discovery_error)?;
+    verify_runtime_dir(&runtime_dir).map_err(classify_bridge_discovery_error)?;
+    let socket_path = control_socket_path(&runtime_dir).map_err(classify_bridge_discovery_error)?;
+    verify_control_socket_leaf(&socket_path).map_err(classify_bridge_discovery_error)?;
+    Ok(socket_path)
+}
+
+fn verify_connected_recovery_client(
+    client: &LocalDisplayClient,
+    socket_path: &std::path::Path,
+    deadline: Instant,
+) -> Result<(), ClientError> {
+    ensure_recovery_deadline(deadline)?;
+    verify_control_socket_leaf(socket_path).map_err(classify_bridge_discovery_error)?;
+    verify_connected_peer_fd(client.socket_fd()).map_err(classify_bridge_discovery_error)?;
+    ensure_recovery_deadline(deadline)
+}
+
+fn register_pending_client(client: LocalDisplayClient, origin: u8) -> Result<u64, ClientError> {
+    let handle = allocate_handle();
+    let mut registry = pending_clients().lock().map_err(|_| ClientError::Io)?;
+    registry.insert(
+        handle,
+        PendingClient {
+            client: Box::new(client),
+            origin,
+        },
+    );
+    if let Some(pending) = registry.get(&handle) {
+        set_recovery_success(&pending.client, handle, pending.origin);
+    }
+    Ok(handle)
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn seyal_bridge_connect_first() -> i32 {
-    if seyal_bridge_open_first() == 0 {
-        -6
-    } else {
+    let handle = seyal_bridge_open_first();
+    if handle == 0 {
+        return -6;
+    }
+    if seyal_bridge_adopt_handle(handle) == 0 {
         0
+    } else {
+        seyal_bridge_disconnect_handle(handle);
+        -1
     }
 }
 
@@ -410,15 +810,43 @@ pub extern "C" fn seyal_bridge_connect_first() -> i32 {
 /// execution identity is known.
 #[unsafe(no_mangle)]
 pub extern "C" fn seyal_bridge_open_first() -> u64 {
-    let Ok(client) = LocalDisplayClient::connect_first_running() else {
-        return 0;
+    seyal_bridge_open_first_until(DEFAULT_RECOVERY_BUDGET_MICROS)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_open_first_until(budget_micros: u64) -> u64 {
+    let deadline = match recovery_deadline(budget_micros) {
+        Ok(deadline) => deadline,
+        Err(error) => {
+            set_recovery_failure(error);
+            return 0;
+        }
     };
-    let handle = allocate_handle();
-    CLIENTS.with(|clients| {
-        clients.borrow_mut().insert(handle, Box::new(client));
-    });
-    ACTIVE_HANDLE.with(|active| active.set(handle));
-    handle
+    let socket_path = match verified_recovery_socket_path() {
+        Ok(path) => path,
+        Err(error) => {
+            set_recovery_failure(error);
+            return 0;
+        }
+    };
+    let client = match LocalDisplayClient::connect_first_running_until(deadline) {
+        Ok(client) => client,
+        Err(error) => {
+            set_recovery_failure(error);
+            return 0;
+        }
+    };
+    if let Err(error) = verify_connected_recovery_client(&client, &socket_path, deadline) {
+        set_recovery_failure(error);
+        return 0;
+    }
+    match register_pending_client(client, 1) {
+        Ok(handle) => handle,
+        Err(error) => {
+            set_recovery_failure(error);
+            0
+        }
+    }
 }
 
 /// Opens a client for one explicitly selected Runtime execution and returns a
@@ -426,20 +854,78 @@ pub extern "C" fn seyal_bridge_open_first() -> u64 {
 /// use identical Block/request counters.
 #[unsafe(no_mangle)]
 pub extern "C" fn seyal_bridge_open_execution(execution_low: u64, execution_high: u64) -> u64 {
+    seyal_bridge_open_execution_until(
+        execution_low,
+        execution_high,
+        DEFAULT_RECOVERY_BUDGET_MICROS,
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_open_execution_until(
+    execution_low: u64,
+    execution_high: u64,
+    budget_micros: u64,
+) -> u64 {
+    let deadline = match recovery_deadline(budget_micros) {
+        Ok(deadline) => deadline,
+        Err(error) => {
+            set_recovery_failure(error);
+            return 0;
+        }
+    };
+    let socket_path = match verified_recovery_socket_path() {
+        Ok(path) => path,
+        Err(error) => {
+            set_recovery_failure(error);
+            return 0;
+        }
+    };
     let mut bytes = [0u8; 16];
     bytes[..8].copy_from_slice(&execution_low.to_le_bytes());
     bytes[8..].copy_from_slice(&execution_high.to_le_bytes());
     let execution_id = ExecutionId::from_bytes(bytes);
-    let Ok(client) = LocalDisplayClient::connect_execution_id(execution_id, Role::Controller)
-    else {
-        return 0;
+    let client = match LocalDisplayClient::connect_execution_id_until(
+        execution_id,
+        Role::Controller,
+        deadline,
+    ) {
+        Ok(client) => client,
+        Err(error) => {
+            set_recovery_failure(error);
+            return 0;
+        }
     };
-    let handle = allocate_handle();
+    if let Err(error) = verify_connected_recovery_client(&client, &socket_path, deadline) {
+        set_recovery_failure(error);
+        return 0;
+    }
+    match register_pending_client(client, 2) {
+        Ok(handle) => handle,
+        Err(error) => {
+            set_recovery_failure(error);
+            0
+        }
+    }
+}
+
+/// Transfer a fully validated, disposable startup client from the lifecycle
+/// queue to the calling Pane executor. A handle may be adopted exactly once.
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_adopt_handle(handle: u64) -> i32 {
+    let Some(pending) = pending_clients()
+        .lock()
+        .ok()
+        .and_then(|mut pending| pending.remove(&handle))
+    else {
+        return -1;
+    };
+    set_recovery_success(&pending.client, handle, pending.origin);
     CLIENTS.with(|clients| {
-        clients.borrow_mut().insert(handle, Box::new(client));
+        clients.borrow_mut().insert(handle, pending.client);
     });
     ACTIVE_HANDLE.with(|active| active.set(handle));
-    handle
+    0
 }
 
 /// Selects the client used by the legacy-shaped bridge calls. Swift calls
@@ -461,6 +947,9 @@ pub extern "C" fn seyal_bridge_disconnect_handle(handle: u64) {
     CLIENTS.with(|clients| {
         clients.borrow_mut().remove(&handle);
     });
+    if let Ok(mut pending) = pending_clients().lock() {
+        pending.remove(&handle);
+    }
     ACTIVE_HANDLE.with(|active| {
         if active.get() == handle {
             active.set(0);
@@ -744,11 +1233,13 @@ fn terminal_key_kind(value: u16) -> Option<TerminalKeyKind> {
 
 fn error_code(error: ClientError) -> i32 {
     match error {
-        ClientError::RuntimeDiscovery => -2,
+        ClientError::Discovery(_) => -2,
+        ClientError::StartupDeadlineExceeded => -20,
         ClientError::Io => -3,
         ClientError::Protocol => -4,
         ClientError::UnsupportedDisplayCapability => -5,
         ClientError::NoRunningExecution => -6,
+        ClientError::AmbiguousExecutions => -19,
         ClientError::InvalidAttachment => -7,
         ClientError::Display => -8,
         ClientError::Prepare => -9,
@@ -761,6 +1252,6 @@ fn error_code(error: ClientError) -> i32 {
         ClientError::ResizeProtocolFailure => -16,
         ClientError::InvalidGeometry => -17,
         ClientError::BlockMetadataConflict => -18,
-        ClientError::Server(code) => -1000 - i32::from(code),
+        ClientError::Server(code) => -1000 - i32::from(code as u16),
     }
 }

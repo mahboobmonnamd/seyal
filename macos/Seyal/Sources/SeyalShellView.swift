@@ -835,9 +835,17 @@ final class SeyalShellView: NSView {
       accessibilityID: "pane.close.\(paneID)",
       action: #selector(closePane(_:))
     )
+    let reconnect = makePaneControlButton(
+      paneID: paneID,
+      symbol: "arrow.clockwise",
+      fallback: "↻",
+      accessibilityLabel: "Reconnect \(paneState.title)",
+      accessibilityID: "pane.reconnect.\(paneID)",
+      action: #selector(reconnectPane(_:))
+    )
     close.isHidden = state.activeTab.paneCount <= 1
 
-    let controls = NSStackView(views: [split, close])
+    let controls = NSStackView(views: [split, reconnect, close])
     controls.orientation = .horizontal
     controls.alignment = .centerY
     controls.spacing = 2
@@ -1580,6 +1588,15 @@ final class SeyalShellView: NSView {
     guard let paneID = sender.identifier?.rawValue else { return }
     state.closePane(id: paneID)
     rebuildUI()
+  }
+
+  @objc
+  private func reconnectPane(_ sender: NSButton) {
+    guard let paneID = sender.identifier?.rawValue,
+      let surface = surfaces[paneID]
+    else { return }
+    state.focusPane(id: paneID)
+    _ = surface.retryRuntimeConnection()
   }
 
   @objc

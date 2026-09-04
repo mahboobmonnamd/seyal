@@ -22,7 +22,17 @@ fn config(label: &str) -> RuntimeConfig {
     config.local_ipc = LocalIpcMode::Disabled;
     config.graceful_termination = Duration::from_millis(50);
     config.forced_reap = Duration::from_millis(250);
-    config.final_drain = Duration::from_millis(100);
+    // Bounded, not unbounded: still well inside every test's own 3s outer
+    // polling deadline in this file. Widened from 100ms after a CI-only,
+    // non-locally-reproducible failure in
+    // detached_output_is_in_authoritative_snapshot_and_exited_child_is_not_recreated:
+    // 100ms was tuned against local timing (this file's own child+sleep(50ms)
+    // scenario completes in ~60ms on unloaded Apple Silicon hardware) and left
+    // far less margin than the production default (250ms) for a hosted,
+    // virtualized CI runner under full `cargo test --workspace` contention to
+    // observe the child's trailing PTY output before Runtime::finalize retires
+    // the execution. This does not touch RuntimeConfig::default's final_drain.
+    config.final_drain = Duration::from_secs(2);
     config
 }
 
@@ -106,6 +116,77 @@ fn block_identity_is_not_reused_across_runtime_incarnations() {
     };
 
     assert_ne!(first_id, second_id);
+}
+
+#[test]
+fn detached_output_is_in_authoritative_snapshot_and_exited_child_is_not_recreated() {
+    let mut runtime = Runtime::new(config("detached-output-child-exit")).expect("runtime");
+    let execution_id = runtime
+        .create_execution(
+            // The 1s sleep after the final write is deliberate, not padding:
+            // Runtime::finalize can legitimately run inside the very same
+            // service_reads() call that just read "after-detach" (confirmed
+            // via CI-only investigation -- the read and the following EOF can
+            // land in the same internal drain pass once the child has fully
+            // exited), which races this test's own poll_once-then-check loop
+            // out of ever observing a live snapshot. That race is about test
+            // observability, not about whether the canonical TerminalState
+            // was updated: draining happens before finalize either way. Keep
+            // the child alive after its last write so there is a
+            // non-racy window to assert against a live execution, and let the
+            // second block below exercise the actual exit/finalize path with
+            // full fidelity.
+            CommandSpec::new("/bin/sh").args([
+                "-c",
+                "printf 'before-detach\\n'; sleep 0.05; printf 'after-detach\\n'; sleep 1; exit 23",
+            ]),
+            size(80, 24),
+        )
+        .expect("execution");
+    let attachment = runtime.attach(execution_id).expect("attach");
+    runtime.detach(execution_id, attachment).expect("detach");
+
+    // The GUI is detached while the Runtime continues polling the same PTY.
+    // Read the canonical projection only after output has arrived; this is the
+    // production reconnect seam and does not introduce a second terminal model.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut output = String::new();
+    while Instant::now() < deadline {
+        runtime
+            .poll_once(Some(Duration::from_millis(10)))
+            .expect("poll detached output");
+        if let Some(execution) = runtime.execution(execution_id) {
+            let snapshot = execution.projection_snapshot();
+            output = snapshot.cells.iter().map(|cell| cell.scalar).collect();
+            if output.contains("after-detach") {
+                break;
+            }
+        }
+    }
+    assert!(
+        output.contains("before-detach") && output.contains("after-detach"),
+        "detached output was not retained in the authoritative snapshot: {output:?}"
+    );
+
+    // The primary child exit must drain and remove the original execution;
+    // recovery must never manufacture a replacement execution for a dead PTY.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && runtime.execution(execution_id).is_some() {
+        runtime
+            .poll_once(Some(Duration::from_millis(10)))
+            .expect("poll child exit");
+    }
+    assert!(
+        runtime.execution(execution_id).is_none(),
+        "exited child remained registered or was replaced"
+    );
+    assert!(
+        runtime
+            .list()
+            .iter()
+            .all(|summary| summary.id != execution_id),
+        "child exit must not create a replacement execution"
+    );
 }
 
 #[test]

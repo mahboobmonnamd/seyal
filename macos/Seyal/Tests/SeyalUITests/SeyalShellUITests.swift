@@ -1,3 +1,4 @@
+import Darwin
 import XCTest
 
 final class SeyalShellUITests: XCTestCase {
@@ -13,6 +14,37 @@ final class SeyalShellUITests: XCTestCase {
     private func leftModeSegment(_ label: String) -> XCUIElement {
         let button = leftModeControl.buttons[label]
         return button.exists ? button : leftModeControl.radioButtons[label]
+    }
+
+    private func wait(
+        timeout: TimeInterval = 5,
+        until condition: () -> Bool
+    ) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if condition() { return true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        } while Date() < deadline
+        return condition()
+    }
+
+    private func recoveryFields(_ surface: XCUIElement) -> [String: String]? {
+        guard let value = surface.value as? String else { return nil }
+        return value.split(separator: " ").reduce(into: [:]) { fields, component in
+            let pair = component.split(separator: "=", maxSplits: 1)
+            if pair.count == 2 { fields[String(pair[0])] = String(pair[1]) }
+        }
+    }
+
+    private func launchProductionApp() -> XCUIElement {
+        app = XCUIApplication()
+        app.launchArguments = []
+        app.launchEnvironment = [:]
+        app.launch()
+        let surface = app.descendants(matching: .any)["terminal-surface.pane-local"]
+        XCTAssertTrue(surface.waitForExistence(timeout: 5))
+        XCTAssertTrue(wait { self.recoveryFields(surface)?["connection"] == "usable" })
+        return surface
     }
 
     override func setUpWithError() throws {
@@ -165,6 +197,101 @@ final class SeyalShellUITests: XCTestCase {
         )
     }
 
+    func testPass9ProductionRecoverySurvivesGracefulAndForcedGUIExit() throws {
+        app.terminate()
+
+        var repoRoot = URL(fileURLWithPath: #filePath)
+        for _ in 0..<5 { repoRoot.deleteLastPathComponent() }
+        let runtimeURL = repoRoot.appendingPathComponent("target/debug/seyal-runtime")
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: runtimeURL.path))
+
+        let token = "pass9-\(UUID().uuidString)"
+        let continuityMarker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("seyal-pass9-continuity-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: continuityMarker)
+        }
+
+        let runtime = Process()
+        runtime.executableURL = runtimeURL
+        runtime.arguments = ["/bin/zsh"]
+        runtime.standardOutput = Pipe()
+        runtime.standardError = Pipe()
+        try runtime.run()
+        defer {
+            if runtime.isRunning { runtime.terminate() }
+            runtime.waitUntilExit()
+        }
+
+        var surface = launchProductionApp()
+        let first = try XCTUnwrap(recoveryFields(surface))
+        XCTAssertNotEqual(first["runtime"], "none")
+        XCTAssertNotEqual(first["execution"], "none")
+        XCTAssertNotEqual(first["attachment"], "none")
+
+        let composer = app.textViews["composer.pane-local"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 3))
+        composer.click()
+        composer.typeText("export SEYAL_PASS9_TOKEN='\(token)'")
+        composer.typeKey(.return, modifierFlags: [])
+
+        // A real window geometry change must keep the surface usable and
+        // produce a finite accessibility frame contained by the app window.
+        let window = app.windows["Seyal"]
+        let oldFrame = window.frame
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.99))
+            .press(forDuration: 0.1, thenDragTo: window.coordinate(
+                withNormalizedOffset: CGVector(dx: 0.85, dy: 0.85)
+            ))
+        XCTAssertTrue(wait { window.frame != oldFrame })
+        XCTAssertTrue(window.frame.intersects(surface.frame))
+        XCTAssertGreaterThan(surface.frame.width, 0)
+        XCTAssertGreaterThan(surface.frame.height, 0)
+
+        // The standard AppKit close control exercises the production
+        // window-close path. Hosted XCTest
+        // can retain the application process after its last window closes, so
+        // explicitly end that now-windowless process before reopening it.
+        let closeButton = window.buttons[XCUIIdentifierCloseWindow]
+        XCTAssertTrue(closeButton.exists)
+        closeButton.click()
+        XCTAssertTrue(wait { !window.exists })
+        if app.state != .notRunning { app.terminate() }
+        surface = launchProductionApp()
+        let afterClose = try XCTUnwrap(recoveryFields(surface))
+        XCTAssertEqual(afterClose["runtime"], first["runtime"])
+        XCTAssertEqual(afterClose["execution"], first["execution"])
+        XCTAssertNotEqual(afterClose["attachment"], first["attachment"])
+
+        // Keep the PTY in alternate screen while the GUI disappears abruptly.
+        surface.click()
+        app.typeText("printf '\\033[?1049hALT'; while :; do sleep 1; done")
+        app.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(wait { self.recoveryFields(surface)?["alternate-screen"] == "true" })
+
+        let killedPID = try XCTUnwrap(Int32(afterClose["process"] ?? ""))
+        XCTAssertGreaterThan(killedPID, 1)
+        XCTAssertEqual(Darwin.kill(killedPID, SIGKILL), 0)
+        XCTAssertTrue(wait { self.app.state == .notRunning })
+        surface = launchProductionApp()
+        let afterKill = try XCTUnwrap(recoveryFields(surface))
+        XCTAssertEqual(afterKill["runtime"], first["runtime"])
+        XCTAssertEqual(afterKill["execution"], first["execution"])
+        XCTAssertNotEqual(afterKill["attachment"], afterClose["attachment"])
+        XCTAssertEqual(afterKill["alternate-screen"], "true")
+
+        // Focus the real NSTextInputClient, interrupt the retained foreground
+        // command, and prove direct terminal input reaches the same shell.
+        surface.click()
+        XCTAssertTrue(surface.isHittable)
+        app.typeKey("c", modifierFlags: .control)
+        app.typeText("printf '%s' '\(token)' > \(continuityMarker.path)")
+        app.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(wait { FileManager.default.fileExists(atPath: continuityMarker.path) })
+        XCTAssertEqual(try String(contentsOf: continuityMarker, encoding: .utf8), token)
+
+    }
+
     func testProductionShellUsesOnePaneOwnedComposerAndMetalSurface() {
         // The production launch intentionally has no preview flag or fixture
         // environment. This exercises the real AppKit shell factory and its
@@ -184,7 +311,11 @@ final class SeyalShellUITests: XCTestCase {
         let surfaces = app
             .descendants(matching: .any)
             .matching(identifier: "terminal-surface.pane-local")
-        XCTAssertEqual(surfaces.count, 1)
+        XCTAssertEqual(
+            surfaces.count,
+            1,
+            "the production terminal surface remains discoverable at the recovery boundary"
+        )
 
         composer.click()
         composer.typeText("printf 'pass7.1'")

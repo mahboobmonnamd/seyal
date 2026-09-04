@@ -1,5 +1,6 @@
 import AppKit
 import Darwin
+import Metal
 
 @main
 enum SeyalMain {
@@ -26,12 +27,13 @@ enum SeyalMain {
             guard RendererValidation.deterministicSelfTest(),
                   Pass6RegressionValidation.selfTest(),
                   MetalTerminalRenderer.gpuCompletionFailureRecoverySelfTest(),
-                  InteractiveMetalSurfaceView.pass7InputSelfTest()
+                  InteractiveMetalSurfaceView.pass7InputSelfTest(),
+                  RuntimeLifecycleRecoveryCoordinator.ownershipSelfTest()
             else {
-                print("Seyal deterministic Metal renderer/input self-test failed.")
+                print("Seyal deterministic Metal renderer/input/recovery self-test failed.")
                 exit(1)
             }
-            print("Seyal deterministic Metal renderer/input self-test passed.")
+            print("Seyal deterministic Metal renderer/input/recovery self-test passed.")
             return
         }
 
@@ -57,6 +59,22 @@ enum SeyalMain {
         if CommandLine.arguments.contains("--pass7-native-input-benchmark") {
             guard runPass7NativeInputBenchmark() else {
                 print("Seyal Pass 7 native input benchmark failed.")
+                exit(1)
+            }
+            return
+        }
+
+        if CommandLine.arguments.contains("--pass9-renderer-calibration") {
+            guard runPass9RendererCalibration() else {
+                print("Seyal Pass 9 renderer lifecycle calibration failed.")
+                exit(1)
+            }
+            return
+        }
+
+        if CommandLine.arguments.contains("--pass9-merge-acceptance") {
+            guard Pass9MergeAcceptance.run() else {
+                print("Seyal Pass 9 merge-acceptance soak failed.")
                 exit(1)
             }
             return
@@ -131,10 +149,18 @@ enum SeyalMain {
             defer: false
         )
         window.contentView = surface
-        guard window.makeFirstResponder(surface), surface.terminalBridgeIsConnected else {
-            window.orderOut(nil)
-            return false
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil) }
+        guard window.makeFirstResponder(surface) else { return false }
+
+        // Pass 9 production startup is visibility-driven and coordinator-owned;
+        // benchmark setup must exercise that same path instead of relying on a
+        // synchronous bridge.start() side effect from surface construction.
+        let recoveryDeadline = Date().addingTimeInterval(2)
+        while !surface.terminalBridgeIsConnected && Date() < recoveryDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
         }
+        guard surface.terminalBridgeIsConnected else { return false }
 
         func makeReturnEvent() -> NSEvent? {
             NSEvent.keyEvent(
@@ -191,7 +217,137 @@ enum SeyalMain {
                 + "appkit_event_boundary=true production_keyDown_route=true "
                 + "synthetic_event=true physical_keyboard=false performance_claim=false"
         )
-        window.orderOut(nil)
+        return true
+    }
+
+    @MainActor
+    private static func runPass9RendererCalibration() -> Bool {
+        guard let device = MTLCreateSystemDefaultDevice() else { return false }
+        let warmups = 20
+        let measuredCycles = 100
+        let cohorts = 5
+        let geometries = [(columns: 120, rows: 40), (columns: 80, rows: 24)]
+
+        func makeCell() -> SeyalPreparedCell {
+            var cell = SeyalPreparedCell()
+            cell.scalar = 0x61
+            cell.foreground = 0
+            cell.background = 0
+            cell.flags = 0
+            cell.reserved = 0
+            return cell
+        }
+
+        func percentile(_ sorted: [UInt64], _ value: Int) -> UInt64 {
+            guard !sorted.isEmpty else { return 0 }
+            let rank = max(1, (sorted.count * value + 99) / 100)
+            return sorted[min(rank - 1, sorted.count - 1)]
+        }
+
+        print(
+            "pass9_renderer_calibration architecture=production_MetalTerminalRenderer "
+                + "warmup_cycles=\(warmups) measured_cycles=\(measuredCycles) cohorts=\(cohorts) "
+                + "geometries=120x40,80x24 resource_boundary=setVisible_false_completed "
+                + "resource_gate=dedicated_GPU_bytes_and_surface_resources_zero_every_cycle "
+                + "presentation_completion=NOT_CLAIMED performance_claim=false"
+        )
+
+        do {
+            for geometry in geometries {
+                for cohort in 1...cohorts {
+                    let renderer = try MetalTerminalRenderer(device: device)
+                    renderer.setVisible(false)
+                    guard !renderer.hasDedicatedSurfaceResources,
+                          renderer.estimatedDedicatedGPUBytes == 0
+                    else { return false }
+
+                    var cells = [SeyalPreparedCell](
+                        repeating: makeCell(),
+                        count: geometry.rows * geometry.columns
+                    )
+                    var generation: UInt64 = 1
+
+                    func lifecycle(measure: Bool) throws -> (update: UInt64, release: UInt64, bytes: Int)? {
+                        renderer.setVisible(true)
+                        var damage = DamageMask()
+                        damage.markAll(rows: geometry.rows)
+                        let updateStarted = DispatchTime.now().uptimeNanoseconds
+                        let result = try cells.withUnsafeBufferPointer { buffer in
+                            try renderer.update(
+                                frame: NativePreparedFrame(
+                                    cells: buffer,
+                                    generation: generation,
+                                    rows: geometry.rows,
+                                    columns: geometry.columns,
+                                    damage: damage
+                                ),
+                                backingScale: 1,
+                                forceFullRebuild: true
+                            )
+                        }
+                        let updateFinished = DispatchTime.now().uptimeNanoseconds
+                        guard result == .updated,
+                              renderer.hasDedicatedSurfaceResources,
+                              renderer.estimatedDedicatedGPUBytes > 0
+                        else { return nil }
+                        let allocatedBytes = renderer.estimatedDedicatedGPUBytes
+
+                        let releaseStarted = DispatchTime.now().uptimeNanoseconds
+                        renderer.setVisible(false)
+                        let releaseFinished = DispatchTime.now().uptimeNanoseconds
+                        guard !renderer.hasDedicatedSurfaceResources,
+                              renderer.estimatedDedicatedGPUBytes == 0
+                        else { return nil }
+                        generation &+= 1
+                        guard measure else { return (0, 0, allocatedBytes) }
+                        return (
+                            updateFinished - updateStarted,
+                            releaseFinished - releaseStarted,
+                            allocatedBytes
+                        )
+                    }
+
+                    for _ in 0..<warmups {
+                        guard try lifecycle(measure: false) != nil else { return false }
+                    }
+
+                    var updateSamples = [UInt64]()
+                    var releaseSamples = [UInt64]()
+                    updateSamples.reserveCapacity(measuredCycles)
+                    releaseSamples.reserveCapacity(measuredCycles)
+                    var maximumDedicatedGPUBytes = 0
+                    for cycle in 0..<measuredCycles {
+                        let index = cycle % cells.count
+                        cells[index].scalar = cells[index].scalar == 0x61 ? 0x62 : 0x61
+                        guard let sample = try lifecycle(measure: true) else { return false }
+                        updateSamples.append(sample.update)
+                        releaseSamples.append(sample.release)
+                        maximumDedicatedGPUBytes = max(maximumDedicatedGPUBytes, sample.bytes)
+                    }
+                    updateSamples.sort()
+                    releaseSamples.sort()
+
+                    print(
+                        "pass9_renderer_cohort geometry=\(geometry.columns)x\(geometry.rows) cohort=\(cohort) "
+                            + "renderer_update_boundary=committed_prepared_state_to_Metal_resources_ready "
+                            + "update_p50_us=\(String(format: "%.3f", Double(percentile(updateSamples, 50)) / 1_000.0)) "
+                            + "update_p95_us=\(String(format: "%.3f", Double(percentile(updateSamples, 95)) / 1_000.0)) "
+                            + "update_p99_us=\(String(format: "%.3f", Double(percentile(updateSamples, 99)) / 1_000.0)) "
+                            + "update_max_us=\(String(format: "%.3f", Double(updateSamples.last ?? 0) / 1_000.0)) "
+                            + "release_boundary=setVisible_false_to_dedicated_resources_zero "
+                            + "release_p50_us=\(String(format: "%.3f", Double(percentile(releaseSamples, 50)) / 1_000.0)) "
+                            + "release_p95_us=\(String(format: "%.3f", Double(percentile(releaseSamples, 95)) / 1_000.0)) "
+                            + "release_p99_us=\(String(format: "%.3f", Double(percentile(releaseSamples, 99)) / 1_000.0)) "
+                            + "release_max_us=\(String(format: "%.3f", Double(releaseSamples.last ?? 0) / 1_000.0)) "
+                            + "max_dedicated_gpu_bytes=\(maximumDedicatedGPUBytes) "
+                            + "resource_return_every_cycle=true sample_count=\(measuredCycles) performance_claim=false"
+                    )
+                }
+            }
+        } catch {
+            print("pass9_renderer_calibration_error=\(error)")
+            return false
+        }
         return true
     }
 }

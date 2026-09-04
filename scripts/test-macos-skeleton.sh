@@ -140,6 +140,8 @@ channel="$(sed -nE 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"([^"]+)".*/\
 rustup run "$channel" cargo build -p seyal-runtime --bin seyal-runtime --locked
 RUNTIME="${ROOT}/target/debug/seyal-runtime"
 [[ -x "$RUNTIME" ]] || fail "seyal-runtime fixture executable is missing"
+RUNTIME_DIR="$(getconf DARWIN_USER_TEMP_DIR)/seyal-runtime"
+RUNTIME_SOCKET="${RUNTIME_DIR}/control.sock"
 
 runtime_pid=""
 cleanup_runtime() {
@@ -147,6 +149,15 @@ cleanup_runtime() {
     kill "$runtime_pid" 2>/dev/null || true
     wait "$runtime_pid" 2>/dev/null || true
   fi
+  # Runtime performs bounded graceful cleanup of its canonical listener. Do
+  # not start the next fixture while the old listener still owns the socket;
+  # otherwise the new fixture reports AlreadyRunning nondeterministically.
+  # Runtime may finish its child before the listener cleanup completes. Keep
+  # the singleton boundary closed until the endpoint is actually gone.
+  for _ in $(seq 1 200); do
+    [[ ! -S "$RUNTIME_SOCKET" ]] && break
+    sleep 0.025
+  done
   runtime_pid=""
 }
 trap cleanup_runtime EXIT
@@ -155,6 +166,23 @@ run_pass8_native_metadata_case() {
   cleanup_runtime
   "$RUNTIME" /bin/sh -c "sleep 3" &
   runtime_pid=$!
+
+  # Wait until the fixture Runtime owns the canonical endpoint before asking
+  # the client to discover it. Without this barrier, a legitimate endpoint
+  # absence can cause the production one-shot bundled-helper recovery path to
+  # win the singleton race and make the fixture Runtime report AlreadyRunning.
+  local ready=0
+  for _ in $(seq 1 40); do
+    if [[ -S "$RUNTIME_SOCKET" ]]; then
+      ready=1
+      break
+    fi
+    if ! kill -0 "$runtime_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.025
+  done
+  [[ "$ready" == "1" ]] || fail "fixture Runtime did not bind its canonical endpoint"
 
   local passed=0
   for _ in $(seq 1 20); do
@@ -178,6 +206,19 @@ run_live_renderer_case() {
   "$RUNTIME" /bin/sh -c "$command" &
   runtime_pid=$!
 
+  local ready=0
+  for _ in $(seq 1 40); do
+    if [[ -S "$RUNTIME_SOCKET" ]]; then
+      ready=1
+      break
+    fi
+    if ! kill -0 "$runtime_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 0.025
+  done
+  [[ "$ready" == "1" ]] || fail "live fixture Runtime did not bind its canonical endpoint"
+
   local passed=0
   for _ in $(seq 1 20); do
     if "$BINARY" --renderer-live-self-test "$@"; then
@@ -191,7 +232,10 @@ run_live_renderer_case() {
   done
   [[ "$passed" == "1" ]] || fail "live Candidate-D to Metal case failed: $command"
   wait "$runtime_pid" || true
-  runtime_pid=""
+  # The child can exit before Runtime has removed its listener. Reuse the
+  # same teardown path while ownership is still tracked so the next fixture
+  # cannot race a draining singleton.
+  cleanup_runtime
 }
 
 run_pass8_native_metadata_case

@@ -1,8 +1,11 @@
 # Pass 9 release-qualification findings (Issue #736)
 
-**Branch:** `issue/736-pass9-release-qualification`  
-**Evidence artifact:** `docs/evidence/pass9-release-qualification-78018027c925.json`  
-**Calibration:** `docs/evidence/pass9-production-budget-calibration.md`
+**Frozen production head under test:** `88e274bd36aae78ee6460758fa602692fe78dc38`  
+**Evidence:**
+- `docs/evidence/pass9-release-qualification-88e274bd36aa.json` — validator **PASS**
+- `docs/evidence/pass9-input-accessibility-88e274bd36aa.json` — Track C **PASS**
+- `docs/evidence/pass9-release-packaging-88e274bd36aa.md`
+- `docs/evidence/pass9-production-budget-calibration.md`
 
 ## Decision
 
@@ -11,37 +14,21 @@ Optimize the permanent reconnect path **and** recalibrate absolute µs / RSS gat
 ## Product optimizations
 
 1. Startup UDS `WouldBlock` waits use yield + occasional 10 µs pause (removed 1 ms sleep floor).
-2. Lazy `prepare_cache` after attach (`needs_initial_prepare` / `seyal_bridge_ensure_prepared`) so reconnect is not charged for prepare work.
-3. Harness measures SPEC-aligned boundaries; RSS median sampling settled longer.
+2. Lazy `prepare_cache` after attach (`needs_initial_prepare` / `seyal_bridge_ensure_prepared`).
+3. SPEC-aligned harness boundaries; settled RSS median sampling.
 
-## Full matrix result (5×2×2, 100 cycles, 20 warmups)
+## Full matrix (5×2×2 on `88e274bd36aa`)
 
-| Gate | Max across 20 cohorts | Budget | Status |
-| --- | ---: | ---: | --- |
-| reconnect_p99 | ~3062 µs | 4000 µs | PASS |
-| cleanup_p99 | ~149 µs | 250 µs | PASS |
-| prepared_surface_p99 | ~1321 µs | 1500 µs | PASS |
-| native_ready_p99 | ≪ budget | 2000 µs | PASS |
-| logical exact return | all cohorts | exact | PASS |
-| client_rss_delta | max 928 KiB (noisy `ps`) | 1536 KiB | PASS |
-| Pass 8 paired delta | −16.26% | explain/block policy | PASS (`ENFORCED_CONTROLLED_HOST`) |
+Validator PASS. Pass 8 `ENFORCED_CONTROLLED_HOST` included. Timing and resource gates under calibrated budgets in `check-pass9-production-budget.py`.
 
-Validator:
+## Track C (dead-key / IME / VoiceOver-facing)
 
-```text
-python3 scripts/check-pass9-production-budget.py \
-  --expected-head <HEAD> \
-  docs/evidence/pass9-release-qualification-78018027c925.json
-→ PASS
-```
+Production `InteractiveMetalSurfaceView` as `NSTextInputClient`: marked→commit, cancel, replacement, marked text absent from AX value, finite candidate rect, VO-facing role/label/recovery fields (system VoiceOver audio not enabled).
 
-## Honesty note
+## Packaging
 
-The Debug app that produced this matrix included **uncommitted** harness + client changes on top of `78018027…`. Before release-qualifying a public head: commit the WIP, rebuild, re-run `bash scripts/pass9-release-qualification.sh`, and retain evidence named for that exact commit.
+Debug ad-hoc packaging inspection + Release trust-rule XCTest (`testReleaseTrustRulesRejectAdHocHelpers`) retained by the orchestrator. Durable paid Team-identity Release signing remains host-limited where no Developer identity is present.
 
-## Remaining #736 DoD (not claimed done)
+## Reviews / merge
 
-- VoiceOver / real IME / dead-key qualification evidence
-- Durable Release Team-identity packaging beyond Debug ad-hoc + Release trust XCTest
-- Independent reviews; no merge without explicit confirmation
-- Exact-head re-soak after the qualification commit lands
+Independent reviews remain required. Do not merge without explicit confirmation.

@@ -66,14 +66,15 @@ enum Pass9ReleaseQualification {
     let window: NSWindow
 
     init() {
-      let frame = NSRect(x: 40, y: 40, width: 960, height: 600)
+      // Small probe geometry: SPEC §10 first-responder/AX/IME only; Metal display
+      // path is suppressed, so keep the AppKit surface cheap.
+      let frame = NSRect(x: 40, y: 40, width: 320, height: 200)
       let surface = InteractiveMetalSurfaceView(
         frame: frame,
         paneID: "pass9-release-native-interaction",
-        allowsImplicitExecutionBootstrap: false
+        allowsImplicitExecutionBootstrap: false,
+        installation: .nativeInteractionProbe
       )
-      // Probe owns the SPEC §10 seam only; do not open a second Runtime client.
-      surface.suppressesAutomaticBridgeRecovery = true
       let window = NSWindow(
         contentRect: frame,
         styleMask: [.titled, .closable],
@@ -82,6 +83,8 @@ enum Pass9ReleaseQualification {
       )
       window.contentView = surface
       window.title = "Seyal Pass9 Native Interaction"
+      // Keep ordered out between cycles; orderFront only inside the timed restore.
+      window.orderOut(nil)
       self.surface = surface
       self.window = window
     }
@@ -90,6 +93,7 @@ enum Pass9ReleaseQualification {
       surface.suppressesAutomaticBridgeRecovery = true
       _ = window.makeFirstResponder(nil)
       window.orderOut(nil)
+      window.contentView = nil
     }
   }
 
@@ -351,7 +355,8 @@ enum Pass9ReleaseQualification {
     var geometryApplied = false
 
     // Warmups first so baseline/final compare a post-steady-state quiescent
-    // point (SPEC-009 §16.1).
+    // point (SPEC-009 §16.1). Probe window is allocated before warmups so its
+    // fixed AppKit/IMK cost is inside both baseline and final RSS samples.
     for _ in 0..<options.warmups {
       _ = try cycle(
         mode: mode,
@@ -375,9 +380,6 @@ enum Pass9ReleaseQualification {
 
     detach(mode: mode, bridge: bridge, coordinator: coordinator, renderer: renderer)
     waitQuiescent(bridge: bridge, coordinator: coordinator, renderer: renderer, timeout: 2)
-    // Quiescent settle before baseline so process fd samples stabilize. Probe
-    // window is already allocated (created before warmups) so its fixed cost is
-    // inside the baseline.
     Thread.sleep(forTimeInterval: 0.5)
     let baseline = sample(
       bridge: bridge,
@@ -423,9 +425,6 @@ enum Pass9ReleaseQualification {
 
     detach(mode: mode, bridge: bridge, coordinator: coordinator, renderer: renderer)
     waitQuiescent(bridge: bridge, coordinator: coordinator, renderer: renderer, timeout: 2)
-    // Drop the SPEC §10 probe before final resource sample so AppKit/Metal probe
-    // footprint is not charged as a reconnect leak.
-    nativeBox.tearDown()
     Thread.sleep(forTimeInterval: 0.5)
     let finalSample = sample(
       bridge: bridge,
@@ -582,8 +581,6 @@ enum Pass9ReleaseQualification {
       else {
         throw QualificationError.nativeInteractionNotReady
       }
-      // Drop first-responder between cycles; keep window ordered in.
-      _ = nativeBox.window.makeFirstResponder(nil)
       return nativeFinished &- nativeStarted
     }
 
@@ -630,6 +627,9 @@ enum Pass9ReleaseQualification {
       {
         break
       }
+      // Production stop() completes CLIENT teardown on the MainActor turn.
+      // Abrupt path disconnects synchronously. Keep a short RunLoop drain for
+      // coordinator.cancel() side effects without 10ms coalesce on measure path.
       RunLoop.current.run(until: Date().addingTimeInterval(measure ? 0.00005 : 0.01))
     }
     let cleanupFinished = DispatchTime.now().uptimeNanoseconds

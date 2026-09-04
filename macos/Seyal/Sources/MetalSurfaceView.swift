@@ -196,9 +196,20 @@ final class MetalDisplayLinkLease {
 
 @MainActor
 class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
+  /// How AppKit installs the surface presenter.
+  enum Installation: Equatable {
+    /// Production Metal display path (`CAMetalLayer` + Runtime bridge).
+    case fullDisplay
+    /// SPEC-009 §10 first-responder / AX / IME only: plain layer, no Runtime
+    /// bridge, no CAMetalLayer drawables. Used by Pass 9 native_ready probe so
+    /// the soak's MetalTerminalRenderer remains the sole display presenter.
+    case nativeInteractionProbe
+  }
+
   let paneID: String
   let requestedExecutionIdentity: String?
   let allowsImplicitExecutionBootstrap: Bool
+  private let installation: Installation
   private let metalDevice: any MTLDevice
   private let renderer: MetalTerminalRenderer
   private var bridge: RustDisplayBridge?
@@ -254,11 +265,13 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     paneID: String,
     executionIdentity: String? = nil,
     allowsImplicitExecutionBootstrap: Bool = true,
-    terminalFont: SeyalResolvedFontSpec = .canonicalTerminal
+    terminalFont: SeyalResolvedFontSpec = .canonicalTerminal,
+    installation: Installation = .fullDisplay
   ) {
     self.paneID = paneID
     self.requestedExecutionIdentity = executionIdentity
     self.allowsImplicitExecutionBootstrap = allowsImplicitExecutionBootstrap
+    self.installation = installation
     guard let device = MTLCreateSystemDefaultDevice() else {
       fatalError("Seyal requires a Metal-capable macOS device")
     }
@@ -274,60 +287,70 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     super.init(frame: frameRect)
     wantsLayer = true
 
-    guard let metalLayer = layer as? CAMetalLayer else {
-      fatalError("MetalSurfaceView backing layer must be CAMetalLayer")
-    }
-    metalLayer.device = device
-    metalLayer.pixelFormat = .bgra8Unorm
-    metalLayer.framebufferOnly = true
-    metalLayer.maximumDrawableCount = 2
-    metalLayer.presentsWithTransaction = false
-    updateDrawableSize()
+    switch installation {
+    case .fullDisplay:
+      guard let metalLayer = layer as? CAMetalLayer else {
+        fatalError("MetalSurfaceView backing layer must be CAMetalLayer")
+      }
+      metalLayer.device = device
+      metalLayer.pixelFormat = .bgra8Unorm
+      metalLayer.framebufferOnly = true
+      metalLayer.maximumDrawableCount = 2
+      metalLayer.presentsWithTransaction = false
+      updateDrawableSize()
 
-    // No dedicated GPU surface resources are retained before the view is
-    // actually visible. Candidate-D state may still advance independently.
-    renderer.setVisible(false)
-    renderer.onNeedsCurrentFrame = { [weak self] in
-      self?.bridge?.publishCurrentFrame()
-    }
-    renderer.onPersistentDisplayFailure = { [weak self] error in
-      self?.lastRenderError = error
-    }
+      // No dedicated GPU surface resources are retained before the view is
+      // actually visible. Candidate-D state may still advance independently.
+      renderer.setVisible(false)
+      renderer.onNeedsCurrentFrame = { [weak self] in
+        self?.bridge?.publishCurrentFrame()
+      }
+      renderer.onPersistentDisplayFailure = { [weak self] error in
+        self?.lastRenderError = error
+      }
 
-    let bridge = RustDisplayBridge(
-      onFrame: { [weak self] frame in
-        self?.consumeBridgeFrame(frame)
-      },
-      onError: { [weak self] code in
-        self?.lastBridgeError = code
-        DispatchQueue.main.async { [weak self] in
-          self?.terminalBridgeDidFail(code)
-        }
-      },
-      onStatusChanged: { [weak self] in
-        DispatchQueue.main.async { [weak self] in
-          self?.terminalBridgeStatusDidChange()
-        }
-      },
-      onTimeline: { [weak self] records in
-        self?.onTimelineChanged?(records)
-      },
-      onHistory: { [weak self] range in
-        self?.onHistoryRangeChanged?(range)
-      },
-      onComposerResult: { [weak self] result in
-        self?.onComposerResultChanged?(result)
-      },
-      paneID: paneID,
-      executionIdentity: executionIdentity,
-      allowsImplicitExecutionBootstrap: allowsImplicitExecutionBootstrap
-    )
-    self.bridge = bridge
-    // A production surface must not perform a synchronous pre-attempt on the
-    // AppKit thread. Visibility starts the one authoritative recovery episode
-    // so startup, retries and cancellation share the exact seven-attempt/
-    // one-second contract instead of creating an eighth attempt with a fresh
-    // timeout before the lifecycle coordinator begins.
+      let bridge = RustDisplayBridge(
+        onFrame: { [weak self] frame in
+          self?.consumeBridgeFrame(frame)
+        },
+        onError: { [weak self] code in
+          self?.lastBridgeError = code
+          DispatchQueue.main.async { [weak self] in
+            self?.terminalBridgeDidFail(code)
+          }
+        },
+        onStatusChanged: { [weak self] in
+          DispatchQueue.main.async { [weak self] in
+            self?.terminalBridgeStatusDidChange()
+          }
+        },
+        onTimeline: { [weak self] records in
+          self?.onTimelineChanged?(records)
+        },
+        onHistory: { [weak self] range in
+          self?.onHistoryRangeChanged?(range)
+        },
+        onComposerResult: { [weak self] result in
+          self?.onComposerResultChanged?(result)
+        },
+        paneID: paneID,
+        executionIdentity: executionIdentity,
+        allowsImplicitExecutionBootstrap: allowsImplicitExecutionBootstrap
+      )
+      self.bridge = bridge
+      // A production surface must not perform a synchronous pre-attempt on the
+      // AppKit thread. Visibility starts the one authoritative recovery episode
+      // so startup, retries and cancellation share the exact seven-attempt/
+      // one-second contract instead of creating an eighth attempt with a fresh
+      // timeout before the lifecycle coordinator begins.
+
+    case .nativeInteractionProbe:
+      // SPEC §10 probe: InteractiveMetalSurfaceView restore only. The Pass 9
+      // soak owns the live Runtime/Metal presenter; this view must not allocate
+      // CAMetalLayer drawables or a second client bridge.
+      suppressesAutomaticBridgeRecovery = true
+      renderer.setVisible(false)
+    }
   }
 
   @available(*, unavailable)
@@ -336,7 +359,12 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
   }
 
   override func makeBackingLayer() -> CALayer {
-    CAMetalLayer()
+    switch installation {
+    case .fullDisplay:
+      CAMetalLayer()
+    case .nativeInteractionProbe:
+      CALayer()
+    }
   }
 
   /// Narrow subclass hooks for Pass 7 presentation-only failure/focus state.
@@ -600,6 +628,14 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
 
   override func layout() {
     super.layout()
+    if suppressesAutomaticBridgeRecovery {
+      // SPEC §10 probe: keep a 1×1 drawable so key-window/first-responder
+      // restore does not allocate full-size CAMetalLayer backings each cycle.
+      if let metalLayer = layer as? CAMetalLayer {
+        metalLayer.drawableSize = CGSize(width: 1, height: 1)
+      }
+      return
+    }
     updateDrawableSize()
     guard shouldRender,
       hasPreparedState,

@@ -41,10 +41,11 @@ use crate::block::{BlockApply, BlockCache, is_epoch_quarantined, quarantine_epoc
 /// Pass 9 owns one wall-clock second for discovery, handshake, attach and the
 /// initial authoritative snapshot.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(1);
-/// Cap busy-yield avoidance: exponential backoff sleep on WouldBlock.
-/// Starts at 50µs and doubles to a 1ms cap so a stalled peer cannot pin a core.
-const STARTUP_BACKOFF_INITIAL: Duration = Duration::from_micros(50);
-const STARTUP_BACKOFF_CAP: Duration = Duration::from_millis(1);
+/// Cap busy-yield avoidance on WouldBlock without inflating reconnect latency.
+/// Short sleeps (10–100µs) beat a yield-spin for stalled peers and stay within
+/// the Pass 9 reconnect budget under multi-RTT startup.
+const STARTUP_BACKOFF_INITIAL: Duration = Duration::from_micros(10);
+const STARTUP_BACKOFF_CAP: Duration = Duration::from_micros(100);
 const READ_CHUNK_BYTES: usize = 64 * 1024;
 const MAX_BUFFERED_BYTES: usize = (MAX_FRAME_PAYLOAD as usize + HEADER_LEN) * 2;
 const MAX_FRAMES_PER_POLL: usize = 64;
@@ -1703,9 +1704,9 @@ fn configure_startup_timeout(stream: &UnixStream, deadline: Instant) -> Result<(
 fn wait_startup_peer(deadline: Instant, wait_count: &mut u32) -> Result<(), ClientError> {
     startup_remaining(deadline)?;
     *wait_count = wait_count.saturating_add(1);
-    // Exponential backoff (50µs → 1ms cap). Prefer sleeping over yield-spin so a
+    // Exponential backoff (10µs → 100µs cap). Prefer sleeping over yield-spin so a
     // stalled peer cannot pin a core for the full STARTUP_TIMEOUT.
-    let shift = (*wait_count - 1).min(5);
+    let shift = (*wait_count - 1).min(4);
     let delay = STARTUP_BACKOFF_INITIAL
         .saturating_mul(1u32 << shift)
         .min(STARTUP_BACKOFF_CAP);

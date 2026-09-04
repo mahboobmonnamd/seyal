@@ -150,6 +150,9 @@ uint64_t seyal_bridge_attachment_id_low(void);
 uint64_t seyal_bridge_attachment_id_high(void);
 SeyalExecutionBlockMetadata seyal_bridge_execution_block_metadata(void);
 int32_t seyal_bridge_poll(void);
+/// Ensure the initial PreparedSurface exists after attach snapshot commit.
+/// Returns 0 on success, negative on failure. Idempotent.
+int32_t seyal_bridge_ensure_prepared(void);
 int32_t seyal_bridge_wants_write(void);
 int32_t seyal_bridge_flush_writable(void);
 int32_t seyal_bridge_submit_utf8(const uint8_t *bytes, uint32_t len);

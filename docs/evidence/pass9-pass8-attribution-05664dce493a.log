@@ -1,0 +1,122 @@
+    Finished `bench` profile [optimized] target(s) in 0.01s
+     Running benches/pass7_input_resize.rs (/var/folders/jg/42_krzk50wx37y55whwswcpc0000gn/T/cursor-sandbox-cache/35eff5fcaba809c0366c1f5fe57878f7/cargo-target/release/deps/pass7_input_resize-ec47bbca6995763c)
+pass7_input_resize architecture=production_client_UDS_Runtime_PTY performance_claim=false percentile_method=nearest_rank repetitions=120 pass6_baseline_reference=docs/engineering/M001-PASS6-METAL-RENDERER.md
+pass7_host macos_version=26.5.2 macos_build=25F84 model="Mac17,9" hardware="Apple M5 Pro" arch=aarch64 rust="rustc 1.98.0 (88d9e12ae 2026-08-18)" build_mode=release commit=05664dce493abeafa257dddc3c524b11ac74924a repetitions=120 percentile_method=nearest_rank cpu_rss_sources=ps_and_usr_bin_time performance_claim=false
+pass7_latency boundary=controlled_native_callback_to_client_admission classification=MEASURED sample_count=120 p50_us=0.125 p95_us=0.375 p99_us=3.250 max_us=3.500 performance_claim=false
+pass7_latency boundary=client_admission_to_socket_complete classification=MEASURED sample_count=120 p50_us=1.208 p95_us=2.959 p99_us=4.500 max_us=5.917 performance_claim=false
+pass7_latency boundary=runtime_frame_admission_to_pty_write classification=MEASURED sample_count=120 p50_us=2.000 p95_us=4.458 p99_us=7.375 max_us=8.958 performance_claim=false
+pass7_latency boundary=controlled_native_callback_to_pty_write classification=MEASURED sample_count=120 p50_us=6.791 p95_us=15.709 p99_us=22.875 max_us=23.792 performance_claim=false
+pass7_input_resources classification=MEASURED measurement_phase=post_input_workload client_queue_high_water_bytes=45 runtime_queue_high_water_bytes=1 rss_baseline_kib=1792 rss_populated_kib=3104 rss_measured_kib=3376 incremental_post_workload_rss_kib=1584 cpu_percent_sample=0 threads_baseline=1 threads_populated=2 threads_measured=2 fds_baseline=6 fds_populated=12 fds_measured=12 native_boundary_classification=CONTROLLED_FFI_EQUIVALENT_APPKIT_EVENT_NOT_CLAIMED performance_claim=false
+real 0.02
+user 0.00
+sys 0.01
+             3538944  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                1706  page reclaims
+                   7  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                 282  messages sent
+                 283  messages received
+                   0  signals received
+                   5  voluntary context switches
+                 524  involuntary context switches
+            63819950  instructions retired
+            32657924  cycles elapsed
+             2441528  peak memory footprint
+pass7_latency boundary=resize_120x40 classification=MEASURED sample_count=120 p50_us=8.833 p95_us=16.667 p99_us=23.583 max_us=61.667 performance_claim=false
+pass7_resize_resources case=resize_120x40 geometry=120x40 classification=MEASURED measurement_phase=post_resize_workload client_queue_high_water_bytes=56 runtime_queue_high_water_bytes=0 rss_baseline_kib=1792 rss_populated_kib=3664 rss_measured_kib=4608 incremental_post_resize_rss_kib=2816 cpu_percent_sample=3.7 performance_claim=false
+real 0.04
+user 0.03
+sys 0.02
+             4767744  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                1780  page reclaims
+                   7  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                3082  messages sent
+                3014  messages received
+                   0  signals received
+                   5  voluntary context switches
+                2424  involuntary context switches
+           803335025  instructions retired
+           223891995  cycles elapsed
+             3670328  peak memory footprint
+pass7_latency boundary=resize_512x256 classification=MEASURED sample_count=120 p50_us=101.416 p95_us=167.750 p99_us=229.959 max_us=269.958 performance_claim=false
+pass7_resize_resources case=resize_512x256 geometry=512x256 classification=MEASURED measurement_phase=post_resize_workload client_queue_high_water_bytes=56 runtime_queue_high_water_bytes=0 rss_baseline_kib=1792 rss_populated_kib=13232 rss_measured_kib=27696 incremental_post_resize_rss_kib=25904 cpu_percent_sample=146.1 performance_claim=false
+real 0.74
+user 0.79
+sys 0.36
+            28409856  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                3225  page reclaims
+                   7  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+               67082  messages sent
+               66988  messages received
+                   0  signals received
+                   4  voluntary context switches
+               48852  involuntary context switches
+         18968655933  instructions retired
+          4765394508  cycles elapsed
+            27345256  peak memory footprint
+pass7_idle_resource classification=MEASURED idle_window_ms=500 rss_baseline_kib=1792 rss_populated_kib=3120 rss_idle_kib=3136 incremental_idle_rss_kib=1344 cpu_percent_sample=0.1 threads_baseline=1 threads_idle=2 fds_baseline=6 fds_idle=12 client_wants_write=false performance_claim=false
+real 0.52
+user 0.00
+sys 0.00
+             3276800  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                1688  page reclaims
+                   7  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                  10  messages sent
+                  12  messages received
+                   0  signals received
+                   6  voluntary context switches
+                 106  involuntary context switches
+            35289852  instructions retired
+            20053307  cycles elapsed
+             2179384  peak memory footprint
+pass8_attribution_cohort boundary=resize_120x40 classification=MEASURED cohort=1 samples_per_mode=512 pass8_disabled_p99_us=30.042 pass8_enabled_p99_us=30.000 delta_percent=-0.14 performance_claim=false
+pass8_attribution_cohort boundary=resize_120x40 classification=MEASURED cohort=2 samples_per_mode=512 pass8_disabled_p99_us=22.750 pass8_enabled_p99_us=24.917 delta_percent=9.53 performance_claim=false
+pass8_attribution_cohort boundary=resize_120x40 classification=MEASURED cohort=3 samples_per_mode=512 pass8_disabled_p99_us=21.917 pass8_enabled_p99_us=22.750 delta_percent=3.80 performance_claim=false
+pass8_attribution_cohort boundary=resize_120x40 classification=MEASURED cohort=4 samples_per_mode=512 pass8_disabled_p99_us=22.542 pass8_enabled_p99_us=23.209 delta_percent=2.96 performance_claim=false
+pass8_attribution_cohort boundary=resize_120x40 classification=MEASURED cohort=5 samples_per_mode=512 pass8_disabled_p99_us=21.791 pass8_enabled_p99_us=25.917 delta_percent=18.93 performance_claim=false
+pass8_attribution_cohort boundary=resize_120x40 classification=MEASURED cohort=6 samples_per_mode=512 pass8_disabled_p99_us=24.333 pass8_enabled_p99_us=17.583 delta_percent=-27.74 performance_claim=false
+pass8_attribution_cohort boundary=resize_120x40 classification=MEASURED cohort=7 samples_per_mode=512 pass8_disabled_p99_us=24.708 pass8_enabled_p99_us=24.958 delta_percent=1.01 performance_claim=false
+pass8_attribution boundary=resize_120x40 classification=MEASURED method=paired_live_runtimes_interleaved_7x512 pass8_disabled_p99_median_us=22.750 pass8_enabled_p99_median_us=24.917 paired_delta_median_percent=2.96 blocking_threshold_percent=10.00 performance_claim=false
+real 1.73
+user 1.89
+sys 0.91
+             5652480  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                1129  page reclaims
+                   2  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+              173575  messages sent
+              170218  messages received
+                   0  signals received
+                   4  voluntary context switches
+              109634  involuntary context switches
+         43043654164  instructions retired
+         11334492522  cycles elapsed
+             4571448  peak memory footprint

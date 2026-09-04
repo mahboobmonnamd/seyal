@@ -1017,6 +1017,19 @@ pub extern "C" fn seyal_bridge_poll() -> i32 {
     }
 }
 
+/// Ensure the initial PreparedSurface after attach snapshot commit. Idempotent.
+///
+/// Returns 0 on success, -1 when no active client is selected, and a stable
+/// negative diagnostic code on prepare failure.
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_ensure_prepared() -> i32 {
+    match with_active_client_mut(|client| client.ensure_prepared_surface()) {
+        Some(Ok(_)) => 0,
+        Some(Err(error)) => error_code(error),
+        None => -1,
+    }
+}
+
 /// Returns 1 only while bounded nonblocking client→Runtime bytes remain.
 #[unsafe(no_mangle)]
 pub extern "C" fn seyal_bridge_wants_write() -> i32 {
@@ -1176,7 +1189,10 @@ pub extern "C" fn seyal_bridge_resize_failure() -> i32 {
 /// frees this memory.
 #[unsafe(no_mangle)]
 pub extern "C" fn seyal_bridge_frame() -> SeyalPreparedFrame {
-    with_active_client(|client| {
+    with_active_client_mut(|client| {
+        if client.ensure_prepared_surface().is_err() {
+            return SeyalPreparedFrame::empty();
+        }
         let prepared = client.prepared_surface();
         let cells = prepared.prepared_cells();
         let Ok(cell_count) = u32::try_from(cells.len()) else {

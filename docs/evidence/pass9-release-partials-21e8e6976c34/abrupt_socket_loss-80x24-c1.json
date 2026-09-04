@@ -1,0 +1,68 @@
+{
+  "cohorts" : [
+    {
+      "attachments_baseline" : 0,
+      "attachments_final" : 0,
+      "cleanup_p99_us" : 21.792,
+      "client_allocator_delta_classification" : "EXACT_RETURN",
+      "client_allocator_in_use_kib_baseline" : 0,
+      "client_allocator_in_use_kib_final" : 0,
+      "client_fds_baseline" : 0,
+      "client_fds_final" : 0,
+      "client_rss_delta_kib" : 240,
+      "client_threads_baseline" : 0,
+      "client_threads_final" : 0,
+      "cohort" : 1,
+      "controllers_baseline" : 0,
+      "controllers_final" : 0,
+      "cycles" : 100,
+      "detached_cpu_p95_percent" : 0,
+      "detached_cpu_samples_percent" : [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "geometry" : "80x24",
+      "mode" : "abrupt_socket_loss",
+      "native_ready_p99_us" : 0.25,
+      "pending_resync_baseline" : 0,
+      "pending_resync_final" : 0,
+      "prepared_surface_p99_us" : 745.917,
+      "reconnect_p99_us" : 1282.833,
+      "renderer_gpu_resources_baseline" : 0,
+      "renderer_gpu_resources_final" : 0,
+      "renderer_surfaces_baseline" : 0,
+      "renderer_surfaces_final" : 0,
+      "retry_timers_baseline" : 0,
+      "retry_timers_final" : 0,
+      "runtime_allocator_in_use_kib_baseline" : 0,
+      "runtime_allocator_in_use_kib_final" : 0,
+      "runtime_fds_baseline" : 0,
+      "runtime_fds_final" : 0,
+      "runtime_rss_delta_kib" : 0,
+      "runtime_threads_baseline" : 0,
+      "runtime_threads_final" : 0,
+      "sockets_baseline" : 0,
+      "sockets_final" : 0
+    }
+  ],
+  "commit" : "21e8e6976c3445ca582bcfe6dd157109cfccdfd1",
+  "measurement_source" : "supplied_exact_head_evidence",
+  "recovery" : {
+    "attempts" : 7,
+    "deadline_ms" : 1000,
+    "launches_per_episode_max" : 1,
+    "retry_delays_ms" : [
+      10,
+      20,
+      40,
+      80,
+      160,
+      250
+    ]
+  },
+  "schema" : "seyal.pass9.production-budget.v1",
+  "topology_note" : "Metal prepare\/release equivalent to MetalSurfaceView.consumeBridgeFrame; not full AppKit window\/CAMetalLayer present. reconnect_p99=lifecycle-queue attempt body for known ExecutionId (open_execution hello\/attach; not open_first+ListExecutions); prepared_surface_p99=ensure PreparedSurface + MetalTerminalRenderer.update; cleanup_p99=bridge stop\/cancel until live_handles==0; allocator\/fd\/thread counters are reconnect-owned logical resources (not process-wide phys_footprint\/lsof)."
+}

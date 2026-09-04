@@ -286,6 +286,11 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @MainActor NSTextInpu
   private var lastLayoutSample: TerminalLayoutSample?
   private var nativeFailure: NativeInputFailure?
   private let failureLayer = CATextLayer()
+  /// IME activate is sticky for a given surface/window session. AppKit may
+  /// return distinct `NSTextInputContext` wrappers for the same client; using
+  /// reference inequality re-activates IMK every Usable transition and grows
+  /// process RSS across Pass 9 reconnect soaks.
+  private var inputContextActivatedForNativeRestore = false
 
   convenience init(frame frameRect: NSRect) {
     self.init(frame: frameRect, paneID: "unbound")
@@ -296,14 +301,16 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @MainActor NSTextInpu
     paneID: String,
     executionIdentity: String? = nil,
     allowsImplicitExecutionBootstrap: Bool = true,
-    terminalFont: SeyalResolvedFontSpec = .canonicalTerminal
+    terminalFont: SeyalResolvedFontSpec = .canonicalTerminal,
+    installation: Installation = .fullDisplay
   ) {
     super.init(
       frame: frameRect,
       paneID: paneID,
       executionIdentity: executionIdentity,
       allowsImplicitExecutionBootstrap: allowsImplicitExecutionBootstrap,
-      terminalFont: terminalFont
+      terminalFont: terminalFont,
+      installation: installation
     )
     configureInteractiveSurface()
   }
@@ -334,8 +341,46 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @MainActor NSTextInpu
   override func resignFirstResponder() -> Bool {
     cancelComposition(discardInputContext: true)
     inputContext?.deactivate()
+    inputContextActivatedForNativeRestore = false
     setAccessibilityFocused(false)
     return super.resignFirstResponder()
+  }
+
+  /// SPEC-009 §10 native interaction restore on the production interactive surface.
+  @discardableResult
+  override func restoreNativeInteractionAfterRendererReady() -> Bool {
+    guard let window else { return false }
+    if !window.isVisible {
+      window.orderFront(nil)
+    }
+    if !window.isKeyWindow {
+      window.makeKey()
+    }
+    guard window.makeFirstResponder(self) else { return false }
+    // makeFirstResponder is a no-op when already first responder and will not
+    // re-enter becomeFirstResponder; re-assert AX focus for that case.
+    if !isAccessibilityFocused() {
+      setAccessibilityFocused(true)
+    }
+    guard isAccessibilityFocused() else { return false }
+    guard !hasMarkedText() else { return false }
+    if let inputContext, !inputContextActivatedForNativeRestore {
+      inputContext.activate()
+      inputContextActivatedForNativeRestore = true
+    }
+    if !suppressesAutomaticBridgeRecovery {
+      refreshRecoveryAccessibilityValue()
+    }
+    announceNativeInteractionReady()
+    return true
+  }
+
+  /// Issue #736 / SPEC-009 §10: VoiceOver-visible announcement when native
+  /// interaction is restored after renderer-ready (Usable seam).
+  func announceNativeInteractionReady() {
+    refreshRecoveryAccessibilityValue()
+    let status = terminalBridgeIsConnected ? "reconnected and ready" : "ready for input"
+    SeyalAccessibilityAnnouncement.post("Seyal Terminal \(status)", element: self)
   }
 
   override func mouseDown(with event: NSEvent) {

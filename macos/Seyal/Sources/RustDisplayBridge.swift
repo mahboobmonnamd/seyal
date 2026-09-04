@@ -211,6 +211,16 @@ private final class RustBridgeTeardownCoordinator: @unchecked Sendable {
     if shouldSchedule { scheduleDisconnectOnMain() }
   }
 
+  /// Eager CLIENT disconnect already dropped the handle; clear accounting so
+  /// `start()` is not blocked and late DispatchSource cancel handlers no-op.
+  func resetAfterEagerDisconnect() {
+    lock.lock()
+    activeSourceCountStorage = 0
+    disconnectPendingStorage = false
+    disconnectScheduled = false
+    lock.unlock()
+  }
+
   private func scheduleDisconnectOnMain() {
     lock.lock()
     guard disconnectPendingStorage, activeSourceCountStorage == 0, !disconnectScheduled else {
@@ -574,8 +584,12 @@ final class RustDisplayBridge {
   /// callers, but replacement scheduling/opening belongs exclusively to
   /// RuntimeLifecycleRecoveryCoordinator.
   func stop(reconnect _: Bool = false) {
+    if teardown.disconnectPending {
+      // Prior stop armed teardown; finish CLIENT drop on this MainActor turn.
+      completeEagerClientDisconnect()
+      return
+    }
     guard isConnected || socketFileDescriptor >= 0 else { return }
-    guard !teardown.disconnectPending else { return }
 
     isConnected = false
     reconstructionState.disconnect()
@@ -589,9 +603,6 @@ final class RustDisplayBridge {
     lastComposerResultRequestID = 0
     runtimeIdentityWords = (0, 0)
     attachmentIdentityWords = (0, 0)
-    socketFileDescriptor = -1
-    _ = seyal_bridge_select(clientHandle)
-    teardown.requestDisconnect()
 
     if let readSource {
       self.readSource = nil
@@ -601,7 +612,26 @@ final class RustDisplayBridge {
       self.writeSource = nil
       writeSource.cancel()
     }
+    socketFileDescriptor = -1
+
+    // Disconnect CLIENT on this MainActor turn (same ownership hand-off as
+    // abrupt). Waiting for DispatchSource cancel-handler hops alone cannot
+    // meet SPEC-009 §16.2 cleanup_p99 (250µs). Cancel handlers remain
+    // idempotent via teardown.resetAfterEagerDisconnect().
+    completeEagerClientDisconnect()
     onStatusChanged()
+  }
+
+  /// Drops the live CLIENT handle immediately and clears teardown so `start()`
+  /// is not blocked on async DispatchSource cancel hops.
+  private func completeEagerClientDisconnect() {
+    if clientHandle != 0 {
+      let handle = clientHandle
+      clientHandle = 0
+      handleBox.value = 0
+      seyal_bridge_disconnect_handle(handle)
+    }
+    teardown.resetAfterEagerDisconnect()
   }
 
   private func teardownCompleted() {
@@ -622,6 +652,13 @@ final class RustDisplayBridge {
     let frame = seyal_bridge_frame()
     guard frame.cells != nil, frame.cell_count > 0 else { return nil }
     return frame
+  }
+
+  /// Builds the initial PreparedSurface after attach. Idempotent.
+  @discardableResult
+  func ensurePreparedSurface() -> Bool {
+    guard isConnected, reconstructionState.canMutate, selectClient() else { return false }
+    return seyal_bridge_ensure_prepared() == 0
   }
 
   func publishCurrentFrame() {

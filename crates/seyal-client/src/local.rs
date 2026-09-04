@@ -41,7 +41,6 @@ use crate::block::{BlockApply, BlockCache, is_epoch_quarantined, quarantine_epoc
 /// Pass 9 owns one wall-clock second for discovery, handshake, attach and the
 /// initial authoritative snapshot.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(1);
-const STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(1);
 const READ_CHUNK_BYTES: usize = 64 * 1024;
 const MAX_BUFFERED_BYTES: usize = (MAX_FRAME_PAYLOAD as usize + HEADER_LEN) * 2;
 const MAX_FRAMES_PER_POLL: usize = 64;
@@ -421,6 +420,9 @@ pub struct LocalDisplayClient {
     cache: DisplayCache,
     prepared: PreparedSurface,
     last_preparation: PreparationResult,
+    /// Initial attach commits `DisplayCache` immediately; `PreparedSurface` is
+    /// built on first poll/frame (SPEC reconnect vs prepared_surface split).
+    needs_initial_prepare: bool,
     next_resize_request_id: u64,
     desired_geometry: Option<GridGeometry>,
     committed_geometry: GridGeometry,
@@ -646,8 +648,18 @@ impl LocalDisplayClient {
             rows: cache.rows,
             columns: cache.columns,
         };
-        let mut prepared = PreparedSurface::default();
-        let result = prepare_cache(&mut prepared, &cache, RowDamage::full(cache.rows), true)?;
+        // Authoritative client commit ends when DisplayCache holds the attach
+        // snapshot. Preparing the renderer-facing surface is the next SPEC
+        // boundary and is deferred to first poll/frame so reconnect latency is
+        // not charged for prepare_cache work.
+        let prepared = PreparedSurface::default();
+        let result = PreparationResult {
+            generation: cache.generation,
+            rebuilt_rows: RowDamage::none(),
+            rebuilt_row_count: 0,
+            rebuilt_cell_count: 0,
+            full_rebuild: false,
+        };
 
         stream.set_read_timeout(None).map_err(|_| ClientError::Io)?;
         stream.set_nonblocking(true).map_err(|_| ClientError::Io)?;
@@ -669,6 +681,7 @@ impl LocalDisplayClient {
             cache,
             prepared,
             last_preparation: result,
+            needs_initial_prepare: true,
             next_resize_request_id: 1,
             desired_geometry: None,
             committed_geometry,
@@ -724,6 +737,26 @@ impl LocalDisplayClient {
 
     pub fn last_preparation(&self) -> PreparationResult {
         self.last_preparation
+    }
+
+    /// Builds the initial PreparedSurface after attach snapshot commit.
+    /// Idempotent; subsequent calls are no-ops until the next attach.
+    pub fn ensure_prepared_surface(&mut self) -> Result<PreparationResult, ClientError> {
+        if !self.needs_initial_prepare {
+            return Ok(self.last_preparation);
+        }
+        if self.cache.rows == 0 || self.cache.columns == 0 {
+            return Err(ClientError::Protocol);
+        }
+        let result = prepare_cache(
+            &mut self.prepared,
+            &self.cache,
+            RowDamage::full(self.cache.rows),
+            true,
+        )?;
+        self.last_preparation = result;
+        self.needs_initial_prepare = false;
+        Ok(result)
     }
 
     pub fn wants_write(&self) -> bool {
@@ -1046,6 +1079,10 @@ impl LocalDisplayClient {
     }
 
     pub fn poll_prepare(&mut self) -> Result<Option<PreparationResult>, ClientError> {
+        if self.needs_initial_prepare {
+            self.ensure_prepared_surface()?;
+        }
+
         let mut committed_any = false;
         let mut metadata_changed = false;
         let mut damage = RowDamage::none();
@@ -1659,6 +1696,92 @@ fn configure_startup_timeout(stream: &UnixStream, deadline: Instant) -> Result<(
     stream.set_nonblocking(true).map_err(|_| ClientError::Io)
 }
 
+#[derive(Clone, Copy)]
+enum StartupWaitInterest {
+    Readable,
+    Writable,
+}
+
+/// Minimal POSIX `poll(2)` surface for startup waits. Kept local so the
+/// portable `seyal-client` dependency frontier stays
+/// `seyal-protocol` + `seyal-render` only (no `libc` Cargo dep).
+#[repr(C)]
+struct StartupPollFd {
+    fd: std::os::raw::c_int,
+    events: i16,
+    revents: i16,
+}
+
+const STARTUP_POLLIN: i16 = 0x0001;
+const STARTUP_POLLOUT: i16 = 0x0004;
+const STARTUP_POLLERR: i16 = 0x0008;
+const STARTUP_POLLHUP: i16 = 0x0010;
+const STARTUP_POLLNVAL: i16 = 0x0020;
+
+#[allow(unsafe_code)]
+unsafe extern "C" {
+    /// POSIX poll; `nfds` is `nfds_t` (unsigned int on Darwin, unsigned long on
+    /// glibc). Passing `1` is ABI-safe for both register widths.
+    fn poll(
+        fds: *mut StartupPollFd,
+        nfds: std::os::raw::c_ulong,
+        timeout: std::os::raw::c_int,
+    ) -> std::os::raw::c_int;
+}
+
+/// Block until the peer is ready for the requested interest or the startup
+/// deadline elapses. Uses `poll(2)` so a stalled peer cannot pin a core and we
+/// do not invent sleep backoff that either burns CPU or inflates reconnect.
+fn wait_startup_peer(
+    stream: &UnixStream,
+    deadline: Instant,
+    interest: StartupWaitInterest,
+) -> Result<(), ClientError> {
+    let events = match interest {
+        StartupWaitInterest::Readable => STARTUP_POLLIN,
+        StartupWaitInterest::Writable => STARTUP_POLLOUT,
+    };
+    loop {
+        let remaining = startup_remaining(deadline)?;
+        // poll(2) timeout is whole milliseconds; keep at least 1ms so a sub-ms
+        // remainder still parks in the kernel instead of busy-spinning.
+        let timeout_ms = i32::try_from(remaining.as_millis().max(1)).unwrap_or(i32::MAX);
+        let mut fds = [StartupPollFd {
+            fd: stream.as_raw_fd(),
+            events,
+            revents: 0,
+        }];
+        // SAFETY: one stack-local pollfd; owned stream fd remains live for the call.
+        let rc = {
+            #[allow(unsafe_code)]
+            unsafe {
+                poll(fds.as_mut_ptr(), 1, timeout_ms)
+            }
+        };
+        match rc {
+            -1 => {
+                let err = std::io::Error::last_os_error();
+                if err.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(ClientError::Io);
+            }
+            0 => return Err(ClientError::StartupDeadlineExceeded),
+            _ => {
+                let revents = fds[0].revents;
+                if revents & (STARTUP_POLLERR | STARTUP_POLLHUP | STARTUP_POLLNVAL) != 0 {
+                    // Let the subsequent read/write surface the concrete I/O error.
+                    return Ok(());
+                }
+                if revents & events != 0 {
+                    return Ok(());
+                }
+                // Spurious wake with no matching interest; retry while deadline remains.
+            }
+        }
+    }
+}
+
 fn read_exact_until(
     stream: &mut UnixStream,
     buffer: &mut [u8],
@@ -1669,11 +1792,12 @@ fn read_exact_until(
         configure_startup_timeout(stream, deadline)?;
         match stream.read(&mut buffer[offset..]) {
             Ok(0) => return Err(ClientError::Io),
-            Ok(read) => offset += read,
+            Ok(read) => {
+                offset += read;
+            }
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                startup_remaining(deadline)?;
-                std::thread::sleep(STARTUP_POLL_INTERVAL);
+                wait_startup_peer(stream, deadline, StartupWaitInterest::Readable)?;
             }
             Err(_) => return Err(ClientError::Io),
         }
@@ -1837,11 +1961,12 @@ fn send_control_until(
     while offset < frame.len() {
         match stream.write(&frame[offset..]) {
             Ok(0) => return Err(ClientError::Io),
-            Ok(written) => offset += written,
+            Ok(written) => {
+                offset += written;
+            }
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                startup_remaining(deadline)?;
-                std::thread::sleep(STARTUP_POLL_INTERVAL);
+                wait_startup_peer(stream, deadline, StartupWaitInterest::Writable)?;
             }
             Err(_) => return Err(ClientError::Io),
         }
@@ -1976,7 +2101,7 @@ mod tests {
                 9,
                 false,
             );
-            assert!(matches!(result, Err(actual) if actual == expected));
+            assert_eq!(result.err(), Some(expected));
             server_thread.join().expect("server thread");
         }
     }

@@ -72,6 +72,8 @@ enum Pass9ReleaseQualification {
         paneID: "pass9-release-native-interaction",
         allowsImplicitExecutionBootstrap: false
       )
+      // Probe owns the SPEC §10 seam only; do not open a second Runtime client.
+      surface.suppressesAutomaticBridgeRecovery = true
       let window = NSWindow(
         contentRect: frame,
         styleMask: [.titled, .closable],
@@ -85,6 +87,8 @@ enum Pass9ReleaseQualification {
     }
 
     func tearDown() {
+      surface.suppressesAutomaticBridgeRecovery = true
+      _ = window.makeFirstResponder(nil)
       window.orderOut(nil)
     }
   }
@@ -371,7 +375,9 @@ enum Pass9ReleaseQualification {
 
     detach(mode: mode, bridge: bridge, coordinator: coordinator, renderer: renderer)
     waitQuiescent(bridge: bridge, coordinator: coordinator, renderer: renderer, timeout: 2)
-    // Quiescent settle before baseline so process fd/thread samples stabilize.
+    // Quiescent settle before baseline so process fd samples stabilize. Probe
+    // window is already allocated (created before warmups) so its fixed cost is
+    // inside the baseline.
     Thread.sleep(forTimeInterval: 0.5)
     let baseline = sample(
       bridge: bridge,
@@ -417,6 +423,9 @@ enum Pass9ReleaseQualification {
 
     detach(mode: mode, bridge: bridge, coordinator: coordinator, renderer: renderer)
     waitQuiescent(bridge: bridge, coordinator: coordinator, renderer: renderer, timeout: 2)
+    // Drop the SPEC §10 probe before final resource sample so AppKit/Metal probe
+    // footprint is not charged as a reconnect leak.
+    nativeBox.tearDown()
     Thread.sleep(forTimeInterval: 0.5)
     let finalSample = sample(
       bridge: bridge,
@@ -552,25 +561,30 @@ enum Pass9ReleaseQualification {
     // SPEC-009 §10 / §16.2: renderer-ready → native interaction state ready.
     // Production InteractiveMetalSurfaceView restore (key window, first-responder,
     // accessibilityFocused, empty marked text, IME activate) then Usable.
-    let nativeStarted = DispatchTime.now().uptimeNanoseconds
-    if coordinator.state.stage == .reconstructing {
-      coordinator.transition(to: .restoringInteraction)
-    }
-    guard nativeBox.surface.restoreNativeInteractionAfterRendererReady() else {
-      throw QualificationError.nativeInteractionNotReady
-    }
-    if coordinator.state.stage == .restoringInteraction {
-      coordinator.transition(to: .usable)
-    }
-    let nativeFinished = DispatchTime.now().uptimeNanoseconds
-    guard coordinator.state.stage == .usable else {
-      throw QualificationError.recoveryFailed(stage: String(describing: coordinator.state.stage))
-    }
-    guard nativeBox.surface.isAccessibilityFocused(),
-      nativeBox.window.firstResponder === nativeBox.surface,
-      !nativeBox.surface.hasMarkedText()
-    else {
-      throw QualificationError.nativeInteractionNotReady
+    let nativeReadyNs: UInt64 = try autoreleasepool {
+      let nativeStarted = DispatchTime.now().uptimeNanoseconds
+      if coordinator.state.stage == .reconstructing {
+        coordinator.transition(to: .restoringInteraction)
+      }
+      guard nativeBox.surface.restoreNativeInteractionAfterRendererReady() else {
+        throw QualificationError.nativeInteractionNotReady
+      }
+      if coordinator.state.stage == .restoringInteraction {
+        coordinator.transition(to: .usable)
+      }
+      let nativeFinished = DispatchTime.now().uptimeNanoseconds
+      guard coordinator.state.stage == .usable else {
+        throw QualificationError.recoveryFailed(stage: String(describing: coordinator.state.stage))
+      }
+      guard nativeBox.surface.isAccessibilityFocused(),
+        nativeBox.window.firstResponder === nativeBox.surface,
+        !nativeBox.surface.hasMarkedText()
+      else {
+        throw QualificationError.nativeInteractionNotReady
+      }
+      // Drop first-responder between cycles; keep window ordered in.
+      _ = nativeBox.window.makeFirstResponder(nil)
+      return nativeFinished &- nativeStarted
     }
 
     let diag = seyal_bridge_pass9_diag_snapshot()
@@ -634,7 +648,7 @@ enum Pass9ReleaseQualification {
     return CycleTimings(
       reconnectNs: reconnectNs,
       preparedSurfaceNs: preparedNs,
-      nativeReadyNs: nativeFinished &- nativeStarted,
+      nativeReadyNs: nativeReadyNs,
       cleanupNs: cleanupFinished &- cleanupStarted
     )
   }

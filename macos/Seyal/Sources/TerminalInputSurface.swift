@@ -342,18 +342,21 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @MainActor NSTextInpu
   @discardableResult
   override func restoreNativeInteractionAfterRendererReady() -> Bool {
     guard let window else { return false }
+    if !window.isVisible {
+      window.orderFront(nil)
+    }
     if !window.isKeyWindow {
-      window.makeKeyAndOrderFront(nil)
+      window.makeKey()
     }
     guard window.makeFirstResponder(self) else { return false }
     guard isAccessibilityFocused() else { return false }
     guard !hasMarkedText() else { return false }
-    // `becomeFirstResponder` activates the text-input context; require it when
-    // AppKit has created one for this client.
     if let inputContext {
       inputContext.activate()
     }
-    refreshRecoveryAccessibilityValue()
+    if !suppressesAutomaticBridgeRecovery {
+      refreshRecoveryAccessibilityValue()
+    }
     return true
   }
 

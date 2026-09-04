@@ -223,6 +223,11 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     }
   )
   var runtimeRecoveryState: RuntimeRecoveryState { bridgeRecoveryCoordinator.state }
+  /// When true, the surface still supports first-responder / AX / IME restore
+  /// (SPEC §10) but does not begin automatic Runtime recovery. Used by the
+  /// Pass 9 native_ready probe so it does not open a second client alongside
+  /// the qualification soak bridge.
+  var suppressesAutomaticBridgeRecovery = false
   private var forceNextFrame = false
   private var hasPreparedState = false
   private var presentationState = PresentationRecoveryState()
@@ -677,7 +682,8 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
   }
 
   private func startAutomaticBridgeRecoveryIfNeeded() {
-    guard renderable,
+    guard !suppressesAutomaticBridgeRecovery,
+      renderable,
       bridge?.isConnected == false,
       // stop() keeps the old clientHandle until both dispatch-source cancel
       // handlers complete. Waiting for zero prevents consuming a retry on our
@@ -707,6 +713,13 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     let renderable = shouldRender
     let becameRenderable = renderable && !self.renderable
     self.renderable = renderable
+    if suppressesAutomaticBridgeRecovery {
+      // SPEC §10 probe surfaces: first-responder / AX / IME only — no Metal
+      // display-link or automatic Runtime recovery alongside the soak bridge.
+      invalidateMetalDisplayLink()
+      renderer.setVisible(false)
+      return
+    }
     if renderable {
       if let metalLayer = layer as? CAMetalLayer {
         installMetalDisplayLink(on: metalLayer)

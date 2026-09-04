@@ -25,7 +25,9 @@ if [[ "$DRY_RUN" == "1" ]]; then
   COHORTS="${SEYAL_PASS9_COHORTS:-1}"
   GEOMETRIES="${SEYAL_PASS9_GEOMETRIES:-120x40}"
   MODES="${SEYAL_PASS9_MODES:-graceful_detach}"
-  echo "[pass9-release-qualification] DRY_RUN=1 cycles=$CYCLES warmup=$WARMUP (validator skipped)"
+  # Never clobber retained exact-head evidence with dry-run partials.
+  OUT_DIR="${SEYAL_PASS9_OUT_DIR:-$ROOT/target/pass9-dry-run}"
+  echo "[pass9-release-qualification] DRY_RUN=1 cycles=$CYCLES warmup=$WARMUP out=$OUT_DIR"
 fi
 
 mkdir -p "$OUT_DIR"
@@ -212,7 +214,14 @@ if [[ "$DRY_RUN" == "1" ]]; then
     echo "[pass9-release-qualification] DRY_RUN skips production-budget validator"
   fi
 else
+  set +e
   python3 scripts/check-pass9-production-budget.py --expected-head "$COMMIT" "$ARTIFACT"
+  VALIDATE_STATUS=$?
+  set -e
+  if [[ "$VALIDATE_STATUS" -ne 0 ]]; then
+    echo "[pass9-release-qualification] production-budget validator FAILED (status=$VALIDATE_STATUS)" >&2
+    exit "$VALIDATE_STATUS"
+  fi
 fi
 
 INPUT_AX="$OUT_DIR/pass9-input-accessibility-${COMMIT:0:12}.json"

@@ -338,6 +338,24 @@ enum Pass9ReleaseQualification {
     detach(mode: mode, bridge: bridge, coordinator: coordinator, renderer: renderer)
     waitQuiescent(bridge: bridge, coordinator: coordinator, renderer: renderer, timeout: 2)
 
+    // Cold-start settle: first cohort after a Release rebuild otherwise charges
+    // Metal/IMK one-time caches into measured client_rss_delta. Touch the SPEC
+    // §10 seam and one prepare/release once before warmups/baseline.
+    do {
+      _ = nativeBox.surface.restoreNativeInteractionAfterRendererReady()
+      try awaitConnected(bridge: bridge, coordinator: coordinator, timeout: 5)
+      _ = try presentConnectedSurface(
+        bridge: bridge,
+        coordinator: coordinator,
+        renderer: renderer,
+        rendererBox: rendererBox,
+        geometry: geometry
+      )
+      detach(mode: mode, bridge: bridge, coordinator: coordinator, renderer: renderer)
+      waitQuiescent(bridge: bridge, coordinator: coordinator, renderer: renderer, timeout: 2)
+      Thread.sleep(forTimeInterval: 1.0)
+    }
+
     var reconnectNs = [UInt64]()
     var preparedNs = [UInt64]()
     var nativeReadyNs = [UInt64]()
@@ -380,7 +398,7 @@ enum Pass9ReleaseQualification {
 
     detach(mode: mode, bridge: bridge, coordinator: coordinator, renderer: renderer)
     waitQuiescent(bridge: bridge, coordinator: coordinator, renderer: renderer, timeout: 2)
-    Thread.sleep(forTimeInterval: 0.5)
+    Thread.sleep(forTimeInterval: 1.0)
     let baseline = sample(
       bridge: bridge,
       coordinator: coordinator,
@@ -425,7 +443,7 @@ enum Pass9ReleaseQualification {
 
     detach(mode: mode, bridge: bridge, coordinator: coordinator, renderer: renderer)
     waitQuiescent(bridge: bridge, coordinator: coordinator, renderer: renderer, timeout: 2)
-    Thread.sleep(forTimeInterval: 0.5)
+    Thread.sleep(forTimeInterval: 1.0)
     let finalSample = sample(
       bridge: bridge,
       coordinator: coordinator,

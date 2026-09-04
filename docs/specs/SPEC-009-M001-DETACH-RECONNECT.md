@@ -1,13 +1,14 @@
 # SPEC-009 — M001 detach, reconnect and GUI-crash survival
 
-- **Status:** Accepted refinement authority for M001 Pass 9. Original acceptance merged through PR #718 as `465ee476124a6d6dd6f48b0485c834d550c684f9`; this amendment resolves the post-merge refinement review gaps. Production implementation remains `NOT_READY` until Issue #719 records the merged commit containing this amendment and satisfies every Ready gate below.
+- **Status:** Accepted and implemented for M001 Pass 9. Original refinement PR #718 merged as `465ee476124a6d6dd6f48b0485c834d550c684f9`; production implementation Issue #719 is closed Done. Production/acceptance landed via PR #743 as `78018027c9251dab09b100386a663c874d7e300b`; release qualification via #736 / PR #745 as `1005bc42397aac485b1aeff08cafd0f67790d969`.
 - **Date:** 2026-08-28
-- **Reconciled:** 2026-08-29 against merged Pass 8 and current master
-- **Issue:** #717 refinement authority; #719 production implementation
+- **Reconciled:** 2026-09-04 against closed #719 / Pass 10 review candidate `1005bc42397aac485b1aeff08cafd0f67790d969`
+- **Issue:** #717 refinement authority; #719 production implementation (Done)
 - **Architecture authority:** accepted Seyal foundation architecture, ADR-001/004/005/006/007
 - **Depends on:** SPEC-002, SPEC-003, SPEC-004, SPEC-005, SPEC-006 and accepted SPEC-007
 - **Pass 7 authority:** PR #707 merged as `4490d89fd32f96fe5ff04393a5470944c592f546`
 - **Pass 8 authority:** reviewed head `54b3a1748effc7c47c409d1f7cfdcbd547e8d1cc`, merged by PR #721 as `d9d21187e8429bbd3dbeb3e1c7cc4d05c1d147e6`
+- **Pass 9 authority:** #719 closed Done; PR #743 / PR #745; review candidate `1005bc42397aac485b1aeff08cafd0f67790d969`
 - **Numbering note:** SPEC-008 is already the active M003 command-Blocks/composer specification and is intentionally not a Pass 9 dependency.
 
 ## 1. Purpose
@@ -520,7 +521,7 @@ On the production macOS path demonstrate:
 
 Pass 9 implementation must preserve the final Pass 8 controlled baseline retained by PR #721 and `docs/engineering/M001-PASS8-BLOCK-METADATA.md`. The inherited Pass 8 regression policy remains normative: paired latency movement `>5%` requires root-cause explanation and `>10%` is blocking absent explicit re-review.
 
-The previously proposed absolute `10 ms`, `25 ms` and `4 MiB` values are **not accepted blocking gates** because the refinement did not record a reproducible derivation. They may be retained only as non-binding investigation/reference values in historical review discussion. Before Issue #719 may become Ready, a controlled pre-implementation calibration must derive and record the exact absolute cleanup/reconnect/RSS budgets, with independent review acceptance.
+The previously proposed absolute `10 ms`, `25 ms` and `4 MiB` values are **not accepted blocking gates** because the refinement did not record a reproducible derivation. They may be retained only as non-binding investigation/reference values in historical review discussion. Before Issue #719 became Ready, a controlled pre-implementation calibration derived and recorded the exact absolute cleanup/reconnect/RSS budgets with independent review acceptance; those accepted budgets are retained under Pass 9 evidence and remain normative for reconnect work.
 
 ### 16.1 Required controlled methodology
 
@@ -589,16 +590,18 @@ Pass 9 production implementation is complete only when all are true:
 
 ## 18. Documentation impact
 
-For this refinement/corrective amendment:
+Pass 9 production behavior now exists on `master`. Remaining documentation work belongs to Pass 10 / site-docs reconciliation, not to reopening this SPEC's production gate:
 
-- **User Guide:** no shipped user behavior changes yet; no user-guide claim should be added before production Pass 9 exists.
-- **Developer Guide:** Pass 9 implementation must document Runtime-vs-GUI lifetime, endpoint discovery ownership and reconnect/native interaction lifecycle once production behavior lands.
-- **Authoritative engineering docs:** this SPEC, the specs index, Issue #719 readiness/evidence matrix, and stale SPEC-006 status are affected by the refinement review and must be reconciled.
-- **Media/screenshots/video:** none for refinement; production UI documentation may add media only after the reconnect UX exists and is stable.
+- **User Guide:** document only observable reconnect/lifecycle behavior that has passed its milestone gates; do not claim Runtime-crash PTY survival.
+- **Developer Guide:** Runtime-vs-GUI lifetime, endpoint discovery ownership and reconnect/native interaction lifecycle are governed by this SPEC plus the Pass 9 evidence retained under `docs/evidence/pass9-*` and Issue #719.
+- **Authoritative engineering docs:** this SPEC, the specs index, and M001 Pass 10 protocols must continue to present Pass 9 as Done while Pass 10 remains open.
+- **Media/screenshots/video:** add only when the reconnect UX is stable enough for procedural user docs.
 
-## 19. Refinement acceptance and Pass 9 readiness
+## 19. Historical refinement acceptance and Pass 9 readiness (superseded)
 
-Refinement provenance is now explicit:
+> **Superseded.** The Ready gates below were the pre-implementation production-start contract for Issue #719. They are retained as historical authority. Pass 9 production is **Done**: #719 closed; PR #743 merged production/acceptance as `78018027c9251dab09b100386a663c874d7e300b`; PR #745 retained release qualification at `1005bc42397aac485b1aeff08cafd0f67790d969`. Pass 10 (#727) is the remaining M001 frontier.
+
+Historical refinement provenance:
 
 - Pass 7 implementation is merged as `4490d89fd32f96fe5ff04393a5470944c592f546`;
 - SPEC-007 is accepted;
@@ -607,9 +610,9 @@ Refinement provenance is now explicit:
 - Pass 8 merge commit is `d9d21187e8429bbd3dbeb3e1c7cc4d05c1d147e6`;
 - original SPEC-009 refinement PR #718 merged as `465ee476124a6d6dd6f48b0485c834d550c684f9`;
 - SPEC-008 remains the active M003 command-Blocks authority;
-- this amendment makes runtime-discovery failure semantics, native reconnect acceptance, retry bounds, measurement reproducibility and documentation impact explicit.
+- the corrective amendment made runtime-discovery failure semantics, native reconnect acceptance, retry bounds, measurement reproducibility and documentation impact explicit.
 
-Production Pass 9 remains `NOT_READY` until Issue #719 records and independently validates all of the following:
+Historical production-start gate (no longer current). Before #719 could become Ready it had to record and independently validate all of the following:
 
 1. the merged commit SHA containing this corrective SPEC-009 amendment;
 2. the final Pass 8 merge SHA and exact retained Pass 8 baseline values;
@@ -619,4 +622,4 @@ Production Pass 9 remains `NOT_READY` until Issue #719 records and independently
 6. documentation impact classification and exact production-document updates expected;
 7. no unresolved architecture/specification question.
 
-No Pass 9 production code belongs in the corrective refinement PR. Production implementation may begin only after Issue #719 is explicitly moved to `Ready` with the evidence above.
+Historically, no Pass 9 production code belonged in the corrective refinement PR, and production implementation could begin only after Issue #719 was explicitly moved to `Ready` with the evidence above. That gate is closed.

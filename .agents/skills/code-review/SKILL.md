@@ -12,7 +12,7 @@ Use this skill when the requested question is specifically whether an implementa
 Apply only these Seyal-specific rules on top of the generic procedure:
 
 1. Read the linked owning Issue, `AGENTS.md`, and governing architecture/ADR/spec/milestone sources before accepting implementation rationale.
-2. Enforce the Issue's in/out scope and Seyal's single-authoritative-state rules. Duplicate PTY/VT/grid/runtime authority, temporary production paths, or architecture-by-precedent are blocking.
+2. Enforce the Issue's in/out scope and Seyal's single-authoritative-state rules. Duplicate PTY/VT/grid/runtime authority, temporary production paths, or architecture-by-precedent are blocking. Any ADR create/amend/reopen/supersede in an implementation PR is blocking; ADR changes must land in a separate Architecture/R&D PR first.
 3. Treat new synchronous terminal hot-path dependencies, unnecessary IPC/serialization/allocations/locks/language round trips, or licensing/cloud coupling as architecture/performance risks requiring explicit authority and evidence.
 4. Inspect affected production paths beyond the diff when surrounding lifecycle, concurrency, ownership, failure or backpressure state controls correctness.
 5. Inspect applicable conformance, fuzz/regression, PTY/integration/failure, renderer/native, benchmark, security/privacy and macOS/accessibility tests instead of trusting test names or green CI alone.

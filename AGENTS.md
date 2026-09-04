@@ -62,7 +62,7 @@ An Issue or PR cannot override architecture/specification. Existing code is neve
 2. When the task needs broader project context than the Issue links provide, use the `project-context` skill to load the smallest relevant node/relationship set, validate it, then read the returned authoritative sources. Do not broadly reread the repository or trust the index summary as authority.
 3. Read every linked/retrieved architecture/spec/milestone document that materially governs the work.
 4. Verify dependencies are complete and ownership/module boundary is explicit.
-5. If architecture is missing or contradictory: **STOP** and use the `architecture-change` skill. Do not invent a workaround.
+5. If architecture is missing or contradictory: **STOP** and use the `architecture-change` skill. Do not invent a workaround. Never amend an ADR inside an implementation PR; ADR create/amendment is always a separate PR.
 6. Confirm the requested work is production implementation rather than a spike/POC. If it is exploratory, isolate it on a non-mergeable path and do not open a mergeable production PR from that code.
 7. Use one Issue → one assignee/agent → one isolated worktree → one branch → one PR.
 8. Core behavior is test-first. Do not weaken tests to make code pass.
@@ -124,5 +124,7 @@ The PR must state the Issue relationship explicitly. Use `Closes #N`, `Fixes #N`
 Before merge handoff, review/verification must compare the final PR evidence with the owning Issue and verify the expected post-merge Issue state. A closing PR must leave no unmet Done gate; a non-closing PR must leave the Issue open. Correct stale Issue state/checklist text when it contradicts the verified result.
 
 A mergeable implementation PR must contain only production-intent code. Exploratory branches may be useful, but their code is not a merge candidate until the work is explicitly reclassified as production, re-refined, and implemented under normal production gates.
+
+An implementation PR must not create, amend, reopen, or supersede an ADR. Any ADR change requires its own Architecture/R&D Issue and separate PR; reviewers must reject mixed ADR+implementation PRs. Land and accept the ADR first, then implement against the accepted authority.
 
 See `docs/engineering/ISSUE-PROTOCOL.md` for Ready/Done rules and `.agents/skills/implement-issue/SKILL.md` for the mandatory execution workflow.

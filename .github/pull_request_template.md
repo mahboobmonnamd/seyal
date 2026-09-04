@@ -62,6 +62,7 @@ Provide reproducible commands/steps from a clean checkout where practical.
 - [ ] The chosen closing/non-closing Issue relationship matches the final acceptance evidence.
 - [ ] No unrelated cleanup/refactor is included.
 - [ ] No architecture was changed incidentally.
+- [ ] No ADR was created, amended, reopened, or superseded in this implementation PR (ADR changes require a separate PR).
 - [ ] No valid test was weakened to make implementation pass.
 - [ ] No temporary production VT/render/runtime path was introduced.
 - [ ] Applicable independent review is requested for core/high-risk work.

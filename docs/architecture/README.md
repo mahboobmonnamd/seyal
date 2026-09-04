@@ -61,4 +61,6 @@ Workspace association never makes Workspace the PTY/VT owner. Blocks never own P
 
 Update the document that owns the subject. Use a new ADR only for a genuinely separate architecture decision with its own alternatives, rationale, and reopen conditions.
 
+ADR create/amend/reopen/supersede must be its own PR. Do not mix ADR changes with implementation; mixed PRs are rejected. Accept the ADR first, then implement against the accepted authority.
+
 Repository changes use **branch → pull request → review/validation → merge**.

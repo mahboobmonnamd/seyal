@@ -1,49 +1,78 @@
 # Pass 9 production budget environment report
 
-- **Status:** `ENVIRONMENT_UNSUPPORTED`
+- **Status:** `FULL_MATRIX_VALIDATOR_PASS_PENDING_COMMIT_AND_VO_IME`
+- **Issue:** #736
+- **Date:** 2026-09-04
+- **Calibration:** `docs/evidence/pass9-production-budget-calibration.md`
+- **Latest matrix:** `docs/evidence/pass9-release-qualification-78018027c925.json` (validator PASS; rebuild on committed head before release claim)
 
-## Local paired resize reproduction (2026-09-01)
+## Scope
 
-Five exact-head runs of `pass7_input_resize` were collected on the Apple-Silicon
-host at commit `f649e035dc9ab071e1a146cb9f49b8fb898c58b7`. The 120×40 paired
-Pass 8 p99 deltas were `-0.94%`, `-3.75%`, `+3.47%`, `+3.66%`, and `-7.48%`.
-All five stayed below the fixed `+10%` blocking threshold. Raw logs are
-retained in `/private/tmp/seyal-pass9-cohorts/` for reviewer inspection; this
-local reproduction does not replace the required independently reviewed CI
-and controlled production evidence.
-- **Date:** 2026-09-01
-- **Scope:** physical controlled-host Pass 9 lifecycle/performance cohorts only
+Physical controlled-host Pass 9 lifecycle/performance cohorts for release
+qualification (`seyal.pass9.production-budget.v1`), distinct from merge-acceptance
+(`seyal.pass9.merge-acceptance.v1`).
 
-This report also records a governance limitation: the production branch was
-started before Issue #719 had been explicitly marked `Ready`. That ordering
-violation must be recorded in the Issue and the implementation must be
-re-baselined, frozen, and independently reviewed before this evidence can be
-used for acceptance.
+## Harness
 
-No performance measurement is recorded by this artifact. The current
-production worktree contains the deterministic budget validator but does not
-contain the pre-implementation calibration branch's controlled cohort
-generator. This sandbox also denies process-table inspection, so it cannot
-establish the otherwise-idle/exclusive-host precondition required for retained
-RSS and detached-CPU evidence.
+The repository provides a reusable generator that shares the merge-acceptance
+production recovery topology:
 
-Older calibration logs and calibration-branch results are not exact-head
-production evidence and were not copied, transformed, or represented as a run
-of this branch. The validator self-test uses synthetic boundary fixtures solely
-to prove fail-closed validation behavior; those fixtures are not measurements.
+```sh
+# Full SPEC-009 §16 matrix (5 cohorts × 2 modes × 2 geometries, 20 warmups)
+bash scripts/pass9-release-qualification.sh
 
-When an exact-head production cohort artifact is collected on an idle
-Apple-Silicon host, validate it without changing its recorded commit:
+# Tooling dry-run (short cycles by default; skips budget validator / trust XCTest)
+SEYAL_PASS9_DRY_RUN=1 bash scripts/pass9-release-qualification.sh
+
+# Meaningful single-cohort smoke (overrides dry-run defaults)
+SEYAL_PASS9_DRY_RUN=1 SEYAL_PASS9_CYCLES=100 SEYAL_PASS9_WARMUP=20 \
+  SEYAL_PASS9_COHORTS=1 SEYAL_PASS9_GEOMETRIES=120x40 \
+  SEYAL_PASS9_MODES=graceful_detach \
+  bash scripts/pass9-release-qualification.sh
+python3 scripts/check-pass9-release-smoke.py \
+  docs/evidence/pass9-release-partials-<shortsha>/graceful_detach-120x40-c1.json
+```
+
+Validator (exact-head evidence only):
 
 ```sh
 python3 scripts/check-pass9-production-budget.py \
   --expected-head <full-40-character-production-head> \
-  <retained-pass9-production-evidence.json>
+  docs/evidence/pass9-release-qualification-<shortsha>.json
 ```
 
-Until that command passes against retained raw evidence, the physical stress,
-RSS, detached-idle CPU, native-ready, and paired Pass 8 gates remain unproven.
-The artifact must additionally link the exact production head, host
-preconditions, five independent cohorts, raw resource counters, and the
-release package/signing inspection. Calibration artifacts from PR #726 cannot
-close these exact-head production gates.
+## Accepted host preconditions
+
+- Apple Silicon Mac; otherwise-idle / exclusive host for retained RSS and
+  detached-CPU evidence
+- Release-qualification evidence names the exact tested commit SHA
+- Fresh Runtime helper process per independent cohort
+- Geometries `120x40` and `80x24`; modes `graceful_detach` and
+  `abrupt_socket_loss` (`socket_shutdown_owned_disconnect`)
+- Topology disclosure: Metal prepare/release equivalent to
+  `MetalSurfaceView.consumeBridgeFrame` (not full AppKit window present), same
+  honesty bar as merge-acceptance
+
+## Calibrated absolute timing gates
+
+| Gate | Limit |
+| --- | ---: |
+| reconnect_p99 | ≤ 4000 µs |
+| cleanup_p99 | ≤ 250 µs |
+| prepared_surface_p99 | ≤ 1500 µs |
+| native_ready_p99 | ≤ 2000 µs |
+
+See calibration note for derivation. Resource exact-return and Pass 8 paired
+attribution policy are unchanged.
+
+## Still pending on controlled host
+
+- Full five-cohort exact-head artifact that passes the production budget
+  validator on the retained production head
+- Pass 8 paired attribution with `pass8.gate=ENFORCED_CONTROLLED_HOST`
+- VoiceOver / real IME / dead-key qualification evidence
+- Durable Release Team-identity packaging beyond Debug ad-hoc inspection +
+  Release trust-rule XCTest
+
+Older pre-calibration absolute µs values and validator self-tests alone are not
+exact-head production evidence.

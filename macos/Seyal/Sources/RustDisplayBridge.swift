@@ -624,6 +624,13 @@ final class RustDisplayBridge {
     return frame
   }
 
+  /// Builds the initial PreparedSurface after attach. Idempotent.
+  @discardableResult
+  func ensurePreparedSurface() -> Bool {
+    guard isConnected, reconstructionState.canMutate, selectClient() else { return false }
+    return seyal_bridge_ensure_prepared() == 0
+  }
+
   func publishCurrentFrame() {
     guard let frame = currentFrame() else { return }
     onFrame(frame)

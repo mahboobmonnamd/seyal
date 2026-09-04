@@ -33,6 +33,7 @@
 		A10000000000000000000017 /* CommandBlockBodyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001A /* CommandBlockBodyView.swift */; };
 		A10000000000000000000025 /* RuntimeLifecycleRecoveryCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000025 /* RuntimeLifecycleRecoveryCoordinator.swift */; };
 		A10000000000000000000028 /* Pass9MergeAcceptance.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000028 /* Pass9MergeAcceptance.swift */; };
+		A10000000000000000000029 /* Pass9ReleaseQualification.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000029 /* Pass9ReleaseQualification.swift */; };
 		A10000000000000000000026 /* BundledRuntimeLauncher.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000026 /* BundledRuntimeLauncher.swift */; };
 		A10000000000000000000027 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000027 /* Security.framework */; };
 		A1000000000000000000001B /* SeyalRGBA.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001B /* SeyalRGBA.swift */; };
@@ -97,6 +98,7 @@
 		A2000000000000000000001A /* CommandBlockBodyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandBlockBodyView.swift; sourceTree = "<group>"; };
 		A20000000000000000000025 /* RuntimeLifecycleRecoveryCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeLifecycleRecoveryCoordinator.swift; sourceTree = "<group>"; };
 		A20000000000000000000028 /* Pass9MergeAcceptance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Pass9MergeAcceptance.swift; sourceTree = "<group>"; };
+		A20000000000000000000029 /* Pass9ReleaseQualification.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Pass9ReleaseQualification.swift; sourceTree = "<group>"; };
 		A20000000000000000000026 /* BundledRuntimeLauncher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BundledRuntimeLauncher.swift; sourceTree = "<group>"; };
 		A20000000000000000000027 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 		A2000000000000000000001B /* SeyalRGBA.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeyalRGBA.swift; sourceTree = "<group>"; };
@@ -180,6 +182,7 @@
 				A2000000000000000000001A /* CommandBlockBodyView.swift */,
 				A20000000000000000000025 /* RuntimeLifecycleRecoveryCoordinator.swift */,
 				A20000000000000000000028 /* Pass9MergeAcceptance.swift */,
+				A20000000000000000000029 /* Pass9ReleaseQualification.swift */,
 				A20000000000000000000026 /* BundledRuntimeLauncher.swift */,
 				A20000000000000000000018 /* TerminalInputSurface.swift */,
 				A20000000000000000000010 /* RustDisplayBridge.swift */,
@@ -359,6 +362,7 @@
 				A10000000000000000000003 /* MetalSurfaceView.swift in Sources */,
 				A10000000000000000000025 /* RuntimeLifecycleRecoveryCoordinator.swift in Sources */,
 				A10000000000000000000028 /* Pass9MergeAcceptance.swift in Sources */,
+				A10000000000000000000029 /* Pass9ReleaseQualification.swift in Sources */,
 				A10000000000000000000026 /* BundledRuntimeLauncher.swift in Sources */,
 				A1000000000000000000001B /* SeyalRGBA.swift in Sources */,
 				A1000000000000000000001C /* SeyalDepthLevel.swift in Sources */,

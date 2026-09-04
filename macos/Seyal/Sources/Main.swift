@@ -80,6 +80,14 @@ enum SeyalMain {
             return
         }
 
+        if CommandLine.arguments.contains("--pass9-release-qualification") {
+            guard Pass9ReleaseQualification.run() else {
+                print("Seyal Pass 9 release-qualification soak failed.")
+                exit(1)
+            }
+            return
+        }
+
         if CommandLine.arguments.contains("--renderer-benchmark") {
             guard RendererValidation.runBenchmark() else {
                 print("Seyal native renderer benchmark failed.")

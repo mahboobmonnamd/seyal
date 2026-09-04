@@ -41,7 +41,10 @@ use crate::block::{BlockApply, BlockCache, is_epoch_quarantined, quarantine_epoc
 /// Pass 9 owns one wall-clock second for discovery, handshake, attach and the
 /// initial authoritative snapshot.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(1);
-const STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(1);
+/// Cap busy-yield bursts so a stalled peer cannot pin a core forever while the
+/// startup deadline still has time remaining.
+const STARTUP_YIELD_BATCH: u32 = 64;
+const STARTUP_YIELD_PAUSE: Duration = Duration::from_micros(10);
 const READ_CHUNK_BYTES: usize = 64 * 1024;
 const MAX_BUFFERED_BYTES: usize = (MAX_FRAME_PAYLOAD as usize + HEADER_LEN) * 2;
 const MAX_FRAMES_PER_POLL: usize = 64;
@@ -421,6 +424,9 @@ pub struct LocalDisplayClient {
     cache: DisplayCache,
     prepared: PreparedSurface,
     last_preparation: PreparationResult,
+    /// Initial attach commits `DisplayCache` immediately; `PreparedSurface` is
+    /// built on first poll/frame (SPEC reconnect vs prepared_surface split).
+    needs_initial_prepare: bool,
     next_resize_request_id: u64,
     desired_geometry: Option<GridGeometry>,
     committed_geometry: GridGeometry,
@@ -646,8 +652,18 @@ impl LocalDisplayClient {
             rows: cache.rows,
             columns: cache.columns,
         };
-        let mut prepared = PreparedSurface::default();
-        let result = prepare_cache(&mut prepared, &cache, RowDamage::full(cache.rows), true)?;
+        // Authoritative client commit ends when DisplayCache holds the attach
+        // snapshot. Preparing the renderer-facing surface is the next SPEC
+        // boundary and is deferred to first poll/frame so reconnect latency is
+        // not charged for prepare_cache work.
+        let prepared = PreparedSurface::default();
+        let result = PreparationResult {
+            generation: cache.generation,
+            rebuilt_rows: RowDamage::none(),
+            rebuilt_row_count: 0,
+            rebuilt_cell_count: 0,
+            full_rebuild: false,
+        };
 
         stream.set_read_timeout(None).map_err(|_| ClientError::Io)?;
         stream.set_nonblocking(true).map_err(|_| ClientError::Io)?;
@@ -669,6 +685,7 @@ impl LocalDisplayClient {
             cache,
             prepared,
             last_preparation: result,
+            needs_initial_prepare: true,
             next_resize_request_id: 1,
             desired_geometry: None,
             committed_geometry,
@@ -724,6 +741,26 @@ impl LocalDisplayClient {
 
     pub fn last_preparation(&self) -> PreparationResult {
         self.last_preparation
+    }
+
+    /// Builds the initial PreparedSurface after attach snapshot commit.
+    /// Idempotent; subsequent calls are no-ops until the next attach.
+    pub fn ensure_prepared_surface(&mut self) -> Result<PreparationResult, ClientError> {
+        if !self.needs_initial_prepare {
+            return Ok(self.last_preparation);
+        }
+        if self.cache.rows == 0 || self.cache.columns == 0 {
+            return Err(ClientError::Protocol);
+        }
+        let result = prepare_cache(
+            &mut self.prepared,
+            &self.cache,
+            RowDamage::full(self.cache.rows),
+            true,
+        )?;
+        self.last_preparation = result;
+        self.needs_initial_prepare = false;
+        Ok(result)
     }
 
     pub fn wants_write(&self) -> bool {
@@ -1046,6 +1083,10 @@ impl LocalDisplayClient {
     }
 
     pub fn poll_prepare(&mut self) -> Result<Option<PreparationResult>, ClientError> {
+        if self.needs_initial_prepare {
+            self.ensure_prepared_surface()?;
+        }
+
         let mut committed_any = false;
         let mut metadata_changed = false;
         let mut damage = RowDamage::none();
@@ -1659,21 +1700,36 @@ fn configure_startup_timeout(stream: &UnixStream, deadline: Instant) -> Result<(
     stream.set_nonblocking(true).map_err(|_| ClientError::Io)
 }
 
+fn wait_startup_peer(deadline: Instant, yield_count: &mut u32) -> Result<(), ClientError> {
+    startup_remaining(deadline)?;
+    *yield_count = yield_count.saturating_add(1);
+    if *yield_count >= STARTUP_YIELD_BATCH {
+        *yield_count = 0;
+        std::thread::sleep(STARTUP_YIELD_PAUSE);
+    } else {
+        std::thread::yield_now();
+    }
+    Ok(())
+}
+
 fn read_exact_until(
     stream: &mut UnixStream,
     buffer: &mut [u8],
     deadline: Instant,
 ) -> Result<(), ClientError> {
     let mut offset = 0;
+    let mut yields = 0u32;
     while offset < buffer.len() {
         configure_startup_timeout(stream, deadline)?;
         match stream.read(&mut buffer[offset..]) {
             Ok(0) => return Err(ClientError::Io),
-            Ok(read) => offset += read,
+            Ok(read) => {
+                yields = 0;
+                offset += read;
+            }
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                startup_remaining(deadline)?;
-                std::thread::sleep(STARTUP_POLL_INTERVAL);
+                wait_startup_peer(deadline, &mut yields)?;
             }
             Err(_) => return Err(ClientError::Io),
         }
@@ -1834,14 +1890,17 @@ fn send_control_until(
     configure_startup_timeout(stream, deadline)?;
     let frame = encode_frame(message_type, payload);
     let mut offset = 0;
+    let mut yields = 0u32;
     while offset < frame.len() {
         match stream.write(&frame[offset..]) {
             Ok(0) => return Err(ClientError::Io),
-            Ok(written) => offset += written,
+            Ok(written) => {
+                yields = 0;
+                offset += written;
+            }
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                startup_remaining(deadline)?;
-                std::thread::sleep(STARTUP_POLL_INTERVAL);
+                wait_startup_peer(deadline, &mut yields)?;
             }
             Err(_) => return Err(ClientError::Io),
         }
@@ -1976,7 +2035,7 @@ mod tests {
                 9,
                 false,
             );
-            assert!(matches!(result, Err(actual) if actual == expected));
+            assert_eq!(result.err(), Some(expected));
             server_thread.join().expect("server thread");
         }
     }

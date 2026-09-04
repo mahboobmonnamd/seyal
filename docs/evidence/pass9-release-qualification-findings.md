@@ -1,6 +1,6 @@
 # Pass 9 release-qualification findings (Issue #736)
 
-**Status:** Exact-head Release evidence retained on `5f8108a`; awaiting independent maintainer DoD confirmation under `Refs #736`.
+**Status:** Exact-head Release evidence retained on `ed5650c`; awaiting independent maintainer DoD confirmation under `Refs #736`.
 
 **PR relationship:** `Refs #736` until independent maintainer review confirms DoD; then `Closes #736` only if every Done checkbox is evidenced.
 
@@ -19,18 +19,20 @@
 - Graceful `RustDisplayBridge.stop()` disconnects CLIENT on the MainActor turn so cleanup meets the 250 µs gate.
 - IME `activate()` is sticky per surface/window session (avoids IMK RSS growth across reconnect soaks).
 - Pass 9 native_ready probe uses `Installation.nativeInteractionProbe` (plain layer, no second Runtime bridge).
-
 - Startup UDS `WouldBlock` waits use `poll(2)` until the attach deadline.
 - Production restore posts `NSAccessibility.announcementRequested` via `SeyalAccessibilityAnnouncement`.
 
 ## Exact-head evidence (retained)
 
-- Prior matrix head: `5f8108ac6ea1464e5645a00770b163aa524ee6b2` (pre-poll / pre-announcement)
-- Re-run matrix + Track C required on the tip that lands poll + announcement before Done claim update
+- Qualification head: `ed5650ce2dec4b278562fe00dcc73e41bc6e227d`
+- Matrix: `docs/evidence/pass9-release-qualification-ed5650ce2dec.json` — production-budget **PASS** (20 cohorts)
+- Track C: `docs/evidence/pass9-input-accessibility-ed5650ce2dec.json` — schema `v2`, `overallPass=true`, `voiceOverAnnouncementAfterReconnect=true`
+- Packaging: `docs/evidence/pass9-release-packaging-ed5650ce2dec.md` (`TeamIdentifier=3TL8X2RDAB`)
+- Pass 8: paired_delta_median_percent=6.03 with measured root-cause explanation on exact head
+- Observed matrix maxima: cleanup ≤31 µs, client_rss ≤448 KiB, reconnect ≤1259 µs, prepared ≤1137 µs, native_ready ≤119 µs
 
 ## Still required before Done
 
-- Re-soak Release 5×2×2 + Track C v2 (`vo_announcement_after_reconnect`) on the poll+announcement tip
 - Independent non-implementer maintainer confirmation
 - Issue checkbox updates to match verified reality
 - Keep `Refs #736` until DoD is confirmed

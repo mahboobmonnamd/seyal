@@ -3,20 +3,19 @@
 - **Status:** `EVIDENCE_RETAINED_AWAITING_MAINTAINER_SIGN_OFF`
 - **Issue:** #736
 - **Date:** 2026-09-04
-- **Qualification head (matrix under test):** `5f8108ac6ea1464e5645a00770b163aa524ee6b2`
-- **Branch tip:** docs/claim-accuracy commits only above that head (no production-code change since `5f8108a`; tip SHA moves with each docs fix)
-- **Artifact:** `docs/evidence/pass9-release-qualification-5f8108ac6ea1.json`
+- **Qualification head (matrix under test):** `ed5650ce2dec4b278562fe00dcc73e41bc6e227d`
+- **Branch tip:** same as qualification head (poll startup waits + VoiceOver announcement)
+- **Artifact:** `docs/evidence/pass9-release-qualification-ed5650ce2dec.json`
 - **Calibration:** `docs/evidence/pass9-production-budget-calibration.md`
 - **Security review:** `docs/evidence/pass9-security-review-745.md`
-- **Packaging:** `docs/evidence/pass9-release-packaging-5f8108ac6ea1.md` (`TeamIdentifier=3TL8X2RDAB`)
-- **Track C:** `docs/evidence/pass9-input-accessibility-5f8108ac6ea1.json` (`overallPass=true`)
+- **Packaging:** `docs/evidence/pass9-release-packaging-ed5650ce2dec.md`
+- **Track C:** `docs/evidence/pass9-input-accessibility-ed5650ce2dec.json` (`overallPass=true`, schema `v2`)
 
 ## Open process gates
 
 - Independent non-implementer sign-off / maintainer confirmation
 - Issue checkbox updates after independent review
 - Keep `Refs #736` until DoD is confirmed (then `Closes` only if every checkbox is evidenced)
-- Re-soak + Track C v2 announcement evidence on the tip that lands `poll(2)` startup waits and production `announcementRequested`
 
 ## Measurement notes (quality bar)
 

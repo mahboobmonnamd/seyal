@@ -67,12 +67,22 @@ impl ChildLifecycle {
 
     pub(crate) fn try_wait(&mut self) -> Result<Option<ChildExit>, ExecError> {
         if let Some(exit) = self.reaped {
+            #[cfg(feature = "test-fault-injection")]
+            if crate::test_fault::take(crate::test_fault::FaultPoint::ChildTryWait) {
+                // Keep ownership of the exit status while pretending reap is
+                // not yet ready so Runtime recovery paths can be exercised.
+                return Ok(None);
+            }
             return Ok(Some(exit));
         }
         match self.child.try_wait()? {
             Some(status) => {
                 let exit = classify(status);
                 self.reaped = Some(exit);
+                #[cfg(feature = "test-fault-injection")]
+                if crate::test_fault::take(crate::test_fault::FaultPoint::ChildTryWait) {
+                    return Ok(None);
+                }
                 Ok(Some(exit))
             }
             None => Ok(None),

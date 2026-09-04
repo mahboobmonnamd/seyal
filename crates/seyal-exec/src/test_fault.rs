@@ -6,6 +6,10 @@ use std::cell::Cell;
 pub enum FaultPoint {
     /// Fail the next N PTY winsize syscalls before canonical resize commit.
     ResizeWinsize,
+    /// After a successful underlying waitpid, temporarily report the child as
+    /// still unreaped for the next N `try_wait` calls. Used to prove Runtime
+    /// recovery out of `TerminationFailed` / bounded `PrimaryExitPending`.
+    ChildTryWait,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

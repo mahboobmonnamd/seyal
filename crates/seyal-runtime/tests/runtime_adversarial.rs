@@ -20,6 +20,8 @@ use seyal_exec::{CommandSpec, WindowSize};
 use seyal_runtime::{ExecutionLifecycle, LocalIpcMode, Runtime, RuntimeConfig};
 
 #[cfg(feature = "test-fault-injection")]
+use seyal_exec::test_fault::{self as exec_fault, FaultPoint as ExecFaultPoint};
+#[cfg(feature = "test-fault-injection")]
 use seyal_runtime::{
     local_ipc::framing::{ClientHello, FrameHeader, HEADER_LEN, MessageType, encode_frame},
     test_fault::{self, FaultPoint},
@@ -357,5 +359,180 @@ fn repeated_listener_resource_pressure_backs_off_without_starving_active_pty_wor
         fd_count(),
         baseline_fds,
         "listener resource-pressure recovery leaked descriptors"
+    );
+}
+
+#[cfg(feature = "test-fault-injection")]
+#[test]
+fn termination_failed_recovers_after_forced_reap_miss() {
+    let _guard = serialized();
+    let baseline_fds = fd_count();
+    {
+        let mut cfg = config("termination-failed-recover", false);
+        cfg.graceful_termination = Duration::from_millis(20);
+        cfg.forced_reap = Duration::from_millis(20);
+        let mut runtime = Runtime::new(cfg).expect("Runtime");
+
+        let id = runtime
+            .create_execution(CommandSpec::new("/bin/sh").args(["-c", "sleep 30"]), size())
+            .expect("live execution");
+
+        // After SIGKILL stores an exit, keep pretending reap is not ready so the
+        // forced-reap deadline must enter recoverable TerminationFailed instead
+        // of silently draining — then clear the fault and prove recovery.
+        exec_fault::fail_times(ExecFaultPoint::ChildTryWait, 64);
+        runtime
+            .request_termination(id)
+            .expect("termination request");
+
+        let failed_deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let lifecycle = runtime
+                .lookup(id)
+                .expect("execution remains owned through TerminationFailed")
+                .lifecycle;
+            if lifecycle == ExecutionLifecycle::TerminationFailed {
+                break;
+            }
+            assert!(
+                Instant::now() < failed_deadline,
+                "forced-reap miss never entered TerminationFailed (last={lifecycle:?})"
+            );
+            runtime
+                .poll_once(Some(Duration::from_millis(10)))
+                .expect("TerminationFailed path remains pollable");
+        }
+
+        exec_fault::fail_times(ExecFaultPoint::ChildTryWait, 0);
+        let recover_deadline = Instant::now() + Duration::from_secs(3);
+        while runtime.lookup(id).is_some() {
+            assert!(
+                Instant::now() < recover_deadline,
+                "TerminationFailed did not recover after reap became available"
+            );
+            runtime
+                .poll_once(Some(Duration::from_millis(10)))
+                .expect("recovery poll");
+        }
+        assert_eq!(runtime.execution_count(), 0);
+    }
+    assert_eq!(
+        fd_count(),
+        baseline_fds,
+        "TerminationFailed recovery leaked descriptors"
+    );
+}
+
+#[cfg(feature = "test-fault-injection")]
+#[test]
+fn primary_exit_pending_escalates_to_termination_failed_then_recovers() {
+    let _guard = serialized();
+    let baseline_fds = fd_count();
+    {
+        let mut runtime =
+            Runtime::new(config("primary-exit-pending-bound", false)).expect("Runtime");
+
+        // Child exits immediately; unreapable try_wait faults force PrimaryExitPending
+        // then the hard attempt bound must escalate into TerminationFailed.
+        exec_fault::fail_times(ExecFaultPoint::ChildTryWait, 32);
+        let id = runtime
+            .create_execution(CommandSpec::new("/bin/sh").args(["-c", "true"]), size())
+            .expect("short-lived execution");
+
+        let escalate_deadline = Instant::now() + Duration::from_secs(3);
+        let mut saw_pending = false;
+        loop {
+            match runtime.lookup(id).map(|summary| summary.lifecycle) {
+                Some(ExecutionLifecycle::PrimaryExitPending) => saw_pending = true,
+                Some(ExecutionLifecycle::TerminationFailed) => break,
+                Some(other) => {
+                    assert!(
+                        Instant::now() < escalate_deadline,
+                        "PrimaryExitPending never escalated (last={other:?})"
+                    );
+                }
+                None => panic!("execution finalized before PrimaryExitPending bound escalated"),
+            }
+            runtime
+                .poll_once(Some(Duration::from_millis(5)))
+                .expect("bounded PrimaryExitPending poll");
+        }
+        assert!(
+            saw_pending,
+            "escalation must pass through PrimaryExitPending"
+        );
+
+        exec_fault::fail_times(ExecFaultPoint::ChildTryWait, 0);
+        let recover_deadline = Instant::now() + Duration::from_secs(3);
+        while runtime.lookup(id).is_some() {
+            assert!(
+                Instant::now() < recover_deadline,
+                "escalated TerminationFailed never recovered"
+            );
+            runtime
+                .poll_once(Some(Duration::from_millis(10)))
+                .expect("escalation recovery poll");
+        }
+    }
+    assert_eq!(
+        fd_count(),
+        baseline_fds,
+        "PrimaryExitPending escalation recovery leaked descriptors"
+    );
+}
+
+#[cfg(feature = "test-fault-injection")]
+#[test]
+fn request_termination_from_termination_failed_rearms_graceful_path() {
+    let _guard = serialized();
+    let baseline_fds = fd_count();
+    {
+        let mut cfg = config("termination-failed-rearm", false);
+        cfg.graceful_termination = Duration::from_millis(20);
+        cfg.forced_reap = Duration::from_millis(20);
+        let mut runtime = Runtime::new(cfg).expect("Runtime");
+
+        let id = runtime
+            .create_execution(CommandSpec::new("/bin/sh").args(["-c", "sleep 30"]), size())
+            .expect("live execution");
+
+        exec_fault::fail_times(ExecFaultPoint::ChildTryWait, 64);
+        runtime
+            .request_termination(id)
+            .expect("initial termination");
+
+        let failed_deadline = Instant::now() + Duration::from_secs(3);
+        while runtime.lookup(id).map(|summary| summary.lifecycle)
+            != Some(ExecutionLifecycle::TerminationFailed)
+        {
+            assert!(
+                Instant::now() < failed_deadline,
+                "did not reach TerminationFailed before re-arm"
+            );
+            runtime
+                .poll_once(Some(Duration::from_millis(10)))
+                .expect("poll toward TerminationFailed");
+        }
+
+        // Re-arm while unreapability persists: must leave the sink and re-enter
+        // the graceful→forced signalling ladder rather than no-op.
+        runtime
+            .request_termination(id)
+            .expect("TerminationFailed remains explicitly terminable");
+        assert_eq!(
+            runtime
+                .lookup(id)
+                .expect("still owned after re-arm")
+                .lifecycle,
+            ExecutionLifecycle::TerminatingGraceful
+        );
+
+        exec_fault::fail_times(ExecFaultPoint::ChildTryWait, 0);
+        shutdown(&mut runtime);
+    }
+    assert_eq!(
+        fd_count(),
+        baseline_fds,
+        "TerminationFailed re-arm path leaked descriptors"
     );
 }

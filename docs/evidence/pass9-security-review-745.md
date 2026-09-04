@@ -2,8 +2,7 @@
 
 **Date:** 2026-09-04  
 **Scope:** `issue/736-pass9-release-qualification` vs `origin/master`  
-**Reviewer path:** Cursor `security-review` subagent (non-implementer automation)  
-**Agent:** [Security review Pass9 PR](bd78d4a7-0f22-42d0-baaa-ef5d1d5ccfc4)
+**Reviewer path:** Cursor `security-review` subagent (non-implementer automation)
 
 ## Verdict
 

@@ -41,11 +41,16 @@ Derived as `ceil(measured_p99 × 1.30)` then rounded up for multi-cohort / dual-
 | reconnect_p99 | 4000 |
 | cleanup_p99 | 250 |
 | prepared_surface_p99 | 1500 |
-| native_ready_p99 | 6000 (SPEC §10 interactive restore; recalibrated from ~4.0–4.1 ms p99) |
+| native_ready_p99 | 6000 (SPEC §10 interactive restore; cold first-activate p99 was ~4.0–4.1 ms when IMK/AppKit caches were charged every cycle) |
 
 Resource exact-return, detached CPU, and Pass 8 paired attribution policy are unchanged.
 
 `client_rss_delta_kib` absolute gate is **1536 KiB** after the full 20-cohort matrix showed Debug `ps` RSS noise from −1872..928 KiB while reconnect-owned logical counters returned exactly on every cohort. Logical exact-return remains the leak contract; RSS is a noisy supporting signal.
+
+## native_ready cold vs steady-state
+
+- **Cold / first Usable on a surface:** key window + first-responder + AX focus + first `NSTextInputContext.activate()` can land near the multi-millisecond end of the gate (historical ~4 ms p99 when activate ran every cycle).
+- **Steady-state reconnect soaks (tip `5f8108a` matrix):** after one sticky IME activate per surface session, restore re-validates readiness without re-entering IMK; measured native_ready p99 was **28–95 µs**. The 6000 µs gate still covers cold first-activate and multi-cohort variance; it is not a claim that every reconnect pays ~4 ms.
 
 ## What these gates mean
 

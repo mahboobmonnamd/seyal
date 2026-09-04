@@ -70,7 +70,7 @@ Do not perform unrelated cleanup. If an out-of-scope problem is discovered, crea
 
 ## Architecture changes
 
-Use `docs/engineering/ISSUE-PROTOCOL.md` and the `architecture-change` skill. Architecture approval and substantial implementation should normally be separate reviewable changes.
+Use `docs/engineering/ISSUE-PROTOCOL.md` and the `architecture-change` skill. Creating, amending, reopening, or superseding an ADR must be a separate PR from implementation. Mixed ADR+implementation PRs are rejected; land and accept the ADR first, then implement against the accepted authority.
 
 ## Development prerequisites
 

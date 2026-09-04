@@ -69,7 +69,9 @@ struct DamageMask: Equatable {
 }
 
 struct NativePreparedFrame {
-    let cells: UnsafeBufferPointer<SeyalPreparedCell>
+    /// Owned cell copy. Bridge frames are copied at construction so Rust
+    /// `PreparedCell` storage never escapes into long-lived Swift state.
+    let cells: [SeyalPreparedCell]
     let generation: UInt64
     let rows: Int
     let columns: Int
@@ -93,7 +95,8 @@ struct NativePreparedFrame {
         else {
             return nil
         }
-        cells = UnsafeBufferPointer(start: pointer, count: count)
+        // Synchronous consume: copy before any later poll can invalidate Rust.
+        cells = Array(UnsafeBufferPointer(start: pointer, count: count))
         generation = bridgeFrame.generation
         self.rows = rows
         self.columns = columns
@@ -112,6 +115,30 @@ struct NativePreparedFrame {
 
     init(
         cells: UnsafeBufferPointer<SeyalPreparedCell>,
+        generation: UInt64,
+        rows: Int,
+        columns: Int,
+        cursorRow: Int = 0,
+        cursorColumn: Int = 0,
+        cursorVisible: Bool = false,
+        alternateScreen: Bool = false,
+        fullRebuild: Bool = true,
+        damage: DamageMask = DamageMask()
+    ) {
+        self.cells = Array(cells)
+        self.generation = generation
+        self.rows = rows
+        self.columns = columns
+        self.cursorRow = cursorRow
+        self.cursorColumn = cursorColumn
+        self.cursorVisible = cursorVisible
+        self.alternateScreen = alternateScreen
+        self.fullRebuild = fullRebuild
+        self.damage = damage
+    }
+
+    init(
+        cells: [SeyalPreparedCell],
         generation: UInt64,
         rows: Int,
         columns: Int,

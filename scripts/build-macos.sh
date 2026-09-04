@@ -48,6 +48,8 @@ esac
 }
 
 cargo_args=(build -p seyal-client -p seyal-runtime --locked)
+# C ABI linked into Swift: never unwind across the bridge (see seyal-client::ffi).
+export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C panic=abort"
 if [[ "$CONFIGURATION" == "Release" ]]; then
   cargo_args+=(--release)
 fi

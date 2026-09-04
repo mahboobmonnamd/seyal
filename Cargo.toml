@@ -19,3 +19,11 @@ repository = "https://github.com/mahboobmonnamd/seyal"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+
+# C ABI linked into Swift must never unwind across the boundary. Abort is the
+# enforced panic policy for every bridge entry point (see seyal-client::ffi).
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

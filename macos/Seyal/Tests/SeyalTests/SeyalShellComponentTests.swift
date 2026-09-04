@@ -561,6 +561,27 @@ final class SeyalShellComponentTests: XCTestCase {
     XCTAssertEqual(MemoryLayout<SeyalExecutionBlockMetadata>.alignment, 8)
   }
 
+  func testPreparedAndHistoryCellCABIsMatchRust() {
+    XCTAssertEqual(MemoryLayout<SeyalPreparedCell>.size, 16)
+    XCTAssertEqual(MemoryLayout<SeyalPreparedCell>.stride, 16)
+    XCTAssertEqual(MemoryLayout<SeyalPreparedCell>.alignment, 4)
+    XCTAssertEqual(MemoryLayout<SeyalHistoryCell>.size, 16)
+    XCTAssertEqual(MemoryLayout<SeyalHistoryCell>.stride, 16)
+    XCTAssertEqual(MemoryLayout<SeyalHistoryCell>.alignment, 4)
+  }
+
+  func testPreparedFrameAndHistoryRowCABIsMatchRust() {
+    XCTAssertEqual(MemoryLayout<SeyalPreparedFrame>.size, 72)
+    XCTAssertEqual(MemoryLayout<SeyalPreparedFrame>.stride, 72)
+    XCTAssertEqual(MemoryLayout<SeyalPreparedFrame>.alignment, 8)
+    XCTAssertEqual(MemoryLayout<SeyalHistoryRow>.size, 24)
+    XCTAssertEqual(MemoryLayout<SeyalHistoryRow>.stride, 24)
+    XCTAssertEqual(MemoryLayout<SeyalHistoryRow>.alignment, 8)
+    XCTAssertEqual(MemoryLayout<SeyalBlockRecord>.size, 48)
+    XCTAssertEqual(MemoryLayout<SeyalBlockRecord>.stride, 48)
+    XCTAssertEqual(MemoryLayout<SeyalBlockRecord>.alignment, 8)
+  }
+
   func testPaneQualifiedIdentitiesDoNotCollideAcrossPanes() {
     let firstBlock = PaneBlockKey(paneID: "pane-left", blockID: 7)
     let secondBlock = PaneBlockKey(paneID: "pane-right", blockID: 7)

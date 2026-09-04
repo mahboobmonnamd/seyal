@@ -22,6 +22,8 @@ pub enum FaultPoint {
     BlockCompletionMutation,
     BlockCompletionEncode,
     BlockCompletionAdmission,
+    // Candidate-D display encode used by steady-state fanout / resync.
+    DisplayEncode,
     // Legacy Candidate-B comparator/reference resource lifecycle.
     ShmOpenWriter,
     Truncate,

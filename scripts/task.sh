@@ -16,7 +16,8 @@ runtime_failure_matrix() {
   cargo_pinned test -p seyal-runtime --locked --features test-fault-injection \
     --test local_ipc_failure_injection \
     --test runtime_adversarial \
-    --test pass8_block_failures
+    --test pass8_block_failures \
+    --test display_publish_bookkeeping
 }
 
 case "$cmd" in

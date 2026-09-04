@@ -19,7 +19,7 @@ Keep optimizing the permanent production reconnect path **and** recalibrate abso
 
 ## Product changes informing this calibration
 
-1. Startup UDS `WouldBlock` waits use yield + occasional 10 µs pause (removed the 1 ms sleep floor that made multi-RTT attach ≥ several ms by construction).
+1. Startup UDS `WouldBlock` waits use exponential sleep backoff **10 µs → 100 µs cap** (prefer sleeping over a yield-spin; removed the earlier 1 ms sleep floor that made multi-RTT attach ≥ several ms by construction).
 2. `prepare_cache` is deferred until first poll/frame/`ensurePreparedSurface`, so reconnect is not charged for renderer-facing prepare work (SPEC split vs prepared_surface).
 
 ## Anchor measurement
@@ -50,7 +50,7 @@ Resource exact-return, detached CPU, and Pass 8 paired attribution policy are un
 ## native_ready cold vs steady-state
 
 - **Cold / first Usable on a surface:** key window + first-responder + AX focus + first `NSTextInputContext.activate()` can land near the multi-millisecond end of the gate (historical ~4 ms p99 when activate ran every cycle).
-- **Steady-state reconnect soaks (tip `5f8108a` matrix):** after one sticky IME activate per surface session, restore re-validates readiness without re-entering IMK; measured native_ready p99 was **28–95 µs**. The 6000 µs gate still covers cold first-activate and multi-cohort variance; it is not a claim that every reconnect pays ~4 ms.
+- **Steady-state reconnect soaks (qualification head `5f8108a` matrix):** after one sticky IME activate per surface session, restore re-validates readiness without re-entering IMK; measured native_ready p99 was **28–95 µs**. The 6000 µs gate still covers cold first-activate and multi-cohort variance; it is not a claim that every reconnect pays ~4 ms.
 
 ## What these gates mean
 

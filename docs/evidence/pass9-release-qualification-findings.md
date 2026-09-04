@@ -32,3 +32,4 @@
 
 - Independent non-implementer maintainer confirmation
 - Issue checkbox updates to match verified reality
+- Explicit DoD decision on Issue “VoiceOver announcement”: either narrow #736 to SPEC §10 AX smoke (current Track C) or add a system VoiceOver audio/announcement gate — Track C does **not** claim announcement today

@@ -3,8 +3,8 @@
 - **Status:** `EVIDENCE_RETAINED_AWAITING_MAINTAINER_SIGN_OFF`
 - **Issue:** #736
 - **Date:** 2026-09-04
-- **Qualification head:** `5f8108ac6ea1464e5645a00770b163aa524ee6b2`
-- **PR tip (evidence commit):** `8e72abc7f73aaff674d5889a7c28b1a33c71e680`
+- **Qualification head (matrix under test):** `5f8108ac6ea1464e5645a00770b163aa524ee6b2`
+- **Branch tip:** docs/claim-accuracy commits only above that head (no production-code change since `5f8108a`; tip SHA moves with each docs fix)
 - **Artifact:** `docs/evidence/pass9-release-qualification-5f8108ac6ea1.json`
 - **Calibration:** `docs/evidence/pass9-production-budget-calibration.md`
 - **Security review:** `docs/evidence/pass9-security-review-745.md`
@@ -16,6 +16,7 @@
 - Independent non-implementer sign-off / maintainer confirmation
 - Issue checkbox updates after independent review
 - Keep `Refs #736` until DoD is confirmed (then `Closes` only if every checkbox is evidenced)
+- Issue #736 “VoiceOver announcement” wording remains **out of scope** for Track C until DoD is narrowed or a system-VO announcement gate is added (current proof is SPEC §10 AX smoke only)
 
 ## Measurement notes (quality bar)
 
@@ -26,3 +27,4 @@
   - `client_allocator_in_use_kib` = dedicated Metal GPU KiB for the soak presenter
 - `client_rss_delta_kib` remains a supporting `ps` RSS signal with a calibrated absolute gate
 - Non-dry-run packaging is Release + Apple-issued Team identity
+- Startup `WouldBlock` path: exponential sleep backoff 10 µs → 100 µs (see calibration)

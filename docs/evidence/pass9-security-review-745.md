@@ -1,7 +1,7 @@
 # Pass 9 security review outcome (PR #745 / Issue #736)
 
 **Date:** 2026-09-04  
-**Scope:** `issue/736-pass9-release-qualification` vs `origin/master` (includes `ed5650c` poll + announcement delta)  
+**Scope:** `issue/736-pass9-release-qualification` vs `origin/master` (includes measured head `05664dc`: poll/libc-drop + announcement + harness metadata)  
 **Reviewer path:** Cursor `security-review` subagent (non-implementer automation)
 
 ## Verdict

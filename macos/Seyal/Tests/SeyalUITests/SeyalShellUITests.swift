@@ -280,6 +280,16 @@ final class SeyalShellUITests: XCTestCase {
         XCTAssertNotEqual(afterKill["attachment"], afterClose["attachment"])
         XCTAssertEqual(afterKill["alternate-screen"], "true")
 
+        // VoiceOver-facing recovery discoverability after abrupt GUI death:
+        // finite hittable surface + usable recovery accessibility fields.
+        XCTAssertTrue(surface.exists)
+        XCTAssertTrue(surface.isHittable)
+        XCTAssertGreaterThan(surface.frame.width, 0)
+        XCTAssertGreaterThan(surface.frame.height, 0)
+        XCTAssertEqual(afterKill["connection"], "usable")
+        XCTAssertNotEqual(afterKill["runtime"], "none")
+        XCTAssertNotEqual(afterKill["execution"], "none")
+
         // Focus the real NSTextInputClient, interrupt the retained foreground
         // command, and prove direct terminal input reaches the same shell.
         surface.click()

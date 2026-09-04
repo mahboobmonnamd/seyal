@@ -1103,6 +1103,14 @@ final class SeyalShellComponentTests: XCTestCase {
   }
 
   @MainActor
+  func testPass9InputAccessibilityQualificationThroughProductionNSTextInputClient() {
+    let checks = Pass9InputAccessibilityQualification.executeChecks()
+    for (name, passed) in checks.sorted(by: { $0.key < $1.key }) {
+      XCTAssertTrue(passed, "Pass 9 input/accessibility check failed: \(name)")
+    }
+  }
+
+  @MainActor
   func testPreviewWorkspaceInventoryMatchesFrozenWorkspaceModel() {
     let state = SeyalShellState.makePreview()
 

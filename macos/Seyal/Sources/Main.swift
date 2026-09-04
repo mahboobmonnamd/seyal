@@ -88,6 +88,14 @@ enum SeyalMain {
             return
         }
 
+        if CommandLine.arguments.contains("--pass9-input-accessibility-qualification") {
+            guard Pass9InputAccessibilityQualification.run() else {
+                print("Seyal Pass 9 input/accessibility qualification failed.")
+                exit(1)
+            }
+            return
+        }
+
         if CommandLine.arguments.contains("--renderer-benchmark") {
             guard RendererValidation.runBenchmark() else {
                 print("Seyal native renderer benchmark failed.")

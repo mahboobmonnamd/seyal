@@ -192,6 +192,30 @@ if [[ "$DRY_RUN" != "1" || "${SEYAL_PASS9_FORCE_VALIDATE:-0}" == "1" ]]; then
   python3 scripts/check-pass9-production-budget.py --expected-head "$COMMIT" "$ARTIFACT"
 fi
 
+INPUT_AX="$OUT_DIR/pass9-input-accessibility-${COMMIT:0:12}.json"
+INPUT_AX_MD="$OUT_DIR/pass9-input-accessibility-${COMMIT:0:12}.md"
+if [[ "$DRY_RUN" == "1" ]]; then
+  echo "[pass9-release-qualification] DRY_RUN skips input/accessibility Track C"
+else
+  echo "[pass9-release-qualification] running input/accessibility Track C"
+  "$BIN" --pass9-input-accessibility-qualification --output "$INPUT_AX"
+  {
+    echo "# Pass 9 input / accessibility qualification"
+    echo
+    echo "- **Issue:** #736"
+    echo "- **Exact production head:** \`$COMMIT\`"
+    echo "- **Artifact:** \`$(basename "$INPUT_AX")\`"
+    echo "- **Surface:** production \`InteractiveMetalSurfaceView\` as \`NSTextInputClient\`"
+    echo "- **VoiceOver:** discoverability via accessibility role/label/value (system VoiceOver audio not enabled)"
+    echo
+    echo '```json'
+    cat "$INPUT_AX"
+    echo '```'
+  } >"$INPUT_AX_MD"
+  echo "[pass9-release-qualification] retained $INPUT_AX"
+  echo "[pass9-release-qualification] retained $INPUT_AX_MD"
+fi
+
 cat >"$REPORT" <<EOF
 # Pass 9 release-qualification evidence
 
@@ -199,6 +223,7 @@ cat >"$REPORT" <<EOF
 - **Exact production head under test:** \`$COMMIT\`
 - **Artifact:** \`$(basename "$ARTIFACT")\`
 - **Packaging:** \`$(basename "$PACKAGING")\`
+- **Input/accessibility:** \`$(basename "$INPUT_AX")\` (skipped on dry-run)
 - **Modes:** $MODES
 - **Geometries:** $GEOMETRIES
 - **Cohorts:** $COHORTS

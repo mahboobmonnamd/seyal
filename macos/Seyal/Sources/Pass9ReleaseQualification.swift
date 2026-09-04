@@ -498,11 +498,16 @@ enum Pass9ReleaseQualification {
     peakGpu = max(peakGpu, renderer.estimatedDedicatedGPUBytes > 0 ? 1 : 0)
 
     let nativeStarted = DispatchTime.now().uptimeNanoseconds
-    if coordinator.state.stage != .usable {
+    if coordinator.state.stage == .reconstructing {
       coordinator.transition(to: .restoringInteraction)
+    }
+    if coordinator.state.stage == .restoringInteraction {
       coordinator.transition(to: .usable)
     }
     let nativeFinished = DispatchTime.now().uptimeNanoseconds
+    guard coordinator.state.stage == .usable else {
+      throw QualificationError.recoveryFailed(stage: String(describing: coordinator.state.stage))
+    }
 
     let diag = seyal_bridge_pass9_diag_snapshot()
     guard diag.connected == 1 else { throw QualificationError.notConnected }
@@ -608,10 +613,8 @@ enum Pass9ReleaseQualification {
           renderer.estimatedDedicatedGPUBytes > 0,
           sawGeometry
         {
-          if coordinator.state.stage == .reconstructing {
-            coordinator.transition(to: .restoringInteraction)
-            coordinator.transition(to: .usable)
-          }
+          // Leave the coordinator short of `.usable` so `native_ready` measures
+          // the restoringInteraction → usable transition separately.
           return true
         }
         RunLoop.current.run(until: Date().addingTimeInterval(pollSeconds))

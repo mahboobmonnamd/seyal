@@ -77,7 +77,19 @@ enum Pass9InputAccessibilityQualification {
       paneID: "pass9-input-accessibility",
       allowsImplicitExecutionBootstrap: false
     )
+    // Attach to a real NSWindow so firstRect screen conversion is non-zero and
+    // accessibility geometry is meaningful (detached views return .zero).
+    let window = NSWindow(
+      contentRect: NSRect(x: 80, y: 80, width: 960, height: 600),
+      styleMask: [.titled, .closable],
+      backing: .buffered,
+      defer: false
+    )
+    window.contentView = surface
+    window.orderFront(nil)
+    defer { window.orderOut(nil) }
     surface.layoutSubtreeIfNeeded()
+    _ = window.makeFirstResponder(surface)
 
     checks["accepts_first_responder"] = surface.acceptsFirstResponder
     checks["pass7_input_self_test"] = InteractiveMetalSurfaceView.pass7InputSelfTest()
@@ -105,6 +117,7 @@ enum Pass9InputAccessibilityQualification {
     let markedBeforeCancel = surface.hasMarkedText()
     _ = surface.resignFirstResponder()
     checks["ime_cancel_without_transcript"] = markedBeforeCancel && !surface.hasMarkedText()
+    _ = window.makeFirstResponder(surface)
 
     // Replacement commit (IME confirms a candidate replacing the marked range).
     surface.setMarkedText(
@@ -132,11 +145,14 @@ enum Pass9InputAccessibilityQualification {
       && rect.origin.y.isFinite
       && rect.size.width.isFinite
       && rect.size.height.isFinite
+      && rect != .zero
+      && rect.height > 0
     _ = surface.resignFirstResponder()
     guard !surface.hasMarkedText() else {
       checks["candidate_rect_finite"] = false
       return checks
     }
+    _ = window.makeFirstResponder(surface)
 
     // VoiceOver-facing discovery without enabling system VoiceOver audio:
     // role/label/element flags + recovery value after refresh.
@@ -144,16 +160,26 @@ enum Pass9InputAccessibilityQualification {
     let roleOK = surface.accessibilityRole() == .group
     let labelOK = surface.accessibilityLabel() == "Seyal Terminal"
     let elementOK = surface.isAccessibilityElement()
+    let frame = surface.accessibilityFrame()
     let value = String(describing: surface.accessibilityValue() ?? "")
     checks["vo_discoverable_disconnected"] =
-      roleOK && labelOK && elementOK && value.contains("connection=disconnected")
+      roleOK
+      && labelOK
+      && elementOK
+      && value.contains("connection=disconnected")
+      && frame.width > 0
+      && frame.height > 0
     surface.refreshRecoveryAccessibilityValue()
     let value2 = String(describing: surface.accessibilityValue() ?? "")
+    // Harness surface is intentionally disconnected; require stable typed fields
+    // and that refresh does not invent a usable connection claim.
     checks["vo_discoverable_after_refresh"] =
-      value2.contains("runtime=")
-      && value2.contains("execution=")
-      && value2.contains("attachment=")
+      value2.contains("connection=disconnected")
+      && value2.contains("runtime=none")
+      && value2.contains("execution=none")
+      && value2.contains("attachment=none")
       && !value2.contains("marked=")
+      && surface.accessibilityFrame().width > 0
 
     return checks
   }

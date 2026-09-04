@@ -28,8 +28,8 @@ use seyal_runtime::{
         connection::MAX_CONNECTIONS,
         framing::{
             Attach, Attached, ClientHello, ErrorCode, ErrorMessage, FrameHeader, HEADER_LEN,
-            InputRef, MessageType, ResizeRequest, ResizeResult, ResizeResultCode, Role, ServerHello,
-            encode_frame,
+            InputRef, MessageType, ResizeRequest, ResizeResult, ResizeResultCode, Role,
+            ServerHello, encode_frame,
         },
     },
 };
@@ -185,12 +185,7 @@ impl Harness {
         let _ = ServerHello::decode(&payload).unwrap();
     }
 
-    fn attach(
-        &mut self,
-        client: &mut Client,
-        execution_id: ExecutionId,
-        role: Role,
-    ) -> Attached {
+    fn attach(&mut self, client: &mut Client, execution_id: ExecutionId, role: Role) -> Attached {
         self.send(
             client,
             MessageType::Attach,
@@ -314,7 +309,14 @@ fn disconnect_during_input_backpressure_releases_authority_without_wedging_execu
         let mut successor = harness.connect();
         harness.hello(&mut successor, 0);
         let _ = harness.attach(&mut successor, execution_id, Role::Controller);
-        assert_eq!(harness.runtime.lookup(execution_id).unwrap().attachment_count, 1);
+        assert_eq!(
+            harness
+                .runtime
+                .lookup(execution_id)
+                .unwrap()
+                .attachment_count,
+            1
+        );
 
         drop(successor);
         harness.wait_attachment_released(execution_id);
@@ -486,7 +488,9 @@ fn disconnect_during_snapshot_chunking_cleans_up_and_allows_full_reattach() {
             assert_eq!(next_kind, kind);
             chunks.push(decode_chunk(&encode_frame(kind, &next_payload)).unwrap());
         }
-        cache.apply_chunks(&chunks).expect("complete snapshot after reattach");
+        cache
+            .apply_chunks(&chunks)
+            .expect("complete snapshot after reattach");
         assert_eq!((cache.rows, cache.columns), (120, 200));
 
         drop(successor);

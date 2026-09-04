@@ -134,9 +134,9 @@ The repository tree for the starting candidate is the inventory source; director
 ### F-006 — TerminationFailed dead-end and PrimaryExitPending unbound retry
 
 - **Severity:** BLOCKING
-- **Status:** OPEN — fix PR pending / opening
+- **Status:** OPEN — fix PR opened; awaiting review/merge
 - **Owning Issue:** #756
-- **PR:** pending (focused PR expected for #756; not yet linked at ledger update time)
+- **PR:** #774
 - **Paths:**
   - `crates/seyal-runtime/src/runtime.rs`
   - related exec/fault-injection and adversarial Runtime tests

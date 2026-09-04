@@ -77,9 +77,32 @@ Independently, no cloud/licensing/telemetry/agent/persistence service may synchr
 
 ## Agent split
 
-Public Seyal may own agent-native primitives that are valuable without proprietary services, such as execution/task identity, attention/approval primitives, terminal-safe integration points and support for external/user-provided agents when justified by milestones.
+Two product terms are intentionally distinct:
 
-Commercial Seyal may own hosted model access, managed orchestration/routing, commercial agent UX/services, account/usage systems, collaboration and managed policy implementations.
+```text
+Seyal Agent Sessions
+= OSS understanding/management of agent sessions running in Seyal
+
+Seyal AI Agent
+= separate first-party Seyal agent product/composition
+```
+
+`docs/product/SEYAL-AGENT-SESSIONS.md` is the OSS product contract for the first term.
+
+Public Seyal may own agent-native primitives that are valuable without proprietary services, including:
+
+- execution/task/`AgentRun` identity;
+- harness capability and event seams;
+- terminal-safe support for external/user-provided agent CLIs;
+- agent session detection, status, Attention and local notifications;
+- local context/evaluation/routing/workflow primitives when independently useful to OSS consumers;
+- provider-neutral model/control interfaces when justified by milestones.
+
+An external agent must remain a valid ordinary terminal/TUI workload even when Seyal has no adapter for it. Seyal Agent Sessions must never require a Seyal AI subscription, hosted inference, account, entitlement or cloud service.
+
+The first-party Seyal AI Agent may reuse the same public `WorkItem` / `Attempt` / `AgentRun` / `Attention` / execution model and appear through the same Agent Sessions UX. That reuse does not move commercial product logic into OSS and does not create a second session authority.
+
+Commercial Seyal may own the first-party paid/service composition above those seams, including managed or bundled model access, proprietary harness/service policy, hosted/cloud agents, adaptive/learned routing, account/usage systems, commercial collaboration, managed enterprise policy and future proprietary Seyal-model IP.
 
 This is a repository/product boundary only; implementation remains milestone-driven.
 

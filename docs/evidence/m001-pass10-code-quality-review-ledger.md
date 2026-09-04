@@ -93,11 +93,15 @@ The repository tree for the starting candidate is the inventory source; director
 ### F-002 — reconcile stale Pass 7/9/UI open Issues
 
 - **Severity:** IMPORTANT
-- **Status:** OPEN — Issue-authority reconcile (no production PR)
+- **Status:** RESOLVED — Issue-authority hygiene complete (no production code)
 - **Owning Issue:** #752
-- **PR:** none (Issue-authority / status-truth only)
-- **Evidence:** open Issues (#706/#725/#730/#654/#73 and related) still claim unfinished Pass 1–9 work even though production landed and #5/#719 record those passes Done; #663 remains later-milestone work.
-- **Required resolution:** close or retarget stale Issues to current authority without inventing unfinished M001 production work.
+- **PR:** none required for production; ledger disposition note on #749
+- **Evidence (pre-fix):** open Issues (#706/#725/#730/#654/#73) still claimed unfinished Pass 1–9 work even though production landed and #5/#719 record those passes Done; #663 remains later-milestone work; PR #742 still Refs #654 for new UI chrome.
+- **Disposition (2026-09-04):**
+  - Closed completed/historical with evidence comments: #706 (PR #707 → `4490d89…`), #725 (#719 Done + `docs/evidence/pass9-production-budget-calibration.md`), #730 (PR #731 → `1a1bb43…`), #654 (PR #655 → `c9311ae…`), #73 (PR #74 → `3d98e84…` + `M001-FIRST-UI-DESIGN.md`).
+  - Clarified and retitled #663 as post-multipane / later-milestone; kept open; not an M001 Pass 10 blocker; M001 not expanded.
+  - Created owning Issue #773 for remaining left-context press-preview work; rehomed open PR #742 from #654 → #773.
+- **Required resolution:** ~~close or retarget stale Issues~~ **done.** Active M001 blockers remain #5 and #727 (plus other open Pass 10 finding Issues).
 
 ### F-003 — remaining Pass 9 / scaffolding status drift
 
@@ -197,7 +201,7 @@ Issue-authority finding #752 has no production path row; disposition is tracked 
 | Finding | Severity | Owning Issue | PR | Re-review required | Final disposition |
 |---|---|---|---|---|---|
 | F-001 stale Pass 9-blocked Pass 10 protocol wording | IMPORTANT | #748 | #751 | yes — documentation/authority | open — PR open |
-| F-002 stale Pass 7/9/UI Issues | IMPORTANT | #752 | none (Issue-authority only) | yes — Issue/status truth | open — reconcile Issues |
+| F-002 stale Pass 7/9/UI Issues | IMPORTANT | #752 | none (Issue-authority only; rehome #773 / PR #742) | yes — Issue/status truth (spot-check) | **RESOLVED** — closed #706/#725/#730/#654/#73; #663 clarified later-milestone; PR #742 → #773 |
 | F-003 remaining Pass 9 / scaffolding status drift | IMPORTANT | #753 | #763 | yes — documentation/authority | open — PR open |
 | F-004 display/Metal hot-path registry | IMPORTANT | #754 | #761 | yes — perf registry | open — PR open |
 | F-005 CI reproducibility honesty / pins | IMPORTANT | #755 | #769 | yes — CI/supply-chain | open — PR open |

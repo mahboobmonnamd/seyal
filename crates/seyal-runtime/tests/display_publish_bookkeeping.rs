@@ -168,8 +168,7 @@ impl Harness {
     }
 
     fn expect_error(&mut self, client: &mut Client, offending: MessageType) {
-        let (kind, payload) =
-            self.expect_frame(client, Instant::now() + Duration::from_secs(3));
+        let (kind, payload) = self.expect_frame(client, Instant::now() + Duration::from_secs(3));
         assert_eq!(kind, MessageType::Error as u16);
         let error = ErrorMessage::decode(&payload).expect("ErrorMessage");
         assert_eq!(error.error_code, ErrorCode::DisplayUnavailable as u16);
@@ -289,10 +288,8 @@ fn encode_failure_does_not_advance_published_and_viewers_recover_together() {
         assert!(
             matches!(
                 (controller_kind, observer_kind),
-                (
-                    MessageType::DisplaySnapshot,
-                    MessageType::DisplaySnapshot
-                ) | (MessageType::DisplayDelta, MessageType::DisplayDelta)
+                (MessageType::DisplaySnapshot, MessageType::DisplaySnapshot)
+                    | (MessageType::DisplayDelta, MessageType::DisplayDelta)
             ),
             "viewers received mismatched recovery kinds: {controller_kind:?}/{observer_kind:?}"
         );

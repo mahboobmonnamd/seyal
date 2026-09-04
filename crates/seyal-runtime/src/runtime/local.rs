@@ -1679,9 +1679,11 @@ impl Runtime {
             // `published` tracks the last generation successfully encoded for
             // fanout. Advancing it after DisplayUnavailable would make later
             // deltas use a base no viewer received (multi-viewer split-brain).
-            let dimensions_changed = previous
-                .is_some_and(|value| value.rows != update.rows || value.columns != update.columns);
-            let encode_ok = if previous.is_none() || dimensions_changed {
+            let use_snapshot = match previous {
+                None => true,
+                Some(value) => value.rows != update.rows || value.columns != update.columns,
+            };
+            let encode_ok = if use_snapshot {
                 match self.encode_projection_snapshot(execution_id) {
                     Some(batch) => {
                         for (_, token) in &viewers {
@@ -1701,8 +1703,8 @@ impl Runtime {
                         false
                     }
                 }
-            } else {
-                let base_generation = previous.expect("delta fanout requires published base").generation;
+            } else if let Some(previous) = previous {
+                let base_generation = previous.generation;
                 match self.encode_projection_delta(&update, base_generation) {
                     Ok(delta) => {
                         for (_, token) in viewers {
@@ -1733,6 +1735,8 @@ impl Runtime {
                         false
                     }
                 }
+            } else {
+                false
             };
 
             if let Some(state) = self.local_ipc.as_mut() {
@@ -1754,10 +1758,7 @@ impl Runtime {
         }
     }
 
-    fn encode_projection_snapshot(
-        &self,
-        execution_id: ExecutionId,
-    ) -> Option<EncodedDisplayBatch> {
+    fn encode_projection_snapshot(&self, execution_id: ExecutionId) -> Option<EncodedDisplayBatch> {
         #[cfg(feature = "test-fault-injection")]
         if test_fault::take(FaultPoint::DisplayEncode) {
             return None;

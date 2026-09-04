@@ -1,13 +1,10 @@
 import AppKit
 import Foundation
 
-/// Pass 9 release-qualification Track C: dead-key / IME / VoiceOver-facing
-/// accessibility through the production `NSTextInputClient` surface (#736).
-///
-/// This drives `InteractiveMetalSurfaceView` itself — not a parallel mock
-/// composition model. Marked text must remain off the terminal transcript and
-/// off the accessibility value; commit/cancel must clear composition; candidate
-/// geometry must stay finite; recovery accessibility must stay discoverable.
+/// Pass 9 release-qualification Track C (partial for #736): dead-key / IME
+/// through the production `NSTextInputClient`, plus VoiceOver-*facing* AX field
+/// checks. This does **not** enable system VoiceOver or prove focus/announcement
+/// after reconnect — that remains an open #736 gate.
 @MainActor
 enum Pass9InputAccessibilityQualification {
   struct Result: Codable {
@@ -18,11 +15,12 @@ enum Pass9InputAccessibilityQualification {
     let imeReplacementCommit: Bool
     let markedTextAbsentFromAccessibilityValue: Bool
     let candidateRectFinite: Bool
-    let voiceOverDiscoverableDisconnected: Bool
-    let voiceOverDiscoverableAfterRefresh: Bool
+    let voiceOverFacingAxFieldsDisconnected: Bool
+    let voiceOverFacingAxFieldsAfterRefresh: Bool
     let acceptsFirstResponder: Bool
     let pass7InputSelfTest: Bool
     let overallPass: Bool
+    let voiceOverClaim: String
   }
 
   static func run(commit: String? = nil) -> Bool {
@@ -40,11 +38,14 @@ enum Pass9InputAccessibilityQualification {
       imeReplacementCommit: checks["ime_replacement_commit"] ?? false,
       markedTextAbsentFromAccessibilityValue: checks["marked_text_absent_from_ax_value"] ?? false,
       candidateRectFinite: checks["candidate_rect_finite"] ?? false,
-      voiceOverDiscoverableDisconnected: checks["vo_discoverable_disconnected"] ?? false,
-      voiceOverDiscoverableAfterRefresh: checks["vo_discoverable_after_refresh"] ?? false,
+      voiceOverFacingAxFieldsDisconnected: checks["vo_facing_ax_disconnected"] ?? false,
+      voiceOverFacingAxFieldsAfterRefresh: checks["vo_facing_ax_after_refresh"] ?? false,
       acceptsFirstResponder: checks["accepts_first_responder"] ?? false,
       pass7InputSelfTest: checks["pass7_input_self_test"] ?? false,
-      overallPass: overall
+      overallPass: overall,
+      voiceOverClaim:
+        "VoiceOver-facing AX role/label/frame/recovery fields only; "
+        + "system VoiceOver focus/announcement/reconnect discoverability not claimed"
     )
 
     if let out = outputPathArgument() {
@@ -162,7 +163,7 @@ enum Pass9InputAccessibilityQualification {
     let elementOK = surface.isAccessibilityElement()
     let frame = surface.accessibilityFrame()
     let value = String(describing: surface.accessibilityValue() ?? "")
-    checks["vo_discoverable_disconnected"] =
+    checks["vo_facing_ax_disconnected"] =
       roleOK
       && labelOK
       && elementOK
@@ -173,7 +174,7 @@ enum Pass9InputAccessibilityQualification {
     let value2 = String(describing: surface.accessibilityValue() ?? "")
     // Harness surface is intentionally disconnected; require stable typed fields
     // and that refresh does not invent a usable connection claim.
-    checks["vo_discoverable_after_refresh"] =
+    checks["vo_facing_ax_after_refresh"] =
       value2.contains("connection=disconnected")
       && value2.contains("runtime=none")
       && value2.contains("execution=none")

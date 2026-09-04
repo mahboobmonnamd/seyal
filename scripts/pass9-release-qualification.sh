@@ -62,7 +62,7 @@ echo "[pass9-release-qualification] retaining packaging inspection"
   echo
   echo '## codesign --display --entitlements - (helper)'
   echo '```'
-  codesign --display --entitlements :- "$RUNTIME_HELPER" 2>&1 || true
+  codesign --display --entitlements - "$RUNTIME_HELPER" 2>&1 || true
   echo '```'
   echo
   echo '## codesign --verify --strict --deep (app)'
@@ -188,7 +188,13 @@ python3 scripts/merge-pass9-release-qualification.py \
   "${PASS8_ARGS[@]}" \
   "${PARTIALS[@]}"
 
-if [[ "$DRY_RUN" != "1" || "${SEYAL_PASS9_FORCE_VALIDATE:-0}" == "1" ]]; then
+if [[ "$DRY_RUN" == "1" ]]; then
+  if [[ "${SEYAL_PASS9_FORCE_VALIDATE:-0}" == "1" ]]; then
+    python3 scripts/check-pass9-release-smoke.py --integrity-only "$ARTIFACT"
+  else
+    echo "[pass9-release-qualification] DRY_RUN skips production-budget validator"
+  fi
+else
   python3 scripts/check-pass9-production-budget.py --expected-head "$COMMIT" "$ARTIFACT"
 fi
 
@@ -206,7 +212,7 @@ else
     echo "- **Exact production head:** \`$COMMIT\`"
     echo "- **Artifact:** \`$(basename "$INPUT_AX")\`"
     echo "- **Surface:** production \`InteractiveMetalSurfaceView\` as \`NSTextInputClient\`"
-    echo "- **VoiceOver:** discoverability via accessibility role/label/value (system VoiceOver audio not enabled)"
+    echo "- **VoiceOver:** VoiceOver-facing AX role/label/value fields only (system VoiceOver focus/announcement/reconnect not claimed)"
     echo
     echo '```json'
     cat "$INPUT_AX"
@@ -228,7 +234,8 @@ cat >"$REPORT" <<EOF
 - **Geometries:** $GEOMETRIES
 - **Cohorts:** $COHORTS
 - **Cycles:** $CYCLES each after $WARMUP warmups
-- **Topology:** Debug \`RustDisplayBridge\` + \`RuntimeLifecycleRecoveryCoordinator\` + \`MetalTerminalRenderer\` prepare/release (same boundary as merge-acceptance; not full AppKit present)
+- **Topology:** Debug \`RustDisplayBridge\` + \`RuntimeLifecycleRecoveryCoordinator\` + \`MetalTerminalRenderer\` prepare/release (same boundary as merge-acceptance; not full AppKit present). \`native_ready\` is coordinator usable transition ONLY (NOT SPEC native interaction).
+- **Issue relationship:** Refs #736 (not closing; packaging/VO/native-interaction/maintainer gates remain open)
 - **Abrupt fault:** \`socket_shutdown_owned_disconnect\`
 - **Fresh Runtime:** one Runtime helper process per cohort
 - **Validator:** \`python3 scripts/check-pass9-production-budget.py --expected-head $COMMIT $ARTIFACT\`

@@ -10,14 +10,6 @@ from pathlib import Path
 from typing import Any
 
 
-RECOVERY = {
-    "attempts": 7,
-    "retry_delays_ms": [10, 20, 40, 80, 160, 250],
-    "deadline_ms": 1000,
-    "launches_per_episode_max": 1,
-}
-
-
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("partials", nargs="+", type=Path)
@@ -30,6 +22,7 @@ def main() -> int:
 
     cohorts: list[dict[str, Any]] = []
     notes: list[str] = []
+    recovery: dict[str, Any] | None = None
     for path in args.partials:
         document = json.loads(path.read_text(encoding="utf-8"))
         if document.get("schema") != "seyal.pass9.production-budget.v1":
@@ -37,6 +30,15 @@ def main() -> int:
             return 1
         if document.get("commit") != args.commit:
             print(f"commit mismatch in {path}", file=sys.stderr)
+            return 1
+        partial_recovery = document.get("recovery")
+        if not isinstance(partial_recovery, dict):
+            print(f"missing recovery in {path}", file=sys.stderr)
+            return 1
+        if recovery is None:
+            recovery = partial_recovery
+        elif recovery != partial_recovery:
+            print(f"recovery mismatch in {path}", file=sys.stderr)
             return 1
         partial_cohorts = document.get("cohorts")
         if not isinstance(partial_cohorts, list) or not partial_cohorts:
@@ -47,11 +49,15 @@ def main() -> int:
         if isinstance(note, str) and note and note not in notes:
             notes.append(note)
 
+    if recovery is None:
+        print("no partials supplied recovery", file=sys.stderr)
+        return 1
+
     artifact: dict[str, Any] = {
         "schema": "seyal.pass9.production-budget.v1",
         "measurement_source": "supplied_exact_head_evidence",
         "commit": args.commit,
-        "recovery": RECOVERY,
+        "recovery": recovery,
         "cohorts": cohorts,
     }
     if notes:
@@ -67,8 +73,6 @@ def main() -> int:
             pass8["root_cause_explanation"] = args.pass8_explanation
         artifact["pass8"] = pass8
     else:
-        # Validator requires pass8 with ENFORCED_CONTROLLED_HOST. Omit until
-        # Track B supplies attribution; dry-run skips the budget validator.
         artifact["pass8"] = {
             "paired_delta_percent": 0.0,
             "gate": "PENDING_CONTROLLED_HOST",

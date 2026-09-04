@@ -41,10 +41,10 @@ use crate::block::{BlockApply, BlockCache, is_epoch_quarantined, quarantine_epoc
 /// Pass 9 owns one wall-clock second for discovery, handshake, attach and the
 /// initial authoritative snapshot.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(1);
-/// Cap busy-yield bursts so a stalled peer cannot pin a core forever while the
-/// startup deadline still has time remaining.
-const STARTUP_YIELD_BATCH: u32 = 64;
-const STARTUP_YIELD_PAUSE: Duration = Duration::from_micros(10);
+/// Cap busy-yield avoidance: exponential backoff sleep on WouldBlock.
+/// Starts at 50µs and doubles to a 1ms cap so a stalled peer cannot pin a core.
+const STARTUP_BACKOFF_INITIAL: Duration = Duration::from_micros(50);
+const STARTUP_BACKOFF_CAP: Duration = Duration::from_millis(1);
 const READ_CHUNK_BYTES: usize = 64 * 1024;
 const MAX_BUFFERED_BYTES: usize = (MAX_FRAME_PAYLOAD as usize + HEADER_LEN) * 2;
 const MAX_FRAMES_PER_POLL: usize = 64;
@@ -1700,15 +1700,16 @@ fn configure_startup_timeout(stream: &UnixStream, deadline: Instant) -> Result<(
     stream.set_nonblocking(true).map_err(|_| ClientError::Io)
 }
 
-fn wait_startup_peer(deadline: Instant, yield_count: &mut u32) -> Result<(), ClientError> {
+fn wait_startup_peer(deadline: Instant, wait_count: &mut u32) -> Result<(), ClientError> {
     startup_remaining(deadline)?;
-    *yield_count = yield_count.saturating_add(1);
-    if *yield_count >= STARTUP_YIELD_BATCH {
-        *yield_count = 0;
-        std::thread::sleep(STARTUP_YIELD_PAUSE);
-    } else {
-        std::thread::yield_now();
-    }
+    *wait_count = wait_count.saturating_add(1);
+    // Exponential backoff (50µs → 1ms cap). Prefer sleeping over yield-spin so a
+    // stalled peer cannot pin a core for the full STARTUP_TIMEOUT.
+    let shift = (*wait_count - 1).min(5);
+    let delay = STARTUP_BACKOFF_INITIAL
+        .saturating_mul(1u32 << shift)
+        .min(STARTUP_BACKOFF_CAP);
+    std::thread::sleep(delay);
     Ok(())
 }
 

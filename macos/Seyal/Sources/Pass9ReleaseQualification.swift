@@ -41,9 +41,10 @@ enum Pass9ReleaseQualification {
     var renderer: MetalTerminalRenderer?
     var lastColumns: Int = 0
     var lastRows: Int = 0
-    /// SPEC §16.2 prepared_surface: ensure PreparedSurface + Metal update
-    /// (excludes frame-wait / RunLoop poll).
-    var lastPreparedUpdateNs: UInt64 = 0
+    /// First Metal update after ensure (cold rebuild). Not overwritten by later
+    /// incremental frames during presentConnectedSurface polling.
+    var firstPreparedUpdateNs: UInt64 = 0
+    var captureFirstPreparedUpdate = false
   }
 
   /// Retains the surviving ExecutionId hex so measured reconnects use
@@ -173,8 +174,11 @@ enum Pass9ReleaseQualification {
             backingScale: 2.0,
             forceFullRebuild: forceFull
           )
-          rendererBox.lastPreparedUpdateNs =
-            DispatchTime.now().uptimeNanoseconds &- started
+          let elapsed = DispatchTime.now().uptimeNanoseconds &- started
+          if rendererBox.captureFirstPreparedUpdate, rendererBox.firstPreparedUpdateNs == 0 {
+            rendererBox.firstPreparedUpdateNs = elapsed
+            rendererBox.captureFirstPreparedUpdate = false
+          }
         }
       },
       onError: { _ in },
@@ -244,10 +248,14 @@ enum Pass9ReleaseQualification {
         + "not full AppKit window/CAMetalLayer present. "
         + "reconnect_p99=lifecycle-queue attempt body for known ExecutionId "
         + "(open_execution hello/attach; not open_first+ListExecutions); "
-        + "prepared_surface_p99=ensure PreparedSurface + MetalTerminalRenderer.update; "
+        + "prepared_surface_p99=ensure PreparedSurface + FIRST MetalTerminalRenderer.update only; "
+        + "native_ready_p99=coordinator reconstructing→usable transition ONLY "
+        + "(NOT SPEC native first-responder/IME/accessibility interaction; that remains an open #736 gate evidenced partly by UITest); "
         + "cleanup_p99=bridge stop/cancel until live_handles==0; "
-        + "allocator/fd/thread counters are reconnect-owned logical resources "
-        + "(not process-wide phys_footprint/lsof)."
+        + "exact-return uses diag live_handles/pending_handles, process open-fd/thread samples, "
+        + "socket_fd, and renderer surface/GPU flags (not invented connection-boolean proxies); "
+        + "process fd/thread gates are non-growth (±1) because GCD/Metal can jitter bit-exact equality; "
+        + "allocator_in_use_kib fields are unused (0) and are NOT Issue #736 malloc leak evidence."
     )
   }
 
@@ -283,7 +291,7 @@ enum Pass9ReleaseQualification {
       rendererBox: rendererBox,
       geometry: geometry
     )
-    detach(mode: .gracefulDetach, bridge: bridge, coordinator: coordinator, renderer: renderer)
+    detach(mode: mode, bridge: bridge, coordinator: coordinator, renderer: renderer)
     waitQuiescent(bridge: bridge, coordinator: coordinator, renderer: renderer, timeout: 2)
 
     var reconnectNs = [UInt64]()
@@ -324,7 +332,7 @@ enum Pass9ReleaseQualification {
       )
     }
 
-    detach(mode: .gracefulDetach, bridge: bridge, coordinator: coordinator, renderer: renderer)
+    detach(mode: mode, bridge: bridge, coordinator: coordinator, renderer: renderer)
     waitQuiescent(bridge: bridge, coordinator: coordinator, renderer: renderer, timeout: 2)
     let baseline = sample(
       bridge: bridge,
@@ -367,7 +375,7 @@ enum Pass9ReleaseQualification {
       )
     }
 
-    detach(mode: .gracefulDetach, bridge: bridge, coordinator: coordinator, renderer: renderer)
+    detach(mode: mode, bridge: bridge, coordinator: coordinator, renderer: renderer)
     waitQuiescent(bridge: bridge, coordinator: coordinator, renderer: renderer, timeout: 2)
     let finalSample = sample(
       bridge: bridge,
@@ -460,7 +468,8 @@ enum Pass9ReleaseQualification {
     geometryApplied: inout Bool
   ) throws -> CycleTimings {
     attemptTiming.lastAttemptNs = 0
-    rendererBox.lastPreparedUpdateNs = 0
+    rendererBox.firstPreparedUpdateNs = 0
+    rendererBox.captureFirstPreparedUpdate = false
 
     coordinator.beginEpisode()
     try awaitConnected(
@@ -482,7 +491,8 @@ enum Pass9ReleaseQualification {
       )
     }
     let ensureNs = DispatchTime.now().uptimeNanoseconds &- prepareStarted
-    rendererBox.lastPreparedUpdateNs = 0
+    rendererBox.firstPreparedUpdateNs = 0
+    rendererBox.captureFirstPreparedUpdate = true
 
     let applied = try presentConnectedSurface(
       bridge: bridge,
@@ -492,11 +502,12 @@ enum Pass9ReleaseQualification {
       geometry: geometry,
       pollSeconds: measure ? 0.0001 : 0.01
     )
-    let preparedNs = ensureNs &+ rendererBox.lastPreparedUpdateNs
+    let preparedNs = ensureNs &+ rendererBox.firstPreparedUpdateNs
     geometryApplied = geometryApplied || applied
     peakSurfaces = max(peakSurfaces, renderer.hasDedicatedSurfaceResources ? 1 : 0)
     peakGpu = max(peakGpu, renderer.estimatedDedicatedGPUBytes > 0 ? 1 : 0)
 
+    // Coordinator usable transition only — NOT SPEC native first-responder/IME.
     let nativeStarted = DispatchTime.now().uptimeNanoseconds
     if coordinator.state.stage == .reconstructing {
       coordinator.transition(to: .restoringInteraction)
@@ -656,27 +667,27 @@ enum Pass9ReleaseQualification {
     precondition(connected == connectedExpectation)
     let clientRss = medianRssKib(pid: getpid())
     let runtimeRss = runtimePid.map { medianRssKib(pid: $0) } ?? 0
-    // Reconnect-owned logical counters (exact-return gates). Process-wide
-    // phys_footprint/lsof/thcount are too noisy for the frozen 4 KiB / exact
-    // allocator contract; RSS movement remains in runtime/client_rss_delta.
-    let ownedSocket = connected ? 1 : 0
+    // Real samples where available. attachments/controllers track the client
+    // handle table (live_handles), not invented connection booleans.
+    // allocator_in_use_kib is intentionally unused (0): no durable malloc
+    // sampler is wired here — do not treat those fields as leak evidence.
+    let live = Int(diag.live_handles)
     let surface = renderer.hasDedicatedSurfaceResources ? 1 : 0
     let gpu = renderer.estimatedDedicatedGPUBytes > 0 ? 1 : 0
-    let gpuKib = renderer.estimatedDedicatedGPUBytes / 1024
     return ResourceSample(
-      attachments: connected ? 1 : 0,
-      controllers: connected ? 1 : 0,
-      runtimeFds: ownedSocket,
-      clientFds: ownedSocket,
-      runtimeThreads: 0,
-      clientThreads: 0,
-      sockets: connected ? 1 : 0,
+      attachments: live,
+      controllers: live,
+      runtimeFds: runtimePid.map { openFdCount(pid: $0) } ?? 0,
+      clientFds: openFdCount(pid: getpid()),
+      runtimeThreads: runtimePid.map { threadCount(pid: $0) } ?? 0,
+      clientThreads: threadCount(pid: getpid()),
+      sockets: diag.socket_fd >= 0 ? 1 : 0,
       rendererSurfaces: surface,
       rendererGpuResources: gpu,
       pendingResync: Int(diag.pending_handles),
       retryTimers: coordinator.hasScheduledAttempt || coordinator.isActive ? 1 : 0,
-      runtimeAllocatorInUseKib: Int(diag.live_handles),
-      clientAllocatorInUseKib: gpuKib,
+      runtimeAllocatorInUseKib: 0,
+      clientAllocatorInUseKib: 0,
       clientRssKib: clientRss,
       runtimeRssKib: runtimeRss
     )
@@ -778,8 +789,20 @@ enum Pass9ReleaseQualification {
   }
 
   private static func threadCount(pid: Int32) -> Int {
-    integerFromProcess(arguments: ["/bin/ps", "-o", "thcount=", "-p", "\(pid)"]) { lines in
-      Int(lines.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") ?? 0
+    if pid == getpid() {
+      var threadList: thread_act_array_t?
+      var count: mach_msg_type_number_t = 0
+      let result = task_threads(mach_task_self_, &threadList, &count)
+      guard result == KERN_SUCCESS else { return -1 }
+      if let threadList {
+        let bytes = vm_size_t(MemoryLayout<thread_t>.stride * Int(count))
+        vm_deallocate(mach_task_self_, vm_address_t(bitPattern: threadList), bytes)
+      }
+      return Int(count)
+    }
+    // macOS `ps` has no thcount; count `ps -M` rows (header excluded).
+    return integerFromProcess(arguments: ["/bin/ps", "-M", "-p", "\(pid)"]) { lines in
+      max(0, lines.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.count - 1)
     }
   }
 
@@ -909,135 +932,6 @@ enum Pass9ReleaseQualification {
       case .vacuousRendererEvidence(let surfaces, let gpu, let geometryApplied):
         return "vacuous_renderer_evidence:surfaces=\(surfaces):gpu=\(gpu):geometry_applied=\(geometryApplied)"
       }
-    }
-  }
-
-  struct Artifact: Encodable {
-    let schema: String
-    let measurementSource: String
-    let commit: String
-    let recovery: RecoveryContract
-    let cohorts: [Cohort]
-    let pass8: Pass8Attribution?
-    let topologyNote: String
-
-    enum CodingKeys: String, CodingKey {
-      case schema
-      case measurementSource = "measurement_source"
-      case commit
-      case recovery
-      case cohorts
-      case pass8
-      case topologyNote = "topology_note"
-    }
-  }
-
-  struct RecoveryContract: Encodable {
-    let attempts: Int
-    let retryDelaysMs: [Int]
-    let deadlineMs: Int
-    let launchesPerEpisodeMax: Int
-
-    enum CodingKeys: String, CodingKey {
-      case attempts
-      case retryDelaysMs = "retry_delays_ms"
-      case deadlineMs = "deadline_ms"
-      case launchesPerEpisodeMax = "launches_per_episode_max"
-    }
-  }
-
-  struct Pass8Attribution: Encodable {
-    let pairedDeltaPercent: Double
-    let gate: String
-    let cohorts: Int
-    let rootCauseExplanation: String?
-
-    enum CodingKeys: String, CodingKey {
-      case pairedDeltaPercent = "paired_delta_percent"
-      case gate
-      case cohorts
-      case rootCauseExplanation = "root_cause_explanation"
-    }
-  }
-
-  struct Cohort: Encodable {
-    let mode: String
-    let geometry: String
-    let cohort: Int
-    let cycles: Int
-    let reconnectP99Us: Double
-    let cleanupP99Us: Double
-    let preparedSurfaceP99Us: Double
-    let nativeReadyP99Us: Double
-    let detachedCpuSamplesPercent: [Double]
-    let detachedCpuP95Percent: Double
-    let runtimeRssDeltaKib: Int
-    let clientRssDeltaKib: Int
-    let attachmentsBaseline: Int
-    let attachmentsFinal: Int
-    let controllersBaseline: Int
-    let controllersFinal: Int
-    let runtimeFdsBaseline: Int
-    let runtimeFdsFinal: Int
-    let clientFdsBaseline: Int
-    let clientFdsFinal: Int
-    let runtimeThreadsBaseline: Int
-    let runtimeThreadsFinal: Int
-    let clientThreadsBaseline: Int
-    let clientThreadsFinal: Int
-    let socketsBaseline: Int
-    let socketsFinal: Int
-    let rendererSurfacesBaseline: Int
-    let rendererSurfacesFinal: Int
-    let rendererGpuResourcesBaseline: Int
-    let rendererGpuResourcesFinal: Int
-    let pendingResyncBaseline: Int
-    let pendingResyncFinal: Int
-    let retryTimersBaseline: Int
-    let retryTimersFinal: Int
-    let runtimeAllocatorInUseKibBaseline: Int
-    let runtimeAllocatorInUseKibFinal: Int
-    let clientAllocatorInUseKibBaseline: Int
-    let clientAllocatorInUseKibFinal: Int
-    let clientAllocatorDeltaClassification: String
-
-    enum CodingKeys: String, CodingKey {
-      case mode, geometry, cohort, cycles
-      case reconnectP99Us = "reconnect_p99_us"
-      case cleanupP99Us = "cleanup_p99_us"
-      case preparedSurfaceP99Us = "prepared_surface_p99_us"
-      case nativeReadyP99Us = "native_ready_p99_us"
-      case detachedCpuSamplesPercent = "detached_cpu_samples_percent"
-      case detachedCpuP95Percent = "detached_cpu_p95_percent"
-      case runtimeRssDeltaKib = "runtime_rss_delta_kib"
-      case clientRssDeltaKib = "client_rss_delta_kib"
-      case attachmentsBaseline = "attachments_baseline"
-      case attachmentsFinal = "attachments_final"
-      case controllersBaseline = "controllers_baseline"
-      case controllersFinal = "controllers_final"
-      case runtimeFdsBaseline = "runtime_fds_baseline"
-      case runtimeFdsFinal = "runtime_fds_final"
-      case clientFdsBaseline = "client_fds_baseline"
-      case clientFdsFinal = "client_fds_final"
-      case runtimeThreadsBaseline = "runtime_threads_baseline"
-      case runtimeThreadsFinal = "runtime_threads_final"
-      case clientThreadsBaseline = "client_threads_baseline"
-      case clientThreadsFinal = "client_threads_final"
-      case socketsBaseline = "sockets_baseline"
-      case socketsFinal = "sockets_final"
-      case rendererSurfacesBaseline = "renderer_surfaces_baseline"
-      case rendererSurfacesFinal = "renderer_surfaces_final"
-      case rendererGpuResourcesBaseline = "renderer_gpu_resources_baseline"
-      case rendererGpuResourcesFinal = "renderer_gpu_resources_final"
-      case pendingResyncBaseline = "pending_resync_baseline"
-      case pendingResyncFinal = "pending_resync_final"
-      case retryTimersBaseline = "retry_timers_baseline"
-      case retryTimersFinal = "retry_timers_final"
-      case runtimeAllocatorInUseKibBaseline = "runtime_allocator_in_use_kib_baseline"
-      case runtimeAllocatorInUseKibFinal = "runtime_allocator_in_use_kib_final"
-      case clientAllocatorInUseKibBaseline = "client_allocator_in_use_kib_baseline"
-      case clientAllocatorInUseKibFinal = "client_allocator_in_use_kib_final"
-      case clientAllocatorDeltaClassification = "client_allocator_delta_classification"
     }
   }
 }

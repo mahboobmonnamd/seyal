@@ -1,30 +1,51 @@
 # Pass 9 release-qualification findings (Issue #736)
 
-**Frozen production head under test:** `21e8e6976c3445ca582bcfe6dd157109cfccdfd1`  
-**Evidence:**
-- `docs/evidence/pass9-release-qualification-21e8e6976c34.json` — validator **PASS**
-- `docs/evidence/pass9-input-accessibility-21e8e6976c34.json` — Track C **PASS**
-- `docs/evidence/pass9-release-packaging-21e8e6976c34.md`
-- `docs/evidence/pass9-production-budget-calibration.md`
+**Status:** `PARTIAL — Refs #736` (not release-qualified; not closing)
 
-## Decision
+**PR relationship:** **`Refs #736`** — do **not** use `Closes #736` until the Issue DoD is fully evidenced.
 
-Optimize the permanent reconnect path **and** recalibrate absolute µs / RSS gates from post-opt controlled evidence.
+## What this PR may claim
 
-## Product optimizations
+- Release-qualification **harness** + calibrated production-budget validator path
+- Deferred `prepare_cache` / ensure-prepared split (SPEC-aligned)
+- Exact-head matrix tooling and Pass 8 attribution collection
+- Dead-key / IME through production `NSTextInputClient`
+- VoiceOver-**facing** AX field checks only (not system VO focus/announcement/reconnect)
+- Honest measurement labeling after harness integrity remediation (see below)
+- Reviewable security outcome: `docs/evidence/pass9-security-review-745.md`
 
-1. Startup UDS `WouldBlock` waits use yield + occasional 10 µs pause.
-2. Lazy `prepare_cache` after attach.
-3. SPEC-aligned harness boundaries; `native_ready` measures restoringInteraction→usable after surface arming (not pre-advanced inside prepared_surface).
+## Harness integrity remediation (this tip)
 
-## Full matrix (5×2×2 on `21e8e6976c34`)
+Addressed review blockers without claiming #736 Done:
 
-Validator PASS. Pass 8 `ENFORCED_CONTROLLED_HOST` included.
+| Finding | Remediation |
+| --- | --- |
+| Vacuous `native_ready` | Relabeled: coordinator `reconstructing→usable` only; topology requires `NOT SPEC` native interaction |
+| Synthetic resource proxies | `live_handles` / process fd+thread samples / `socket_fd` / renderer flags; allocator fields unused (0) |
+| Abrupt baseline after graceful detach | Pre/post-warmup/final detach uses cohort `mode` |
+| `prepared_surface` last-frame overwrite | Captures **first** post-ensure Metal update only |
+| Merge hard-coded `recovery` | Merge reads/validates `recovery` from partials |
+| WouldBlock busy-yield | Exponential sleep backoff (50µs→1ms) |
+| File >1000 lines | Models split to `Pass9ReleaseQualificationModels.swift` (~937 + ~131) |
+| VO overclaim | Track C claim narrowed in code + orchestrator report |
+| Security asserted only | Retained `pass9-security-review-745.md` |
+| `Closes #736` dishonest | PR must be **`Refs #736`** |
 
-## Track C (dead-key / IME / VoiceOver-facing)
+Dry-run integrity check (`check-pass9-release-smoke.py --integrity-only`) passes on tip after these fixes. That is **not** a full 5×2×2 production-budget PASS.
 
-Production `InteractiveMetalSurfaceView` as `NSTextInputClient` in a real `NSWindow`: marked→commit, cancel, replacement, marked text absent from AX value, non-zero finite candidate rect, VO-facing role/label/frame + disconnected recovery fields.
+## Historical note on `21e8e697` evidence
 
-## Reviews / merge
+Retained matrix for `21e8e6976c34` remains useful for latency/Pass 8 attribution history, but under the honest fd/thread sampler + non-vacuous baseline rules the production-budget validator **no longer PASSes** that artifact (baselines were synthetic zeros). Do not treat that head as Issue #736 resource-leak completion evidence.
 
-Security review: no medium+ findings. Bugbot findings addressed in this head. Do not merge without explicit confirmation.
+## What remains open on #736
+
+- SPEC native interaction readiness measurement (first-responder/IME/AX after reconnect)
+- Real VoiceOver discovery/focus/announcement after reconnect
+- Durable Team-identity Release packaging / trust evidence
+- Fresh full 5×2×2 exact-head matrix PASS after harness remediation
+- Independent non-implementer maintainer approval
+- Issue checkbox updates to match verified reality
+
+## Security
+
+See `docs/evidence/pass9-security-review-745.md` (no medium+ findings; packaging Team-identity remains an open process gate).

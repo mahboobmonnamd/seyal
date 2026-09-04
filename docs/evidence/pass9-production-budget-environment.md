@@ -1,34 +1,22 @@
 # Pass 9 production budget environment report
 
-- **Status:** `RELEASE_QUALIFICATION_EVIDENCE_COMPLETE_ON_21e8e6976c34`
+- **Status:** `PARTIAL_HARNESS_REFS_736`
 - **Issue:** #736
 - **Date:** 2026-09-04
 - **Calibration:** `docs/evidence/pass9-production-budget-calibration.md`
-- **Exact production head:** `21e8e6976c3445ca582bcfe6dd157109cfccdfd1`
-- **Matrix artifact:** `docs/evidence/pass9-release-qualification-21e8e6976c34.json` (validator PASS)
-- **Input/accessibility:** `docs/evidence/pass9-input-accessibility-21e8e6976c34.json` (PASS)
+- **Security review:** `docs/evidence/pass9-security-review-745.md`
 
-## Harness
+## Open gates (do not treat as Done)
 
-```sh
-bash scripts/pass9-release-qualification.sh
-python3 scripts/check-pass9-production-budget.py \
-  --expected-head 21e8e6976c3445ca582bcfe6dd157109cfccdfd1 \
-  docs/evidence/pass9-release-qualification-21e8e6976c34.json
-```
+- Independent non-implementer sign-off / maintainer confirmation
+- Durable Team-identity Release signing + packaging qualification
+- SPEC native interaction readiness (not coordinator stage flips)
+- Real VoiceOver focus/announcement/reconnect discoverability
+- Fresh exact-head matrix after harness integrity remediation
 
-## Calibrated absolute timing gates
+## Honest measurement notes
 
-| Gate | Limit |
-| --- | ---: |
-| reconnect_p99 | ≤ 4000 µs |
-| cleanup_p99 | ≤ 250 µs |
-| prepared_surface_p99 | ≤ 1500 µs |
-| native_ready_p99 | ≤ 2000 µs |
-| client_rss_delta | ≤ 1536 KiB |
-
-## Remaining non-evidence items
-
-- Independent human architecture/accessibility review sign-off as required by project policy
-- Explicit maintainer confirmation before merge
-- Paid Apple Developer Team-identity Release signing when that identity is available
+- `native_ready_p99_us` = coordinator `reconstructing→usable` only; excluded from SPEC native-interaction release claims
+- Resource exact-return uses diag `live_handles`/`pending_handles`, process fd/thread samples, `socket_fd`, renderer surface/GPU flags
+- `allocator_in_use_kib` fields are unused (0) and are not malloc leak evidence
+- Packaging retained by the orchestrator is Debug/ad-hoc unless a Developer Team identity is available on the host

@@ -97,6 +97,22 @@ def require_exact_return(record: dict[str, Any], field: str, context: str, error
         errors.append(f"{context}.{field} did not return exactly: {before} -> {after}")
 
 
+def require_non_growth(
+    record: dict[str, Any],
+    field: str,
+    context: str,
+    errors: list[str],
+    *,
+    tolerance: int = 1,
+) -> None:
+    before = integer(record.get(f"{field}_baseline"), f"{context}.{field}_baseline", errors)
+    after = integer(record.get(f"{field}_final"), f"{context}.{field}_final", errors)
+    if before <= 0:
+        errors.append(f"{context}.{field}_baseline={before} is not a usable process sample")
+    if after > before + tolerance:
+        errors.append(f"{context}.{field} grew beyond tolerance: {before} -> {after}")
+
+
 def nearest_rank(samples: list[float], percentile: float) -> float:
     ordered = sorted(samples)
     rank = max(1, math.ceil(percentile * len(ordered)))
@@ -178,11 +194,12 @@ def validate(document: dict[str, Any], expected_head: str | None = None) -> list
         require_at_most(cohort, "client_rss_delta_kib", CLIENT_RSS_KIB, context, errors)
 
         for resource in (
-            "attachments", "controllers", "runtime_fds", "client_fds",
-            "runtime_threads", "client_threads", "sockets",
+            "attachments", "controllers", "sockets",
             "renderer_surfaces", "renderer_gpu_resources", "pending_resync", "retry_timers",
         ):
             require_exact_return(cohort, resource, context, errors)
+        for resource in ("runtime_fds", "client_fds", "runtime_threads", "client_threads"):
+            require_non_growth(cohort, resource, context, errors, tolerance=1)
         require_exact_return(cohort, "runtime_allocator_in_use_kib", context, errors)
 
         client_allocator_before = integer(

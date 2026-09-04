@@ -9,6 +9,8 @@ This document sharpens existing product contracts already represented by `SY-007
 
 It is **not** a second feature registry and does not authorize implementation ahead of the owning milestone. The canonical feature inventory remains `docs/product/FEATURES.md`.
 
+`docs/product/SEYAL-AGENT-SESSIONS.md` defines the product terminology for observing and managing external/user-provided agent sessions. The separate first-party **Seyal AI Agent** may project through the same canonical `AgentRun`/Attention/session UX, but its subscription, managed inference and proprietary service behavior are not defined by this OSS refinement.
+
 ## 1. Product outcome
 
 Seyal should let humans and agents coordinate many independent or cooperating executions without turning the terminal into an agent-specific UI or making agent state authoritative over terminal state.
@@ -159,9 +161,11 @@ The authoritative model remains the capability-scoped Control API (`SY-011`). It
 
 This refines `SY-002`, `SY-010`, `SY-011`, `F-118`, `F-143`, `F-150`, `F-222` and M006 issue #683.
 
-## 6. Agent lifecycle, status lanes and Attention
+## 6. Seyal Agent Sessions lifecycle, status lanes and Attention
 
-Seyal should summarize many running agents/workspaces without forcing users to watch terminal output.
+Seyal should summarize many running agents/workspaces without forcing users to watch terminal output. This is the **Seyal Agent Sessions** experience: it applies to supported external/user-provided agents and may also present the first-party Seyal AI Agent through the same canonical projection.
+
+An unsupported or unknown agent remains an ordinary terminal/TUI workload; rich recognition is additive and must never be required for execution correctness.
 
 ### Contract
 
@@ -170,6 +174,8 @@ Seyal should summarize many running agents/workspaces without forcing users to w
 - Derived status lanes such as `working`, `needs attention`, `needs review`, `ready`, `failed` or `completed` may be shown as filters/boards, but must not silently reorder or redefine Workspace identity.
 - Attention remains the canonical human-intervention model for approvals, questions, failures, conflicts and important completion events.
 - Readiness and Attention are related but distinct: readiness describes evidence toward the next action; Attention says a human should act.
+- Agent Sessions must not require a Seyal AI subscription, managed inference, account, entitlement or cloud service.
+- Provider-specific metadata such as resume, changed files, artifacts, token/cache/cost or structured status is shown only when the adapter capability is declared/probed/observed with appropriate provenance.
 
 This refines `SY-006`, `SY-009`, `F-110`–`F-124`, `F-136`, `F-138`, `F-162` and `F-202`.
 

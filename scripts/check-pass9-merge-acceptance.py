@@ -19,10 +19,10 @@ MODES = ("graceful_detach", "abrupt_socket_loss")
 MIN_CYCLES = 100
 RETRY_DELAYS_MS = [10, 20, 40, 80, 160, 250]
 RUNTIME_RSS_KIB = 1_024
-# Debug Metal shared-atlas reclaim is not page-tight; logical renderer_*
-# exact-return remains the hard gate. This soft ceiling absorbs allocator
-# noise from 120×40 prepare/release cycles without claiming a Release budget.
-CLIENT_RSS_KIB = 48 * 1024
+# Soft merge-safety ceiling for client process RSS delta. Logical renderer_*
+# exact-return / peak_connected remain the hard Metal proof. Current exact-head
+# evidence stays well under this value after the Metal prepare/release path.
+CLIENT_RSS_KIB = 768
 RECONNECT_P99_US = 50_000.0  # merge-safety soft gate for full native recovery path
 
 EXACT_RETURN_FIELDS = (

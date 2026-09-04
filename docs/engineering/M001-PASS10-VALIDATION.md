@@ -283,12 +283,15 @@ Audit the registry against the final production surfaces, then run every applica
 - local binary protocol decode;
 - Candidate-D display decode/client state;
 - attachment/reconnect/resync state machine;
+- Pass 7 protocol decoders (`TerminalKey`, resize, composer, history/timeline);
 - BlockState decode;
-- any additional final Pass 9 decoder/state-machine surface required by its accepted implementation contract.
+- any additional final Pass 9 decoder/state-machine surface required by its accepted implementation contract (or an explicit `N/A` with architecture proof in `docs/engineering/M001-FUZZ-EVIDENCE.md`).
 
 The registry being syntactically green is not enough. A required production surface without real fuzz coverage is `INCONCLUSIVE` and blocks milestone completion.
 
 Foundation fuzz-registry smoke is continuous CI proof of registry/adapter integrity only. Path-filtered ~30s libFuzzer jobs are targeted PR evidence and must be labelled `CI`. They are not continuous campaign coverage and must not be cited alone as Pass 10 “fuzz clean.” See `fuzz/README.md` and `docs/engineering/GITHUB-WORKFLOW.md`.
+
+**Evidence grade (mandatory):** PR CI campaigns at the `ci-smoke` floor (typically ≤30s) **cannot alone** score this criterion `PASS`. Milestone `PASS` requires `nightly-campaign` or `controlled-campaign` provenance on the exact validation head for every applicable active production target, as defined in `docs/engineering/M001-FUZZ-EVIDENCE.md`, or an explicit `N/A` with architecture proof for each remaining gap. Legacy Candidate-B shared-projection comparator rows are not production §6.9 coverage.
 
 ### 6.10 Security and privacy
 

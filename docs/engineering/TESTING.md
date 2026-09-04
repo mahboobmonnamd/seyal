@@ -60,7 +60,7 @@ Material macOS UI changes are incomplete without tests in the same PR.
 
 `tests/fixtures/vt/manifest.toml` is deterministic and `provenance.schema.toml` defines the minimum provenance record for future semantic fixtures. Pass 1 intentionally contains no fake terminal-behavior fixtures; Pass 2 adds the first real VT corpus test-first.
 
-`fuzz/targets.toml` registers the required M001 fuzz surfaces before their implementations exist. A target remains `pending-production-surface` until its owning pass exposes the real API. Pending targets validate corpus/ownership only. They must not use no-op adapters to claim parser, protocol, projection or reconnect coverage. Once a target is `active`, the smoke runner requires and executes its adapter for every retained seed.
+`fuzz/targets.toml` registers the required M001 fuzz surfaces before their implementations exist. A target remains `pending-production-surface` until its owning pass exposes the real API. Pending targets validate corpus/ownership only. They must not use no-op adapters to claim parser, protocol, projection or reconnect coverage. Once a target is `active`, the smoke runner requires and executes its adapter for every retained seed and requires a mapped libFuzzer binary for campaign parity. `non-production-comparator` rows (for example legacy Candidate-B shared-projection) retain corpora/adapters but are not Pass 10 §6.9 production coverage. Pass surface decisions such as Pass 9 `N/A` are recorded in the registry and proven in `docs/engineering/M001-FUZZ-EVIDENCE.md`.
 
 Canonical `make test` and `make check` validate the harness contracts and fuzz registry. `make bench` validates benchmark-environment recording without publishing a performance result.
 

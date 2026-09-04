@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Legacy Candidate-B comparator only. Not production Candidate-D §6.9 coverage.
 input="${1:?retained fuzz seed path is required}"
 SEYAL_FUZZ_INPUT="$input" cargo test --quiet -p seyal-runtime --features benchmark-shared-projection --test shared_projection_fuzz_smoke shared_projection_validation_seed -- --ignored --exact

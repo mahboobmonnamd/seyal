@@ -1,5 +1,5 @@
 [package]
-name = "seyal-pass5-fuzz"
+name = "seyal-m001-fuzz"
 version = "0.0.0"
 edition = "2024"
 publish = false
@@ -12,6 +12,7 @@ libfuzzer-sys = "0.4"
 seyal-exec = { path = "../crates/seyal-exec" }
 seyal-protocol = { path = "../crates/seyal-protocol" }
 seyal-runtime = { path = "../crates/seyal-runtime" }
+seyal-terminal = { path = "../crates/seyal-terminal" }
 
 [[bin]]
 name = "display_decode"
@@ -42,8 +43,29 @@ doc = false
 bench = false
 
 [[bin]]
+name = "pass7_protocol_decode"
+path = "fuzz_targets/pass7_protocol_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "pass8_block_state_decode"
 path = "fuzz_targets/pass8_block_state_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "vt_byte_parser"
+path = "fuzz_targets/vt_byte_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parser_state_mutation"
+path = "fuzz_targets/parser_state_mutation.rs"
 test = false
 doc = false
 bench = false

@@ -82,7 +82,7 @@ fn pass7_runtime_benchmark_marks_locked() -> Pass7RuntimeBenchmarkMarks {
 
 fn mark_pass7_input_admission_locked(queue_bytes: usize) {
     INPUT_ADMISSION_NS.store(pass7_benchmark_now_ns(), Ordering::SeqCst);
-    RUNTIME_QUEUE_HIGH_WATER.fetch_max(queue_bytes, Ordering::SeqCst);
+    observe_runtime_queue_locked(queue_bytes);
     INPUT_ADMISSION_COUNT.fetch_add(1, Ordering::SeqCst);
 }
 
@@ -132,8 +132,7 @@ pub(crate) fn mark_pass7_resize_commit() {
     mark_pass7_resize_commit_locked();
 }
 
-pub(crate) fn observe_runtime_queue(queue_bytes: usize) {
-    let _guard = marks_lock();
+fn observe_runtime_queue_locked(queue_bytes: usize) {
     RUNTIME_QUEUE_HIGH_WATER.fetch_max(queue_bytes, Ordering::SeqCst);
 }
 

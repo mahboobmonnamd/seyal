@@ -1050,7 +1050,6 @@ enum Pass6RegressionValidation {
       && transientDrawableRecoverySelfTest()
       && RendererValidation.inFlightVisibilityRecoverySelfTest()
       && RendererValidation.failedReplacementInvalidationSelfTest()
-      && RendererValidation.historyPrepareDefersWhileFrameInFlightSelfTest()
       && RustDisplayBridge.teardownReconnectStateSelfTest()
   }
 

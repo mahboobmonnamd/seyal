@@ -310,7 +310,8 @@ enum RendererValidation {
             // lifecycle cleanup, and the production CAMetalLayer path itself.
             guard atlasPressureSelfTest(device: device),
                   try repeatedLifecycleSelfTest(device: device),
-                  try productionLayerPresentSelfTest(device: device)
+                  try productionLayerPresentSelfTest(device: device),
+                  historyPrepareDefersWhileFrameInFlightSelfTest()
             else {
                 return false
             }

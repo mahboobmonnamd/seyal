@@ -63,10 +63,51 @@ so policy differences remain explicit.
 - scalar/UTF-8 length, grapheme count and width for each corpus item;
 - segmentation and width-classification throughput;
 - construction/update proxy timing for the three candidate representations;
-- inline-overflow frequency for clusters longer than four scalars.
+- inline-overflow frequency for clusters longer than four scalars;
+- incremental grapheme growth versus legacy scalar cursor behavior;
+- late width growth at the right margin;
+- overwrite/reclamation pressure for variable-length storage.
 
 These timings are comparative spike evidence only. They are not Seyal
 key-to-photon or production PTY/VT benchmarks.
+
+## Evidence checkpoint
+
+The first CI-backed evidence establishes the following without freezing the
+production architecture:
+
+- the measured text payload is 32 bytes for a per-cell owned `String`, 20 bytes
+  for four inline Rust `char`s, and 8 bytes for the compact arena reference;
+- the family emoji `👨‍👩‍👧‍👦` is seven scalars, so a fixed four-scalar inline
+  representation already requires an overflow path for an ordinary sequence;
+- a deliberately append-only byte arena retained 800,000 payload bytes after
+  100,000 overwrites while only 25 bytes were live, proving that compact cell
+  references alone do not solve bounded-memory ownership;
+- scalar-by-scalar cursor accounting produces width 4 for `👩‍💻` and width 8
+  for the family emoji in this corpus, while the grapheme hypothesis occupies
+  width 2 for each;
+- `❤` followed by VS16 demonstrates late width growth from one to two cells;
+  when the first scalar is already in the final column, the spike detects an
+  unresolved right-edge conflict instead of inventing wrap semantics;
+- ambiguous-width policy is observable (`¡` is width 1 under the ordinary
+  table and width 2 under the CJK table), so width policy must be explicit;
+- the expanded deterministic suite contains 12 tests covering representation,
+  storage and incremental grapheme behavior.
+
+### Candidate status after this checkpoint
+
+**Rejected as the direct production design:**
+
+- one owned `String` per terminal cell;
+- a fixed four-scalar-only cell representation;
+- an append-only global grapheme byte arena.
+
+**Still viable as a design family:**
+
+A compact cell/reference representation backed by **bounded, reclaimable,
+state-owned variable-length text storage**. The exact ownership unit and
+allocator/layout remain intentionally undecided until overwrite, scrollback,
+reflow and projection measurements are combined with #685.
 
 ## Run
 
@@ -79,15 +120,18 @@ cargo run --release --manifest-path spikes/m002-unicode-684/Cargo.toml
 
 This branch is not a merge candidate. Before production implementation:
 
-1. close remaining semantic questions (Unicode-version policy, ambiguous width,
-   mode-2027 compatibility, cluster mutation rules and bounded storage);
+1. close remaining semantic questions (released Unicode-version pinning,
+   ambiguous width, mode-2027/legacy compatibility, cluster mutation and
+   right-edge late-width behavior);
 2. measure representative real terminal feeds and resize/reflow interactions;
 3. validate the macOS IME commit/cancel/coordinate seam without moving preedit
    into terminal authority;
 4. choose projection/wire semantics for multi-scalar clusters and wide-cell
    continuation without making the client cache authoritative;
-5. land the accepted ADR/spec in a separate mergeable architecture PR;
-6. implement clean production code under the promoted M002 implementation
+5. combine bounded text-storage measurements with #685 scrollback/reflow
+   ownership and memory-slope evidence;
+6. land the accepted ADR/spec in a separate mergeable architecture PR;
+7. implement clean production code under the promoted M002 implementation
    issue with TDD, fuzzing and performance gates.
 
 Refs #684

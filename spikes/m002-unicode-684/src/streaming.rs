@@ -175,12 +175,8 @@ pub(crate) fn report_streaming_semantics() {
         }
     }
 
-    let conflict = simulate_grapheme_monotonic(
-        "❤\u{fe0f}",
-        80,
-        79,
-        LateWidenEdgePolicy::DetectConflict,
-    );
+    let conflict =
+        simulate_grapheme_monotonic("❤\u{fe0f}", 80, 79, LateWidenEdgePolicy::DetectConflict);
     let reflow = simulate_grapheme_monotonic(
         "❤\u{fe0f}",
         80,

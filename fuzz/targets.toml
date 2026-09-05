@@ -1,11 +1,17 @@
 version = 1
 
+# Authoritative M001 fuzz registry. Every `active` row must name a libFuzzer
+# binary (`libfuzzer`) whose campaign corpus is either `corpus` or an explicit
+# `campaign_corpus`. Smoke adapters prove retained seeds; libFuzzer campaigns
+# prove mutation coverage. See docs/engineering/M001-FUZZ-EVIDENCE.md.
+
 [[target]]
 name = "vt-byte-parser"
 owner_pass = 2
 status = "active"
 corpus = "fuzz/corpus/vt-byte-parser"
 adapter = "fuzz/targets/vt-byte-parser"
+libfuzzer = "vt_byte_parser"
 
 [[target]]
 name = "parser-state-mutation"
@@ -13,6 +19,7 @@ owner_pass = 2
 status = "active"
 corpus = "fuzz/corpus/parser-state-mutation"
 adapter = "fuzz/targets/parser-state-mutation"
+libfuzzer = "parser_state_mutation"
 
 [[target]]
 name = "local-binary-protocol-decode"
@@ -20,6 +27,7 @@ owner_pass = 5
 status = "active"
 corpus = "fuzz/corpus/local-binary-protocol-decode"
 adapter = "fuzz/targets/local-binary-protocol-decode"
+libfuzzer = "local_binary_protocol_decode"
 
 [[target]]
 name = "display-binary-decode"
@@ -27,13 +35,15 @@ owner_pass = 5
 status = "active"
 corpus = "fuzz/corpus/display-binary-decode"
 adapter = "fuzz/targets/display-binary-decode"
+libfuzzer = "display_decode"
 
 [[target]]
-name = "shared-projection-validation"
+name = "display-state-machine"
 owner_pass = 5
 status = "active"
-corpus = "fuzz/corpus/shared-projection-validation"
-adapter = "fuzz/targets/shared-projection-validation"
+corpus = "fuzz/corpus/display-state-machine"
+adapter = "fuzz/targets/display-state-machine"
+libfuzzer = "display_state_machine"
 
 [[target]]
 name = "reconnect-resync-state-machine"
@@ -41,6 +51,18 @@ owner_pass = 5
 status = "active"
 corpus = "fuzz/corpus/reconnect-resync-state-machine"
 adapter = "fuzz/targets/reconnect-resync-state-machine"
+libfuzzer = "reconnect_resync_state_machine"
+# Structural AttachmentRegistry/recovery campaign is cross-platform; full
+# ConnectionState transitions remain macOS-gated with the production IPC module.
+platform = "all"
+
+[[target]]
+name = "pass7-protocol-decode"
+owner_pass = 7
+status = "active"
+corpus = "fuzz/corpus/pass7-protocol-decode"
+adapter = "fuzz/targets/pass7-protocol-decode"
+libfuzzer = "pass7_protocol_decode"
 
 [[target]]
 name = "block-state-decode"
@@ -48,3 +70,22 @@ owner_pass = 8
 status = "active"
 corpus = "fuzz/corpus/block-state-decode"
 adapter = "fuzz/targets/block-state-decode"
+libfuzzer = "pass8_block_state_decode"
+
+# Legacy Candidate-B shared-projection comparator. Not production Candidate-D
+# coverage. Retained only for isolated comparator evidence behind
+# `benchmark-shared-projection`; never cite as §6.9 production fuzz.
+[[target]]
+name = "shared-projection-validation"
+owner_pass = 5
+status = "non-production-comparator"
+corpus = "fuzz/corpus/shared-projection-validation"
+adapter = "fuzz/targets/shared-projection-validation"
+
+# Pass 9 introduces no additional wire decoder or state-machine trust boundary
+# beyond Pass 5 reconnect/resync, Pass 7 protocol, and Pass 8 BlockState.
+# Continuity/native-ready are integration/perf surfaces, not byte decoders.
+[[surface_decision]]
+owner_pass = 9
+decision = "N/A"
+proof = "docs/engineering/M001-FUZZ-EVIDENCE.md"

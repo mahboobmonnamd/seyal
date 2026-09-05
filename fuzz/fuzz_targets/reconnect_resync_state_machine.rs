@@ -1,20 +1,155 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-
-#[cfg(target_os = "macos")]
 use std::collections::{HashSet, VecDeque};
 
-#[cfg(target_os = "macos")]
 use seyal_runtime::{
     AttachmentId, ExecutionId,
     local_ipc::{
         attachment::AttachmentRegistry,
-        connection::ConnectionState,
-        framing::{MessageType, Role},
+        framing::Role,
         recovery,
     },
 };
+
+#[cfg(target_os = "macos")]
+use seyal_runtime::local_ipc::{
+    connection::ConnectionState,
+    framing::MessageType,
+};
+
+fn forged_attachment(seed: u8) -> AttachmentId {
+    AttachmentId::from_bytes((0xf00d_0000u128 | seed as u128).to_le_bytes())
+}
+
+fn schedule_recovery_twice(
+    queue: &mut VecDeque<u64>,
+    pending: &mut HashSet<u64>,
+    token: u64,
+) {
+    let first = recovery::schedule_snapshot_recovery(queue, pending, token);
+    let second = recovery::schedule_snapshot_recovery(queue, pending, token);
+    assert!(!second, "repeated recovery request must coalesce");
+    assert!(pending.contains(&token));
+    if first {
+        assert_eq!(
+            queue.back().copied(),
+            Some(token),
+            "a newly pending recovery must enqueue the requesting token"
+        );
+    }
+}
+
+/// Cross-platform structural campaign over production AttachmentRegistry and
+/// recovery coalescing. Removes the previous Linux silent no-op while keeping
+/// ConnectionState transitions macOS-gated with the IPC module.
+fn fuzz_attachment_recovery(data: &[u8]) {
+    let execution = ExecutionId::from_bytes(1u128.to_le_bytes());
+    let mut registry = AttachmentRegistry::new();
+    let mut tokens = [1u64, 2u64];
+    let mut attachments = [None::<AttachmentId>, None::<AttachmentId>];
+    let mut next_token = 3u64;
+    let mut recovery_queue = VecDeque::new();
+    let mut recovery_pending = HashSet::new();
+
+    for operation in data.chunks(4).take(128) {
+        if operation.len() < 4 {
+            break;
+        }
+        let index = (operation[0] as usize) & 1;
+        match operation[1] % 7 {
+            0 => {
+                let role = if operation[2] & 1 == 0 {
+                    Role::Observer
+                } else {
+                    Role::Controller
+                };
+                if attachments[index].is_none() {
+                    if let Ok(id) = registry.create_attachment(execution, role, tokens[index]) {
+                        attachments[index] = Some(id);
+                    }
+                }
+            }
+            1 => {
+                let id = if operation[2] & 1 == 0 {
+                    attachments[index].unwrap_or_else(|| forged_attachment(operation[3]))
+                } else {
+                    forged_attachment(operation[3])
+                };
+                if registry.detach_for_connection(tokens[index], id).is_ok()
+                    && attachments[index] == Some(id)
+                {
+                    recovery_pending.remove(&tokens[index]);
+                    attachments[index] = None;
+                }
+            }
+            2 => {
+                let id = if operation[2] & 1 == 0 {
+                    attachments[index].unwrap_or_else(|| forged_attachment(operation[3]))
+                } else {
+                    forged_attachment(operation[3])
+                };
+                if registry.execution_for_connection(tokens[index], id).is_ok() {
+                    schedule_recovery_twice(
+                        &mut recovery_queue,
+                        &mut recovery_pending,
+                        tokens[index],
+                    );
+                }
+            }
+            3 => {
+                let id = if operation[2] & 1 == 0 {
+                    attachments[index].unwrap_or_else(|| forged_attachment(operation[3]))
+                } else {
+                    forged_attachment(operation[3])
+                };
+                let _ = registry.authorize_mutation(tokens[index], id);
+            }
+            4 => {
+                if let Some(id) = attachments[index].take() {
+                    let _ = registry.detach_for_connection(tokens[index], id);
+                }
+                recovery_pending.remove(&tokens[index]);
+                tokens[index] = next_token;
+                next_token = next_token.wrapping_add(1).max(3);
+            }
+            5 => {
+                registry.remove_all_for_execution(execution);
+                for token in &tokens {
+                    recovery_pending.remove(token);
+                }
+                attachments = [None, None];
+            }
+            _ => {
+                if attachments[index].is_some() {
+                    if operation[2] & 1 == 0 {
+                        schedule_recovery_twice(
+                            &mut recovery_queue,
+                            &mut recovery_pending,
+                            tokens[index],
+                        );
+                    } else {
+                        if let Some(token) = recovery_queue.pop_front() {
+                            recovery_pending.remove(&token);
+                        }
+                    }
+                }
+            }
+        }
+
+        for (token, attachment) in tokens.iter().zip(attachments.iter()) {
+            if let Some(id) = attachment {
+                assert_eq!(
+                    registry.execution_for_connection(*token, *id),
+                    Ok(execution)
+                );
+            } else {
+                assert!(!recovery_pending.contains(token));
+            }
+        }
+        assert!(recovery_pending.len() <= tokens.len());
+    }
+}
 
 #[cfg(target_os = "macos")]
 #[derive(Clone, Copy)]
@@ -32,30 +167,6 @@ impl ClientState {
             state: ConnectionState::AwaitHello,
             attachment: None,
         }
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn forged_attachment(seed: u8) -> AttachmentId {
-    AttachmentId::from_bytes((0xf00d_0000u128 | seed as u128).to_le_bytes())
-}
-
-#[cfg(target_os = "macos")]
-fn schedule_recovery_twice(
-    queue: &mut VecDeque<u64>,
-    pending: &mut HashSet<u64>,
-    token: u64,
-) {
-    let first = recovery::schedule_snapshot_recovery(queue, pending, token);
-    let second = recovery::schedule_snapshot_recovery(queue, pending, token);
-    assert!(!second, "repeated recovery request must coalesce");
-    assert!(pending.contains(&token));
-    if first {
-        assert_eq!(
-            queue.back().copied(),
-            Some(token),
-            "a newly pending recovery must enqueue the requesting token"
-        );
     }
 }
 
@@ -236,10 +347,11 @@ fn fuzz_state_machine(data: &[u8]) {
     }
 }
 
+
 fuzz_target!(|data: &[u8]| {
+    // Never silently discard input: Linux/macOS always exercise attachment and
+    // recovery helpers. macOS additionally fuzzes ConnectionState transitions.
+    fuzz_attachment_recovery(data);
     #[cfg(target_os = "macos")]
     fuzz_state_machine(data);
-
-    #[cfg(not(target_os = "macos"))]
-    let _ = data;
 });

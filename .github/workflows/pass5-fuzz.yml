@@ -1,4 +1,4 @@
-name: Pass 5 Production Fuzz
+name: M001 Production Fuzz
 
 on:
   pull_request:
@@ -6,19 +6,43 @@ on:
       - "crates/seyal-runtime/**"
       - "crates/seyal-exec/**"
       - "crates/seyal-protocol/**"
+      - "crates/seyal-terminal/**"
       - "fuzz/**"
+      - "docs/engineering/M001-FUZZ-EVIDENCE.md"
       - ".github/workflows/pass5-fuzz.yml"
+  schedule:
+    # Nightly campaign floors for Pass 10 §6.9 evidence grade.
+    - cron: "17 6 * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  candidate-d-libfuzzer:
+  production-libfuzzer:
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    timeout-minutes: ${{ github.event_name == 'schedule' && 90 || 25 }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Select fuzz evidence grade and campaign floor
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "FUZZ_EVIDENCE_GRADE=nightly-campaign" >> "$GITHUB_ENV"
+            echo "FUZZ_MAX_TOTAL_TIME=600" >> "$GITHUB_ENV"
+          else
+            # pull_request and workflow_dispatch default to ci-smoke so a manual
+            # dispatch cannot be mistaken for milestone evidence unless the
+            # schedule path (or a controlled local campaign) is used.
+            echo "FUZZ_EVIDENCE_GRADE=ci-smoke" >> "$GITHUB_ENV"
+            echo "FUZZ_MAX_TOTAL_TIME=30" >> "$GITHUB_ENV"
+          fi
+          echo "HEAD_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Publish evidence-grade banner
+        run: |
+          echo "FUZZ_EVIDENCE_GRADE=${FUZZ_EVIDENCE_GRADE}"
+          echo "HEAD_SHA=${HEAD_SHA}"
+          echo "FUZZ_MAX_TOTAL_TIME=${FUZZ_MAX_TOTAL_TIME}"
+          echo "ci-smoke cannot alone score Pass 10 §6.9 PASS; see docs/engineering/M001-FUZZ-EVIDENCE.md"
       - name: Install pinned nightly and cargo-fuzz
         run: |
           rustup toolchain install nightly-2026-08-20 --profile minimal
@@ -26,35 +50,72 @@ jobs:
       - name: Verify fuzz workspace lockfile
         working-directory: fuzz
         run: cargo +nightly-2026-08-20 metadata --locked --format-version 1 >/dev/null
+      - name: Validate registry/campaign parity
+        run: python3 scripts/fuzz-smoke.py
       - name: Build production fuzz targets
         working-directory: fuzz
         run: cargo +nightly-2026-08-20 fuzz build
+      - name: Fuzz VT byte parser
+        working-directory: fuzz
+        run: |
+          cargo +nightly-2026-08-20 fuzz run vt_byte_parser corpus/vt-byte-parser -- \
+            -max_total_time=${FUZZ_MAX_TOTAL_TIME} -timeout=10 -rss_limit_mb=1024 -print_final_stats=1
+      - name: Fuzz VT parser/state mutation
+        working-directory: fuzz
+        run: |
+          cargo +nightly-2026-08-20 fuzz run parser_state_mutation corpus/parser-state-mutation -- \
+            -max_total_time=${FUZZ_MAX_TOTAL_TIME} -timeout=10 -rss_limit_mb=1024 -print_final_stats=1
       - name: Fuzz Candidate-D display decoder
         working-directory: fuzz
         run: |
           cargo +nightly-2026-08-20 fuzz run display_decode corpus/display-binary-decode -- \
-            -max_total_time=30 -timeout=10 -rss_limit_mb=1024 -print_final_stats=1
+            -max_total_time=${FUZZ_MAX_TOTAL_TIME} -timeout=10 -rss_limit_mb=1024 -print_final_stats=1
       - name: Fuzz Candidate-D display cache state machine
         working-directory: fuzz
         run: |
-          cargo +nightly-2026-08-20 fuzz run display_state_machine corpus/reconnect-resync-state-machine -- \
-            -max_total_time=30 -timeout=10 -rss_limit_mb=1024 -print_final_stats=1
+          cargo +nightly-2026-08-20 fuzz run display_state_machine corpus/display-state-machine -- \
+            -max_total_time=${FUZZ_MAX_TOTAL_TIME} -timeout=10 -rss_limit_mb=1024 -print_final_stats=1
       - name: Fuzz Candidate-D control/binary protocol decoder
         working-directory: fuzz
         run: |
           cargo +nightly-2026-08-20 fuzz run local_binary_protocol_decode corpus/local-binary-protocol-decode -- \
-            -max_total_time=30 -timeout=10 -rss_limit_mb=1024 -print_final_stats=1
+            -max_total_time=${FUZZ_MAX_TOTAL_TIME} -timeout=10 -rss_limit_mb=1024 -print_final_stats=1
+      - name: Fuzz Pass 7 protocol decoders
+        working-directory: fuzz
+        run: |
+          cargo +nightly-2026-08-20 fuzz run pass7_protocol_decode corpus/pass7-protocol-decode -- \
+            -max_total_time=${FUZZ_MAX_TOTAL_TIME} -timeout=10 -rss_limit_mb=1024 -print_final_stats=1
       - name: Fuzz Pass 8 BlockState decoder
         working-directory: fuzz
         run: |
           cargo +nightly-2026-08-20 fuzz run pass8_block_state_decode corpus/block-state-decode -- \
-            -max_total_time=30 -timeout=10 -rss_limit_mb=1024 -print_final_stats=1
+            -max_total_time=${FUZZ_MAX_TOTAL_TIME} -timeout=10 -rss_limit_mb=1024 -print_final_stats=1
+      - name: Fuzz attachment/recovery reconnect helpers (cross-platform)
+        working-directory: fuzz
+        run: |
+          cargo +nightly-2026-08-20 fuzz run reconnect_resync_state_machine corpus/reconnect-resync-state-machine -- \
+            -max_total_time=${FUZZ_MAX_TOTAL_TIME} -timeout=10 -rss_limit_mb=1024 -print_final_stats=1
 
-  candidate-d-macos-state-fuzz:
+  production-macos-state-fuzz:
     runs-on: macos-14
-    timeout-minutes: 10
+    timeout-minutes: ${{ github.event_name == 'schedule' && 45 || 15 }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Select fuzz evidence grade and campaign floor
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "FUZZ_EVIDENCE_GRADE=nightly-campaign" >> "$GITHUB_ENV"
+            echo "FUZZ_MAX_TOTAL_TIME=600" >> "$GITHUB_ENV"
+          else
+            echo "FUZZ_EVIDENCE_GRADE=ci-smoke" >> "$GITHUB_ENV"
+            echo "FUZZ_MAX_TOTAL_TIME=30" >> "$GITHUB_ENV"
+          fi
+          echo "HEAD_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Publish evidence-grade banner
+        run: |
+          echo "FUZZ_EVIDENCE_GRADE=${FUZZ_EVIDENCE_GRADE}"
+          echo "HEAD_SHA=${HEAD_SHA}"
+          echo "FUZZ_MAX_TOTAL_TIME=${FUZZ_MAX_TOTAL_TIME}"
       - name: Install pinned nightly and cargo-fuzz
         run: |
           rustup toolchain install nightly-2026-08-20 --profile minimal
@@ -69,4 +130,4 @@ jobs:
         working-directory: fuzz
         run: |
           cargo +nightly-2026-08-20 fuzz run reconnect_resync_state_machine corpus/reconnect-resync-state-machine -- \
-            -max_total_time=30 -timeout=10 -rss_limit_mb=1024 -print_final_stats=1
+            -max_total_time=${FUZZ_MAX_TOTAL_TIME} -timeout=10 -rss_limit_mb=1024 -print_final_stats=1

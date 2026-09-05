@@ -159,14 +159,21 @@ def validate_fuzz_registry() -> None:
         "shared-projection-validation",
         "reconnect-resync-state-machine",
         "display-binary-decode",
+        "display-state-machine",
+        "pass7-protocol-decode",
         "block-state-decode",
     }
     names = {target.get("name") for target in targets}
     require(names == expected, f"fuzz registry mismatch: expected {sorted(expected)}, got {sorted(names)}")
 
+    allowed_status = {
+        "pending-production-surface",
+        "active",
+        "non-production-comparator",
+    }
     for target in targets:
         require(
-            target.get("status") in {"pending-production-surface", "active"},
+            target.get("status") in allowed_status,
             f"invalid fuzz status for {target.get('name')}",
         )
         corpus = ROOT / target["corpus"]
@@ -174,7 +181,37 @@ def validate_fuzz_registry() -> None:
         seeds = sorted(path for path in corpus.iterdir() if path.is_file())
         require(seeds, f"fuzz corpus has no retained seed: {target['name']}")
         if target["status"] == "active":
-            require((ROOT / target["adapter"]).is_file(), f"active fuzz target has no adapter: {target['name']}")
+            require(
+                (ROOT / target["adapter"]).is_file(),
+                f"active fuzz target has no adapter: {target['name']}",
+            )
+            require(
+                target.get("libfuzzer"),
+                f"active fuzz target is missing libfuzzer mapping: {target['name']}",
+            )
+        if target["status"] == "non-production-comparator":
+            require(
+                (ROOT / target["adapter"]).is_file(),
+                f"comparator fuzz target has no adapter: {target['name']}",
+            )
+            require(
+                "libfuzzer" not in target,
+                f"comparator fuzz target must not claim production libfuzzer: {target['name']}",
+            )
+
+    decisions = registry.get("surface_decision", [])
+    require(
+        any(
+            decision.get("owner_pass") == 9 and decision.get("decision") == "N/A"
+            for decision in decisions
+        ),
+        "missing Pass 9 fuzz surface_decision N/A",
+    )
+    for decision in decisions:
+        require(
+            (ROOT / decision["proof"]).is_file(),
+            f"surface_decision proof missing: {decision.get('proof')}",
+        )
 
 
 def validate_benchmark_contract() -> None:

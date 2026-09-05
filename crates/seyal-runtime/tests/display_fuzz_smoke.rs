@@ -47,6 +47,60 @@ fn valid_frame() -> Vec<u8> {
 }
 
 #[test]
+#[ignore = "executed by fuzz/targets/display-state-machine with retained seeds"]
+fn display_state_machine_seed() {
+    use seyal_runtime::display::{decode_chunk, empty_cache, encode_snapshot};
+
+    let bytes = input();
+    let rows = 1 + (bytes.first().copied().unwrap_or(1) % 8) as u16;
+    let columns = 1 + (bytes.get(1).copied().unwrap_or(1) % 32) as u16;
+    let total = rows as usize * columns as usize;
+    let cell_seed = |index: usize| bytes.get(index % bytes.len().max(1)).copied().unwrap_or(0);
+    let cells = (0..total)
+        .map(|index| ProjectionCell {
+            scalar: char::from(b' ' + cell_seed(index) % 95),
+            foreground: ProjectionColor::Default,
+            background: ProjectionColor::Default,
+            attributes: ProjectionAttributes {
+                bold: false,
+                underline: false,
+                inverse: false,
+            },
+        })
+        .collect();
+    let snapshot = TerminalProjectionSnapshot {
+        rows,
+        columns,
+        cursor_row: 0,
+        cursor_col: 0,
+        cursor_visible: true,
+        alternate_screen: false,
+        source_damage_generation: 1,
+        damage: ProjectionDamage::full(rows),
+        cells,
+    };
+    let Ok(encoded) = encode_snapshot(&snapshot) else {
+        return;
+    };
+    let chunks: Result<Vec<_>, _> = encoded
+        .frames
+        .iter()
+        .map(|frame| decode_chunk(frame))
+        .collect();
+    let Ok(chunks) = chunks else {
+        return;
+    };
+    let mut cache = empty_cache();
+    let before = cache.clone();
+    if cache.apply_chunks(&chunks).is_err() {
+        assert_eq!(
+            cache, before,
+            "rejected display batch partially mutated cache"
+        );
+    }
+}
+
+#[test]
 #[ignore = "executed by fuzz/targets/display-binary-decode with retained mutation seeds"]
 fn display_binary_decode_seed() {
     let controls = input();

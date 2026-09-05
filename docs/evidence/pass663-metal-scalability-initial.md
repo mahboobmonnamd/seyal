@@ -44,11 +44,7 @@ From `pass663-metal-scalability-initial.log`:
 
 ## Remaining to close #663
 
-1. Controlled-host soak ≥ documented plateau (Issue: ~30 minutes or equivalent).
-2. Headed display-link / visible-pane latency for 1/5/25 visible.
-3. One-noisy vs many-noisy CPU/tail latency.
-4. Explicit judgment vs budgets; fix any material unbounded growth with regression coverage.
-5. Either land M003 topology for honest 5×10×5 product exercise, or refine #663 acceptance to accept harness topology with explicit non-goals.
+Superseded by `docs/evidence/pass663-metal-scalability-final.md` and Issue refine (harness topology accepted; product 5×10×5 → #674).
 
 ## Raw harness output (excerpt)
 

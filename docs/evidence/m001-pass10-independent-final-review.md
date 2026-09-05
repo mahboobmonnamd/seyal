@@ -1,6 +1,6 @@
 # Pass 10 independent final milestone review
 
-**READY — close #727 then #5**
+**READY — #727 and #5 closed**
 
 | Field | Value |
 |---|---|
@@ -39,4 +39,4 @@
 
 ## Close authority
 
-Close owning Issue **#727**, then parent milestone **#5**. Do not reopen Pass 9. Do not raise the 768 KiB soft RSS gate. Do not treat #778 as a production-behavior change.
+Owning Issue **#727** and parent milestone **#5** are **closed**. Do not reopen Pass 9. Do not raise the 768 KiB soft RSS gate. Do not treat #778 as a production-behavior change.

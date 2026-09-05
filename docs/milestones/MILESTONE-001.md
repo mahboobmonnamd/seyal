@@ -1,6 +1,6 @@
 # Milestone 001 — Production Foundation Vertical Slice
 
-**Status:** Passes 1–9 Done; Pass 10 remaining (owning Issue #727). Pass 10 Phase 1 milestone-closure code/quality review is in progress from frozen review candidate `1005bc42397aac485b1aeff08cafd0f67790d969`. Independent final validation is still gated on review completion and final-head freeze. M001 itself is not closed.
+**Status:** **Done / closed.** Passes 1–10 complete. Pass 10 (#727) and parent M001 (#5) are closed on GitHub. Production freeze `d845c6ddbe86f20183186f1aa69f2293aa8356ba` (#776); harness tip `e2b76024de2c85b3e9adb6dd5dcadb7b40881079` (#778); evidence tip `c1246d43869abda194bcc0c678ab8c916c581caf` (#779). Soft RSS gate remains **768 KiB**. Live Pass 10 PASS ledger: `docs/engineering/M001-PASS10-EVIDENCE.md`. Independent review: `docs/evidence/m001-pass10-independent-final-review.md`. Parked post-M001 cohesion/CI follow-ups (#764–#768) are explicitly outside M001 acceptance.
 
 **Authority:** This document is subordinate to the accepted Seyal foundation architecture, its rationale, and accepted ADRs. It narrows that architecture into an implementable M001 slice; it does not reopen accepted foundation decisions.
 
@@ -742,7 +742,7 @@ Use identical workloads. Record latency, CPU, RSS, copies/bytes, allocations, re
 
 No next pass starts until the current pass is working, tested, demonstrable, and benchmarked where relevant.
 
-**Frontier (2026-09-04):** Passes 1–9 are Done on `master`. Pass 10 (#727) is the remaining M001 gate. Required-exit lists below remain the historical pass contracts; they are not open implementation checklists for already-completed passes.
+**Frontier (2026-09-05):** M001 is **Done** on `master` (Passes 1–10). Required-exit lists below remain the historical pass contracts; they are not open implementation checklists. Post-M001 follow-ups (#764–#768) and M002+ are outside this milestone.
 
 ### Pass 1 — Repository/build/test foundation — Done
 
@@ -877,9 +877,9 @@ Required exits:
 - projection resources from dead client are reclaimed;
 - explicit terminate remains distinct from close/detach.
 
-### Pass 10 — Conformance/performance/failure validation — In progress
+### Pass 10 — Conformance/performance/failure validation — Done
 
-Run the complete M001 suite and publish baselines. Owning Issue #727. Phase 1 code/quality review is authorized from frozen candidate `1005bc42397aac485b1aeff08cafd0f67790d969`; Phase 2 final validation remains gated on review completion and final-head freeze.
+Run the complete M001 suite and publish baselines. Owning Issue #727 **closed**. Aggregate PASS ledger: `docs/engineering/M001-PASS10-EVIDENCE.md`. Production freeze `d845c6ddbe86…` (#776); harness tip `e2b7602…` (#778); evidence tip `c1246d4…` (#779). Soft RSS gate **768 KiB** unchanged.
 
 Required exits:
 
@@ -899,7 +899,7 @@ Required exits:
 
 M001 passes only when every item below is demonstrated, not merely represented by interfaces.
 
-These checkboxes remain the **Pass 10 final milestone-validation ledger**. Passes 1–9 production evidence is necessary but not sufficient; Pass 10 (#727) must still mark each criterion `PASS` on the final frozen M001 head. Do not check them from historical CI, merged PR state, or Issue assertions alone.
+These checkboxes are the **historical Pass 10 final milestone-validation contract**. They are satisfied as an aggregate by the live PASS ledger in `docs/engineering/M001-PASS10-EVIDENCE.md` (Pass 10 / #727 closed; parent #5 closed). Do not re-open M001 solely because individual Markdown boxes below remain unchecked; the authoritative closeout evidence is the Pass 10 evidence pack + independent READY review.
 
 ### Architecture
 
@@ -996,7 +996,7 @@ The final M001 demo must be reproducible from a clean checkout/build.
 
 ## 17. Historical readiness check before implementation (superseded)
 
-> **Superseded as a current implementation gate.** Architecture readiness for starting M001 passes was satisfied; Passes 1–9 are Done. The remaining open work is Pass 10 review/validation (#727), not re-opening Pass 1–9 implementation.
+> **Superseded as a current implementation gate.** Architecture readiness for starting M001 passes was satisfied; Passes 1–10 are Done; #727 and #5 are closed. Do not reopen Pass 1–9 or Pass 10 acceptance.
 
 ```text
 [x] exactly one authoritative VT

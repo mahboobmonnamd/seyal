@@ -1,6 +1,6 @@
 # Repository and workspace structure
 
-This document defines Seyal's physical repository layout and the accepted logical ownership/dependency boundaries. Passes 1–9 have materialized the production Rust and native surfaces described below. Pass 10 (#727) validates that surface; it does not invent a new layout.
+This document defines Seyal's physical repository layout and the accepted logical ownership/dependency boundaries. Passes 1–10 have materialized and validated the production Rust and native surfaces described below. Pass 10 (#727, closed) validated that surface; it did not invent a new layout.
 
 ## Principle
 

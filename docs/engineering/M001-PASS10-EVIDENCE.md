@@ -171,4 +171,4 @@ Expanded from `docs/milestones/MILESTONE-001.md` §15 and Pass 10 validation §6
 
 ## Final conclusion
 
-**M001 Pass 10:** `PASS` — production freeze `d845c6ddbe86f20183186f1aa69f2293aa8356ba` (#776); harness tip `e2b76024de2c85b3e9adb6dd5dcadb7b40881079` (#778). Every mandatory criterion in this ledger is `PASS`. Soft RSS gate remains 768 KiB. Ready to close #727 then #5.
+**M001 Pass 10:** `PASS` — production freeze `d845c6ddbe86f20183186f1aa69f2293aa8356ba` (#776); harness tip `e2b76024de2c85b3e9adb6dd5dcadb7b40881079` (#778); evidence tip `c1246d43869abda194bcc0c678ab8c916c581caf` (#779). Every mandatory criterion in this ledger is `PASS`. Soft RSS gate remains 768 KiB. Owning Issue **#727** and parent **#5** are **closed**.

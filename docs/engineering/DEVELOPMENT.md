@@ -138,7 +138,7 @@ The physical Rust workspace is the Passes 1–9 production surface documented in
 
 The native host under `macos/Seyal` is **Swift + AppKit + Metal** and now includes the permanent Metal terminal renderer, Candidate-D client attachment, native input/resize/focus/IME seams, minimal Block presentation, and Pass 9 detach/reconnect recovery. Metal shaders use Metal Shading Language. Rust/native interop crosses a coarse C-compatible prepared-frame boundary rather than per-cell language calls.
 
-Harness locations under `tests/`, `fuzz/` and `benches/` hold real M001 fixtures, fuzz adapters and pass benchmarks. Deeper Pass 10 aggregate validation remains owned by #727.
+Harness locations under `tests/`, `fuzz/` and `benches/` hold real M001 fixtures, fuzz adapters and pass benchmarks. Pass 10 aggregate validation is complete (#727 closed); retained evidence lives under `docs/engineering/M001-PASS10-EVIDENCE.md` and `docs/evidence/`.
 
 Issue #12 made the Pass-1 CI gates production-shaped: external workflow actions are pinned by reviewed commit SHA, workflow permissions remain minimal, repository validators are negative-fixture tested, and architecture layering is enforced in the public PR path. Later passes extended those gates without replacing the canonical root `make` interface.
 

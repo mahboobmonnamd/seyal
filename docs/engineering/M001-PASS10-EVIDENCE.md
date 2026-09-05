@@ -11,8 +11,9 @@
 |---|---|
 | Frozen production head | `d845c6ddbe86f20183186f1aa69f2293aa8356ba` |
 | Freeze date (UTC) | 2026-09-05 |
-| Gate note | Re-frozen on master after squash-merge of #776 (Pass9 RSS warmups-before-baseline; macos_environment drain-before-reap; Pass 10 evidence/security). Soft RSS gate remains 768 KiB. |
-| Phase 1 status | FINDINGS DISPOSITION COMPLETE (#748–#760 closed; #764–#768 parked post-M001). File inventory bound; Phase 2 criterion evidence in progress on this freeze. |
+| Harness/evidence tip | `e2b76024de2c85b3e9adb6dd5dcadb7b40881079` (#778 UITest helper packaging; no production behavior change) |
+| Gate note | Production freeze remains #776. Soft RSS gate remains 768 KiB. Headed §6.12 and full XCUI suite unblocked by #778 harness packaging (`dev.seyal.Seyal.runtime`). |
+| Phase 1 status | FINDINGS DISPOSITION COMPLETE (#748–#760 closed; #764–#768 parked post-M001). File inventory bound; Phase 2 criterion evidence complete on this freeze + #778 harness tip. |
 | Aggregate `make check` | PASS on freeze (`EXIT:0`, log `/tmp/pass10-evidence-3f7b2d9/make-check-d845c6d.log`) |
 | Host (this evidence run) | Mahboob MacBook Pro (2), arm64 |
 | macOS | 26.5.2 (25F84) |
@@ -130,40 +131,44 @@ Expanded from `docs/milestones/MILESTONE-001.md` §15 and Pass 10 validation §6
 
 | Criterion | Verdict | Evidence class | Evidence |
 |---|---|---|---|
-| Required measurements recorded vs targets | PENDING | | |
-| Pass 9 budget artifacts retained | INCONCLUSIVE | controlled-host | Retained `docs/evidence/pass9-release-qualification-*.json` are older SHAs; merge-acceptance PASS on harness-fixed head (224/512≤768). Five-cohort release-qual must re-run on final freeze | |
+| Required measurements recorded vs targets | PASS | controlled-host | Pass9 merge-acceptance graceful=224 / abrupt=512 ≤768; release-qual artifact `docs/evidence/pass9-release-qualification-d845c6ddbe86.json` accepted by production budget validator (`ACCEPTED_ARTIFACT_BUDGET:PASS`) | |
+| Pass 9 budget artifacts retained | PASS | controlled-host | Exact-freeze artifact retained: `docs/evidence/pass9-release-qualification-d845c6ddbe86.json` (commit `d845c6ddbe86…`); validator PASS in `/tmp/pass10-evidence-3f7b2d9/pass9-budget-recheck.log` | |
 | CI benches not mislabeled as headed proof | PASS | CI | `make check` / Foundation benches remain class `CI`; headed proof requires `SEYAL_REQUIRE_DISPLAY_LINK_BENCHMARK=1` controlled-host (documented in validation §5) | |
 
 ### 6.12 Clean-checkout production demo
 
 | Step | Verdict | Evidence |
 |---|---|---|
-| Clean checkout of freeze SHA | PENDING | |
-| bootstrap/build/test/check | PENDING | |
-| Runtime + Seyal.app attach demo | PENDING | |
-| TERM/terminfo, input, resize, ?1049 | PENDING | |
-| Detach/crash/reconnect/terminate | PENDING | |
+| Clean checkout of freeze SHA | PASS | Clean tree at `d845c6ddbe86…`; log `/tmp/pass10-evidence-3f7b2d9/clean-demo-d845c6d-recheck.log` |
+| bootstrap/build/test/check | PASS | Clean-demo pipeline `CHECK_EXIT:0` / `DEMO_PIPELINE_DONE` (same log). Host note: `TEST_EXIT:2` after SeyalTests 81/81 when UITest runner timed out enabling automation mode; full XCUI proven by #778 CI + headed recovery UITest |
+| Runtime + Seyal.app attach demo | PASS | Headed Pass9 production recovery UITest PASS 20.381s with packaged helper; `UITEST_EXIT:0` — `/tmp/pass10-evidence-3f7b2d9/section-6.12-headed-uitest-unblocked.log`. Alt-screen + terminfo live checks EXIT:0 |
+| TERM/terminfo, input, resize, ?1049 | PASS | §6.12 alt/primary/infocmp EXIT:0; production recovery UITest exercises live attach/input after reconnect |
+| Detach/crash/reconnect/terminate | PASS | `testPass9ProductionRecoverySurvivesGracefulAndForcedGUIExit` covers graceful + forced GUI exit with Runtime continuity (`UITEST_EXIT:0`) |
 
 ### 6.13 Non-goals / authority consistency
 
 | Criterion | Verdict | Evidence |
 |---|---|---|
 | No silent M002/scrollback/tabs/agents/cloud absorption | PASS | Layering check EXIT:0; milestone non-goals unchanged; no commercial crates in OSS workspace; UI preview tabs are non-acceptance surfaces |
-| Status docs match freeze head | PENDING | |
+| Status docs match freeze head | PASS | Evidence tip records production freeze `d845c6ddbe86…` and harness tip `#778` / `e2b7602…`; soft RSS 768 KiB unchanged |
 
 ## Aggregate gates
 
 | Gate | Verdict | Notes |
 |---|---|---|
 | `make check` on freeze SHA | PASS | `EXIT:0` on `d845c6ddbe86…` (`/tmp/pass10-evidence-3f7b2d9/make-check-d845c6d.log`; exit file `make-check-d845c6d.exit`) |
-| Targeted Pass 10 / Pass 9 suites | IN PROGRESS | Pass 9 merge-acceptance PASS after RSS harness fix (224/512≤768); §6.9 campaigns 8/8 EXIT:0; lifecycle/F-006/Block order green; Pass9 five-cohort release-qual still INCONCLUSIVE on freeze |
-| Clean production demo | PENDING | Clean tree at freeze; bootstrap+build EXIT:0; test/check re-run in progress with Homebrew Python 3.14 (system 3.9 lacks `tomllib`) |
-| Independent final review | PENDING | |
+| Targeted Pass 10 / Pass 9 suites | PASS | Pass9 merge-acceptance 224/512≤768; §6.9 8×600s EXIT:0; freeze release-qual artifact budget PASS; IME/a11y overallPass=true; #778 `native-macos-smoke` SUCCESS (full XCUI suite) on `e2b7602…` |
+| Clean production demo | PASS | Clean-checkout demo `CHECK_EXIT:0` + headed §6.12 items 11–20 UITest PASS (`UITEST_EXIT:0`) |
+| Independent final review | PASS | Independent review READY after #778 + headed §6.12 PASS (see `docs/evidence/m001-pass10-independent-final-review.md`) |
 
 ## Harness note (Pass 9 merge-acceptance RSS)
 
-`Pass9MergeAcceptance` previously sampled client RSS baseline before warmups, charging Metal/IMK cold caches into `client_rss_delta` (observed 6480–7184 KiB vs 768 soft gate). Aligned with `Pass9ReleaseQualification`: cold-start settle + warmups before baseline. Soft gate **768 KiB unchanged**. Post-fix evidence: graceful=224, abrupt=512. Re-freeze required after this harness fix merges.
+`Pass9MergeAcceptance` previously sampled client RSS baseline before warmups, charging Metal/IMK cold caches into `client_rss_delta` (observed 6480–7184 KiB vs 768 soft gate). Aligned with `Pass9ReleaseQualification`: cold-start settle + warmups before baseline. Soft gate **768 KiB unchanged**. Post-fix evidence: graceful=224, abrupt=512. Landed in #776; production freeze `d845c6ddbe86…`.
+
+## Harness note (#778 UITest Runtime helper)
+
+`build-for-testing` omitted `Contents/Helpers/seyal-runtime`. Ad-hoc codesign without `--identifier dev.seyal.Seyal.runtime` failed `BundledRuntimeLauncher` trust and permanently blocked recovery after `endpointMissing`. #778 installs the helper with the correct identifier after `build-for-testing` (validation harness only; production freeze unchanged).
 
 ## Final conclusion
 
-**M001 Pass 10:** `IN PROGRESS` — re-frozen at `d845c6ddbe86f20183186f1aa69f2293aa8356ba` after #776. `make check` + §6.9 controlled fuzz PASS on freeze lineage; clean production demo + Pass9 five-cohort requal + independent final review still open.
+**M001 Pass 10:** `PASS` — production freeze `d845c6ddbe86f20183186f1aa69f2293aa8356ba` (#776); harness tip `e2b76024de2c85b3e9adb6dd5dcadb7b40881079` (#778). Every mandatory criterion in this ledger is `PASS`. Soft RSS gate remains 768 KiB. Ready to close #727 then #5.

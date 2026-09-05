@@ -10,16 +10,18 @@ use crate::{
 #[cfg(feature = "test-fault-injection")]
 use crate::test_fault::{self, FaultPoint};
 
-use super::Runtime;
+use super::connection::ConnectionMeta;
+use super::{ACCEPT_BACKOFF_INITIAL, ACCEPT_BACKOFF_MAX};
+use super::super::Runtime;
 
 impl Runtime {
-    pub(super) fn local_ipc_deadline(&self) -> Option<Instant> {
+    pub(in crate::runtime) fn local_ipc_deadline(&self) -> Option<Instant> {
         self.local_ipc
             .as_ref()
             .and_then(|state| state.listener_backoff_deadline)
     }
 
-    pub(super) fn service_local_deadline(&mut self, now: Instant) -> Result<(), RuntimeError> {
+    pub(in crate::runtime) fn service_local_deadline(&mut self, now: Instant) -> Result<(), RuntimeError> {
         let token = self.local_ipc.as_ref().and_then(|state| {
             state
                 .listener_backoff_deadline
@@ -56,7 +58,7 @@ impl Runtime {
         }
     }
 
-    pub(super) fn service_local_reactor_event(
+    pub(in crate::runtime) fn service_local_reactor_event(
         &mut self,
         reactor_token: RegistrationToken,
         kind: ReactorEventKind,
@@ -163,5 +165,21 @@ impl Runtime {
             }
         }
         Ok(())
+    }
+
+    pub(super) fn handle_local_server_events(&mut self, events: Vec<ServerEvent>) {
+        for event in events {
+            match event {
+                ServerEvent::Connected { .. } | ServerEvent::PeerRejected => {}
+                ServerEvent::FramingError { token } | ServerEvent::Disconnected { token } => {
+                    self.close_local_connection(token);
+                }
+                ServerEvent::Frame {
+                    token,
+                    message_type,
+                    payload,
+                } => self.dispatch_local_ipc_frame(token, message_type, &payload),
+            }
+        }
     }
 }

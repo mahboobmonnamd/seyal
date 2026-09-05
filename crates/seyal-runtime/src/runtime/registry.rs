@@ -7,9 +7,13 @@ use std::{
     },
     time::Instant,
 };
+#[cfg(feature = "benchmark-instrumentation")]
+use std::collections::HashMap;
 
 use seyal_exec::{CommandSpec, SignalDisposition, TerminalExecution, WindowSize};
 
+#[cfg(target_os = "macos")]
+use crate::command_block_timeline::CommandBlockTimeline;
 use crate::{
     AttachmentId, BlockSummary, ExecutionId, InputIngress, RuntimeError, RuntimeId, WorkspaceId,
 };

@@ -57,7 +57,7 @@ pub(in crate::runtime) struct Entry {
 #[cfg(target_os = "macos")]
 #[derive(Clone, Copy, Debug)]
 pub(super) struct PendingComposerCommand {
-    token: ShellIntegrationToken,
+    pub(super) token: ShellIntegrationToken,
 }
 
 #[cfg(target_os = "macos")]

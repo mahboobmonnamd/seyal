@@ -1,8 +1,10 @@
+use std::collections::HashMap;
+
 use seyal_exec::WindowSize;
 
 use crate::{
-    RuntimeError,
-    display::{self, EncodedDisplayBatch, MAX_DISPLAY_COLUMNS, MAX_DISPLAY_ROWS},
+    ExecutionId, RuntimeError,
+    display::{EncodedDisplayBatch, MAX_DISPLAY_COLUMNS, MAX_DISPLAY_ROWS},
     local_ipc::{
         attachment::AttachmentError,
         framing::{
@@ -13,7 +15,8 @@ use crate::{
 };
 
 use super::display_publish::PublishedDisplay;
-use super::Runtime;
+use super::RESYNC_SNAPSHOT_BUDGET_PER_POLL;
+use super::super::Runtime;
 
 fn resize_error_code(error: &RuntimeError) -> ErrorCode {
     match error {
@@ -25,7 +28,7 @@ fn resize_error_code(error: &RuntimeError) -> ErrorCode {
 }
 
 impl Runtime {
-    fn handle_resize(&mut self, token: u64, payload: &[u8]) {
+    pub(super) fn handle_resize(&mut self, token: u64, payload: &[u8]) {
         let Ok(resize) = WireResize::decode(payload) else {
             self.send_error(
                 token,
@@ -82,7 +85,7 @@ impl Runtime {
         }
     }
 
-    fn handle_resize_request(&mut self, token: u64, payload: &[u8]) {
+    pub(super) fn handle_resize_request(&mut self, token: u64, payload: &[u8]) {
         let Ok(request) = WireResizeRequest::decode(payload) else {
             self.send_error(
                 token,
@@ -195,7 +198,7 @@ impl Runtime {
         }
     }
 
-    fn handle_resync(&mut self, token: u64, payload: &[u8]) {
+    pub(super) fn handle_resync(&mut self, token: u64, payload: &[u8]) {
         let Ok(resync) = framing::Resync::decode(payload) else {
             self.send_error(
                 token,

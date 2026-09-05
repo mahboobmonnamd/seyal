@@ -53,13 +53,13 @@ mod composer_wrapper_tests {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg(target_os = "macos")]
-enum ShellIntegrationMode {
+pub(super) enum ShellIntegrationMode {
     ZshHook,
     Unsupported,
 }
 
 #[cfg(target_os = "macos")]
-fn shell_integration_mode(command: &CommandSpec) -> ShellIntegrationMode {
+pub(super) fn shell_integration_mode(command: &CommandSpec) -> ShellIntegrationMode {
     match command.program().to_string_lossy().as_ref() {
         "/bin/zsh" | "zsh" => ShellIntegrationMode::ZshHook,
         _ => ShellIntegrationMode::Unsupported,

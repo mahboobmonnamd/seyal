@@ -10,7 +10,7 @@ use crate::{
 };
 
 use crate::AttachmentId;
-use super::Runtime;
+use super::super::Runtime;
 
 impl Runtime {
     pub(super) fn send_mandatory_frame(&mut self, token: u64, bytes: Vec<u8>) -> bool {

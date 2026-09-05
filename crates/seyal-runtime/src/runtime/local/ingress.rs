@@ -9,7 +9,7 @@ use crate::{
     },
 };
 
-use super::Runtime;
+use super::super::Runtime;
 use super::super::shell_integration::ComposerAdmission;
 
 fn encode_terminal_key(key: WireTerminalKey) -> Vec<u8> {
@@ -41,7 +41,7 @@ fn encode_terminal_key(key: WireTerminalKey) -> Vec<u8> {
 
 
 impl Runtime {
-    fn handle_input(&mut self, token: u64, payload: &[u8]) {
+    pub(super) fn handle_input(&mut self, token: u64, payload: &[u8]) {
         let Ok(input) = framing::InputRef::decode(payload) else {
             self.send_error(
                 token,
@@ -83,7 +83,7 @@ impl Runtime {
         }
     }
 
-    fn handle_terminal_key(&mut self, token: u64, payload: &[u8]) {
+    pub(super) fn handle_terminal_key(&mut self, token: u64, payload: &[u8]) {
         let Ok(key) = WireTerminalKey::decode(payload) else {
             self.send_error(
                 token,
@@ -134,7 +134,7 @@ impl Runtime {
         }
     }
 
-    fn handle_composer_command(&mut self, token: u64, payload: &[u8]) {
+    pub(super) fn handle_composer_command(&mut self, token: u64, payload: &[u8]) {
         let Ok(request) = ComposerCommandRef::decode(payload) else {
             self.send_error(
                 token,

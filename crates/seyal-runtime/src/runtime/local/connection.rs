@@ -1,8 +1,12 @@
 use seyal_exec::RegistrationToken;
+use seyal_protocol::pass8::CAP_BLOCK_METADATA;
 
-use crate::{AttachmentId, ExecutionId};
+use crate::{
+    AttachmentId,
+    local_ipc::connection::MAX_CONNECTIONS,
+};
 
-use super::Runtime;
+use super::super::Runtime;
 
 pub(super) struct ConnectionMeta {
     pub(super) attachment: Option<AttachmentId>,

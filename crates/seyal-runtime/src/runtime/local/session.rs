@@ -1,5 +1,5 @@
 use seyal_exec::LineId;
-use seyal_protocol::pass8::encode_block_state_frame;
+use seyal_protocol::pass8::{CAP_BLOCK_METADATA, encode_block_state_frame};
 
 use crate::{
     AttachmentId, RuntimeError,
@@ -8,9 +8,8 @@ use crate::{
         attachment::{AttachmentError, MAX_LIVE_ATTACHMENTS},
         connection::ConnectionState as LocalIpcConnState,
         framing::{
-            self, Attach as WireAttach, Attached as WireAttached, CAP_BLOCK_METADATA,
-            CAP_COMMAND_BLOCKS, ErrorCode, ExecutionList, ExecutionListEntry, Lifecycle as WireLifecycle,
-            MessageType, Role,
+            self, Attach as WireAttach, Attached as WireAttached, CAP_COMMAND_BLOCKS, ErrorCode,
+            ExecutionList, ExecutionListEntry, Lifecycle as WireLifecycle, MessageType, Role,
         },
     },
 };
@@ -18,7 +17,7 @@ use seyal_exec::WindowSize;
 
 use super::connection::ConnectionMeta;
 use super::display_publish::PublishedDisplay;
-use super::Runtime;
+use super::super::Runtime;
 use super::super::ExecutionLifecycle;
 
 impl Runtime {

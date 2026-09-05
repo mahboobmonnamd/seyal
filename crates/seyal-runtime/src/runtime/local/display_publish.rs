@@ -12,9 +12,9 @@ use crate::{
 
 #[cfg(feature = "test-fault-injection")]
 use crate::test_fault::{self, FaultPoint};
-use seyal_protocol::pass8::encode_block_state_frame;
+use seyal_protocol::pass8::{CAP_BLOCK_METADATA, encode_block_state_frame};
 
-use super::Runtime;
+use super::super::Runtime;
 use super::super::lifecycle::BlockCompletion;
 
 #[derive(Clone, Copy)]
@@ -25,7 +25,7 @@ pub(super) struct PublishedDisplay {
 }
 
 impl Runtime {
-    pub(super) fn notify_local_ipc_execution_finalized(
+    pub(in crate::runtime) fn notify_local_ipc_execution_finalized(
         &mut self,
         execution_id: ExecutionId,
         block_completion: BlockCompletion,
@@ -122,7 +122,7 @@ impl Runtime {
     /// explicit even when no new projection update exists in the final turn.
     /// It never waits for a client read or acknowledgement; the existing
     /// replaceable display slot and after-display queue preserve ordering.
-    pub(super) fn publish_final_display_snapshot(&mut self, execution_id: ExecutionId) {
+    pub(in crate::runtime) fn publish_final_display_snapshot(&mut self, execution_id: ExecutionId) {
         let viewers = self.local_ipc.as_ref().map_or_else(Vec::new, |state| {
             state
                 .attachments
@@ -154,7 +154,7 @@ impl Runtime {
         }
     }
 
-    pub(super) fn publish_display_updates(&mut self) {
+    pub(in crate::runtime) fn publish_display_updates(&mut self) {
         self.service_pending_resyncs();
 
         let execution_ids = self.local_ipc.as_ref().map_or_else(Vec::new, |state| {

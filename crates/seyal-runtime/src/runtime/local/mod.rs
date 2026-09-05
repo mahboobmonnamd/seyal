@@ -17,7 +17,7 @@ use crate::{
     },
 };
 
-use super::connection::ConnectionMeta;
+use connection::ConnectionMeta;
 use display_publish::PublishedDisplay;
 
 pub(super) const RESYNC_SNAPSHOT_BUDGET_PER_POLL: usize = 2;

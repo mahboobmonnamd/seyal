@@ -11,7 +11,7 @@ use crate::{
     },
 };
 
-use super::Runtime;
+use super::super::Runtime;
 
 fn pack_terminal_color(color: Color) -> u32 {
     match color {
@@ -24,7 +24,7 @@ fn pack_terminal_color(color: Color) -> u32 {
 }
 
 impl Runtime {
-    fn handle_history_range_request(&mut self, token: u64, payload: &[u8]) {
+    pub(super) fn handle_history_range_request(&mut self, token: u64, payload: &[u8]) {
         let Ok(request) = framing::HistoryRangeRequest::decode(payload) else {
             self.send_error(
                 token,
@@ -128,7 +128,7 @@ impl Runtime {
     /// Broadcast a bounded replacement cache after the Runtime has observed a
     /// trusted OSC lifecycle transition. It is queued after display work so a
     /// slow client cannot delay PTY/VT or terminal projection progress.
-    pub(super) fn publish_block_timeline(&mut self, execution_id: ExecutionId) {
+    pub(in crate::runtime) fn publish_block_timeline(&mut self, execution_id: ExecutionId) {
         let Some(entry) = self.entries.get(&execution_id) else {
             return;
         };

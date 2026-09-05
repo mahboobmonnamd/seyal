@@ -44,7 +44,8 @@ func shape(_ text: String) -> ShapeSummary {
     for run in runs {
         glyphCount += CTRunGetGlyphCount(run)
         let attributes = CTRunGetAttributes(run) as NSDictionary
-        if let runFont = attributes.object(forKey: kCTFontAttributeName) as? CTFont {
+        if let rawFont = attributes.object(forKey: kCTFontAttributeName) {
+            let runFont = rawFont as! CTFont
             fontNames.insert(CTFontCopyPostScriptName(runFont) as String)
         }
     }
@@ -78,8 +79,10 @@ print("SHAPE\tlabel\tutf8_bytes\tterminal_cells\truns\tglyphs\ttypographic_width
 
 for sample in samples {
     let summary = shape(sample.text)
+    let formattedWidth = String(format: "%.3f", summary.typographicWidth)
+    let fonts = summary.fonts.joined(separator: ",")
     print(
-        "SHAPE\t\(sample.label)\t\(sample.text.utf8.count)\t\(sample.terminalWidth)\t\(summary.runCount)\t\(summary.glyphCount)\t\(String(format: \"%.3f\", summary.typographicWidth))\t\(summary.fonts.joined(separator: \",\"))"
+        "SHAPE\t\(sample.label)\t\(sample.text.utf8.count)\t\(sample.terminalWidth)\t\(summary.runCount)\t\(summary.glyphCount)\t\(formattedWidth)\t\(fonts)"
     )
 }
 

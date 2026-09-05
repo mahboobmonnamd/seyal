@@ -6,11 +6,20 @@
 
 use std::{
     sync::{
-        OnceLock,
+        Mutex, MutexGuard, OnceLock,
         atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::Instant,
 };
+
+/// Workspace tests unify `benchmark-instrumentation` through `seyal-client`, so
+/// Pass 7 mark atomics are process-global across parallel unit tests. Serialize
+/// mark/reset/observe mutations so metadata assertions are not racing other
+/// Runtime tests that also touch input/resize instrumentation.
+fn marks_lock() -> MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 static ORIGIN: OnceLock<Instant> = OnceLock::new();
 static INPUT_ADMISSION_NS: AtomicU64 = AtomicU64::new(0);
@@ -43,7 +52,7 @@ pub fn pass7_benchmark_now_ns() -> u64 {
     u64::try_from(elapsed).unwrap_or(u64::MAX)
 }
 
-pub fn reset_pass7_runtime_benchmark_marks() {
+fn reset_pass7_runtime_benchmark_marks_locked() {
     INPUT_ADMISSION_NS.store(0, Ordering::SeqCst);
     PTY_WRITE_NS.store(0, Ordering::SeqCst);
     RESIZE_RECEIPT_NS.store(0, Ordering::SeqCst);
@@ -56,7 +65,7 @@ pub fn reset_pass7_runtime_benchmark_marks() {
     RUNTIME_QUEUE_HIGH_WATER.store(0, Ordering::SeqCst);
 }
 
-pub fn pass7_runtime_benchmark_marks() -> Pass7RuntimeBenchmarkMarks {
+fn pass7_runtime_benchmark_marks_locked() -> Pass7RuntimeBenchmarkMarks {
     Pass7RuntimeBenchmarkMarks {
         input_admission_ns: INPUT_ADMISSION_NS.load(Ordering::SeqCst),
         pty_write_ns: PTY_WRITE_NS.load(Ordering::SeqCst),
@@ -71,29 +80,60 @@ pub fn pass7_runtime_benchmark_marks() -> Pass7RuntimeBenchmarkMarks {
     }
 }
 
-pub(crate) fn mark_pass7_input_admission(queue_bytes: usize) {
+fn mark_pass7_input_admission_locked(queue_bytes: usize) {
     INPUT_ADMISSION_NS.store(pass7_benchmark_now_ns(), Ordering::SeqCst);
-    observe_runtime_queue(queue_bytes);
+    RUNTIME_QUEUE_HIGH_WATER.fetch_max(queue_bytes, Ordering::SeqCst);
     INPUT_ADMISSION_COUNT.fetch_add(1, Ordering::SeqCst);
 }
 
-pub(crate) fn mark_pass7_pty_write(bytes: usize) {
+fn mark_pass7_pty_write_locked(bytes: usize) {
     PTY_WRITE_NS.store(pass7_benchmark_now_ns(), Ordering::SeqCst);
     PTY_WRITE_COUNT.fetch_add(1, Ordering::SeqCst);
     PTY_WRITE_BYTES.fetch_add(u64::try_from(bytes).unwrap_or(u64::MAX), Ordering::SeqCst);
 }
 
-pub(crate) fn mark_pass7_resize_receipt() {
+fn mark_pass7_resize_receipt_locked() {
     RESIZE_RECEIPT_NS.store(pass7_benchmark_now_ns(), Ordering::SeqCst);
     RESIZE_RECEIPT_COUNT.fetch_add(1, Ordering::SeqCst);
 }
 
-pub(crate) fn mark_pass7_resize_commit() {
+fn mark_pass7_resize_commit_locked() {
     RESIZE_COMMIT_NS.store(pass7_benchmark_now_ns(), Ordering::SeqCst);
     RESIZE_COMMIT_COUNT.fetch_add(1, Ordering::SeqCst);
 }
 
+pub fn reset_pass7_runtime_benchmark_marks() {
+    let _guard = marks_lock();
+    reset_pass7_runtime_benchmark_marks_locked();
+}
+
+pub fn pass7_runtime_benchmark_marks() -> Pass7RuntimeBenchmarkMarks {
+    let _guard = marks_lock();
+    pass7_runtime_benchmark_marks_locked()
+}
+
+pub(crate) fn mark_pass7_input_admission(queue_bytes: usize) {
+    let _guard = marks_lock();
+    mark_pass7_input_admission_locked(queue_bytes);
+}
+
+pub(crate) fn mark_pass7_pty_write(bytes: usize) {
+    let _guard = marks_lock();
+    mark_pass7_pty_write_locked(bytes);
+}
+
+pub(crate) fn mark_pass7_resize_receipt() {
+    let _guard = marks_lock();
+    mark_pass7_resize_receipt_locked();
+}
+
+pub(crate) fn mark_pass7_resize_commit() {
+    let _guard = marks_lock();
+    mark_pass7_resize_commit_locked();
+}
+
 pub(crate) fn observe_runtime_queue(queue_bytes: usize) {
+    let _guard = marks_lock();
     RUNTIME_QUEUE_HIGH_WATER.fetch_max(queue_bytes, Ordering::SeqCst);
 }
 
@@ -103,13 +143,21 @@ mod tests {
 
     #[test]
     fn benchmark_marks_are_metadata_only_and_resettable() {
-        reset_pass7_runtime_benchmark_marks();
-        mark_pass7_input_admission(17);
-        mark_pass7_pty_write(5);
-        mark_pass7_pty_write(7);
-        mark_pass7_resize_receipt();
-        mark_pass7_resize_commit();
-        let marks = pass7_runtime_benchmark_marks();
+        // Prime the origin clock and advance past a zero-elapsed sample so
+        // timestamp marks are observably non-zero on fast hosts.
+        let _ = pass7_benchmark_now_ns();
+        std::thread::sleep(std::time::Duration::from_micros(50));
+
+        // Hold the process-global marks lock for the whole assertion window so
+        // parallel Runtime tests cannot reset mid-check.
+        let _guard = marks_lock();
+        reset_pass7_runtime_benchmark_marks_locked();
+        mark_pass7_input_admission_locked(17);
+        mark_pass7_pty_write_locked(5);
+        mark_pass7_pty_write_locked(7);
+        mark_pass7_resize_receipt_locked();
+        mark_pass7_resize_commit_locked();
+        let marks = pass7_runtime_benchmark_marks_locked();
         assert_eq!(marks.input_admission_count, 1);
         assert_eq!(marks.pty_write_count, 2);
         assert_eq!(marks.pty_write_bytes, 12);
@@ -121,9 +169,9 @@ mod tests {
         assert!(marks.resize_receipt_ns > 0);
         assert!(marks.resize_commit_ns > 0);
 
-        reset_pass7_runtime_benchmark_marks();
+        reset_pass7_runtime_benchmark_marks_locked();
         assert_eq!(
-            pass7_runtime_benchmark_marks(),
+            pass7_runtime_benchmark_marks_locked(),
             Pass7RuntimeBenchmarkMarks::default()
         );
     }

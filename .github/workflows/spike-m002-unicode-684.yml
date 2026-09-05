@@ -29,13 +29,26 @@ jobs:
           rustup toolchain install 1.98.0 --profile minimal
           rustup override set 1.98.0
       - name: Format check
-        run: cargo fmt --manifest-path spikes/m002-unicode-684/Cargo.toml -- --check
-      - name: Deterministic corpus tests
-        run: cargo test --manifest-path spikes/m002-unicode-684/Cargo.toml
-      - name: Comparative measurements
+        id: format
+        continue-on-error: true
         run: |
+          set -o pipefail
+          cargo fmt --manifest-path spikes/m002-unicode-684/Cargo.toml -- --check \
+            2>&1 | tee /tmp/m002-unicode-684-format.txt
+      - name: Deterministic corpus tests
+        id: tests
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          cargo test --manifest-path spikes/m002-unicode-684/Cargo.toml \
+            2>&1 | tee /tmp/m002-unicode-684-tests.txt
+      - name: Comparative measurements
+        id: measurements
+        continue-on-error: true
+        run: |
+          set -o pipefail
           cargo run --release --manifest-path spikes/m002-unicode-684/Cargo.toml \
-            | tee /tmp/m002-unicode-684-results.txt
+            2>&1 | tee /tmp/m002-unicode-684-results.txt
       - name: Publish spike evidence to PR
         if: always() && github.event_name == 'pull_request'
         env:
@@ -48,12 +61,29 @@ jobs:
             echo
             echo 'Non-mergeable R&D branch. Comparative numbers are CI-host evidence, not production latency gates.'
             echo
+            echo '**Format check**'
             echo '```text'
-            if [ -f /tmp/m002-unicode-684-results.txt ]; then
-              cat /tmp/m002-unicode-684-results.txt
-            else
-              echo 'measurement output unavailable; inspect the failed job'
-            fi
+            cat /tmp/m002-unicode-684-format.txt 2>/dev/null || true
+            echo '```'
+            echo
+            echo '**Tests**'
+            echo '```text'
+            tail -n 80 /tmp/m002-unicode-684-tests.txt 2>/dev/null || true
+            echo '```'
+            echo
+            echo '**Measurements**'
+            echo '```text'
+            cat /tmp/m002-unicode-684-results.txt 2>/dev/null || true
             echo '```'
           } > /tmp/comment.md
           gh pr comment "$PR_NUMBER" --body-file /tmp/comment.md
+      - name: Enforce spike gates
+        if: always()
+        env:
+          FORMAT_OUTCOME: ${{ steps.format.outcome }}
+          TEST_OUTCOME: ${{ steps.tests.outcome }}
+          MEASUREMENT_OUTCOME: ${{ steps.measurements.outcome }}
+        run: |
+          test "$FORMAT_OUTCOME" = success
+          test "$TEST_OUTCOME" = success
+          test "$MEASUREMENT_OUTCOME" = success

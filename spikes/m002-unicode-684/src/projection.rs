@@ -53,7 +53,8 @@ impl ProjectionBatch {
         let text_key = if chars.next().is_none() {
             first as u32
         } else {
-            let index = u32::try_from(self.sidecar.len()).expect("spike sidecar index remains bounded");
+            let index =
+                u32::try_from(self.sidecar.len()).expect("spike sidecar index remains bounded");
             self.sidecar.push(text.as_bytes().to_vec());
             SIDECAR_TAG | index
         };

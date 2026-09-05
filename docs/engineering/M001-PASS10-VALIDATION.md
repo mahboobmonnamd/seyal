@@ -40,7 +40,7 @@ Pass 9 no longer blocks Pass 10 Phase 1. The following entry conditions were sat
 - Phase 1 review candidate was frozen at `1005bc42397aac485b1aeff08cafd0f67790d969`;
 - there is no unresolved architecture/specification question that blocks review;
 - development readiness for #727 returned Ready and Phase 1 was transitioned to IN PROGRESS by user direction;
-- finding Issues #748–#760 are closed; IMPORTANT follow-ups #764–#768 are parked post-M001.
+- finding Issues #748–#760 are closed; IMPORTANT follow-ups #764–#768 are closed post-M001 by their owning PRs.
 
 Phase 1 follows `docs/engineering/M001-PASS10-CODE-QUALITY-REVIEW.md`. Findings disposition is complete; claiming full Phase 1 COMPLETE still requires file-level ledger completeness per that protocol.
 

@@ -82,7 +82,7 @@ Label every perf/presentation/fuzz claim: `CI` | `controlled-host` | `PLATFORM_L
 2. **Evidence class honesty** — do not cite Foundation display-link-off benches as headed presentation proof; do not cite socket-loss soak as GUI-process death (#787 lineage).
 3. **Freeze invalidation** — production commits after a freeze SHA invalidate affected criterion evidence; re-freeze and re-validate.
 4. **Finding-set freeze** — after Pass review freeze, new Issues only for FAIL/INCONCLUSIVE mandatory criteria, amended frozen findings, or new BLOCKING defects — not Issue factories.
-5. **Parked post-M001 debt** — module-cohesion follow-ups (#764–#768) and later-work #663 remain outside M001 unless proven true blockers; each has an owner/milestone.
+5. **Post-M001 cohesion/CI debt** — #764–#768 are implemented and closed via their owning PRs (CI pin, block naming, client/runtime/FFI ownership splits). Later-work #663 (250-pane Metal) remains outside M001 / post-multipane.
 6. **Harness ≠ product** — UITest helper packaging / ad-hoc codesign for diagnostic benches must not be confused with distributable Release identity or production behavior changes.
 7. **Candidate-B / non-production comparators** — retained corpora are not production coverage; registry grades must stay honest.
 8. **Issue-body hygiene** — closed Issues must not still say ACTIVE/IN PROGRESS; reopened Issues must state residuals with evidence.

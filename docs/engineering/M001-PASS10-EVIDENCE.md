@@ -12,7 +12,7 @@
 | Frozen production head | `e8431f01c797b57d7b6ee6a9be65706f77c7d789` |
 | Freeze date (UTC) | 2026-09-05 |
 | Gate note | Initial freeze `e8431f0…` failed `make check` / workspace test on `pass7_benchmark::…resettable` due to process-global mark races under feature unification via `seyal-client`. Fix in this Phase 2 branch; **re-freeze required after merge** before final PASS. |
-| Phase 1 status | COMPLETE — all BLOCKING findings resolved; IMPORTANT residual parked post-M001 (#764–#768) |
+| Phase 1 status | FINDINGS DISPOSITION COMPLETE (#748–#760 closed; #764–#768 parked post-M001). Full file-level ledger completeness still required before Phase 2 authorization. |
 | Host (this evidence run) | Mahboob MacBook Pro (2), arm64 |
 | macOS | 26.5.2 (25F84) |
 | Rust toolchain | rustc/cargo 1.98.0 (88d9e12ae / 797e8a9bc) |
@@ -161,4 +161,4 @@ Expanded from `docs/milestones/MILESTONE-001.md` §15 and Pass 10 validation §6
 
 ## Final conclusion
 
-**M001 Pass 10:** `PENDING` — Phase 2 execution in progress on frozen head `e8431f01c797b57d7b6ee6a9be65706f77c7d789`.
+**M001 Pass 10:** `PENDING` — Phase 2 not yet authorized. Freeze candidate `e8431f01…` is provisional; evidence criteria remain PENDING.

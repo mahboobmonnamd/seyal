@@ -20,16 +20,26 @@ fn command_environment_is_explicit_and_pty_injects_no_terminal_markers() {
     let mut exit = None;
     let mut eof = false;
 
-    while Instant::now() < deadline && (!eof || exit.is_none()) {
+    // Drain until EOF after the child exits. Fast hosts can observe Exited(0)
+    // before the PTY master has delivered the final env lines; stopping at the
+    // first exit observation can yield an empty buffer without proving env
+    // injection failed.
+    while Instant::now() < deadline && !eof {
         match execution
             .read_output(&mut buffer)
             .expect("read environment output")
         {
             ReadOutcome::Bytes(count) => output.extend_from_slice(&buffer[..count]),
             ReadOutcome::WouldBlock => {
-                let _ = execution
-                    .wait_readable(Duration::from_millis(100))
-                    .expect("wait readable");
+                if exit.is_none() {
+                    exit = execution.try_wait().expect("wait child");
+                }
+                let wait = if exit.is_some() {
+                    Duration::from_millis(20)
+                } else {
+                    Duration::from_millis(100)
+                };
+                let _ = execution.wait_readable(wait).expect("wait readable");
             }
             ReadOutcome::Eof => eof = true,
         }

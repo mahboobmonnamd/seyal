@@ -2,7 +2,7 @@
 
 **Owning Issue:** #727  
 **Starting review candidate:** `1005bc42397aac485b1aeff08cafd0f67790d969`  
-**Status:** PHASE 1 COMPLETE — findings resolved on frozen final validation head `e8431f01c797b57d7b6ee6a9be65706f77c7d789` (2026-09-05); Phase 2 validation authorized  
+**Status:** PHASE 1 FINDINGS DISPOSITION COMPLETE — BLOCKING/IMPORTANT finding Issues #748–#760 closed on lineage through `e8431f01…`; domain agent reviews retained. File-level inventory completeness remains an explicit ledger duty under `M001-PASS10-CODE-QUALITY-REVIEW.md` §3/§20 and must be finished before claiming full Phase 1 COMPLETE / Phase 2 authorization.  
 **Normative protocol:** `docs/engineering/M001-PASS10-CODE-QUALITY-REVIEW.md`
 
 This ledger records the exhaustive M001 milestone-closure code and quality review required before independent final Pass 10 validation.
@@ -235,8 +235,13 @@ Branch tip at freeze: `master` / `e8431f0` (“Close Pass 10 fuzz registry/campa
 
 Any later production delta invalidates affected Phase 2 evidence and requires a new freeze + revalidation.
 
+## File inventory binding
+
+Production-significant path inventory (domain-mapped to Agent1–10 results, with finding overrides):
+`docs/evidence/m001-pass10-phase1-file-inventory.md`.
+
 ## Completion condition
 
 Phase 1 of this ledger is complete: every `BLOCKING` finding is resolved and re-reviewed, every `IMPORTANT` finding is resolved or authoritatively assigned outside M001 (#764–#768), and the final M001 validation head is frozen above.
 
-Phase 2 independent validation proceeds under `docs/engineering/M001-PASS10-VALIDATION.md` with evidence in `docs/engineering/M001-PASS10-EVIDENCE.md`.
+Phase 2 independent validation may proceed only after: (1) file-level ledger completeness for M001-significant paths, (2) authority-doc status alignment, and (3) green exact-head Foundation/production gates. Evidence lives in `docs/engineering/M001-PASS10-EVIDENCE.md`.

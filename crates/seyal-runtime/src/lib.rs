@@ -5,9 +5,9 @@
 //! continues to own its PTY, primary child and sole canonical TerminalState.
 
 mod activity_block_timeline;
+mod capability;
 #[cfg(target_os = "macos")]
 mod command_block_timeline;
-mod capability;
 pub mod display;
 mod error;
 mod ids;

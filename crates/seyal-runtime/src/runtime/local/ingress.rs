@@ -39,7 +39,6 @@ fn encode_terminal_key(key: WireTerminalKey) -> Vec<u8> {
     }
 }
 
-
 impl Runtime {
     pub(super) fn handle_input(&mut self, token: u64, payload: &[u8]) {
         let Ok(input) = framing::InputRef::decode(payload) else {

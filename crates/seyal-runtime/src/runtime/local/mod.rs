@@ -10,11 +10,7 @@ use seyal_exec::{ExecutionReactor, RegistrationToken};
 use crate::test_fault::{self, FaultPoint};
 use crate::{
     ExecutionId, RuntimeError,
-    local_ipc::{
-        attachment::AttachmentRegistry,
-        connection::LocalIpcServer,
-        discovery,
-    },
+    local_ipc::{attachment::AttachmentRegistry, connection::LocalIpcServer, discovery},
 };
 
 use connection::ConnectionMeta;

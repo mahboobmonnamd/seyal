@@ -1,17 +1,13 @@
-use std::{
-    collections::VecDeque,
-    io::Write,
-};
+use std::{collections::VecDeque, io::Write};
 
 use seyal_runtime::local_ipc::framing::{
-    ErrorCode, ErrorMessage, InputRef, MAX_INPUT_BYTES, MessageType, ResizeRequest,
-    ResizeResult, ResizeResultCode, Resync, Role, TerminalKey, TerminalKeyKind,
-    TerminalKeyModifiers, encode_frame,
+    ErrorCode, ErrorMessage, InputRef, MAX_INPUT_BYTES, MessageType, ResizeRequest, ResizeResult,
+    ResizeResultCode, Resync, Role, TerminalKey, TerminalKeyKind, TerminalKeyModifiers,
+    encode_frame,
 };
 
 use super::{
-    ClientError, LocalDisplayClient, MAX_OUTBOUND_WIRE_BYTES, MAX_UNRESOLVED_RESIZES,
-    server_error,
+    ClientError, LocalDisplayClient, MAX_OUTBOUND_WIRE_BYTES, MAX_UNRESOLVED_RESIZES, server_error,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -340,7 +336,11 @@ impl LocalDisplayClient {
         Ok(())
     }
 
-    pub(crate) fn admit_frame(&mut self, bytes: Vec<u8>, kind: OutboundKind) -> Result<(), ClientError> {
+    pub(crate) fn admit_frame(
+        &mut self,
+        bytes: Vec<u8>,
+        kind: OutboundKind,
+    ) -> Result<(), ClientError> {
         #[cfg(feature = "benchmark-instrumentation")]
         let benchmark_input = matches!(kind, OutboundKind::Input | OutboundKind::TerminalKey);
         let next = self
@@ -868,7 +868,9 @@ mod tests {
             block_id: 99,
             request_id: 41,
         };
-        assert!(super::super::validate_composer_result(accepted, attachment, &pending));
+        assert!(super::super::validate_composer_result(
+            accepted, attachment, &pending
+        ));
         assert!(!super::super::validate_composer_result(
             accepted,
             other_attachment,

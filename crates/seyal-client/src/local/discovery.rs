@@ -12,8 +12,8 @@ use seyal_runtime::{
             ensure_verified_runtime_dir,
         },
         framing::{
-            CAP_BINARY_DISPLAY, CAP_COMMAND_BLOCKS, CAP_CORRELATED_RESIZE, CAP_SEMANTIC_TERMINAL_KEY,
-            ClientHello, ErrorMessage, MessageType, ServerHello,
+            CAP_BINARY_DISPLAY, CAP_COMMAND_BLOCKS, CAP_CORRELATED_RESIZE,
+            CAP_SEMANTIC_TERMINAL_KEY, ClientHello, ErrorMessage, MessageType, ServerHello,
             encode_frame,
         },
     },
@@ -44,7 +44,10 @@ pub enum DiscoveryFailure {
     InvalidPath,
 }
 
-pub(crate) fn connect_stream_until(path: &Path, deadline: Instant) -> Result<UnixStream, ClientError> {
+pub(crate) fn connect_stream_until(
+    path: &Path,
+    deadline: Instant,
+) -> Result<UnixStream, ClientError> {
     startup_remaining(deadline)?;
     let stream = UnixStream::connect(path).map_err(classify_connect_error)?;
     configure_startup_timeout(&stream, deadline)?;
@@ -58,7 +61,10 @@ pub(crate) fn startup_remaining(deadline: Instant) -> Result<Duration, ClientErr
         .ok_or(ClientError::StartupDeadlineExceeded)
 }
 
-pub(crate) fn configure_startup_timeout(stream: &UnixStream, deadline: Instant) -> Result<(), ClientError> {
+pub(crate) fn configure_startup_timeout(
+    stream: &UnixStream,
+    deadline: Instant,
+) -> Result<(), ClientError> {
     startup_remaining(deadline)?;
     stream.set_nonblocking(true).map_err(|_| ClientError::Io)
 }

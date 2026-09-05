@@ -271,7 +271,10 @@ impl Runtime {
         }
     }
 
-    pub(super) fn encode_projection_snapshot(&self, execution_id: ExecutionId) -> Option<EncodedDisplayBatch> {
+    pub(super) fn encode_projection_snapshot(
+        &self,
+        execution_id: ExecutionId,
+    ) -> Option<EncodedDisplayBatch> {
         #[cfg(feature = "test-fault-injection")]
         if test_fault::take(FaultPoint::DisplayEncode) {
             return None;

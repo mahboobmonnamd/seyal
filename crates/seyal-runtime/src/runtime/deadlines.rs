@@ -5,9 +5,9 @@ use seyal_exec::{ChildExit, SignalDisposition};
 
 use crate::{ExecutionId, RuntimeError};
 
+use super::Runtime;
 use super::config::{PRIMARY_EXIT_REAP_LIMIT, PRIMARY_EXIT_REAP_RETRY};
 use super::lifecycle::Lifecycle;
-use super::Runtime;
 
 impl Runtime {
     pub(super) fn observe_primary_exit(&mut self, id: ExecutionId) -> Result<(), RuntimeError> {
@@ -37,7 +37,11 @@ impl Runtime {
         Ok(())
     }
 
-    pub(super) fn enter_drain(&mut self, id: ExecutionId, exit: ChildExit) -> Result<(), RuntimeError> {
+    pub(super) fn enter_drain(
+        &mut self,
+        id: ExecutionId,
+        exit: ChildExit,
+    ) -> Result<(), RuntimeError> {
         let entry = self
             .entries
             .get_mut(&id)

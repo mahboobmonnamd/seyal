@@ -3,13 +3,13 @@ use std::time::Instant;
 
 use seyal_exec::{ReadOutcome, WriteOutcome};
 
-use crate::{ExecutionId, RuntimeError};
 use crate::input::ControlMessage;
+use crate::{ExecutionId, RuntimeError};
 use std::sync::mpsc::TryRecvError;
 
+use super::Runtime;
 use super::config::{CONTROL_DISPATCH_QUANTUM, PtyEofReapProbe};
 use super::lifecycle::Lifecycle;
-use super::Runtime;
 
 impl Runtime {
     pub(super) fn drain_control(&mut self) -> Result<usize, RuntimeError> {

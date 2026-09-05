@@ -58,11 +58,9 @@ impl CommandBlockTimeline {
             // Retain active work and roll the oldest completed projection out
             // of the disposable timeline. Runtime lifecycle truth remains in
             // the execution, so eviction never invalidates a running block.
-            let Some(index) = self
-                .records
-                .iter()
-                .position(|record| matches!(record.lifecycle, CommandBlockLifecycle::Completed { .. }))
-            else {
+            let Some(index) = self.records.iter().position(|record| {
+                matches!(record.lifecycle, CommandBlockLifecycle::Completed { .. })
+            }) else {
                 return Err(CommandBlockTimelineError::Capacity);
             };
             self.records.remove(index);

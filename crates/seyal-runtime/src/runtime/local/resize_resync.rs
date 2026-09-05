@@ -14,9 +14,9 @@ use crate::{
     },
 };
 
-use super::display_publish::PublishedDisplay;
-use super::RESYNC_SNAPSHOT_BUDGET_PER_POLL;
 use super::super::Runtime;
+use super::RESYNC_SNAPSHOT_BUDGET_PER_POLL;
+use super::display_publish::PublishedDisplay;
 
 fn resize_error_code(error: &RuntimeError) -> ErrorCode {
     match error {

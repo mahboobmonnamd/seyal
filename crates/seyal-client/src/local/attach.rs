@@ -18,20 +18,23 @@ use seyal_runtime::{
 use crate::block_cache::{BlockCache, is_epoch_quarantined};
 
 use super::{
-    ClientError, LocalDisplayClient, READ_CHUNK_BYTES, server_error,
+    ClientError, LocalDisplayClient, READ_CHUNK_BYTES,
     discovery::{
         canonical_control_socket_path, connect_stream_until, hello_until, read_exact_until,
         send_control_until,
     },
     display_apply::PendingDisplayBatch,
     input_resize::GridGeometry,
+    server_error,
 };
 
 /// Pass 9 owns one wall-clock second for discovery, handshake, attach and the
 /// initial authoritative snapshot.
 pub(crate) const STARTUP_TIMEOUT: Duration = Duration::from_secs(1);
 
-pub(crate) fn resolve_single_running_execution(list: &ExecutionList) -> Result<ExecutionId, ClientError> {
+pub(crate) fn resolve_single_running_execution(
+    list: &ExecutionList,
+) -> Result<ExecutionId, ClientError> {
     let mut running = list
         .entries
         .iter()
@@ -90,10 +93,9 @@ impl LocalDisplayClient {
             stream = connect_stream_until(&socket_path, deadline)?;
             server_hello = hello_until(&mut stream, true, false, deadline)?;
         }
-        let block_metadata_negotiated = server_hello.server_capabilities
-            & seyal_runtime::pass8::CAP_BLOCK_METADATA
-            != 0
-            && !is_epoch_quarantined(server_hello.runtime_id, execution_id);
+        let block_metadata_negotiated =
+            server_hello.server_capabilities & seyal_runtime::pass8::CAP_BLOCK_METADATA != 0
+                && !is_epoch_quarantined(server_hello.runtime_id, execution_id);
         Self::finish_attach_with_deadline(
             stream,
             execution_id,
@@ -131,10 +133,9 @@ impl LocalDisplayClient {
             stream = connect_stream_until(socket_path, deadline)?;
             server_hello = hello_until(&mut stream, role == Role::Controller, false, deadline)?;
         }
-        let block_metadata_negotiated = server_hello.server_capabilities
-            & seyal_runtime::pass8::CAP_BLOCK_METADATA
-            != 0
-            && !is_epoch_quarantined(server_hello.runtime_id, execution_id);
+        let block_metadata_negotiated =
+            server_hello.server_capabilities & seyal_runtime::pass8::CAP_BLOCK_METADATA != 0
+                && !is_epoch_quarantined(server_hello.runtime_id, execution_id);
         Self::finish_attach_with_deadline(
             stream,
             execution_id,
@@ -310,7 +311,9 @@ impl LocalDisplayClient {
 }
 
 #[cfg(test)]
-pub(crate) fn read_blocking_frame(stream: &mut UnixStream) -> Result<(MessageType, Vec<u8>), ClientError> {
+pub(crate) fn read_blocking_frame(
+    stream: &mut UnixStream,
+) -> Result<(MessageType, Vec<u8>), ClientError> {
     let frame = read_blocking_raw_frame(stream)?;
     let header = FrameHeader::decode(&frame[..HEADER_LEN]).map_err(|_| ClientError::Protocol)?;
     let message_type = MessageType::from_u16(header.message_type).ok_or(ClientError::Protocol)?;

@@ -501,7 +501,7 @@ final class RustDisplayBridge {
     source.setEventHandler { [weak self] in
       self?.drainReadyDisplayWork()
     }
-    source.setCancelHandler { [teardown] in
+    source.setCancelHandler { [teardown = teardown!] in
       teardown.sourceCancelled()
     }
     teardown.sourceCreated()
@@ -979,7 +979,7 @@ final class RustDisplayBridge {
     source.setEventHandler { [weak self] in
       self?.flushReadyControlWork()
     }
-    source.setCancelHandler { [teardown] in
+    source.setCancelHandler { [teardown = teardown!] in
       teardown.sourceCancelled()
     }
     teardown.sourceCreated()

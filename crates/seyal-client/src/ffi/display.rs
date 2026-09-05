@@ -3,9 +3,9 @@ use seyal_runtime::local_ipc::framing::ComposerResultCode;
 use crate::LocalDisplayClient;
 
 use super::{
-    error_code, with_active_client, with_active_client_mut, SeyalBlockRecord, SeyalComposerResult,
-    SeyalExecutionBlockMetadata, SeyalHistoryCell, SeyalHistoryRange, SeyalHistoryRow,
-    SeyalPreparedFrame,
+    SeyalBlockRecord, SeyalComposerResult, SeyalExecutionBlockMetadata, SeyalHistoryCell,
+    SeyalHistoryRange, SeyalHistoryRow, SeyalPreparedFrame, error_code, with_active_client,
+    with_active_client_mut,
 };
 
 #[unsafe(no_mangle)]

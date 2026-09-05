@@ -1,6 +1,6 @@
 # Milestone 001 — Production Foundation Vertical Slice
 
-**Status:** **Done / closed.** Passes 1–10 complete. Pass 10 (#727) and parent M001 (#5) are closed on GitHub. Production freeze `d845c6ddbe86f20183186f1aa69f2293aa8356ba` (#776); harness tip `e2b76024de2c85b3e9adb6dd5dcadb7b40881079` (#778); evidence tip `c1246d43869abda194bcc0c678ab8c916c581caf` (#779). Soft RSS gate remains **768 KiB**. Live Pass 10 PASS ledger: `docs/engineering/M001-PASS10-EVIDENCE.md`. Independent review: `docs/evidence/m001-pass10-independent-final-review.md`. Parked post-M001 cohesion/CI follow-ups (#764–#768) are explicitly outside M001 acceptance.
+**Status:** **Done / closed.** Passes 1–10 complete. Pass 10 (#727) and parent M001 (#5) are closed on GitHub. Production freeze `d845c6ddbe86f20183186f1aa69f2293aa8356ba` (#776); harness tip `e2b76024de2c85b3e9adb6dd5dcadb7b40881079` (#778); evidence tip `c1246d43869abda194bcc0c678ab8c916c581caf` (#779). Machine RSS gate remains **`CLIENT_RSS_KIB = 1536`** (Pass 9 calibration; unchanged by Pass 10; #784). Live Pass 10 PASS ledger: `docs/engineering/M001-PASS10-EVIDENCE.md`. Independent review: `docs/evidence/m001-pass10-independent-final-review.md`. Parked post-M001 cohesion/CI follow-ups (#764–#768) are explicitly outside M001 acceptance.
 
 **Authority:** This document is subordinate to the accepted Seyal foundation architecture, its rationale, and accepted ADRs. It narrows that architecture into an implementable M001 slice; it does not reopen accepted foundation decisions.
 
@@ -879,7 +879,7 @@ Required exits:
 
 ### Pass 10 — Conformance/performance/failure validation — Done
 
-Run the complete M001 suite and publish baselines. Owning Issue #727 **closed**. Aggregate PASS ledger: `docs/engineering/M001-PASS10-EVIDENCE.md`. Production freeze `d845c6ddbe86…` (#776); harness tip `e2b7602…` (#778); evidence tip `c1246d4…` (#779). Soft RSS gate **768 KiB** unchanged.
+Run the complete M001 suite and publish baselines. Owning Issue #727 **closed**. Aggregate PASS ledger: `docs/engineering/M001-PASS10-EVIDENCE.md`. Production freeze `d845c6ddbe86…` (#776); harness tip `e2b7602…` (#778); evidence tip `c1246d4…` (#779). Machine RSS gate **`CLIENT_RSS_KIB = 1536`** unchanged by Pass 10 (#784).
 
 Required exits:
 

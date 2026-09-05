@@ -97,10 +97,15 @@ jobs:
             -max_total_time=${FUZZ_MAX_TOTAL_TIME} -timeout=10 -rss_limit_mb=1024 -print_final_stats=1
 
   production-macos-state-fuzz:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: ${{ github.event_name == 'schedule' && 45 || 15 }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Select pinned Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode_16.4.app
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-version
       - name: Select fuzz evidence grade and campaign floor
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then

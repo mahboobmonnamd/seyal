@@ -46,6 +46,113 @@ fn same_grapheme(active: &str, scalar: char) -> bool {
     candidate.graphemes(true).count() == 1
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mutation {
+    Bell,
+    StyleChange(u8),
+    HyperlinkStateChange,
+    CursorMove { row: usize, col: usize },
+    EraseAnchoredCell,
+    InsertDeleteCells,
+    ScreenSwitch,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Anchor {
+    row: usize,
+    col: usize,
+    generation: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AnchoredCluster {
+    text: String,
+    anchor: Anchor,
+    style: u8,
+}
+
+#[derive(Debug)]
+struct AnchoredAppendProbe {
+    row: usize,
+    col: usize,
+    mutation_generation: u64,
+    current_style: u8,
+    active: Option<AnchoredCluster>,
+}
+
+impl Default for AnchoredAppendProbe {
+    fn default() -> Self {
+        Self {
+            row: 0,
+            col: 0,
+            mutation_generation: 0,
+            current_style: 0,
+            active: None,
+        }
+    }
+}
+
+impl AnchoredAppendProbe {
+    fn print(&mut self, scalar: char) {
+        let can_append = self.active.as_ref().is_some_and(|active| {
+            active.anchor.row == self.row
+                && active.anchor.col == self.col
+                && active.anchor.generation == self.mutation_generation
+                && same_grapheme(&active.text, scalar)
+        });
+
+        if can_append {
+            self.active
+                .as_mut()
+                .expect("append candidate was present")
+                .text
+                .push(scalar);
+            return;
+        }
+
+        self.active = Some(AnchoredCluster {
+            text: scalar.to_string(),
+            anchor: Anchor {
+                row: self.row,
+                col: self.col,
+                generation: self.mutation_generation,
+            },
+            style: self.current_style,
+        });
+    }
+
+    fn apply(&mut self, mutation: Mutation) {
+        match mutation {
+            Mutation::Bell | Mutation::HyperlinkStateChange => {
+                // These actions change neither the anchored cell nor cursor
+                // location. They therefore do not invalidate append identity.
+            }
+            Mutation::StyleChange(style) => {
+                // Style affects the next newly-created grapheme. A combining
+                // scalar that continues the currently anchored grapheme does
+                // not retroactively restyle the cluster lead.
+                self.current_style = style;
+            }
+            Mutation::CursorMove { row, col } => {
+                self.row = row;
+                self.col = col;
+                self.invalidate_anchor();
+            }
+            Mutation::EraseAnchoredCell | Mutation::InsertDeleteCells | Mutation::ScreenSwitch => {
+                self.invalidate_anchor();
+            }
+        }
+    }
+
+    fn invalidate_anchor(&mut self) {
+        self.mutation_generation = self.mutation_generation.wrapping_add(1);
+    }
+
+    fn active(&self) -> &AnchoredCluster {
+        self.active.as_ref().expect("probe has an active cluster")
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum GridCell {
     Empty,
@@ -132,6 +239,20 @@ pub(crate) fn report_mutation_semantics() {
         );
     }
 
+    let mut anchored = AnchoredAppendProbe::default();
+    anchored.print('e');
+    anchored.apply(Mutation::Bell);
+    anchored.apply(Mutation::StyleChange(7));
+    anchored.apply(Mutation::HyperlinkStateChange);
+    anchored.print('\u{301}');
+    println!(
+        "MUTATION\tanchored-non-positional\tcluster={:?}\tcluster_style={}\tcurrent_style={}\tgeneration={}",
+        anchored.active().text,
+        anchored.active().style,
+        anchored.current_style,
+        anchored.mutation_generation
+    );
+
     let mut moved = AppendProbe::default();
     moved.print('e');
     moved.cursor_moved();
@@ -182,6 +303,55 @@ mod tests {
         assert_eq!(preserve.joined_scalars, 1);
         assert_eq!(break_all.cluster, "\u{301}");
         assert_eq!(break_all.joined_scalars, 0);
+    }
+
+    #[test]
+    fn non_positional_actions_preserve_anchor_identity() {
+        let mut probe = AnchoredAppendProbe::default();
+        probe.print('e');
+        let generation = probe.mutation_generation;
+        probe.apply(Mutation::Bell);
+        probe.apply(Mutation::HyperlinkStateChange);
+        probe.print('\u{301}');
+        assert_eq!(probe.active().text, "e\u{301}");
+        assert_eq!(probe.mutation_generation, generation);
+    }
+
+    #[test]
+    fn style_change_does_not_retroactively_split_or_restyle_active_grapheme() {
+        let mut probe = AnchoredAppendProbe::default();
+        probe.current_style = 3;
+        probe.print('e');
+        probe.apply(Mutation::StyleChange(9));
+        probe.print('\u{301}');
+        assert_eq!(probe.active().text, "e\u{301}");
+        assert_eq!(probe.active().style, 3);
+        assert_eq!(probe.current_style, 9);
+    }
+
+    #[test]
+    fn destructive_mutations_invalidate_active_anchor() {
+        for mutation in [
+            Mutation::EraseAnchoredCell,
+            Mutation::InsertDeleteCells,
+            Mutation::ScreenSwitch,
+        ] {
+            let mut probe = AnchoredAppendProbe::default();
+            probe.print('e');
+            probe.apply(mutation);
+            probe.print('\u{301}');
+            assert_eq!(probe.active().text, "\u{301}");
+        }
+    }
+
+    #[test]
+    fn cursor_move_invalidates_active_anchor_even_if_cursor_returns() {
+        let mut probe = AnchoredAppendProbe::default();
+        probe.print('e');
+        probe.apply(Mutation::CursorMove { row: 0, col: 1 });
+        probe.apply(Mutation::CursorMove { row: 0, col: 0 });
+        probe.print('\u{301}');
+        assert_eq!(probe.active().text, "\u{301}");
     }
 
     #[test]

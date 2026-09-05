@@ -209,15 +209,12 @@ final class SeyalShellUITests: XCTestCase {
         }
         XCTAssertTrue(runtimeReady, "external Runtime did not become attachable")
 
-        app = XCUIApplication()
-        app.launchArguments = []
-        app.launchEnvironment = [:]
-        app.launch()
-
-        let window = app.windows["Seyal"]
-        XCTAssertTrue(window.waitForExistence(timeout: 5))
+        // Packaged Helpers/seyal-runtime makes attach a real startup cost.
+        // Wait for connection=usable (same budget as Pass 9) before driving
+        // the pane-owned composer.
+        _ = launchProductionApp()
         let composer = app.textViews["composer.pane-local"]
-        XCTAssertTrue(composer.waitForExistence(timeout: 3))
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
         composer.click()
         composer.typeText("printf PASS8_BASIC; printf ok > \(markerURL.path)")
         composer.typeKey(.return, modifierFlags: [])
@@ -352,19 +349,14 @@ final class SeyalShellUITests: XCTestCase {
     func testProductionShellUsesOnePaneOwnedComposerAndMetalSurface() {
         // The production launch intentionally has no preview flag or fixture
         // environment. This exercises the real AppKit shell factory and its
-        // pane-owned surface/composer identity, while remaining independent of
-        // an optional Runtime process on the test host.
+        // pane-owned surface/composer identity. With Helpers/seyal-runtime
+        // packaged for UI tests, wait for connection=usable before asserting
+        // the composer — the same attach budget Pass 9 already requires.
         app.terminate()
-        app = XCUIApplication()
-        app.launchArguments = []
-        app.launchEnvironment = [:]
-        app.launch()
-
-        let window = app.windows["Seyal"]
-        XCTAssertTrue(window.waitForExistence(timeout: 5))
+        _ = launchProductionApp()
 
         let composer = app.textViews["composer.pane-local"]
-        XCTAssertTrue(composer.waitForExistence(timeout: 3))
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
         let surfaces = app
             .descendants(matching: .any)
             .matching(identifier: "terminal-surface.pane-local")

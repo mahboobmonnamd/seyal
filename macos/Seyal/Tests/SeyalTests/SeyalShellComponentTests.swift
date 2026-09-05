@@ -247,6 +247,9 @@ final class SeyalShellComponentTests: XCTestCase {
     // A fabricated pending-handle ID must fail closed at the native adopt
     // boundary. Protocol-level stale identity coverage lives in Rust; this
     // proves the Swift/C adopt seam does not resurrect an unknown handle.
+    // Diag counters are process-wide across the XCTest host, so assert the
+    // reject path does not create handles rather than requiring a cold registry.
+    let before = seyal_bridge_pass9_diag_snapshot()
     let bridge = RustDisplayBridge(
       onFrame: { _ in },
       onError: { _ in },
@@ -254,10 +257,10 @@ final class SeyalShellComponentTests: XCTestCase {
     )
     XCTAssertFalse(bridge.adoptRecoveredHandle(UInt64.max - 17))
     XCTAssertFalse(bridge.isConnected)
-    let diag = seyal_bridge_pass9_diag_snapshot()
-    XCTAssertEqual(diag.connected, 0)
-    XCTAssertEqual(diag.live_handles, 0)
-    XCTAssertEqual(diag.pending_handles, 0)
+    let after = seyal_bridge_pass9_diag_snapshot()
+    XCTAssertEqual(after.connected, before.connected)
+    XCTAssertEqual(after.live_handles, before.live_handles)
+    XCTAssertEqual(after.pending_handles, before.pending_handles)
   }
 
   private func adHocSign(_ url: URL, identifier: String) throws {

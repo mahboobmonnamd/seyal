@@ -70,7 +70,10 @@ impl ProbeRow {
         self.erase_cluster_at(col);
 
         let width = UnicodeWidthStr::width(text);
-        assert!((1..=2).contains(&width), "grid probe only covers width-1/2 clusters");
+        assert!(
+            (1..=2).contains(&width),
+            "grid probe only covers width-1/2 clusters"
+        );
         assert!(col + width <= self.cells.len());
 
         self.cells[col] = GridCell::Lead {

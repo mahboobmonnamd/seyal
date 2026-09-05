@@ -22,6 +22,17 @@ private final class Pass9AcceptanceTimerBox: @unchecked Sendable {
 /// GUI-process death.
 @MainActor
 enum Pass9MergeAcceptance {
+  /// Contractual RSS measurement order for merge-acceptance soft gates.
+  /// Warmups must precede baseline so Metal/IMK cold caches are not charged to
+  /// `client_rss_delta` (aligned with `Pass9ReleaseQualification`, SPEC-009 §16.1).
+  static let rssMeasurementPhaseOrder: [String] = [
+    "cold_start_settle",
+    "warmups",
+    "baseline",
+    "measured_cycles",
+    "final_sample",
+  ]
+
   struct Options {
     var cycles: Int = 100
     var warmups: Int = 5

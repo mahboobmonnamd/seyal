@@ -31,23 +31,7 @@ jobs:
               raise SystemExit("unit test import anchor changed")
           text = text.replace(import_old, import_new, 1)
           anchor = "  @MainActor\n  private func normalizedModifiers(_ item: NSMenuItem) -> NSEvent.ModifierFlags {"
-          test = '''  @MainActor
-  func testNativeProtocolCompatibilityKeepsInteractiveSurfaceMainActorOwned() {
-    let surface = InteractiveMetalSurfaceView(
-      frame: NSRect(x: 0, y: 0, width: 320, height: 180),
-      paneID: "protocol-compat",
-      installation: .nativeInteractionProbe
-    )
-    let displayDelegate: any CAMetalDisplayLinkDelegate = surface
-    let textClient: any NSTextInputClient = surface
-
-    XCTAssertNotNil(displayDelegate as AnyObject)
-    XCTAssertNotNil(textClient as AnyObject)
-    XCTAssertTrue(surface.acceptsFirstResponder)
-    XCTAssertTrue(InteractiveMetalSurfaceView.pass7InputSelfTest())
-  }
-
-'''
+          test = "  @MainActor\n  func testNativeProtocolCompatibilityKeepsInteractiveSurfaceMainActorOwned() {\n    let surface = InteractiveMetalSurfaceView(\n      frame: NSRect(x: 0, y: 0, width: 320, height: 180),\n      paneID: \"protocol-compat\",\n      installation: .nativeInteractionProbe\n    )\n    let displayDelegate: any CAMetalDisplayLinkDelegate = surface\n    let textClient: any NSTextInputClient = surface\n\n    XCTAssertNotNil(displayDelegate as AnyObject)\n    XCTAssertNotNil(textClient as AnyObject)\n    XCTAssertTrue(surface.acceptsFirstResponder)\n    XCTAssertTrue(InteractiveMetalSurfaceView.pass7InputSelfTest())\n  }\n\n"
           if text.count(anchor) != 1:
               raise SystemExit("unit test insertion anchor changed")
           text = text.replace(anchor, test + anchor, 1)
@@ -56,17 +40,7 @@ jobs:
           ui = Path("macos/Seyal/Tests/SeyalUITests/SeyalShellUITests.swift")
           text = ui.read_text(encoding="utf-8")
           anchor = "    func testLightAppearanceStillExposesTokenBackedShellChrome() {"
-          test = '''    func testProductionNativeSurfaceRemainsReachableAfterProtocolCompatibilityMigration() {
-        app.terminate()
-        let surface = launchProductionApp(requireUsableConnection: false)
-
-        XCTAssertTrue(surface.exists)
-        XCTAssertTrue(surface.isHittable)
-        surface.click()
-        XCTAssertTrue(surface.isHittable)
-    }
-
-'''
+          test = "    func testProductionNativeSurfaceRemainsReachableAfterProtocolCompatibilityMigration() {\n        app.terminate()\n        let surface = launchProductionApp(requireUsableConnection: false)\n\n        XCTAssertTrue(surface.exists)\n        XCTAssertTrue(surface.isHittable)\n        surface.click()\n        XCTAssertTrue(surface.isHittable)\n    }\n\n"
           if text.count(anchor) != 1:
               raise SystemExit("UI test insertion anchor changed")
           text = text.replace(anchor, test + anchor, 1)

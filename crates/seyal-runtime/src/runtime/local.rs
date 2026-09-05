@@ -17,7 +17,8 @@ use crate::{
     local_ipc::{
         attachment::{AttachmentError, AttachmentRegistry, MAX_LIVE_ATTACHMENTS},
         connection::{
-            ConnectionState as LocalIpcConnState, DeltaEnqueueResult, LocalIpcServer, ServerEvent,
+            ConnectionState as LocalIpcConnState, DeltaEnqueueResult, LocalIpcServer,
+            MAX_CONNECTIONS, ServerEvent,
         },
         discovery,
         framing::{
@@ -394,6 +395,29 @@ impl Runtime {
             self.release_local_attachment(attachment_id);
         }
         let _ = self.reactor.deregister(reactor_token);
+        // Capacity-full accept turns disarm the listener behind exponential
+        // backoff (up to ACCEPT_BACKOFF_MAX). When a live connection frees a
+        // slot, re-arm immediately so a waiting peer is not delayed solely by
+        // a stale no-progress backoff that no longer matches capacity.
+        self.rearm_local_listener_after_capacity_release();
+    }
+
+    fn rearm_local_listener_after_capacity_release(&mut self) {
+        let (token, should_rearm) = match self.local_ipc.as_ref() {
+            Some(state) => (
+                state.listener_reactor_token,
+                state.listener_backoff_deadline.is_some()
+                    && state.server.connection_count() < MAX_CONNECTIONS,
+            ),
+            None => return,
+        };
+        if !should_rearm {
+            return;
+        }
+        if self.reactor.set_readable(token, true).is_ok() {
+            self.reset_local_listener_backoff();
+            let _ = self.reactor.waker().wake();
+        }
     }
 
     fn release_local_attachment(&mut self, attachment_id: AttachmentId) {

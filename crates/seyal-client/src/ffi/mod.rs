@@ -40,6 +40,7 @@ pub(crate) use types::{
     SeyalRecoveryResult,
 };
 
+#[allow(unused_imports)]
 pub use display::{
     seyal_bridge_block_count, seyal_bridge_block_record, seyal_bridge_block_timeline_revision,
     seyal_bridge_composer_result, seyal_bridge_ensure_prepared, seyal_bridge_execution_block_metadata,
@@ -48,14 +49,18 @@ pub use display::{
     seyal_bridge_next_composer_request_id, seyal_bridge_next_history_request_id, seyal_bridge_poll,
     seyal_bridge_request_history_range, seyal_bridge_wants_write,
 };
+pub(crate) use errors::error_code;
+#[allow(unused_imports)]
 pub use errors::{
-    error_code, seyal_bridge_input_failure, seyal_bridge_last_recovery_result,
+    seyal_bridge_input_failure, seyal_bridge_last_recovery_result,
     seyal_bridge_pass9_diag_snapshot, seyal_bridge_resize_failure,
 };
+#[allow(unused_imports)]
 pub use input::{
     seyal_bridge_propose_geometry, seyal_bridge_retry_resize, seyal_bridge_submit_composer,
     seyal_bridge_submit_key, seyal_bridge_submit_utf8,
 };
+#[allow(unused_imports)]
 pub use session::{
     seyal_bridge_adopt_handle, seyal_bridge_attachment_id_high, seyal_bridge_attachment_id_low,
     seyal_bridge_connect_first, seyal_bridge_disconnect, seyal_bridge_disconnect_handle,

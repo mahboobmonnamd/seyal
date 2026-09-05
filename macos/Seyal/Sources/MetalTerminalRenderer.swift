@@ -188,6 +188,12 @@ enum RendererUpdateResult: Equatable {
     case deferred
 }
 
+private struct DeferredHistoryPrepare {
+    let historyRange: NativeHistoryRange
+    let region: NativeTranscriptRegion
+    let backingScale: CGFloat
+}
+
 struct GPUCompletionRetryState: Equatable {
     static let maximumAutomaticRetries = 4
 
@@ -259,6 +265,9 @@ final class MetalTerminalRenderer {
     private var framesInFlight = 0
     private var deferredDamage = DamageMask()
     private var deferredNeedsFullRebuild = false
+    /// History prepares that arrived while a command buffer still samples the
+    /// shared glyph atlas. Latest prepare per Block ID wins.
+    private var deferredHistoryPrepares: [UInt64: DeferredHistoryPrepare] = [:]
     private var releaseWhenIdle = false
     private var visible = true
     private var needsPresent = false
@@ -332,6 +341,14 @@ final class MetalTerminalRenderer {
 
     var hasFrameInFlight: Bool {
         framesInFlight != 0
+    }
+
+    var hasDeferredHistoryPrepare: Bool {
+        !deferredHistoryPrepares.isEmpty
+    }
+
+    var historyRegionCount: Int {
+        historyRegions.count
     }
 
     var glyphStats: GlyphAtlasStats {
@@ -526,11 +543,16 @@ final class MetalTerminalRenderer {
     /// Pane surface as the live terminal. No text conversion or second
     /// renderer is introduced; the range remains styled cells until the Metal
     /// fragment stage consumes it.
+    ///
+    /// History must not CPU-write the shared glyph atlas while a command buffer
+    /// is still sampling it (`framesInFlight > 0`). Defer and coalesce until
+    /// GPU completion, matching the live `update(frame:)` in-flight gate.
+    @discardableResult
     func update(
         historyRange: NativeHistoryRange,
         region: NativeTranscriptRegion,
         backingScale: CGFloat
-    ) throws {
+    ) throws -> RendererUpdateResult {
         guard historyRange.blockID != 0,
               historyRange.requestID != 0,
               region.id == historyRange.blockID,
@@ -539,16 +561,43 @@ final class MetalTerminalRenderer {
             throw MetalTerminalRendererError.invalidFrame
         }
 
-        let metrics = glyphAtlas.metrics(backingScale: max(backingScale, 1))
         let cells = historyRange.rows.reduce(0) { $0 + min($1.count, 512) }
         guard cells <= 131_072 else {
             throw MetalTerminalRendererError.invalidFrame
         }
+
+        if framesInFlight >= Self.maximumFramesInFlight {
+            deferredHistoryPrepares[historyRange.blockID] = DeferredHistoryPrepare(
+                historyRange: historyRange,
+                region: region,
+                backingScale: backingScale
+            )
+            stats.coalescedFrames &+= 1
+            return .deferred
+        }
+
+        try applyHistoryPrepare(
+            historyRange: historyRange,
+            region: region,
+            backingScale: backingScale,
+            cells: cells
+        )
+        return .updated
+    }
+
+    private func applyHistoryPrepare(
+        historyRange: NativeHistoryRange,
+        region: NativeTranscriptRegion,
+        backingScale: CGFloat,
+        cells: Int
+    ) throws {
+        deferredHistoryPrepares.removeValue(forKey: historyRange.blockID)
         guard cells > 0 else {
             historyRegions.removeValue(forKey: historyRange.blockID)
             needsPresent = instanceBuffer != nil
             return
         }
+        let metrics = glyphAtlas.metrics(backingScale: max(backingScale, 1))
         let byteCount = cells * MemoryLayout<TerminalInstance>.stride
         guard let buffer = device.makeBuffer(length: byteCount, options: .storageModeShared) else {
             throw MetalTerminalRendererError.unavailableBuffer
@@ -594,6 +643,39 @@ final class MetalTerminalRenderer {
             clip: region.clip
         )
         needsPresent = instanceBuffer != nil
+    }
+
+    private func flushDeferredHistoryPrepares() {
+        guard framesInFlight == 0, !deferredHistoryPrepares.isEmpty else { return }
+        let pending = deferredHistoryPrepares
+        deferredHistoryPrepares.removeAll(keepingCapacity: true)
+        for prepare in pending.values {
+            let cells = prepare.historyRange.rows.reduce(0) { $0 + min($1.count, 512) }
+            do {
+                try applyHistoryPrepare(
+                    historyRange: prepare.historyRange,
+                    region: prepare.region,
+                    backingScale: prepare.backingScale,
+                    cells: cells
+                )
+            } catch {
+                // Preserve deferred damage/live recovery path; surface failure
+                // through the same persistent-display latch used elsewhere.
+                deferredNeedsFullRebuild = true
+                needsCurrentFrameWhenIdle = true
+                let failure: MetalTerminalRendererError
+                if let atlas = error as? GlyphAtlasError {
+                    failure = .glyphAtlas(atlas)
+                } else if let metal = error as? MetalTerminalRendererError {
+                    failure = metal
+                } else {
+                    failure = .invalidFrame
+                }
+                persistentDisplayFailure = failure
+                onPersistentDisplayFailure?(failure)
+                return
+            }
+        }
     }
 
     func setHistoryRegionOrder(_ ids: [UInt64]) {
@@ -971,6 +1053,9 @@ final class MetalTerminalRenderer {
         // the renderer later.
         guard persistentDisplayFailure == nil else { return }
 
+        flushDeferredHistoryPrepares()
+        guard persistentDisplayFailure == nil else { return }
+
         if !deferredDamage.isEmpty || deferredNeedsFullRebuild || needsCurrentFrameWhenIdle {
             requestCurrentFrameIfNeeded()
         }
@@ -994,6 +1079,7 @@ final class MetalTerminalRenderer {
         instanceCount = 0
         historyRegions.removeAll()
         historyRegionOrder.removeAll()
+        deferredHistoryPrepares.removeAll()
         currentRows = 0
         currentColumns = 0
         currentMetrics = nil

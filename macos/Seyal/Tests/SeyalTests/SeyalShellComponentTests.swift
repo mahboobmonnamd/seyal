@@ -1,5 +1,6 @@
 import AppKit
 import Darwin
+import Metal
 import XCTest
 @testable import Seyal
 
@@ -1149,6 +1150,21 @@ final class SeyalShellComponentTests: XCTestCase {
     XCTAssertEqual(surface.accessibilityLabel(), "Seyal Terminal")
     XCTAssertTrue(surface.acceptsFirstResponder)
     XCTAssertTrue(InteractiveMetalSurfaceView.pass7InputSelfTest())
+  }
+
+  /// #786 — history Metal prepare must defer atlas CPU writes while a frame is
+  /// in flight. Exercise the production renderer self-test from XCTest so the
+  /// same-PR UI policy sees component coverage for MetalTerminalRenderer /
+  /// RendererValidation changes.
+  @MainActor
+  func testHistoryMetalPrepareDefersWhileFrameInFlight() throws {
+    guard MTLCreateSystemDefaultDevice() != nil else {
+      throw XCTSkip("Metal device unavailable in this environment")
+    }
+    XCTAssertTrue(
+      RendererValidation.historyPrepareDefersWhileFrameInFlightSelfTest(),
+      "history prepare must not texture.replace the shared glyph atlas while GPU in flight"
+    )
   }
 
   @MainActor

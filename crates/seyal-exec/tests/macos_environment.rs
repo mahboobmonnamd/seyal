@@ -5,9 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use seyal_exec::{
-    ChildExit, CommandSpec, ExecError, ReadOutcome, TerminalExecution, WindowSize,
-};
+use seyal_exec::{ChildExit, CommandSpec, ExecError, ReadOutcome, TerminalExecution, WindowSize};
 
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 const IO_TIMEOUT: Duration = Duration::from_secs(3);
@@ -75,11 +73,9 @@ fn command_environment_is_explicit_and_pty_injects_no_terminal_markers() {
     let command = CommandSpec::new("/usr/bin/env")
         .clear_environment()
         .env("SEYAL_TEST_VALUE", "explicit");
-    let mut execution = TerminalExecution::spawn(
-        &command,
-        WindowSize::cells(80, 24).expect("valid size"),
-    )
-    .expect("spawn PTY command");
+    let mut execution =
+        TerminalExecution::spawn(&command, WindowSize::cells(80, 24).expect("valid size"))
+            .expect("spawn PTY command");
 
     let output =
         read_until(&mut execution, b"SEYAL_TEST_VALUE=explicit", IO_TIMEOUT).expect("read env");

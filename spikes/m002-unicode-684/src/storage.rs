@@ -74,10 +74,7 @@ mod tests {
             store.overwrite("👨‍👩‍👧‍👦");
         }
         assert_eq!(store.live_bytes(), "👨‍👩‍👧‍👦".len());
-        assert_eq!(
-            store.allocated_payload_bytes(),
-            1_000 * "👨‍👩‍👧‍👦".len()
-        );
+        assert_eq!(store.allocated_payload_bytes(), 1_000 * "👨‍👩‍👧‍👦".len());
     }
 
     #[test]

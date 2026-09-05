@@ -118,7 +118,8 @@ mod tests {
 
     #[test]
     fn both_contracts_can_use_only_one_or_two_cell_physical_occupations() {
-        for text in ["A", "界", "e\u{301}", "❤\u{fe0f}", "👩‍💻", "👨‍👩‍👧‍👦", "🇮🇳"] {
+        for text in ["A", "界", "e\u{301}", "❤\u{fe0f}", "👩‍💻", "👨‍👩‍👧‍👦", "🇮🇳"]
+        {
             for contract in [WidthContract::UnicodeGrapheme, WidthContract::LegacyScalar] {
                 let units = place(contract, text);
                 assert!(

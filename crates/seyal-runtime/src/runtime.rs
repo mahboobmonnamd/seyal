@@ -15,13 +15,13 @@ use seyal_exec::{
 };
 
 #[cfg(target_os = "macos")]
-use crate::blocks::{
-    BlockId as CommandBlockId, BlockTimeline as CommandBlockTimeline, MAX_COMMAND_BYTES,
+use crate::command_block_timeline::{
+    CommandBlockId, CommandBlockTimeline, MAX_COMMAND_BYTES,
 };
 use crate::{
     AttachmentId, BlockSummary, CapabilityPolicy, ExecutionId, InputIngress, RuntimeError,
     RuntimeId, WorkspaceId,
-    block::BlockTimeline as ExecutionBlockTimeline,
+    activity_block_timeline::ActivityBlockTimeline,
     input::{AcceptedInput, ControlMessage},
     singleton::SingletonGuard,
 };
@@ -417,7 +417,7 @@ pub struct Runtime {
     singleton: SingletonGuard,
     reactor: ExecutionReactor,
     entries: HashMap<ExecutionId, Entry>,
-    execution_blocks: ExecutionBlockTimeline,
+    execution_blocks: ActivityBlockTimeline,
     by_token: HashMap<RegistrationToken, ExecutionId>,
     control_tx: SyncSender<ControlMessage>,
     control_rx: Receiver<ControlMessage>,
@@ -474,7 +474,7 @@ impl Runtime {
             singleton,
             reactor,
             entries: HashMap::new(),
-            execution_blocks: ExecutionBlockTimeline::default(),
+            execution_blocks: ActivityBlockTimeline::default(),
             by_token: HashMap::new(),
             control_tx,
             control_rx,

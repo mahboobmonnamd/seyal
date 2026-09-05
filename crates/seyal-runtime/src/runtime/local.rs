@@ -1172,8 +1172,8 @@ impl Runtime {
                 start_line: record.start_line,
                 end_line: record.end_line,
                 state: match record.lifecycle {
-                    crate::blocks::BlockLifecycle::Running => CommandBlockState::Running,
-                    crate::blocks::BlockLifecycle::Completed { exit_status } => {
+                    crate::command_block_timeline::CommandBlockLifecycle::Running => CommandBlockState::Running,
+                    crate::command_block_timeline::CommandBlockLifecycle::Completed { exit_status } => {
                         CommandBlockState::Completed { exit_status }
                     }
                 },

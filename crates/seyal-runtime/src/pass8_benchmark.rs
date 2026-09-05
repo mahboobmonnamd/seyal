@@ -1,15 +1,15 @@
 //! Benchmark-only access to the exact Runtime-owned Pass 8 metadata map.
 //!
-//! The wrapper owns the production `BlockTimeline` directly. It creates no PTY,
+//! The wrapper owns the production `ActivityBlockTimeline` directly. It creates no PTY,
 //! VT, terminal grid, renderer, transcript or background task, so retained RSS
 //! can be attributed to the metadata structure itself.
 
-use crate::{ExecutionId, WorkspaceId, block::BlockTimeline};
+use crate::{ExecutionId, WorkspaceId, activity_block_timeline::ActivityBlockTimeline};
 
 #[doc(hidden)]
 #[derive(Default)]
 pub struct BenchmarkBlockTimeline {
-    inner: BlockTimeline,
+    inner: ActivityBlockTimeline,
     count: usize,
 }
 

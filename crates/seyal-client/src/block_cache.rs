@@ -1,3 +1,8 @@
+//! Disposable Pass-8 client Block metadata cache.
+//!
+//! Not terminal authority: applies wire `pass8::BlockState` into a disposable
+//! cache with epoch quarantine. Distinct from Runtime activity/command timelines.
+
 use std::{
     collections::{HashSet, VecDeque},
     sync::{Mutex, OnceLock},

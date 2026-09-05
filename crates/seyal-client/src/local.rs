@@ -36,7 +36,7 @@ use seyal_runtime::{
     pass8::{BLOCK_STATE_MESSAGE_TYPE, BlockLifecycle, BlockState, CAP_BLOCK_METADATA},
 };
 
-use crate::block::{BlockApply, BlockCache, is_epoch_quarantined, quarantine_epoch};
+use crate::block_cache::{BlockApply, BlockCache, is_epoch_quarantined, quarantine_epoch};
 
 /// Pass 9 owns one wall-clock second for discovery, handshake, attach and the
 /// initial authoritative snapshot.

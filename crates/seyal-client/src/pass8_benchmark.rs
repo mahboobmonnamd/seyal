@@ -5,7 +5,7 @@
 
 use seyal_protocol::{ExecutionId, pass8::BlockState};
 
-use crate::block::BlockCache;
+use crate::block_cache::BlockCache;
 
 #[doc(hidden)]
 #[derive(Default)]

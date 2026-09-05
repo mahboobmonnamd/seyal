@@ -1,3 +1,6 @@
+mod storage;
+mod streaming;
+
 use std::{hint::black_box, mem::size_of, time::Instant};
 
 use unicode_segmentation::UnicodeSegmentation;
@@ -44,6 +47,7 @@ struct ArenaCell {
     flags: u8,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 struct ScalarBaselineCell {
     scalar: char,
@@ -71,10 +75,7 @@ fn report_corpus() {
 
 fn report_representation_sizes() {
     println!("SIZE\trepresentation\tbytes");
-    println!(
-        "SIZE\tscalar-baseline\t{}",
-        size_of::<ScalarBaselineCell>()
-    );
+    println!("SIZE\tscalar-baseline\t{}", size_of::<ScalarBaselineCell>());
     println!("SIZE\towned-string\t{}", size_of::<OwnedClusterCell>());
     println!("SIZE\tinline-4-scalars\t{}", size_of::<Inline4Cell>());
     println!("SIZE\tarena-ref\t{}", size_of::<ArenaCell>());
@@ -165,11 +166,7 @@ fn benchmark_inline(rounds: usize) -> (u128, usize, usize) {
             black_box(cell);
         }
     }
-    (
-        started.elapsed().as_nanos(),
-        black_box(checksum),
-        overflows,
-    )
+    (started.elapsed().as_nanos(), black_box(checksum), overflows)
 }
 
 fn append_to_arena(arena: &mut Vec<u8>, cluster: &str) -> ArenaCell {
@@ -219,6 +216,8 @@ fn main() {
     println!("SPIKE\tnote\tnon-mergeable comparative evidence only");
     report_representation_sizes();
     report_corpus();
+    streaming::report_streaming_semantics();
+    storage::report_storage_pressure();
 
     let (seg_ns, seg_checksum) = benchmark_segmentation(segmentation_rounds);
     println!(

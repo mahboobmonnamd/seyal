@@ -1,3 +1,9 @@
+//! Pass-8 TerminalActivity Block metadata timeline (one record per ExecutionId).
+//!
+//! Owns `CAP_BLOCK_METADATA` / activity-block admit·complete·retire bookkeeping.
+//! Distinct from `command_block_timeline`, which stores per-execution composer
+//! command blocks (`CAP_COMMAND_BLOCKS`).
+
 use std::collections::HashMap;
 
 #[cfg(target_os = "macos")]
@@ -45,7 +51,7 @@ impl BlockSummary {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum BlockTimelineError {
+pub(crate) enum ActivityBlockTimelineError {
     DuplicateExecution,
     InvalidAnchor,
     OwnershipMismatch,
@@ -56,11 +62,11 @@ pub(crate) enum BlockTimelineError {
 }
 
 #[derive(Default)]
-pub(crate) struct BlockTimeline {
+pub(crate) struct ActivityBlockTimeline {
     records: HashMap<ExecutionId, BlockSummary>,
 }
 
-impl BlockTimeline {
+impl ActivityBlockTimeline {
     pub(crate) fn len(&self) -> usize {
         self.records.len()
     }
@@ -74,19 +80,19 @@ impl BlockTimeline {
         workspace_id: WorkspaceId,
         execution_id: ExecutionId,
         start_line_id: u64,
-    ) -> Result<BlockSummary, BlockTimelineError> {
+    ) -> Result<BlockSummary, ActivityBlockTimelineError> {
         #[cfg(all(target_os = "macos", feature = "test-fault-injection"))]
         if test_fault::take(FaultPoint::BlockAdmission) {
-            return Err(BlockTimelineError::InjectedFailure);
+            return Err(ActivityBlockTimelineError::InjectedFailure);
         }
         if start_line_id == 0 {
-            return Err(BlockTimelineError::InvalidAnchor);
+            return Err(ActivityBlockTimelineError::InvalidAnchor);
         }
         if self.records.contains_key(&execution_id) {
-            return Err(BlockTimelineError::DuplicateExecution);
+            return Err(ActivityBlockTimelineError::DuplicateExecution);
         }
         if self.records.len() >= MAX_BLOCK_RECORDS {
-            return Err(BlockTimelineError::CapacityExceeded);
+            return Err(ActivityBlockTimelineError::CapacityExceeded);
         }
         let record = BlockSummary {
             id: BlockId::new(),
@@ -104,19 +110,19 @@ impl BlockTimeline {
         &mut self,
         workspace_id: WorkspaceId,
         execution_id: ExecutionId,
-    ) -> Result<Option<BlockSummary>, BlockTimelineError> {
+    ) -> Result<Option<BlockSummary>, ActivityBlockTimelineError> {
         #[cfg(all(target_os = "macos", feature = "test-fault-injection"))]
         if test_fault::take(FaultPoint::BlockCompletionMutation) {
-            return Err(BlockTimelineError::InjectedFailure);
+            return Err(ActivityBlockTimelineError::InjectedFailure);
         }
         let Some(record) = self.records.get_mut(&execution_id) else {
             return Ok(None);
         };
         if record.workspace_id != workspace_id || record.execution_id != execution_id {
-            return Err(BlockTimelineError::OwnershipMismatch);
+            return Err(ActivityBlockTimelineError::OwnershipMismatch);
         }
         if record.lifecycle != BlockLifecycle::Current || record.revision != 1 {
-            return Err(BlockTimelineError::InvalidTransition);
+            return Err(ActivityBlockTimelineError::InvalidTransition);
         }
         record.lifecycle = BlockLifecycle::Completed;
         record.revision = 2;
@@ -140,7 +146,7 @@ mod tests {
     fn timeline_admits_one_workspace_owned_block_and_completes_monotonically() {
         let workspace = WorkspaceId::m001_default();
         let execution = execution(7);
-        let mut timeline = BlockTimeline::default();
+        let mut timeline = ActivityBlockTimeline::default();
 
         let current = timeline.admit(workspace, execution, 1).unwrap();
         assert_eq!(timeline.len(), 1);
@@ -158,7 +164,7 @@ mod tests {
         assert_eq!(completed.revision, 2);
         assert_eq!(
             timeline.complete(workspace, execution),
-            Err(BlockTimelineError::InvalidTransition)
+            Err(ActivityBlockTimelineError::InvalidTransition)
         );
     }
 
@@ -166,28 +172,28 @@ mod tests {
     fn timeline_rejects_duplicate_execution_invalid_anchor_and_wrong_workspace() {
         let workspace = WorkspaceId::m001_default();
         let execution = execution(9);
-        let mut timeline = BlockTimeline::default();
+        let mut timeline = ActivityBlockTimeline::default();
 
         assert_eq!(
             timeline.admit(workspace, execution, 0),
-            Err(BlockTimelineError::InvalidAnchor)
+            Err(ActivityBlockTimelineError::InvalidAnchor)
         );
         timeline.admit(workspace, execution, 3).unwrap();
         assert_eq!(
             timeline.admit(workspace, execution, 3),
-            Err(BlockTimelineError::DuplicateExecution)
+            Err(ActivityBlockTimelineError::DuplicateExecution)
         );
         let wrong_workspace = WorkspaceId::from_bytes(99u128.to_le_bytes());
         assert_eq!(
             timeline.complete(wrong_workspace, execution),
-            Err(BlockTimelineError::OwnershipMismatch)
+            Err(ActivityBlockTimelineError::OwnershipMismatch)
         );
     }
 
     #[test]
     fn timeline_is_bounded_at_the_pass8_capacity_and_recovers_after_retirement() {
         let workspace = WorkspaceId::m001_default();
-        let mut timeline = BlockTimeline::default();
+        let mut timeline = ActivityBlockTimeline::default();
         for ordinal in 1..=MAX_BLOCK_RECORDS {
             timeline
                 .admit(workspace, execution(ordinal as u128), ordinal as u64)
@@ -200,7 +206,7 @@ mod tests {
                 execution((MAX_BLOCK_RECORDS + 1) as u128),
                 (MAX_BLOCK_RECORDS + 1) as u64,
             ),
-            Err(BlockTimelineError::CapacityExceeded)
+            Err(ActivityBlockTimelineError::CapacityExceeded)
         );
 
         let retired_execution = execution(1);
@@ -223,7 +229,7 @@ mod tests {
     fn retirement_removes_completed_history_immediately() {
         let workspace = WorkspaceId::m001_default();
         let execution = execution(11);
-        let mut timeline = BlockTimeline::default();
+        let mut timeline = ActivityBlockTimeline::default();
         let current = timeline.admit(workspace, execution, 4).unwrap();
         let completed = timeline.complete(workspace, execution).unwrap().unwrap();
         assert_eq!(completed.id, current.id);
@@ -237,7 +243,7 @@ mod tests {
         use std::collections::HashSet;
 
         let workspace = WorkspaceId::m001_default();
-        let mut timeline = BlockTimeline::default();
+        let mut timeline = ActivityBlockTimeline::default();
         let mut ids = HashSet::with_capacity(10_000);
         for ordinal in 1..=10_000_u128 {
             let execution_id = execution(ordinal);

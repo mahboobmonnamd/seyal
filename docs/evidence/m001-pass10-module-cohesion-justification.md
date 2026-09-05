@@ -27,7 +27,7 @@ Handwritten production files above the AGENTS.md justification threshold:
 | `crates/seyal-client/src/ffi.rs` | ~1273 | Rust↔Swift FFI bridge |
 | `macos/Seyal/Sources/SeyalShellView.swift` | ~1723 | Native shell presentation (advisory for M001 size gate) |
 
-Related naming debt (not size): dual `crates/seyal-runtime/src/block.rs` and `blocks.rs`.
+Related naming debt (not size): dual `block.rs` / `blocks.rs` — resolved post-M001 by #768 as `activity_block_timeline.rs` / `command_block_timeline.rs` (client `block_cache.rs`).
 
 ## Pass 10 decision
 

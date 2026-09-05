@@ -5,7 +5,7 @@
 //! committed `DisplayCache`, and derived `seyal-render` presentation state.
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-mod block;
+mod block_cache;
 
 // Keep the existing internal import path mechanically stable while severing the
 // production dependency on the Runtime crate. `seyal_runtime` below is only an

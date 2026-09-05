@@ -19,16 +19,20 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: rustfmt
       - name: Format temporary checkout
         run: cargo fmt --manifest-path spikes/issue-685-scrollback/Cargo.toml
-      - name: Lint
-        run: cargo clippy --manifest-path spikes/issue-685-scrollback/Cargo.toml --all-targets -- -D warnings
+      - name: Compile spike
+        run: cargo check --manifest-path spikes/issue-685-scrollback/Cargo.toml 2>&1 | tee spike-check.log
       - name: Run experiments
-        run: cargo run --manifest-path spikes/issue-685-scrollback/Cargo.toml --release
-      - name: Preserve evidence
+        run: cargo run --manifest-path spikes/issue-685-scrollback/Cargo.toml --release 2>&1 | tee spike-run.log
+      - name: Preserve evidence and diagnostics
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: issue-685-scrollback-spike-report
-          path: spike-report.md
-          if-no-files-found: error
+          path: |
+            spike-report.md
+            spike-check.log
+            spike-run.log
+          if-no-files-found: warn

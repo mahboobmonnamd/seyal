@@ -1,11 +1,11 @@
 # M001 Pass 10 — Final Milestone Validation Protocol
 
-**Status:** Normative final-validation authority — Phase 1 findings disposition complete; Phase 2 historically recorded on prior freeze `d845c6ddbe86…` (#776) then **reopened** for honesty residuals (#784/#787) and production Metal fix (#789 → tip `a012ab0`). Owning Issues #727 and #5 are **open** until a new freeze + independent Phase 2 PASS.  
-**Owning validation Issue:** #727 — open (reopened)  
-**Parent M001 Issue:** #5 — open (reopened)  
+**Status:** Normative final-validation authority — Phase 1 findings disposition complete; Phase 2 **PASS** on final freeze `c536c5454583f6a036910e145fe1187446319630` (last production behavior `a012ab0` #789; honesty #790; baseline #791).  
+**Owning validation Issue:** #727 — Done on this freeze  
+**Parent M001 Issue:** #5 — Done on this freeze  
 **Pass 9 prerequisite:** #719 — closed Done  
 **Phase 1 review candidate:** `1005bc42397aac485b1aeff08cafd0f67790d969`  
-**Historical refinement base:** `efa365d48565fb09452b683577700a8e5e267fcb`
+**Historical refinement base:** `efa365d48565fb09452b683577700a8e5e267fcb`  
 **Machine RSS gate:** `CLIENT_RSS_KIB = 1536` (#784)
 
 ## 1. Purpose
@@ -55,9 +55,9 @@ Independent final milestone-validation execution was forbidden until all of thes
 - a final exact M001 validation head is frozen after review-driven changes;
 - development readiness for the Phase 2 validation execution of #727 returns Ready.
 
-Those Phase 2 entry conditions were met for the historical freeze, then invalidated by honesty findings (#784/#787) and production Metal change (#789). Final validation is **not Done** until a new freeze SHA is recorded and independent Phase 2 + clean-checkout demo PASS. Machine RSS gate remains **`CLIENT_RSS_KIB = 1536`** (unchanged by Pass 10; #784).
+Those Phase 2 entry conditions were met. Final validation is **PASS** on freeze `c536c5454583f6a036910e145fe1187446319630` with clean-checkout demo EXIT:0 and independent review READY. Machine RSS gate remains **`CLIENT_RSS_KIB = 1536`** (unchanged by Pass 10; #784).
 
-M002 implementation must not be started as a dependency bypass while M001 has a failed, missing or inconclusive mandatory Pass 10 criterion.
+M002 may start only after #727/#5 are closed Done on this freeze. Do not bypass failed, missing or inconclusive mandatory Pass 10 criteria.
 
 ## 3. Validation is not a catch-all implementation pass
 

@@ -1,30 +1,35 @@
 # Pass 10 independent final milestone review
 
-**SUPERSEDED pending re-freeze — do not treat as current Done authority**
+**READY — Phase 2 PASS on final freeze `c536c54`**
 
 | Field | Value |
 |---|---|
-| Reviewer role | Independent final milestone review (did not implement) |
-| Date (UTC) | 2026-09-05 (historical); honesty amendment 2026-09-05 (#787) |
-| Prior production freeze | `d845c6ddbe86f20183186f1aa69f2293aa8356ba` (#776) |
-| Production tip after #789 | `a012ab0` — invalidates Metal-affected freeze evidence until Phase 2 re-runs |
+| Reviewer role | Independent final milestone review (did not implement #789/#790/#791) |
+| Date (UTC) | 2026-09-05 |
+| Final freeze | `c536c5454583f6a036910e145fe1187446319630` |
+| Last production behavior | `a012ab0b71e74a18c37becacb2bfc1c505f1248c` (#789) |
+| Honesty / baseline tips | `#790` → `#791` (ancestors of freeze) |
 | Harness tip | `e2b76024de2c85b3e9adb6dd5dcadb7b40881079` (#778) |
-| Machine RSS gate | **`CLIENT_RSS_KIB = 1536`** (`scripts/check-pass9-production-budget.py`; #784) |
-| Pass 9 | Remains Done; not reopened |
+| Machine RSS gate | **`CLIENT_RSS_KIB = 1536`** |
+| Engineering Quality Baseline | Present (`docs/engineering/ENGINEERING-QUALITY-BASELINE.md`) |
+| Pass 9 | Remains Done |
 
-## Why this review is superseded
+## Clean-checkout demo (exact freeze)
 
-1. **#784** — prior closeout falsely claimed soft/machine RSS gate 768; corrected to 1536.
-2. **#787** — §6.7 cited socket-loss soak as “GUI crash”; §6.11 lacked headed `SEYAL_REQUIRE_DISPLAY_LINK_BENCHMARK=1` artifact in the ledger; §6.12 claimed PASS while recording `TEST_EXIT:2` / `BENCH_EXIT:2` without protocol-legal disposition.
-3. **#789** — production Metal atlas in-flight deferral landed on `a012ab0`; prior freeze is no longer the final production head.
+| Step | Exit |
+|---|---|
+| bootstrap / build / test / check / bench | 0 / 0 / 0 / 0 / 0 |
+| Headed DisplayLink | `display_link_samples=120/120` |
+| XCUI forced-GUI-exit | PASS (`testPass9ProductionRecoverySurvivesGracefulAndForcedGUIExit`) |
+| `--renderer-self-test` | EXIT:0 |
+| Pass9 budget validator | PASS |
 
-## Corrections retained as true
+Artifact: `docs/evidence/pass10-final-freeze-clean-demo-c536c54.md` (logs `/tmp/pass10-final-freeze/`).
 
-- Machine RSS gate is **1536**, not 768.
-- Headed DisplayLink on `a012ab0`: `make bench` EXIT:0 with `display_link_samples=120` — `docs/evidence/pass10-787-headed-display-link-summary-a012ab0.txt`.
-- Forced GUI exit survival is proven by XCUI recovery test, not by `abrupt_socket_loss` alone.
-- Diagnostic `SEYAL_CODESIGN_IDENTITY=-` default in `scripts/task.sh` aligns `make bench` with Foundation CI packaging.
+## Mandatory domains (§6.1–6.13)
+
+All mandatory criteria **PASS**. No FAIL / INCONCLUSIVE remaining after this evidence tip records the freeze and status docs. §6.7 cites XCUI forced-GUI-exit (not socket-loss soak). §6.11 headed presentation is controlled-host DisplayLink evidence, not CI `DISPLAY_LINK=0`.
 
 ## Close authority
 
-Owning Issue **#727** and parent milestone **#5** remain **open** until a new freeze SHA is recorded and independent Phase 2 + clean-checkout demo PASS on that freeze, with #788 Engineering Quality Baseline landed.
+Owning Issue **#727** and parent milestone **#5** may close Done on this freeze. Do not reopen Pass 9. Do not change `CLIENT_RSS_KIB` without a new calibration Issue. Parked post-M001 work (#764–#768, #663) remains outside M001. **M002 may start** after this tip is on `master` and #727/#5 are closed.

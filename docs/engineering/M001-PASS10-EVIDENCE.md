@@ -62,9 +62,9 @@ Expanded from `docs/milestones/MILESTONE-001.md` §15 and Pass 10 validation §6
 | Spawn/read/write real PTY | PASS | `macos_pty` + `macos_runtime` EXIT:0 |
 | Exit vs signal vs EOF/HUP | PASS | `runtime_adversarial` + `macos_failure_contracts` EXIT:0 |
 | Terminate + deterministic reap | PASS | `macos_runtime` / `macos_failure_contracts` EXIT:0 |
-| Endpoint-first resize | PENDING | |
-| Repeated cleanup / resource return | PENDING | |
-| TerminationFailed recovery / PrimaryExitPending bound (F-006) | PENDING | |
+| Endpoint-first resize | PASS | `seyal-exec` macos_pty resize kernel-visible test EXIT:0; runtime rejects resize after termination begins EXIT:0 |
+| Repeated cleanup / resource return | PASS | `repeated_create_and_controlled_terminate_returns_registry_and_budget_to_zero` EXIT:0 |
+| TerminationFailed recovery / PrimaryExitPending bound (F-006) | PASS | `runtime_adversarial` with `test-fault-injection`: primary_exit_pending + termination_failed recovery EXIT:0 |
 
 ### 6.4 Candidate-D attachment/projection
 
@@ -90,7 +90,7 @@ Expanded from `docs/milestones/MILESTONE-001.md` §15 and Pass 10 validation §6
 | Criterion | Verdict | Evidence |
 |---|---|---|
 | Runtime-owned Block metadata + anchors | PASS | `pass8_blocks` EXIT:0 |
-| Current→Completed ordering | PENDING | |
+| Current→Completed ordering | PASS | `block_identity_anchor_completion_order_and_retirement_follow_spec007` EXIT:0 |
 
 ### 6.7 Pass 9 detach/reconnect/crash continuity
 
@@ -156,7 +156,7 @@ Expanded from `docs/milestones/MILESTONE-001.md` §15 and Pass 10 validation §6
 | Gate | Verdict | Notes |
 |---|---|---|
 | `make check` on freeze SHA | PASS | `make check` EXIT:0 on `3f7b2d926dcab888e4dadc480033c1d137fd5ad7` (`/tmp/pass10-evidence-3f7b2d9/make-check-final.log`) |
-| Targeted Pass 10 / Pass 9 suites | IN PROGRESS | Pass 10 disconnect/adversarial/FFI green; Pass 9 merge-acceptance + §6.9 campaigns running on freeze |
+| Targeted Pass 10 / Pass 9 suites | IN PROGRESS | Pass 9 merge-acceptance PASS after RSS harness fix (224/512≤768); §6.9 campaigns in progress (2/8 EXIT:0); lifecycle/F-006/Block order green |
 | Clean production demo | PENDING | |
 | Independent final review | PENDING | |
 

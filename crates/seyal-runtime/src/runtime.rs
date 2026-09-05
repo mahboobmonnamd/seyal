@@ -43,6 +43,15 @@ const ROLLBACK_REAP_TICK: Duration = Duration::from_millis(10);
 /// retry cadence for re-attempting the reap rather than discarding the
 /// one-shot notification and stranding the execution with no deadline.
 const PRIMARY_EXIT_REAP_RETRY: Duration = Duration::from_millis(10);
+/// Bound `PrimaryExitPending` the same way PTY EOF probes are bounded: a
+/// fixed number of short retries, then escalate into recoverable
+/// `TerminationFailed` rather than spinning forever at 10 ms.
+const PRIMARY_EXIT_REAP_LIMIT: u8 = 6;
+/// After forced-reap deadline, keep a bounded signalling/reap path so
+/// `TerminationFailed` remains recoverable instead of a silent registry sink.
+const TERMINATION_FAILED_RETRY_INITIAL: Duration = Duration::from_millis(10);
+const TERMINATION_FAILED_RETRY_MAX: Duration = Duration::from_millis(250);
+const TERMINATION_FAILED_REAP_LIMIT: u8 = 8;
 /// PTY EOF is terminal-I/O state, not process-exit truth. A short bounded
 /// exponential probe covers the narrow race where a process exits around
 /// NOTE_EXIT registration and the first `try_wait` has not become reapable
@@ -215,10 +224,13 @@ pub enum ExecutionLifecycle {
     TerminatingGraceful,
     TerminatingForced,
     /// The kernel has confirmed the primary process exited (`NOTE_EXIT`),
-    /// but the reap (`waitpid`) has not yet completed. Always transient and
-    /// retried on a short deadline; never a terminal state.
+    /// but the reap (`waitpid`) has not yet completed. Retried on a short
+    /// deadline with a hard attempt bound; never an unbounded terminal state.
     PrimaryExitPending,
     DrainingAfterPrimaryExit,
+    /// Forced reap deadline was exceeded. Ownership is retained and a bounded
+    /// retry/signalling path remains until reap succeeds or the operator
+    /// re-arms termination.
     TerminationFailed,
 }
 
@@ -249,12 +261,18 @@ enum Lifecycle {
     /// See `ExecutionLifecycle::PrimaryExitPending`.
     PrimaryExitPending {
         deadline: Instant,
+        remaining: u8,
     },
     DrainingAfterPrimaryExit {
         deadline: Instant,
         exit: ChildExit,
     },
-    TerminationFailed,
+    /// See `ExecutionLifecycle::TerminationFailed`.
+    TerminationFailed {
+        deadline: Instant,
+        delay: Duration,
+        remaining: u8,
+    },
 }
 
 impl Lifecycle {
@@ -265,7 +283,7 @@ impl Lifecycle {
             Self::TerminatingForced { .. } => ExecutionLifecycle::TerminatingForced,
             Self::PrimaryExitPending { .. } => ExecutionLifecycle::PrimaryExitPending,
             Self::DrainingAfterPrimaryExit { .. } => ExecutionLifecycle::DrainingAfterPrimaryExit,
-            Self::TerminationFailed => ExecutionLifecycle::TerminationFailed,
+            Self::TerminationFailed { .. } => ExecutionLifecycle::TerminationFailed,
         }
     }
 
@@ -273,14 +291,47 @@ impl Lifecycle {
         match self {
             Self::TerminatingGraceful { deadline }
             | Self::TerminatingForced { deadline }
-            | Self::PrimaryExitPending { deadline }
-            | Self::DrainingAfterPrimaryExit { deadline, .. } => Some(deadline),
-            Self::Running | Self::TerminationFailed => None,
+            | Self::PrimaryExitPending { deadline, .. }
+            | Self::DrainingAfterPrimaryExit { deadline, .. }
+            | Self::TerminationFailed { deadline, .. } => Some(deadline),
+            Self::Running => None,
         }
     }
 
     fn accepts_input(self) -> bool {
         matches!(self, Self::Running)
+    }
+
+    fn enter_termination_failed(now: Instant) -> Self {
+        Self::TerminationFailed {
+            deadline: now + TERMINATION_FAILED_RETRY_INITIAL,
+            delay: TERMINATION_FAILED_RETRY_INITIAL,
+            remaining: TERMINATION_FAILED_REAP_LIMIT,
+        }
+    }
+
+    fn advance_termination_failed(self, now: Instant) -> Self {
+        match self {
+            Self::TerminationFailed {
+                delay, remaining, ..
+            } => {
+                let next_delay = delay.saturating_mul(2).min(TERMINATION_FAILED_RETRY_MAX);
+                let next_remaining = remaining.saturating_sub(1);
+                Self::TerminationFailed {
+                    deadline: now + next_delay,
+                    delay: next_delay,
+                    // When the attempt budget is exhausted, keep ownership and
+                    // continue at the max backoff so shutdown cannot hot-spin
+                    // and `request_termination` can still re-arm recovery.
+                    remaining: if next_remaining == 0 {
+                        0
+                    } else {
+                        next_remaining
+                    },
+                }
+            }
+            other => other,
+        }
     }
 }
 
@@ -744,8 +795,9 @@ impl Runtime {
             .entries
             .get_mut(&id)
             .ok_or(RuntimeError::UnknownExecution)?;
-        if !matches!(entry.lifecycle, Lifecycle::Running) {
-            return Ok(());
+        match entry.lifecycle {
+            Lifecycle::Running | Lifecycle::TerminationFailed { .. } => {}
+            _ => return Ok(()),
         }
         entry.pty_eof_reap_probe = None;
         entry.ingress_active.store(false, Ordering::Release);
@@ -759,6 +811,8 @@ impl Runtime {
                 };
             }
             SignalDisposition::Delivered | SignalDisposition::ProcessGone => {
+                // Recovering from TerminationFailed re-enters the graceful→forced
+                // path so ownership always retains a signalling/reap deadline.
                 entry.lifecycle = Lifecycle::TerminatingGraceful {
                     deadline: now + self.config.graceful_termination,
                 };
@@ -1114,6 +1168,7 @@ impl Runtime {
             // transition rather than terminal-I/O state leakage.
             entry.lifecycle = Lifecycle::PrimaryExitPending {
                 deadline: Instant::now() + PRIMARY_EXIT_REAP_RETRY,
+                remaining: PRIMARY_EXIT_REAP_LIMIT,
             };
         }
         Ok(())
@@ -1225,10 +1280,12 @@ impl Runtime {
                         self.enter_drain(id, exit)?;
                         self.service_reads(id)?;
                     } else if let Some(entry) = self.entries.get_mut(&id) {
-                        entry.lifecycle = Lifecycle::TerminationFailed;
+                        // Forced reap missed: retain ownership on a bounded
+                        // retry path instead of a deadline-less sink.
+                        entry.lifecycle = Lifecycle::enter_termination_failed(now);
                     }
                 }
-                Some(Lifecycle::PrimaryExitPending { .. }) => {
+                Some(Lifecycle::PrimaryExitPending { remaining, .. }) => {
                     let exit = {
                         let entry = self
                             .entries
@@ -1240,9 +1297,44 @@ impl Runtime {
                         self.enter_drain(id, exit)?;
                         self.service_reads(id)?;
                     } else if let Some(entry) = self.entries.get_mut(&id) {
-                        entry.lifecycle = Lifecycle::PrimaryExitPending {
-                            deadline: now + PRIMARY_EXIT_REAP_RETRY,
-                        };
+                        let next_remaining = remaining.saturating_sub(1);
+                        if next_remaining == 0 {
+                            entry.lifecycle = Lifecycle::enter_termination_failed(now);
+                        } else {
+                            entry.lifecycle = Lifecycle::PrimaryExitPending {
+                                deadline: now + PRIMARY_EXIT_REAP_RETRY,
+                                remaining: next_remaining,
+                            };
+                        }
+                    }
+                }
+                Some(Lifecycle::TerminationFailed { .. }) => {
+                    let exit = {
+                        let entry = self
+                            .entries
+                            .get_mut(&id)
+                            .ok_or(RuntimeError::UnknownExecution)?;
+                        entry.execution.try_wait()?
+                    };
+                    if let Some(exit) = exit {
+                        self.enter_drain(id, exit)?;
+                        self.service_reads(id)?;
+                        continue;
+                    }
+                    let entry = self
+                        .entries
+                        .get_mut(&id)
+                        .ok_or(RuntimeError::UnknownExecution)?;
+                    match entry.execution.signal_kill()? {
+                        SignalDisposition::AlreadyReaped(exit) => {
+                            entry.lifecycle = Lifecycle::DrainingAfterPrimaryExit {
+                                deadline: now + self.config.final_drain,
+                                exit,
+                            };
+                        }
+                        SignalDisposition::Delivered | SignalDisposition::ProcessGone => {
+                            entry.lifecycle = entry.lifecycle.advance_termination_failed(now);
+                        }
                     }
                 }
                 Some(Lifecycle::DrainingAfterPrimaryExit { exit, .. }) => {
@@ -1258,7 +1350,7 @@ impl Runtime {
                         self.finalize(id)?;
                     }
                 }
-                Some(Lifecycle::Running | Lifecycle::TerminationFailed) | None => {}
+                Some(Lifecycle::Running) | None => {}
             }
         }
 

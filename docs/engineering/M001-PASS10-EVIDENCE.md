@@ -140,7 +140,7 @@ Expanded from `docs/milestones/MILESTONE-001.md` §15 and Pass 10 validation §6
 | Step | Verdict | Evidence |
 |---|---|---|
 | Clean checkout of freeze SHA | PASS | Clean tree at `d845c6ddbe86…`; log `/tmp/pass10-evidence-3f7b2d9/clean-demo-d845c6d-recheck.log` |
-| bootstrap/build/test/check | PASS | Clean-demo pipeline `CHECK_EXIT:0` / `DEMO_PIPELINE_DONE` (same log) |
+| bootstrap/build/test/check | PASS | Clean-demo pipeline `CHECK_EXIT:0` / `DEMO_PIPELINE_DONE` (same log). Host note: `TEST_EXIT:2` after SeyalTests 81/81 when UITest runner timed out enabling automation mode; full XCUI proven by #778 CI + headed recovery UITest |
 | Runtime + Seyal.app attach demo | PASS | Headed Pass9 production recovery UITest PASS 20.381s with packaged helper; `UITEST_EXIT:0` — `/tmp/pass10-evidence-3f7b2d9/section-6.12-headed-uitest-unblocked.log`. Alt-screen + terminfo live checks EXIT:0 |
 | TERM/terminfo, input, resize, ?1049 | PASS | §6.12 alt/primary/infocmp EXIT:0; production recovery UITest exercises live attach/input after reconnect |
 | Detach/crash/reconnect/terminate | PASS | `testPass9ProductionRecoverySurvivesGracefulAndForcedGUIExit` covers graceful + forced GUI exit with Runtime continuity (`UITEST_EXIT:0`) |

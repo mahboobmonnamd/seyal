@@ -1,10 +1,11 @@
 # M001 Pass 10 — Final Milestone Validation Protocol
 
-**Status:** Refinement authority; execution blocked until Pass 9 is complete  
+**Status:** Normative final-validation authority — Phase 1 review IN PROGRESS; final validation not yet started  
 **Owning validation Issue:** #727  
 **Parent M001 Issue:** #5  
-**Blocked by:** #719  
-**Refinement base:** `efa365d48565fb09452b683577700a8e5e267fcb`
+**Pass 9 prerequisite:** #719 — closed Done  
+**Phase 1 review candidate:** `1005bc42397aac485b1aeff08cafd0f67790d969`  
+**Historical refinement base:** `efa365d48565fb09452b683577700a8e5e267fcb`
 
 ## 1. Purpose
 
@@ -27,17 +28,32 @@ Use `.agents/skills/milestone-validation/SKILL.md` as the primary workflow.
 
 ## 2. Entry gate
 
-Pass 10 may be refined while Pass 9 is nearing completion, but validation execution is forbidden until all of these are true:
+### 2.1 Phase 1 code/quality review — READY / IN PROGRESS
 
-- Pass 9 production Issue #719 is genuinely Done and merged;
+Pass 9 no longer blocks Pass 10 Phase 1. The following entry conditions are satisfied:
+
+- Pass 9 production Issue #719 is closed Done;
 - final Pass 9 independent review has no unresolved blocker;
 - Pass 9 calibrated reconnect/cleanup/resource budgets are accepted and retained;
 - current `master` contains the accepted Pass 1–9 production lineage;
-- the candidate M001 production head is frozen;
-- there is no unresolved architecture/specification question;
-- development readiness for #727 returns Ready.
+- Phase 1 review candidate is frozen at `1005bc42397aac485b1aeff08cafd0f67790d969`;
+- there is no unresolved architecture/specification question that blocks review;
+- development readiness for #727 returned Ready and Phase 1 was transitioned to IN PROGRESS by user direction.
 
-Until then, Pass 10 remains `BLOCKED / NOT_READY`.
+Phase 1 follows `docs/engineering/M001-PASS10-CODE-QUALITY-REVIEW.md`.
+
+### 2.2 Phase 2 final validation — still gated
+
+Independent final milestone-validation execution remains forbidden until all of these are true:
+
+- Phase 1 review ledger covers every M001-significant file/module;
+- no `BLOCKING` review finding remains;
+- every `IMPORTANT` finding is resolved or authoritatively assigned outside M001 with the correct future owner;
+- all review domains affected by accepted fixes have been rerun;
+- a final exact M001 validation head is frozen after review-driven changes;
+- development readiness for the Phase 2 validation execution of #727 returns Ready.
+
+Until those Phase 2 conditions are met, final validation remains `NOT STARTED / GATED`, even though Phase 1 review is authorized and in progress.
 
 M002 implementation must not be started as a dependency bypass while M001 has a failed, missing or inconclusive mandatory Pass 10 criterion.
 

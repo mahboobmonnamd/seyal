@@ -1,8 +1,9 @@
 # M001 Pass 10 — Milestone Closure Code and Quality Review
 
-**Status:** Refinement authority; execution blocked until Pass 9 is complete  
+**Status:** Normative Phase 1 review authority — IN PROGRESS from frozen review candidate `1005bc42397aac485b1aeff08cafd0f67790d969`  
 **Owning Issue:** #727  
 **Parent M001 Issue:** #5  
+**Pass 9 prerequisite:** #719 — closed Done  
 **Companion protocol:** `docs/engineering/M001-PASS10-VALIDATION.md`
 
 ## 1. Purpose

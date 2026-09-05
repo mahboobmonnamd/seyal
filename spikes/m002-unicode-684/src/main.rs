@@ -1,5 +1,6 @@
 mod bounds;
 mod mutation;
+mod overflow;
 mod projection;
 mod storage;
 mod streaming;
@@ -226,6 +227,7 @@ fn main() {
     storage::report_storage_pressure();
     projection::report_projection_pressure();
     bounds::report_cluster_bounds();
+    overflow::report_overflow_policy();
 
     let (seg_ns, seg_checksum) = benchmark_segmentation(segmentation_rounds);
     println!(

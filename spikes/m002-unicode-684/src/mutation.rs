@@ -55,6 +55,7 @@ enum Mutation {
     EraseAnchoredCell,
     InsertDeleteCells,
     ScreenSwitch,
+    WidthModeSwitch,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -138,7 +139,14 @@ impl AnchoredAppendProbe {
                 self.col = col;
                 self.invalidate_anchor();
             }
-            Mutation::EraseAnchoredCell | Mutation::InsertDeleteCells | Mutation::ScreenSwitch => {
+            Mutation::EraseAnchoredCell
+            | Mutation::InsertDeleteCells
+            | Mutation::ScreenSwitch
+            | Mutation::WidthModeSwitch => {
+                // A mode-2027/legacy switch changes the interpretation of
+                // subsequent printable scalars. Existing cells remain as
+                // already committed; only the active append candidate is
+                // invalidated so no grapheme crosses the semantic boundary.
                 self.invalidate_anchor();
             }
         }
@@ -253,6 +261,16 @@ pub(crate) fn report_mutation_semantics() {
         anchored.mutation_generation
     );
 
+    let mut mode_switch = AnchoredAppendProbe::default();
+    mode_switch.print('❤');
+    mode_switch.apply(Mutation::WidthModeSwitch);
+    mode_switch.print('\u{fe0f}');
+    println!(
+        "MUTATION\twidth-mode-switch-boundary\tcluster={:?}\tgeneration={}",
+        mode_switch.active().text,
+        mode_switch.mutation_generation
+    );
+
     let mut moved = AppendProbe::default();
     moved.print('e');
     moved.cursor_moved();
@@ -342,6 +360,18 @@ mod tests {
             probe.print('\u{301}');
             assert_eq!(probe.active().text, "\u{301}");
         }
+    }
+
+    #[test]
+    fn width_mode_switch_invalidates_active_anchor_without_rewriting_old_cells() {
+        let mut probe = AnchoredAppendProbe::default();
+        probe.print('❤');
+        let old = probe.active().clone();
+        probe.apply(Mutation::WidthModeSwitch);
+        probe.print('\u{fe0f}');
+        assert_eq!(old.text, "❤");
+        assert_eq!(probe.active().text, "\u{fe0f}");
+        assert_ne!(probe.active().anchor.generation, old.anchor.generation);
     }
 
     #[test]

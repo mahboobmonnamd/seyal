@@ -18,6 +18,9 @@
 		A1000000000000000000000A /* PaneComposerShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000C /* PaneComposerShellView.swift */; };
 		A1000000000000000000000B /* TerminalSurfaceHostView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000D /* TerminalSurfaceHostView.swift */; };
 		A1000000000000000000000C /* SeyalShellView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000E /* SeyalShellView.swift */; };
+		A1000000000000000000002D /* SeyalShellChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000002D /* SeyalShellChrome.swift */; };
+		A1000000000000000000002E /* SeyalShellPaneLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000002E /* SeyalShellPaneLayout.swift */; };
+		A1000000000000000000002F /* SeyalShellTranscriptCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000002F /* SeyalShellTranscriptCoordinator.swift */; };
 		A1000000000000000000000D /* SeyalShellPreviewFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000F /* SeyalShellPreviewFactory.swift */; };
 		A10000000000000000000016 /* SeyalShellProductionFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000019 /* SeyalShellProductionFactory.swift */; };
 		C10000000000000000000001 /* SeyalShellComponentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000003 /* SeyalShellComponentTests.swift */; };
@@ -83,6 +86,9 @@
 		A2000000000000000000000C /* PaneComposerShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaneComposerShellView.swift; sourceTree = "<group>"; };
 		A2000000000000000000000D /* TerminalSurfaceHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalSurfaceHostView.swift; sourceTree = "<group>"; };
 		A2000000000000000000000E /* SeyalShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeyalShellView.swift; sourceTree = "<group>"; };
+		A2000000000000000000002D /* SeyalShellChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeyalShellChrome.swift; sourceTree = "<group>"; };
+		A2000000000000000000002E /* SeyalShellPaneLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeyalShellPaneLayout.swift; sourceTree = "<group>"; };
+		A2000000000000000000002F /* SeyalShellTranscriptCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeyalShellTranscriptCoordinator.swift; sourceTree = "<group>"; };
 		A2000000000000000000000F /* SeyalShellPreviewFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeyalShellPreviewFactory.swift; sourceTree = "<group>"; };
 		C20000000000000000000001 /* SeyalTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SeyalTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		C20000000000000000000002 /* SeyalUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SeyalUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -183,6 +189,9 @@
 				A2000000000000000000000C /* PaneComposerShellView.swift */,
 				A2000000000000000000000D /* TerminalSurfaceHostView.swift */,
 				A2000000000000000000000E /* SeyalShellView.swift */,
+				A2000000000000000000002D /* SeyalShellChrome.swift */,
+				A2000000000000000000002E /* SeyalShellPaneLayout.swift */,
+				A2000000000000000000002F /* SeyalShellTranscriptCoordinator.swift */,
 				A2000000000000000000000F /* SeyalShellPreviewFactory.swift */,
 				A20000000000000000000019 /* SeyalShellProductionFactory.swift */,
 				A2000000000000000000001A /* CommandBlockBodyView.swift */,
@@ -391,6 +400,9 @@
 				A1000000000000000000000A /* PaneComposerShellView.swift in Sources */,
 				A1000000000000000000000B /* TerminalSurfaceHostView.swift in Sources */,
 				A1000000000000000000000C /* SeyalShellView.swift in Sources */,
+				A1000000000000000000002D /* SeyalShellChrome.swift in Sources */,
+				A1000000000000000000002E /* SeyalShellPaneLayout.swift in Sources */,
+				A1000000000000000000002F /* SeyalShellTranscriptCoordinator.swift in Sources */,
 				A1000000000000000000000D /* SeyalShellPreviewFactory.swift in Sources */,
 				A10000000000000000000016 /* SeyalShellProductionFactory.swift in Sources */,
 				A10000000000000000000017 /* CommandBlockBodyView.swift in Sources */,

@@ -69,7 +69,7 @@ Revalidation rules:
 - Reopen a closed current issue only when its own promised deliverable is actually unfinished **and** there is no valid current owner replacing that scope. Do not reopen merely because a broader feature remains unfinished.
 - Rejected/superseded/historical-only shapes stay closed and point to their current decision/replacement.
 
-The 2026-08-25 closed-current-issue audit found **no non-historical closed issue that requires reopening** under these rules. Unfinished product work is represented by #640–#650, #197, #262 and active milestone/implementation issues such as #105.
+The 2026-08-25 closed-current-issue audit found **no non-historical closed issue that requires reopening** under these rules. Unfinished product work is represented by #640–#650, #197, #262 and active M002+ milestone/implementation issues (M001/#105 are closed).
 
 One important exception remains intentionally open: [#107](https://github.com/mahboobmonnamd/seyal/issues/107). The canonical feature inventory and 511/511 historical import are complete, but #107's stricter requirement for an explicit per-source-issue disposition ledger covering all 511 imported issues has not yet been committed. Do not close #107 until that audit requirement is either completed or explicitly superseded by a reviewed decision.
 

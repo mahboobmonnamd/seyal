@@ -120,7 +120,7 @@ make docs-check    # run Starlight/Astro documentation validation
 
 `make docs` requires Node.js 22.12 or later. Do not create competing undocumented command paths.
 
-Current behavior after Passes 1–9:
+Current behavior after Passes 1–10 (M001 Done / closed):
 
 - `make bootstrap` provisions/verifies the pinned Rust toolchain and, on macOS, validates full Xcode + Swift + macOS SDK + Metal tooling;
 - `make build` builds the Rust workspace (`seyal-core`, `seyal-terminal`, `seyal-exec`, `seyal-protocol`, `seyal-runtime`, `seyal-render`, `seyal-client`) and, on macOS, builds the native `Seyal.app` Xcode target;
@@ -134,7 +134,7 @@ The public `Foundation Quality` workflow separates the fast PR gates into `repos
 
 Canonical Cargo operations use the pinned toolchain and `--locked` where dependency resolution applies.
 
-The physical Rust workspace is the Passes 1–9 production surface documented in `docs/engineering/REPOSITORY-STRUCTURE.md`. Crates exist only for justified ownership boundaries; do not pre-create empty diagram-driven packages.
+The physical Rust workspace is the Passes 1–10 / M001 production surface documented in `docs/engineering/REPOSITORY-STRUCTURE.md`. Crates exist only for justified ownership boundaries; do not pre-create empty diagram-driven packages.
 
 The native host under `macos/Seyal` is **Swift + AppKit + Metal** and now includes the permanent Metal terminal renderer, Candidate-D client attachment, native input/resize/focus/IME seams, minimal Block presentation, and Pass 9 detach/reconnect recovery. Metal shaders use Metal Shading Language. Rust/native interop crosses a coarse C-compatible prepared-frame boundary rather than per-cell language calls.
 

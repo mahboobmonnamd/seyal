@@ -8,7 +8,7 @@ Seyal OSS welcomes focused, evidence-backed contributions. Start with [CONTRIBUT
 
 The public repository owns the generic terminal foundation. Commercial Pro, Teams, Enterprise, hosted-service, billing, identity, and private-deployment capabilities belong in the separate commercial composition repository and must not become dependencies here.
 
-The foundation architecture is accepted and **Milestone 001 is ready for implementation**. Production work must follow the accepted milestone sequence and its pass/acceptance gates.
+The foundation architecture is accepted and **Milestone 001 is Done / closed** (Passes 1–10; Issues #5 and #727 closed). Current production work follows the accepted milestone sequence starting at **M002+**. Soft RSS remains **768 KiB**.
 
 ## Start here
 

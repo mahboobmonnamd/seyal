@@ -1,0 +1,13 @@
+[package]
+name = "seyal-m002-unicode-684-spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Keep this experimental package outside the production Seyal workspace.
+[workspace]
+resolver = "3"
+
+[dependencies]
+unicode-segmentation = "=1.13.3"
+unicode-width = "=0.2.2"

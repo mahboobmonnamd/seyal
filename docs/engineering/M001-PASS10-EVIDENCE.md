@@ -124,7 +124,7 @@ Expanded from `docs/milestones/MILESTONE-001.md` §15 and Pass 10 validation §6
 | Socket ownership/permissions | PASS | `local_ipc_protocol` + adversarial suites EXIT:0; same-user UDS trust contracts |
 | Same-user auth / attachment identity | PASS | `local_ipc_protocol` / adversarial Observer-Controller auth EXIT:0 |
 | Bounds/version validation | PASS | `local_ipc_adversarial` + `local_ipc_ctrunc` + FFI misuse EXIT:0 |
-| Focused M001 threat review recorded | PASS | `docs/evidence/m001-pass10-security-review.md` (Pass 9 #745 not used as sole proof) |
+| Focused M001 threat review recorded | PASS | `docs/evidence/m001-pass10-security-review.md` (Pass 9 review artifact not used as sole proof) |
 
 ### 6.11 Performance / memory / resources
 

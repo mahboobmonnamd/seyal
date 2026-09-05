@@ -1,0 +1,59 @@
+name: Spike M002 Unicode 684
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [master]
+    paths:
+      - "spikes/m002-unicode-684/**"
+      - ".github/workflows/spike-m002-unicode-684.yml"
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: spike-m002-unicode-684-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  comparative-evidence:
+    name: comparative-evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install project Rust version
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup override set 1.98.0
+      - name: Format check
+        run: cargo fmt --manifest-path spikes/m002-unicode-684/Cargo.toml -- --check
+      - name: Deterministic corpus tests
+        run: cargo test --manifest-path spikes/m002-unicode-684/Cargo.toml
+      - name: Comparative measurements
+        run: |
+          cargo run --release --manifest-path spikes/m002-unicode-684/Cargo.toml \
+            | tee /tmp/m002-unicode-684-results.txt
+      - name: Publish spike evidence to PR
+        if: always() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          {
+            echo '<!-- seyal-m002-unicode-684-ci -->'
+            echo '### M002 Unicode #684 spike CI evidence'
+            echo
+            echo 'Non-mergeable R&D branch. Comparative numbers are CI-host evidence, not production latency gates.'
+            echo
+            echo '```text'
+            if [ -f /tmp/m002-unicode-684-results.txt ]; then
+              cat /tmp/m002-unicode-684-results.txt
+            else
+              echo 'measurement output unavailable; inspect the failed job'
+            fi
+            echo '```'
+          } > /tmp/comment.md
+          gh pr comment "$PR_NUMBER" --body-file /tmp/comment.md

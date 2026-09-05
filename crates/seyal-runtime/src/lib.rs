@@ -37,4 +37,7 @@ pub use capability::{CapabilityPolicy, m001_term_name};
 pub use error::RuntimeError;
 pub use ids::{AttachmentId, BlockId, ExecutionId, ProjectionId, RuntimeId, WorkspaceId};
 pub use input::InputIngress;
+#[cfg(feature = "benchmark-instrumentation")]
+#[doc(hidden)]
+pub use runtime::BenchmarkRuntimeDiagnostics;
 pub use runtime::{ExecutionLifecycle, ExecutionSummary, LocalIpcMode, Runtime, RuntimeConfig};

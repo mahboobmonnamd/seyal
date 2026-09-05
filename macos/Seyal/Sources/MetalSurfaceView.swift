@@ -195,7 +195,7 @@ final class MetalDisplayLinkLease {
 }
 
 @MainActor
-class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
+class MetalSurfaceView: NSView, @preconcurrency CAMetalDisplayLinkDelegate {
   /// How AppKit installs the surface presenter.
   enum Installation: Equatable {
     /// Production Metal display path (`CAMetalLayer` + Runtime bridge).

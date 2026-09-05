@@ -14,8 +14,7 @@ use seyal_exec::{
 
 use crate::{
     ExecutionId, RuntimeError, RuntimeId, WorkspaceId,
-    activity_block_timeline::ActivityBlockTimeline,
-    input::ControlMessage,
+    activity_block_timeline::ActivityBlockTimeline, input::ControlMessage,
     singleton::SingletonGuard,
 };
 
@@ -37,9 +36,9 @@ pub use lifecycle::ExecutionLifecycle;
 #[cfg(feature = "benchmark-instrumentation")]
 pub use config::BenchmarkRuntimeDiagnostics;
 
-use config::{EVENT_CAPACITY, READ_BUFFER_SIZE, ROLLBACK_REAP_TICK};
 #[cfg(feature = "benchmark-instrumentation")]
 use config::BenchmarkRuntimeState;
+use config::{EVENT_CAPACITY, READ_BUFFER_SIZE, ROLLBACK_REAP_TICK};
 use entry::Entry;
 #[cfg(target_os = "macos")]
 use local::LocalIpcState;

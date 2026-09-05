@@ -10,9 +10,9 @@ use crate::{
 #[cfg(feature = "test-fault-injection")]
 use crate::test_fault::{self, FaultPoint};
 
+use super::super::Runtime;
 use super::connection::ConnectionMeta;
 use super::{ACCEPT_BACKOFF_INITIAL, ACCEPT_BACKOFF_MAX};
-use super::super::Runtime;
 
 impl Runtime {
     pub(in crate::runtime) fn local_ipc_deadline(&self) -> Option<Instant> {
@@ -21,7 +21,10 @@ impl Runtime {
             .and_then(|state| state.listener_backoff_deadline)
     }
 
-    pub(in crate::runtime) fn service_local_deadline(&mut self, now: Instant) -> Result<(), RuntimeError> {
+    pub(in crate::runtime) fn service_local_deadline(
+        &mut self,
+        now: Instant,
+    ) -> Result<(), RuntimeError> {
         let token = self.local_ipc.as_ref().and_then(|state| {
             state
                 .listener_backoff_deadline

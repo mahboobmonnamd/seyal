@@ -688,6 +688,16 @@ final class SeyalShellUITests: XCTestCase {
         XCTAssertTrue(app.textViews["composer.pane-1"].exists)
     }
 
+    func testProductionNativeSurfaceRemainsReachableAfterProtocolCompatibilityMigration() {
+        app.terminate()
+        let surface = launchProductionApp(requireUsableConnection: false)
+
+        XCTAssertTrue(surface.exists)
+        XCTAssertTrue(surface.isHittable)
+        surface.click()
+        XCTAssertTrue(surface.isHittable)
+    }
+
     func testLightAppearanceStillExposesTokenBackedShellChrome() {
         app.terminate()
         app = XCUIApplication()

@@ -15,13 +15,18 @@ use crate::{
 };
 use seyal_exec::WindowSize;
 
+use super::super::ExecutionLifecycle;
+use super::super::Runtime;
 use super::connection::ConnectionMeta;
 use super::display_publish::PublishedDisplay;
-use super::super::Runtime;
-use super::super::ExecutionLifecycle;
 
 impl Runtime {
-    pub(super) fn dispatch_local_ipc_frame(&mut self, token: u64, message_type: u16, payload: &[u8]) {
+    pub(super) fn dispatch_local_ipc_frame(
+        &mut self,
+        token: u64,
+        message_type: u16,
+        payload: &[u8],
+    ) {
         let Some(current_state) = self
             .local_ipc
             .as_ref()

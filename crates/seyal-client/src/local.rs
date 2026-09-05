@@ -25,9 +25,7 @@ use seyal_runtime::{
 use crate::block_cache::{BlockApply, BlockCache, quarantine_epoch};
 
 pub use discovery::DiscoveryFailure;
-pub use input_resize::{
-    GridGeometry, InputAdmissionFailure, ResizeFailure, derive_grid_geometry,
-};
+pub use input_resize::{GridGeometry, InputAdmissionFailure, ResizeFailure, derive_grid_geometry};
 
 pub(crate) const READ_CHUNK_BYTES: usize = 64 * 1024;
 pub(crate) const MAX_BUFFERED_BYTES: usize = (MAX_FRAME_PAYLOAD as usize + HEADER_LEN) * 2;
@@ -481,7 +479,13 @@ mod tests {
         let fallback = discovery::requested_capabilities(false);
         assert_ne!(full & CAP_BLOCK_METADATA, 0);
         assert_eq!(fallback & CAP_BLOCK_METADATA, 0);
-        assert_ne!(full & seyal_runtime::local_ipc::framing::CAP_COMMAND_BLOCKS, 0);
-        assert_ne!(fallback & seyal_runtime::local_ipc::framing::CAP_COMMAND_BLOCKS, 0);
+        assert_ne!(
+            full & seyal_runtime::local_ipc::framing::CAP_COMMAND_BLOCKS,
+            0
+        );
+        assert_ne!(
+            fallback & seyal_runtime::local_ipc::framing::CAP_COMMAND_BLOCKS,
+            0
+        );
     }
 }

@@ -2,7 +2,7 @@ use std::{slice, str};
 
 use seyal_runtime::local_ipc::framing::TerminalKeyKind;
 
-use crate::{local::derive_grid_geometry, LocalDisplayClient};
+use crate::{LocalDisplayClient, local::derive_grid_geometry};
 
 use super::{error_code, with_active_client_mut};
 

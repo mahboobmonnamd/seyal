@@ -18,8 +18,8 @@ use crate::{ClientError, DiscoveryFailure, LocalDisplayClient};
 
 use super::{
     ACTIVE_HANDLE, CLIENTS, DEFAULT_RECOVERY_BUDGET_MICROS, LAST_RECOVERY_RESULT, PendingClient,
-    active_handle, allocate_handle, identity_words, pending_clients, with_active_client,
-    SeyalRecoveryResult,
+    SeyalRecoveryResult, active_handle, allocate_handle, identity_words, pending_clients,
+    with_active_client,
 };
 
 pub(crate) fn set_recovery_failure(error: ClientError) {

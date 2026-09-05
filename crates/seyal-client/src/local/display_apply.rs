@@ -1,12 +1,12 @@
 use seyal_render::{
-    CellSource, CommittedDisplay, CursorState, PreparationResult, PreparedSurface, RenderAttributes,
-    RenderCell, RenderColor, RowDamage,
+    CellSource, CommittedDisplay, CursorState, PreparationResult, PreparedSurface,
+    RenderAttributes, RenderCell, RenderColor, RowDamage,
 };
 use seyal_runtime::{
     display::{
         DISPLAY_CELL_LEN, DISPLAY_CHUNK_HEADER_LEN, DecodedDisplayChunk, DisplayAttributes,
-        DisplayCache, DisplayCell, DisplayColor, DisplayError, DisplayKind, MAX_DISPLAY_BATCH_BYTES,
-        MAX_DISPLAY_CELLS,
+        DisplayCache, DisplayCell, DisplayColor, DisplayError, DisplayKind,
+        MAX_DISPLAY_BATCH_BYTES, MAX_DISPLAY_CELLS,
     },
     local_ipc::framing::HEADER_LEN,
 };

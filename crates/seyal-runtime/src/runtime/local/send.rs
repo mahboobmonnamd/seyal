@@ -4,13 +4,15 @@ use crate::{
     RuntimeError,
     display::EncodedDisplayBatch,
     local_ipc::{
-        framing::{self, ErrorCode, MessageType, ResizeResult as WireResizeResult, ResizeResultCode},
+        framing::{
+            self, ErrorCode, MessageType, ResizeResult as WireResizeResult, ResizeResultCode,
+        },
         recovery,
     },
 };
 
-use crate::AttachmentId;
 use super::super::Runtime;
+use crate::AttachmentId;
 
 impl Runtime {
     pub(super) fn send_mandatory_frame(&mut self, token: u64, bytes: Vec<u8>) -> bool {

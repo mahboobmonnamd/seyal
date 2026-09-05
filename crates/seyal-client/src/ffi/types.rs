@@ -1,4 +1,7 @@
-use std::{mem::{align_of, offset_of, size_of}, ptr};
+use std::{
+    mem::{align_of, offset_of, size_of},
+    ptr,
+};
 
 use seyal_render::PreparedCell;
 use seyal_runtime::local_ipc::framing::HistoryCell;
@@ -40,10 +43,10 @@ impl SeyalRecoveryResult {
 #[cfg(test)]
 mod recovery_result_tests {
     use super::SeyalRecoveryResult;
-    use crate::{ClientError, DiscoveryFailure};
     use crate::ffi::session::{
         classify_bridge_discovery_error, recovery_deadline, set_recovery_failure,
     };
+    use crate::{ClientError, DiscoveryFailure};
     use seyal_runtime::local_ipc::{discovery::DiscoveryError, framing::ErrorCode};
     use std::io;
 

@@ -281,7 +281,7 @@ private enum TerminalNativeKeyClassifier {
 }
 
 @MainActor
-final class InteractiveMetalSurfaceView: MetalSurfaceView, @MainActor NSTextInputClient {
+final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTextInputClient {
   private var composition = CompositionDocument()
   private var lastLayoutSample: TerminalLayoutSample?
   private var nativeFailure: NativeInputFailure?

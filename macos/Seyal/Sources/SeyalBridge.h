@@ -7,6 +7,20 @@
 extern "C" {
 #endif
 
+/*
+ * Layout contract: sizes/offsets of the structs below must match the Rust
+ * `#[repr(C)]` types in crates/seyal-client/src/ffi.rs (and PreparedCell /
+ * HistoryCell). Dual Rust+Swift size/offset tests lock the ABI.
+ *
+ * Panic policy: seyal-client is built with panic=abort. Bridge entry points
+ * must never unwind into Swift; a Rust panic terminates the process.
+ *
+ * Borrow policy: pointer fields returned by seyal_bridge_frame / history row /
+ * block record APIs borrow Rust storage only until the next mutating bridge
+ * call (poll/prepare/disconnect/history consume). Swift copies synchronously
+ * (NativePreparedFrame owns cells at construction).
+ */
+
 typedef struct SeyalPreparedCell {
     uint32_t scalar;
     uint32_t foreground;

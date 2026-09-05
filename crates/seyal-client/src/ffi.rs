@@ -1,3 +1,22 @@
+//! Seyal.app ↔ `seyal-client` C ABI bridge.
+//!
+//! # Panic / unwind policy
+//!
+//! Every `extern "C"` entry point in this module is a C ABI surface consumed by
+//! Swift. Unwinding across that boundary is undefined behavior. The workspace
+//! `dev`/`release` profiles set `panic = "abort"`, so a Rust panic terminates
+//! the process instead of unwinding into Swift. Callers must treat abort as the
+//! only defined panic outcome; there is no catch-and-continue path across FFI.
+//!
+//! # Borrow lifetimes
+//!
+//! Pointer-carrying returns (`seyal_bridge_frame`, history rows, block command
+//! bytes) borrow executor-local Rust storage. They are valid only until the next
+//! mutating bridge call that can replace that storage (poll, disconnect, or a
+//! later history consume). Swift must copy synchronously before returning to the
+//! run loop; `NativePreparedFrame` owns a cell copy at construction so Rust
+//! `PreparedCell` pointers never escape into long-lived Swift state.
+
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
@@ -432,7 +451,13 @@ impl SeyalExecutionBlockMetadata {
 mod pass8_execution_block_abi_tests {
     use std::mem::{align_of, offset_of, size_of};
 
-    use super::SeyalExecutionBlockMetadata;
+    use seyal_render::PreparedCell;
+    use seyal_runtime::local_ipc::framing::HistoryCell;
+
+    use super::{
+        SeyalBlockRecord, SeyalExecutionBlockMetadata, SeyalHistoryCell, SeyalHistoryRow,
+        SeyalPreparedFrame,
+    };
 
     #[test]
     fn execution_block_metadata_c_abi_is_exactly_40_bytes() {
@@ -444,6 +469,74 @@ mod pass8_execution_block_abi_tests {
         assert_eq!(offset_of!(SeyalExecutionBlockMetadata, start_line_id), 24);
         assert_eq!(offset_of!(SeyalExecutionBlockMetadata, state), 32);
         assert_eq!(offset_of!(SeyalExecutionBlockMetadata, reserved), 33);
+    }
+
+    #[test]
+    fn prepared_cell_matches_seyal_bridge_h() {
+        assert_eq!(size_of::<PreparedCell>(), 16);
+        assert_eq!(align_of::<PreparedCell>(), 4);
+        assert_eq!(offset_of!(PreparedCell, scalar), 0);
+        assert_eq!(offset_of!(PreparedCell, foreground), 4);
+        assert_eq!(offset_of!(PreparedCell, background), 8);
+        assert_eq!(offset_of!(PreparedCell, flags), 12);
+        assert_eq!(offset_of!(PreparedCell, reserved), 14);
+    }
+
+    #[test]
+    fn history_cell_matches_seyal_history_cell_and_header() {
+        assert_eq!(size_of::<HistoryCell>(), 16);
+        assert_eq!(size_of::<SeyalHistoryCell>(), 16);
+        assert_eq!(align_of::<HistoryCell>(), align_of::<SeyalHistoryCell>());
+        assert_eq!(offset_of!(HistoryCell, scalar), 0);
+        assert_eq!(offset_of!(HistoryCell, foreground), 4);
+        assert_eq!(offset_of!(HistoryCell, background), 8);
+        assert_eq!(offset_of!(HistoryCell, flags), 12);
+        assert_eq!(offset_of!(HistoryCell, reserved), 14);
+        assert_eq!(
+            offset_of!(SeyalHistoryCell, reserved),
+            offset_of!(HistoryCell, reserved)
+        );
+    }
+
+    #[test]
+    fn prepared_frame_matches_seyal_bridge_h() {
+        assert_eq!(size_of::<SeyalPreparedFrame>(), 72);
+        assert_eq!(align_of::<SeyalPreparedFrame>(), 8);
+        assert_eq!(offset_of!(SeyalPreparedFrame, cells), 0);
+        assert_eq!(offset_of!(SeyalPreparedFrame, cell_count), 8);
+        assert_eq!(offset_of!(SeyalPreparedFrame, generation), 16);
+        assert_eq!(offset_of!(SeyalPreparedFrame, rows), 24);
+        assert_eq!(offset_of!(SeyalPreparedFrame, columns), 26);
+        assert_eq!(offset_of!(SeyalPreparedFrame, cursor_row), 28);
+        assert_eq!(offset_of!(SeyalPreparedFrame, cursor_column), 30);
+        assert_eq!(offset_of!(SeyalPreparedFrame, cursor_visible), 32);
+        assert_eq!(offset_of!(SeyalPreparedFrame, alternate_screen), 33);
+        assert_eq!(offset_of!(SeyalPreparedFrame, full_rebuild), 34);
+        assert_eq!(offset_of!(SeyalPreparedFrame, reserved0), 35);
+        assert_eq!(offset_of!(SeyalPreparedFrame, rebuilt_row_count), 36);
+        assert_eq!(offset_of!(SeyalPreparedFrame, reserved1), 38);
+        assert_eq!(offset_of!(SeyalPreparedFrame, damage_word0), 40);
+        assert_eq!(offset_of!(SeyalPreparedFrame, damage_word3), 64);
+    }
+
+    #[test]
+    fn history_row_and_block_record_match_seyal_bridge_h() {
+        assert_eq!(size_of::<SeyalHistoryRow>(), 24);
+        assert_eq!(align_of::<SeyalHistoryRow>(), 8);
+        assert_eq!(offset_of!(SeyalHistoryRow, line_id), 0);
+        assert_eq!(offset_of!(SeyalHistoryRow, cells), 8);
+        assert_eq!(offset_of!(SeyalHistoryRow, cell_count), 16);
+
+        assert_eq!(size_of::<SeyalBlockRecord>(), 48);
+        assert_eq!(align_of::<SeyalBlockRecord>(), 8);
+        assert_eq!(offset_of!(SeyalBlockRecord, id), 0);
+        assert_eq!(offset_of!(SeyalBlockRecord, start_line), 8);
+        assert_eq!(offset_of!(SeyalBlockRecord, end_line), 16);
+        assert_eq!(offset_of!(SeyalBlockRecord, state), 24);
+        assert_eq!(offset_of!(SeyalBlockRecord, reserved), 25);
+        assert_eq!(offset_of!(SeyalBlockRecord, exit_status), 28);
+        assert_eq!(offset_of!(SeyalBlockRecord, command), 32);
+        assert_eq!(offset_of!(SeyalBlockRecord, command_len), 40);
     }
 }
 
@@ -790,6 +883,17 @@ fn register_pending_client(client: LocalDisplayClient, origin: u8) -> Result<u64
     Ok(handle)
 }
 
+/// Test-only hook: register an already-connected client as a pending adopt handle.
+/// Used by adversarial FFI misuse tests that need a live handle without going
+/// through discovery.
+#[doc(hidden)]
+pub fn test_register_pending_client(
+    client: LocalDisplayClient,
+    origin: u8,
+) -> Result<u64, ClientError> {
+    register_pending_client(client, origin)
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn seyal_bridge_connect_first() -> i32 {
     let handle = seyal_bridge_open_first();
@@ -911,6 +1015,16 @@ pub extern "C" fn seyal_bridge_open_execution_until(
 
 /// Transfer a fully validated, disposable startup client from the lifecycle
 /// queue to the calling Pane executor. A handle may be adopted exactly once.
+///
+/// # Thread affinity
+///
+/// Adoption installs the client into the calling thread's executor-local map.
+/// Steady-state bridge calls must run on that same thread; selecting a handle
+/// adopted on another thread fails closed.
+///
+/// # Panic policy
+///
+/// Panics abort the process (`panic = "abort"`); they never unwind into Swift.
 #[unsafe(no_mangle)]
 pub extern "C" fn seyal_bridge_adopt_handle(handle: u64) -> i32 {
     let Some(pending) = pending_clients()
@@ -1052,8 +1166,11 @@ pub extern "C" fn seyal_bridge_flush_writable() -> i32 {
 /// Atomically submit one already-committed UTF-8 native text action.
 ///
 /// # Safety
-/// `bytes` must address `len` readable bytes for the duration of this call when
-/// `len != 0`. The bridge copies/adopts no bytes after the function returns.
+/// - When `len != 0`, `bytes` must be non-null and address `len` readable bytes
+///   for the full duration of this call.
+/// - The bridge copies the bytes synchronously and retains nothing after return.
+/// - Caller thread must own the active adopted handle (executor-local client).
+/// - Panics abort; they must never unwind into Swift.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn seyal_bridge_submit_utf8(bytes: *const u8, len: u32) -> i32 {
     if len == 0 {
@@ -1077,6 +1194,14 @@ pub unsafe extern "C" fn seyal_bridge_submit_utf8(bytes: *const u8, len: u32) ->
 
 /// Submit one complete command from the Pane composer through the
 /// capability-negotiated Runtime Block route.
+///
+/// # Safety
+/// - `bytes` must be non-null and address `len` readable bytes for the full
+///   duration of this call (`len == 0` is rejected as invalid).
+/// - The bridge validates UTF-8 and copies the command synchronously; no caller
+///   bytes are retained after return.
+/// - Caller thread must own the active adopted handle (executor-local client).
+/// - Panics abort; they must never unwind into Swift.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn seyal_bridge_submit_composer(bytes: *const u8, len: u32) -> i32 {
     if len == 0 || bytes.is_null() {
@@ -1085,6 +1210,8 @@ pub unsafe extern "C" fn seyal_bridge_submit_composer(bytes: *const u8, len: u32
     let Ok(len) = usize::try_from(len) else {
         return -11;
     };
+    // SAFETY: the C/Swift caller contract above guarantees a readable range
+    // for this synchronous call. The resulting slice is never retained.
     let bytes = unsafe { slice::from_raw_parts(bytes, len) };
     let Ok(command) = str::from_utf8(bytes) else {
         return -4;
@@ -1183,10 +1310,15 @@ pub extern "C" fn seyal_bridge_resize_failure() -> i32 {
 
 /// Borrow the current contiguous prepared surface.
 ///
-/// The returned cell pointer is owned by the Rust client and is valid until the
-/// next bridge poll that changes geometry or until disconnect. Swift consumes
-/// it synchronously to update its native cached/GPU state; it never owns or
-/// frees this memory.
+/// The returned cell pointer borrows Rust-owned prepared storage and is valid
+/// only until the next poll/prepare/disconnect that can replace that surface.
+/// Swift must copy cells synchronously before returning to the run loop;
+/// `NativePreparedFrame(bridgeFrame:)` performs that copy so Rust
+/// `PreparedCell` pointers never escape into long-lived Swift state.
+///
+/// # Panic policy
+///
+/// Panics abort the process; they never unwind into Swift.
 #[unsafe(no_mangle)]
 pub extern "C" fn seyal_bridge_frame() -> SeyalPreparedFrame {
     with_active_client_mut(|client| {
@@ -1269,5 +1401,104 @@ fn error_code(error: ClientError) -> i32 {
         ClientError::InvalidGeometry => -17,
         ClientError::BlockMetadataConflict => -18,
         ClientError::Server(code) => -1000 - i32::from(code as u16),
+    }
+}
+
+#[cfg(test)]
+mod adversarial_ffi_misuse_tests {
+    use std::{
+        ptr,
+        sync::{Arc, Barrier},
+        thread,
+    };
+
+    use super::{
+        SeyalPreparedFrame, seyal_bridge_adopt_handle, seyal_bridge_disconnect_handle,
+        seyal_bridge_frame, seyal_bridge_poll, seyal_bridge_select, seyal_bridge_submit_composer,
+        seyal_bridge_submit_utf8,
+    };
+
+    #[test]
+    fn submit_utf8_rejects_null_with_nonzero_len() {
+        let code = unsafe { seyal_bridge_submit_utf8(ptr::null(), 4) };
+        assert_eq!(code, -4);
+    }
+
+    #[test]
+    fn submit_utf8_accepts_empty_without_pointer() {
+        let code = unsafe { seyal_bridge_submit_utf8(ptr::null(), 0) };
+        assert_eq!(code, 0);
+    }
+
+    #[test]
+    fn submit_composer_rejects_null_or_empty() {
+        assert_eq!(unsafe { seyal_bridge_submit_composer(ptr::null(), 0) }, -4);
+        assert_eq!(unsafe { seyal_bridge_submit_composer(ptr::null(), 3) }, -4);
+    }
+
+    #[test]
+    fn frame_without_active_client_is_empty() {
+        seyal_bridge_disconnect_handle(u64::MAX);
+        let frame = seyal_bridge_frame();
+        assert!(frame.cells.is_null());
+        assert_eq!(frame.cell_count, 0);
+        assert_eq!(SeyalPreparedFrame::empty().cell_count, 0);
+    }
+
+    #[test]
+    fn poll_without_active_client_fails_closed() {
+        seyal_bridge_disconnect_handle(u64::MAX);
+        assert_eq!(seyal_bridge_poll(), -1);
+    }
+
+    #[test]
+    fn select_unknown_handle_fails_closed() {
+        assert_eq!(seyal_bridge_select(0), -1);
+        assert_eq!(seyal_bridge_select(u64::MAX - 1), -1);
+    }
+
+    #[test]
+    fn adopt_missing_handle_fails_closed() {
+        assert_eq!(seyal_bridge_adopt_handle(0), -1);
+        assert_eq!(seyal_bridge_adopt_handle(u64::MAX), -1);
+    }
+
+    #[test]
+    fn double_adopt_of_absent_handle_stays_fail_closed() {
+        // Absent-handle branch only. Live double-adopt after a successful first
+        // adopt is covered by `tests/ffi_misuse_macos.rs`.
+        let handle = 0x0ff1_ceda_u64;
+        assert_eq!(seyal_bridge_adopt_handle(handle), -1);
+        assert_eq!(seyal_bridge_adopt_handle(handle), -1);
+    }
+
+    #[test]
+    fn wrong_thread_cannot_select_unadopted_handle() {
+        // Absent-handle / unadopted branch only. Cross-thread select after a
+        // successful adopt is covered by `tests/ffi_misuse_macos.rs`.
+        let barrier = Arc::new(Barrier::new(2));
+        let handle = 0x7ead_u64;
+        let barrier_thread = Arc::clone(&barrier);
+        let worker = thread::spawn(move || {
+            assert_eq!(seyal_bridge_adopt_handle(handle), -1);
+            barrier_thread.wait();
+            assert_eq!(seyal_bridge_select(handle), -1);
+        });
+        barrier.wait();
+        assert_eq!(seyal_bridge_select(handle), -1);
+        worker.join().expect("worker");
+    }
+
+    #[test]
+    fn use_after_poll_without_client_keeps_frame_empty() {
+        // No-client fail-closed branch only. Live poll → disconnect invalidation
+        // is covered by `tests/ffi_misuse_macos.rs`.
+        assert_eq!(seyal_bridge_poll(), -1);
+        let frame = seyal_bridge_frame();
+        assert!(frame.cells.is_null());
+        assert_eq!(seyal_bridge_poll(), -1);
+        let after = seyal_bridge_frame();
+        assert!(after.cells.is_null());
+        assert_eq!(after.cell_count, 0);
     }
 }

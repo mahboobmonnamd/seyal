@@ -561,6 +561,52 @@ final class SeyalShellComponentTests: XCTestCase {
     XCTAssertEqual(MemoryLayout<SeyalExecutionBlockMetadata>.alignment, 8)
   }
 
+  func testPreparedAndHistoryCellCABIsMatchRust() {
+    XCTAssertEqual(MemoryLayout<SeyalPreparedCell>.size, 16)
+    XCTAssertEqual(MemoryLayout<SeyalPreparedCell>.stride, 16)
+    XCTAssertEqual(MemoryLayout<SeyalPreparedCell>.alignment, 4)
+    XCTAssertEqual(MemoryLayout.offset(of: \SeyalPreparedCell.scalar), 0)
+    XCTAssertEqual(MemoryLayout.offset(of: \SeyalPreparedCell.foreground), 4)
+    XCTAssertEqual(MemoryLayout.offset(of: \SeyalPreparedCell.background), 8)
+    XCTAssertEqual(MemoryLayout.offset(of: \SeyalPreparedCell.flags), 12)
+    XCTAssertEqual(MemoryLayout.offset(of: \SeyalPreparedCell.reserved), 14)
+    XCTAssertEqual(MemoryLayout<SeyalHistoryCell>.size, 16)
+    XCTAssertEqual(MemoryLayout<SeyalHistoryCell>.stride, 16)
+    XCTAssertEqual(MemoryLayout<SeyalHistoryCell>.alignment, 4)
+    XCTAssertEqual(MemoryLayout.offset(of: \SeyalHistoryCell.scalar), 0)
+    XCTAssertEqual(MemoryLayout.offset(of: \SeyalHistoryCell.foreground), 4)
+    XCTAssertEqual(MemoryLayout.offset(of: \SeyalHistoryCell.background), 8)
+    XCTAssertEqual(MemoryLayout.offset(of: \SeyalHistoryCell.flags), 12)
+    XCTAssertEqual(MemoryLayout.offset(of: \SeyalHistoryCell.reserved), 14)
+  }
+
+  func testPreparedFrameAndHistoryRowCABIsMatchRust() {
+    XCTAssertEqual(MemoryLayout<SeyalPreparedFrame>.size, 72)
+    XCTAssertEqual(MemoryLayout<SeyalPreparedFrame>.stride, 72)
+    XCTAssertEqual(MemoryLayout<SeyalPreparedFrame>.alignment, 8)
+    XCTAssertEqual(MemoryLayout.offset(of: \SeyalPreparedFrame.cells), 0)
+    XCTAssertEqual(MemoryLayout.offset(of: \SeyalPreparedFrame.cell_count), 8)
+    XCTAssertEqual(MemoryLayout.offset(of: \SeyalPreparedFrame.generation), 16)
+    XCTAssertEqual(MemoryLayout.offset(of: \SeyalPreparedFrame.rows), 24)
+    XCTAssertEqual(MemoryLayout.offset(of: \SeyalPreparedFrame.columns), 26)
+    XCTAssertEqual(MemoryLayout<SeyalHistoryRow>.size, 24)
+    XCTAssertEqual(MemoryLayout<SeyalHistoryRow>.stride, 24)
+    XCTAssertEqual(MemoryLayout<SeyalHistoryRow>.alignment, 8)
+    XCTAssertEqual(MemoryLayout.offset(of: \SeyalHistoryRow.line_id), 0)
+    XCTAssertEqual(MemoryLayout.offset(of: \SeyalHistoryRow.cells), 8)
+    XCTAssertEqual(MemoryLayout.offset(of: \SeyalHistoryRow.cell_count), 16)
+    XCTAssertEqual(MemoryLayout<SeyalBlockRecord>.size, 48)
+    XCTAssertEqual(MemoryLayout<SeyalBlockRecord>.stride, 48)
+    XCTAssertEqual(MemoryLayout<SeyalBlockRecord>.alignment, 8)
+    XCTAssertEqual(MemoryLayout.offset(of: \SeyalBlockRecord.id), 0)
+    XCTAssertEqual(MemoryLayout.offset(of: \SeyalBlockRecord.start_line), 8)
+    XCTAssertEqual(MemoryLayout.offset(of: \SeyalBlockRecord.end_line), 16)
+    XCTAssertEqual(MemoryLayout.offset(of: \SeyalBlockRecord.state), 24)
+    XCTAssertEqual(MemoryLayout.offset(of: \SeyalBlockRecord.exit_status), 28)
+    XCTAssertEqual(MemoryLayout.offset(of: \SeyalBlockRecord.command), 32)
+    XCTAssertEqual(MemoryLayout.offset(of: \SeyalBlockRecord.command_len), 40)
+  }
+
   func testPaneQualifiedIdentitiesDoNotCollideAcrossPanes() {
     let firstBlock = PaneBlockKey(paneID: "pane-left", blockID: 7)
     let secondBlock = PaneBlockKey(paneID: "pane-right", blockID: 7)

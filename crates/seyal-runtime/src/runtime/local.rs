@@ -1098,6 +1098,7 @@ impl Runtime {
                         flags: (u16::from(cell.style.bold))
                             | (u16::from(cell.style.underline) << 1)
                             | (u16::from(cell.style.inverse) << 2),
+                        reserved: 0,
                     })
                     .collect(),
             });

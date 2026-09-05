@@ -271,6 +271,9 @@ pub struct HistoryRow {
 /// Canonical terminal cells retain style as well as scalar. The packed colors
 /// use the same tagged representation as `PreparedCell` and are resolved by
 /// the native renderer, so the UI never reconstructs style from text.
+///
+/// Layout matches `SeyalHistoryCell` in `macos/Seyal/Sources/SeyalBridge.h`
+/// (`reserved` is an explicit ABI field, not accidental padding).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(C)]
 pub struct HistoryCell {
@@ -278,6 +281,7 @@ pub struct HistoryCell {
     pub foreground: u32,
     pub background: u32,
     pub flags: u16,
+    pub reserved: u16,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -318,7 +322,7 @@ impl HistoryRangeSnapshot {
                 out.extend_from_slice(&cell.foreground.to_le_bytes());
                 out.extend_from_slice(&cell.background.to_le_bytes());
                 out.extend_from_slice(&cell.flags.to_le_bytes());
-                out.extend_from_slice(&[0; 2]);
+                out.extend_from_slice(&cell.reserved.to_le_bytes());
             }
             if out.len() > crate::framing::MAX_FRAME_PAYLOAD as usize
                 || out.len() > MAX_HISTORY_RANGE_BYTES
@@ -390,13 +394,20 @@ impl HistoryRangeSnapshot {
             }
             let values = cell_chunks
                 .iter()
-                .map(|chunk| HistoryCell {
-                    scalar: u32::from_le_bytes(chunk[..4].try_into().unwrap()),
-                    foreground: u32::from_le_bytes(chunk[4..8].try_into().unwrap()),
-                    background: u32::from_le_bytes(chunk[8..12].try_into().unwrap()),
-                    flags: u16::from_le_bytes(chunk[12..14].try_into().unwrap()),
+                .map(|chunk| {
+                    let reserved = u16::from_le_bytes(chunk[14..16].try_into().unwrap());
+                    if reserved != 0 {
+                        return Err(FramingError::MalformedPayload);
+                    }
+                    Ok(HistoryCell {
+                        scalar: u32::from_le_bytes(chunk[..4].try_into().unwrap()),
+                        foreground: u32::from_le_bytes(chunk[4..8].try_into().unwrap()),
+                        background: u32::from_le_bytes(chunk[8..12].try_into().unwrap()),
+                        flags: u16::from_le_bytes(chunk[12..14].try_into().unwrap()),
+                        reserved,
+                    })
                 })
-                .collect();
+                .collect::<Result<Vec<_>, _>>()?;
             rows.push(HistoryRow {
                 line_id,
                 cells: values,
@@ -663,6 +674,7 @@ mod command_block_tests {
                             foreground: 0x0200_00ff,
                             background: 0,
                             flags: 1,
+                            reserved: 0,
                         })
                         .collect(),
                 },
@@ -673,7 +685,8 @@ mod command_block_tests {
                             scalar: b' ' as u32,
                             foreground: 0,
                             background: 0,
-                            flags: 0
+                            flags: 0,
+                            reserved: 0,
                         };
                         3
                     ],
@@ -696,13 +709,42 @@ mod command_block_tests {
                         scalar: 0,
                         foreground: 0,
                         background: 0,
-                        flags: 0
+                        flags: 0,
+                        reserved: 0,
                     };
                     MAX_HISTORY_RANGE_CELLS + 1
                 ],
             }],
         };
         assert_eq!(too_many.try_encode(), Err(FramingError::OversizedPayload));
+    }
+
+    #[test]
+    fn history_snapshot_rejects_nonzero_cell_reserved() {
+        let snapshot = HistoryRangeSnapshot {
+            request_id: 1,
+            block_id: 2,
+            revision: 3,
+            status: HistoryRangeStatus::Complete,
+            rows: vec![HistoryRow {
+                line_id: 1,
+                cells: vec![HistoryCell {
+                    scalar: b'x' as u32,
+                    foreground: 0,
+                    background: 0,
+                    flags: 0,
+                    reserved: 0,
+                }],
+            }],
+        };
+        let mut encoded = snapshot.encode();
+        // scalar(4)+fg(4)+bg(4)+flags(2)+reserved(2) — flip reserved.
+        let reserved_at = encoded.len() - 2;
+        encoded[reserved_at] = 1;
+        assert_eq!(
+            HistoryRangeSnapshot::decode(&encoded),
+            Err(FramingError::MalformedPayload)
+        );
     }
 }
 

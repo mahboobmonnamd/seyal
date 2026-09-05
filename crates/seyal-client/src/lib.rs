@@ -32,3 +32,10 @@ pub use local::{
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 mod ffi;
+
+#[cfg(target_os = "macos")]
+#[doc(hidden)]
+pub use ffi::{
+    seyal_bridge_adopt_handle, seyal_bridge_disconnect_handle, seyal_bridge_ensure_prepared,
+    seyal_bridge_frame, seyal_bridge_poll, seyal_bridge_select, test_register_pending_client,
+};

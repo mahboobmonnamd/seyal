@@ -804,6 +804,94 @@ enum RendererValidation {
         }
     }
 
+    /// #786: history prepare must not CPU-write the shared glyph atlas while a
+    /// command buffer is still sampling it.
+    static func historyPrepareDefersWhileFrameInFlightSelfTest() -> Bool {
+        guard let device = MTLCreateSystemDefaultDevice() else { return false }
+        do {
+            let renderer = try MetalTerminalRenderer(device: device)
+            let liveCells = [preparedCell(scalar: UInt32(ascii: "A"))]
+            var damage = DamageMask()
+            damage.mark(row: 0)
+            guard try liveCells.withUnsafeBufferPointer({ buffer in
+                try renderer.update(
+                    frame: NativePreparedFrame(
+                        cells: buffer,
+                        generation: 1,
+                        rows: 1,
+                        columns: 1,
+                        fullRebuild: true,
+                        damage: damage
+                    ),
+                    backingScale: 1
+                ) == .updated
+            }) else { return false }
+
+            let cellSize = renderer.cellPixelSize(backingScale: 1)
+            let layer = makePresentationLayer(
+                device: device,
+                width: max(cellSize.width, 8),
+                height: max(cellSize.height, 8)
+            )
+            let completedBefore = renderer.stats.completedFrames
+            guard presentOnLayerForValidation(renderer: renderer, layer: layer),
+                  renderer.hasFrameInFlight
+            else {
+                return false
+            }
+
+            let uploadsBefore = renderer.glyphStats.uploads
+            let history = NativeHistoryRange(
+                startLine: 1,
+                endLine: 1,
+                blockID: 42,
+                requestID: 7,
+                revision: 1,
+                rows: [[
+                    NativeHistoryRange.Cell(
+                        scalar: UInt32(ascii: "Z"),
+                        foreground: 0xffe9_e1d8,
+                        background: 0xff10_0d0b,
+                        flags: 0
+                    )
+                ]]
+            )
+            let region = NativeTranscriptRegion(
+                id: 42,
+                origin: .zero,
+                clip: NSRect(
+                    x: 0,
+                    y: 0,
+                    width: CGFloat(cellSize.width),
+                    height: CGFloat(cellSize.height)
+                )
+            )
+            let deferred = try renderer.update(
+                historyRange: history,
+                region: region,
+                backingScale: 1
+            )
+            guard deferred == .deferred,
+                  renderer.hasDeferredHistoryPrepare,
+                  renderer.historyRegionCount == 0,
+                  renderer.glyphStats.uploads == uploadsBefore
+            else {
+                return false
+            }
+
+            guard waitForGPUCompletion(renderer, after: completedBefore),
+                  !renderer.hasFrameInFlight
+            else {
+                return false
+            }
+            return !renderer.hasDeferredHistoryPrepare
+                && renderer.historyRegionCount == 1
+                && renderer.glyphStats.uploads > uploadsBefore
+        } catch {
+            return false
+        }
+    }
+
     private static func makePresentationLayer(
         device: MTLDevice,
         width: Int,

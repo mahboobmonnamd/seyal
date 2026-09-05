@@ -1,6 +1,6 @@
 # M001 Pass 10 — Milestone Closure Code and Quality Review
 
-**Status:** Normative Phase 1 review authority — IN PROGRESS from frozen review candidate `1005bc42397aac485b1aeff08cafd0f67790d969`  
+**Status:** Normative Phase 1 review authority — findings disposition complete for #748–#760; file inventory bound in `docs/evidence/m001-pass10-phase1-file-inventory.md`; Phase 2 still gated on exact-head green gates + validation readiness  
 **Owning Issue:** #727  
 **Parent M001 Issue:** #5  
 **Pass 9 prerequisite:** #719 — closed Done  

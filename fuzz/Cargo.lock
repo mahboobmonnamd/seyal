@@ -88,13 +88,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "seyal-pass5-fuzz"
+name = "seyal-m001-fuzz"
 version = "0.0.0"
 dependencies = [
  "libfuzzer-sys",
  "seyal-exec",
  "seyal-protocol",
  "seyal-runtime",
+ "seyal-terminal",
 ]
 
 [[package]]

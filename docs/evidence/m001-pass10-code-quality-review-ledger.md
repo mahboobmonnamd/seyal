@@ -2,7 +2,7 @@
 
 **Owning Issue:** #727  
 **Starting review candidate:** `1005bc42397aac485b1aeff08cafd0f67790d969`  
-**Status:** IN PROGRESS — Phase 1 milestone-closure review (findings disposition recorded; fixes/re-review open)  
+**Status:** PHASE 1 FINDINGS DISPOSITION COMPLETE — BLOCKING/IMPORTANT finding Issues #748–#760 closed on lineage through `e8431f01…`; domain agent reviews retained. File-level inventory completeness remains an explicit ledger duty under `M001-PASS10-CODE-QUALITY-REVIEW.md` §3/§20 and must be finished before claiming full Phase 1 COMPLETE / Phase 2 authorization.  
 **Normative protocol:** `docs/engineering/M001-PASS10-CODE-QUALITY-REVIEW.md`
 
 This ledger records the exhaustive M001 milestone-closure code and quality review required before independent final Pass 10 validation.
@@ -81,7 +81,7 @@ The repository tree for the starting candidate is the inventory source; director
 ### F-001 — stale Pass 9-blocked status in normative Pass 10 protocols
 
 - **Severity:** IMPORTANT
-- **Status:** OPEN — fix PR open
+- **Status:** RESOLVED — merged #751
 - **Owning Issue:** #748
 - **PR:** #751
 - **Paths:**
@@ -106,7 +106,7 @@ The repository tree for the starting candidate is the inventory source; director
 ### F-003 — remaining Pass 9 / scaffolding status drift
 
 - **Severity:** IMPORTANT
-- **Status:** OPEN — fix PR open
+- **Status:** RESOLVED — merged #763
 - **Owning Issue:** #753
 - **PR:** #763
 - **Related:** extends F-001 / #748 (Pass 10 protocols handled on #751)
@@ -116,7 +116,7 @@ The repository tree for the starting candidate is the inventory source; director
 ### F-004 — register display/Metal production hot paths
 
 - **Severity:** IMPORTANT
-- **Status:** OPEN — fix PR open
+- **Status:** RESOLVED — merged #761
 - **Owning Issue:** #754
 - **PR:** #761
 - **Evidence:** `scripts/check-hot-path.py` passes for registered VT/Runtime/input functions, but Candidate-D display encode/publish and Metal prepare/present remain outside `HOT_FUNCTIONS` despite `PERFORMANCE.md` requiring production-authoritative renderer/projection registration.
@@ -125,7 +125,7 @@ The repository tree for the starting candidate is the inventory source; director
 ### F-005 — CI reproducibility honesty and supply-chain pins
 
 - **Severity:** IMPORTANT
-- **Status:** OPEN — fix PR open
+- **Status:** RESOLVED — merged #769
 - **Owning Issue:** #755
 - **PR:** #769
 - **Evidence:** Foundation Quality does not silently skip required jobs, but green CI remains incomplete Pass 10 proof (DisplayLink bench env honesty, floating Actions tags vs SHA-pin policy, docs npm lockfile gaps).
@@ -134,7 +134,7 @@ The repository tree for the starting candidate is the inventory source; director
 ### F-006 — TerminationFailed dead-end and PrimaryExitPending unbound retry
 
 - **Severity:** BLOCKING
-- **Status:** OPEN — fix PR opened; awaiting review/merge
+- **Status:** RESOLVED — merged #774
 - **Owning Issue:** #756
 - **PR:** #774
 - **Paths:**
@@ -146,7 +146,7 @@ The repository tree for the starting candidate is the inventory source; director
 ### F-007 — disconnect-during adversarial matrix gaps
 
 - **Severity:** IMPORTANT
-- **Status:** OPEN — fix PR open
+- **Status:** RESOLVED — merged #770
 - **Owning Issue:** #757
 - **PR:** #770
 - **Evidence:** Pass 10 §6.8 requires disconnect-during evidence for input backpressure, outstanding resize, snapshot/display chunking, and Block finalization; dedicated cells are missing.
@@ -155,7 +155,7 @@ The repository tree for the starting candidate is the inventory source; director
 ### F-008 — fuzz registry/campaign parity and Pass 7/9 surfaces
 
 - **Severity:** IMPORTANT
-- **Status:** OPEN — fix PR open
+- **Status:** RESOLVED — merged #772
 - **Owning Issue:** #758
 - **PR:** #772
 - **Evidence:** `fuzz/targets.toml` covers Pass 2/5/8 only; Pass 7 protocol decoders unfuzzed; registry ≠ libFuzzer campaigns; §6.9 evidence risks INCONCLUSIVE without parity.
@@ -164,7 +164,7 @@ The repository tree for the starting candidate is the inventory source; director
 ### F-009 — oversized Runtime/client modules and display publish bookkeeping
 
 - **Severity:** IMPORTANT
-- **Status:** OPEN — fix PR open
+- **Status:** RESOLVED — publish fix #771; module split → #765–#768
 - **Owning Issue:** #759
 - **PR:** #771
 - **Evidence:** handwritten production modules exceed the AGENTS.md >1000-line justification threshold without a Pass 10 decomposition plan; display publish bookkeeping cohesion gaps reported with module-size findings.
@@ -173,7 +173,7 @@ The repository tree for the starting candidate is the inventory source; director
 ### F-010 — Rust↔Swift FFI ABI, borrow lifetime, and panic policy
 
 - **Severity:** BLOCKING
-- **Status:** OPEN — fix PR open
+- **Status:** RESOLVED — merged #762
 - **Owning Issue:** #760
 - **PR:** #762
 - **Evidence:** escapable borrowed `NativePreparedFrame` pointers, incomplete ABI/lifetime enforcement, and panic-crossing-FFI policy gaps vs Pass 10 §5.1.
@@ -183,38 +183,65 @@ The repository tree for the starting candidate is the inventory source; director
 
 | Path | Subsystem | Class | Architecture | Correctness | Concurrency/resources | Security/privacy | Performance/hot path | Dead code/API/deps | Tests | Docs/diagram | Findings | Status |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| `docs/engineering/M001-PASS10-CODE-QUALITY-REVIEW.md` | Pass 10 authority | docs | checked | current-status wording stale | N/A | N/A | N/A | N/A | protocol exists | contradiction with current #5/#719/#727 state | F-001 / #748 → #751 | BLOCKED |
-| `docs/engineering/M001-PASS10-VALIDATION.md` | Pass 10 authority | docs | checked | current Ready-gate wording stale | N/A | N/A | N/A | N/A | validation protocol exists | contradiction with current #5/#719/#727 state | F-001 / #748 → #751 | BLOCKED |
-| SPEC / MILESTONE / distribution / scaffolding status docs | Pass authority | docs | checked | remaining Pass 9 / scaffolding drift | N/A | N/A | N/A | N/A | N/A | status truth vs #719 Done | F-003 / #753 → #763 | BLOCKED |
-| `scripts/check-hot-path.py` + display/Metal hot paths | Perf registry | build/prod | checked | registry incomplete for display/Metal | N/A | N/A | registry gap | N/A | check passes on registered set | PERFORMANCE.md coverage | F-004 / #754 → #761 | BLOCKED |
-| `.github/workflows/*` + docs npm pins | CI / supply chain | build | checked | honesty/repro gaps | N/A | pin policy | N/A | floating tags / lockfile | Foundation does not silent-skip | workflow honesty | F-005 / #755 → #769 | BLOCKED |
-| `crates/seyal-runtime/src/runtime.rs` (termination) | Runtime lifecycle | production | checked | TerminationFailed dead-end | BLOCKING resource sink | N/A | N/A | N/A | forced-reap fault coverage missing | AGENTS/SPEC termination | F-006 / #756 → PR pending | BLOCKED |
-| disconnect-during adversarial matrix | Runtime / attachment | test | checked | §6.8 cells incomplete | disconnect races | N/A | N/A | N/A | matrix gaps | Pass 10 §6.8 | F-007 / #757 → #770 | BLOCKED |
-| `fuzz/targets.toml` + campaigns | Fuzz | test | checked | Pass 7/9 / parity gaps | N/A | trust-boundary fuzz missing | N/A | registry≠campaigns | §6.9 risk INCONCLUSIVE | Pass 10 §6.9 | F-008 / #758 → #772 | BLOCKED |
-| Runtime/client oversized modules + display publish | Runtime / client | production | checked | cohesion / bookkeeping | N/A | N/A | N/A | >1000-line modules | N/A | AGENTS.md size gate | F-009 / #759 → #771 | BLOCKED |
-| Rust↔Swift FFI / prepared-frame boundary | FFI | production | checked | ABI/borrow/panic gaps | borrow lifetime | UB risk | N/A | API misuse surface | misuse coverage incomplete | Pass 10 §5.1 | F-010 / #760 → #762 | BLOCKED |
+| `docs/engineering/M001-PASS10-CODE-QUALITY-REVIEW.md` | Pass 10 authority | docs | checked | current-status wording stale | N/A | N/A | N/A | N/A | protocol exists | contradiction with current #5/#719/#727 state | F-001 / #748 → #751 | PASS |
+| `docs/engineering/M001-PASS10-VALIDATION.md` | Pass 10 authority | docs | checked | current Ready-gate wording stale | N/A | N/A | N/A | N/A | validation protocol exists | contradiction with current #5/#719/#727 state | F-001 / #748 → #751 | PASS |
+| SPEC / MILESTONE / distribution / scaffolding status docs | Pass authority | docs | checked | remaining Pass 9 / scaffolding drift | N/A | N/A | N/A | N/A | N/A | status truth vs #719 Done | F-003 / #753 → #763 | PASS |
+| `scripts/check-hot-path.py` + display/Metal hot paths | Perf registry | build/prod | checked | registry incomplete for display/Metal | N/A | N/A | registry gap | N/A | check passes on registered set | PERFORMANCE.md coverage | F-004 / #754 → #761 | PASS |
+| `.github/workflows/*` + docs npm pins | CI / supply chain | build | checked | honesty/repro gaps | N/A | pin policy | N/A | floating tags / lockfile | Foundation does not silent-skip | workflow honesty | F-005 / #755 → #769 | PASS |
+| `crates/seyal-runtime/src/runtime.rs` (termination) | Runtime lifecycle | production | checked | TerminationFailed dead-end | BLOCKING resource sink | N/A | N/A | N/A | forced-reap fault coverage missing | AGENTS/SPEC termination | F-006 / #756 → #774 | PASS |
+| disconnect-during adversarial matrix | Runtime / attachment | test | checked | §6.8 cells incomplete | disconnect races | N/A | N/A | N/A | matrix gaps | Pass 10 §6.8 | F-007 / #757 → #770 | PASS |
+| `fuzz/targets.toml` + campaigns | Fuzz | test | checked | Pass 7/9 / parity gaps | N/A | trust-boundary fuzz missing | N/A | registry≠campaigns | §6.9 risk INCONCLUSIVE | Pass 10 §6.9 | F-008 / #758 → #772 | PASS |
+| Runtime/client oversized modules + display publish | Runtime / client | production | checked | cohesion / bookkeeping | N/A | N/A | N/A | >1000-line modules | N/A | AGENTS.md size gate | F-009 / #759 → #771 | PASS |
+| Rust↔Swift FFI / prepared-frame boundary | FFI | production | checked | ABI/borrow/panic gaps | borrow lifetime | UB risk | N/A | API misuse surface | misuse coverage incomplete | Pass 10 §5.1 | F-010 / #760 → #762 | PASS |
 
 Issue-authority finding #752 has no production path row; disposition is tracked only in the resolution map below.
 
 ## Resolution map
 
-| Finding | Severity | Owning Issue | PR | Re-review required | Final disposition |
+| Finding | Severity | Owning Issue | PR | Re-review | Final disposition |
 |---|---|---|---|---|---|
-| F-001 stale Pass 9-blocked Pass 10 protocol wording | IMPORTANT | #748 | #751 | yes — documentation/authority | open — PR open |
-| F-002 stale Pass 7/9/UI Issues | IMPORTANT | #752 | none (Issue-authority only; rehome #773 / PR #742) | yes — Issue/status truth (spot-check) | **RESOLVED** — closed #706/#725/#730/#654/#73; #663 clarified later-milestone; PR #742 → #773 |
-| F-003 remaining Pass 9 / scaffolding status drift | IMPORTANT | #753 | #763 | yes — documentation/authority | open — PR open |
-| F-004 display/Metal hot-path registry | IMPORTANT | #754 | #761 | yes — perf registry | open — PR open |
-| F-005 CI reproducibility honesty / pins | IMPORTANT | #755 | #769 | yes — CI/supply-chain | open — PR open |
-| F-006 TerminationFailed / PrimaryExitPending | BLOCKING | #756 | pending (PR opening for #756) | yes — concurrency/lifecycle | open — **blocks Phase 2** |
-| F-007 disconnect-during adversarial matrix | IMPORTANT | #757 | #770 | yes — adversarial tests | open — PR open |
-| F-008 fuzz registry/campaign parity | IMPORTANT | #758 | #772 | yes — fuzz/§6.9 | open — PR open |
-| F-009 modules / display publish bookkeeping | IMPORTANT | #759 | #771 | yes — runtime/client cohesion | open — PR open |
-| F-010 FFI ABI / borrow / panic policy | BLOCKING | #760 | #762 | yes — FFI/unsafe | open — **blocks Phase 2** |
+| F-001 stale Pass 9-blocked Pass 10 protocol wording | IMPORTANT | #748 | #751 | docs/authority spot-check on `e8431f0` | **RESOLVED** — merged; protocols no longer claim Pass 9 block |
+| F-002 stale Pass 7/9/UI Issues | IMPORTANT | #752 | none (Issue-authority) | Issue/status truth | **RESOLVED** — closed #706/#725/#730/#654/#73; #663 later-milestone; PR #742 → #773 |
+| F-003 remaining Pass 9 / scaffolding status drift | IMPORTANT | #753 | #763 | docs/authority spot-check | **RESOLVED** — merged |
+| F-004 display/Metal hot-path registry | IMPORTANT | #754 | #761 | `scripts/check-hot-path.py` | **RESOLVED** — merged |
+| F-005 CI reproducibility honesty / pins | IMPORTANT | #755 | #769 | workflow/docs honesty | **RESOLVED** — merged; floating Xcode image → post-M001 #764 |
+| F-006 TerminationFailed / PrimaryExitPending | BLOCKING | #756 | #774 | concurrency/lifecycle tests | **RESOLVED** — merged; adversarial recovery/escalation/re-arm coverage landed |
+| F-007 disconnect-during adversarial matrix | IMPORTANT | #757 | #770 | `pass10_disconnect_during` | **RESOLVED** — merged; non-vacuous finalization cell retained |
+| F-008 fuzz registry/campaign parity | IMPORTANT | #758 | #772 | fuzz smoke + §6.9 honesty | **RESOLVED** — merged; CI smoke ≠ campaign PASS documented |
+| F-009 modules / display publish bookkeeping | IMPORTANT | #759 | #771 | runtime publish + cohesion | **RESOLVED** — publish bookkeeping merged; oversized-module split → post-M001 #765–#768 |
+| F-010 FFI ABI / borrow / panic policy | BLOCKING | #760 | #762 | FFI misuse + Swift ABI offsets | **RESOLVED** — merged |
 
-Ledger kickoff PR for this evidence document: #749 (Refs #727).
+Ledger kickoff PR: #749 (Refs #727).
+
+## Phase 1 re-review notes (2026-09-05)
+
+Re-reviewed the domains touched by merged finding PRs on exact head `e8431f01c797b57d7b6ee6a9be65706f77c7d789`:
+
+- **Concurrency/lifecycle (F-006):** #774 restores recoverable `TerminationFailed` and bounds `PrimaryExitPending`; adversarial tests present.
+- **FFI/unsafe (F-010):** #762 locks ABI, owned frame cells, panic=abort policy; live-handle misuse + Swift field-offset tests present.
+- **Adversarial disconnect (F-007):** #770 matrix cells present including Block-finalization disconnect with unread-bytes proof.
+- **Fuzz/§6.9 (F-008):** #772 registry/campaign parity + evidence-grade honesty; PR CI alone cannot score §6.9 PASS.
+- **Docs/CI/hot-path/publish (F-001/F-003/F-004/F-005/F-009):** corresponding PRs merged; IMPORTANT module-size follow-ups explicitly parked post-M001 (#765–#768, #764).
+
+No open `BLOCKING` Pass 10 finding Issues remain. Finding Issues #748–#760 are disposition-complete; IMPORTANT follow-ups #764–#768 remain parked post-M001.
+
+## Provisional freeze (invalidated by Phase 2 branch)
+
+```text
+e8431f01c797b57d7b6ee6a9be65706f77c7d789
+```
+
+Branch tip at that provisional freeze: `master` / `e8431f0` (“Close Pass 10 fuzz registry/campaign parity and Pass 7/9 surfaces (#772)”).
+
+This SHA is **not** the final Pass 10 validation head. Phase 2 branch production/docs deltas invalidate it; **re-freeze after this PR merges** before claiming any criterion `PASS`. Phase 2 final validation remains **gated** until the Phase 2 entry conditions in `M001-PASS10-VALIDATION.md` §2.2 are met on the re-frozen head.
+
+## File inventory binding
+
+Production-significant path inventory (domain-mapped to Agent1–10 results, with finding overrides):
+`docs/evidence/m001-pass10-phase1-file-inventory.md`.
 
 ## Completion condition
 
-This ledger is complete only when every M001 production-significant file/module has an explicit result, every `BLOCKING` finding is resolved and re-reviewed, every `IMPORTANT` finding is resolved or authoritatively assigned outside M001, and the resulting final M001 head is frozen for independent Pass 10 validation.
+Phase 1 **findings disposition** is complete: every `BLOCKING` finding is resolved and re-reviewed, and every `IMPORTANT` finding is resolved or authoritatively assigned outside M001 (#764–#768).
 
-**Phase 2 validation must not start while F-006 / #756 or F-010 / #760 remain open.**
+Full Phase 1 COMPLETE / Phase 2 authorization still requires: (1) file-level ledger completeness for M001-significant paths (inventory bound; line-level completeness remains a ledger duty), (2) authority-doc status alignment, (3) green exact-head Foundation/production gates, and (4) a re-frozen final validation head after review-driven production deltas. Evidence lives in `docs/engineering/M001-PASS10-EVIDENCE.md`.

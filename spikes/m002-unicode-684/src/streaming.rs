@@ -7,12 +7,19 @@ enum Policy {
     GraphemeMonotonicHypothesis,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LateWidenEdgePolicy {
+    DetectConflict,
+    Mode2027AutowrapReflowHypothesis,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct StreamStats {
     cursor_col: usize,
     wraps: usize,
     joined_scalars: usize,
     late_widens: usize,
+    late_widen_reflows: usize,
     suppressed_narrows: usize,
     right_edge_widen_conflicts: usize,
 }
@@ -69,6 +76,7 @@ fn append_to_cluster(
     scalar: char,
     stats: &mut StreamStats,
     columns: usize,
+    edge_policy: LateWidenEdgePolicy,
 ) {
     active.text.push(scalar);
     stats.joined_scalars += 1;
@@ -80,17 +88,34 @@ fn append_to_cluster(
         stats.late_widens += 1;
         stats.cursor_col += delta;
         if stats.cursor_col > columns {
-            stats.right_edge_widen_conflicts += 1;
+            match edge_policy {
+                LateWidenEdgePolicy::DetectConflict => {
+                    stats.right_edge_widen_conflicts += 1;
+                }
+                LateWidenEdgePolicy::Mode2027AutowrapReflowHypothesis => {
+                    // The Terminal Unicode Core draft allows VS16 to widen a
+                    // cluster and reflow that symbol to the next line when
+                    // DECAWM is enabled. This is a spike model of that outcome,
+                    // not yet accepted Seyal wrap-state behavior.
+                    stats.wraps += 1;
+                    stats.late_widen_reflows += 1;
+                    stats.cursor_col = active.committed_width;
+                }
+            }
         }
     } else if natural_width < active.committed_width {
-        // This is intentionally a hypothesis to measure, not an accepted Seyal rule.
-        // A terminal cannot safely move already-emitted following cells backwards
-        // without an explicit compatibility contract, so record the event instead.
+        // A cluster already placed on screen must not silently shrink under
+        // this hypothesis; record the attempted narrow instead.
         stats.suppressed_narrows += 1;
     }
 }
 
-fn simulate_grapheme_monotonic(text: &str, columns: usize, start_col: usize) -> StreamStats {
+fn simulate_grapheme_monotonic(
+    text: &str,
+    columns: usize,
+    start_col: usize,
+    edge_policy: LateWidenEdgePolicy,
+) -> StreamStats {
     let mut stats = StreamStats {
         cursor_col: start_col,
         ..StreamStats::default()
@@ -101,7 +126,7 @@ fn simulate_grapheme_monotonic(text: &str, columns: usize, start_col: usize) -> 
         if active.text.is_empty() {
             start_cluster(&mut active, scalar, &mut stats, columns);
         } else if starts_same_grapheme(active.text.as_str(), scalar) {
-            append_to_cluster(&mut active, scalar, &mut stats, columns);
+            append_to_cluster(&mut active, scalar, &mut stats, columns, edge_policy);
         } else {
             start_cluster(&mut active, scalar, &mut stats, columns);
         }
@@ -112,9 +137,12 @@ fn simulate_grapheme_monotonic(text: &str, columns: usize, start_col: usize) -> 
 fn simulate(policy: Policy, text: &str, columns: usize, start_col: usize) -> StreamStats {
     match policy {
         Policy::LegacyScalar => simulate_legacy(text, columns, start_col),
-        Policy::GraphemeMonotonicHypothesis => {
-            simulate_grapheme_monotonic(text, columns, start_col)
-        }
+        Policy::GraphemeMonotonicHypothesis => simulate_grapheme_monotonic(
+            text,
+            columns,
+            start_col,
+            LateWidenEdgePolicy::DetectConflict,
+        ),
     }
 }
 
@@ -129,30 +157,43 @@ pub(crate) fn report_streaming_semantics() {
     ];
 
     println!(
-        "STREAM\tlabel\tpolicy\tcursor\twraps\tjoined\tlate_widens\tsuppressed_narrows\tright_edge_conflicts"
+        "STREAM\tlabel\tpolicy\tcursor\twraps\tjoined\tlate_widens\tlate_widen_reflows\tsuppressed_narrows\tright_edge_conflicts"
     );
     for (label, text) in SEQUENCES {
         for policy in [Policy::LegacyScalar, Policy::GraphemeMonotonicHypothesis] {
             let stats = simulate(policy, text, 80, 0);
             println!(
-                "STREAM\t{label}\t{policy:?}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "STREAM\t{label}\t{policy:?}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 stats.cursor_col,
                 stats.wraps,
                 stats.joined_scalars,
                 stats.late_widens,
+                stats.late_widen_reflows,
                 stats.suppressed_narrows,
                 stats.right_edge_widen_conflicts,
             );
         }
     }
 
-    // Heart starts as width 1 at the final column; VS16 then makes the same
-    // extended grapheme width 2. The spike records this as an unresolved edge
-    // event rather than inventing wrap semantics here.
-    let edge = simulate(Policy::GraphemeMonotonicHypothesis, "❤\u{fe0f}", 80, 79);
+    let conflict = simulate_grapheme_monotonic(
+        "❤\u{fe0f}",
+        80,
+        79,
+        LateWidenEdgePolicy::DetectConflict,
+    );
+    let reflow = simulate_grapheme_monotonic(
+        "❤\u{fe0f}",
+        80,
+        79,
+        LateWidenEdgePolicy::Mode2027AutowrapReflowHypothesis,
+    );
     println!(
-        "STREAM_EDGE\tlate-wide-at-right-edge\tcursor={}\tconflicts={}",
-        edge.cursor_col, edge.right_edge_widen_conflicts
+        "STREAM_EDGE\tlate-wide-at-right-edge\tconflict_cursor={}\tconflicts={}\treflow_cursor={}\treflows={}\twraps={}",
+        conflict.cursor_col,
+        conflict.right_edge_widen_conflicts,
+        reflow.cursor_col,
+        reflow.late_widen_reflows,
+        reflow.wraps,
     );
 }
 
@@ -180,6 +221,20 @@ mod tests {
     fn late_widen_at_right_edge_is_explicitly_detected() {
         let stats = simulate(Policy::GraphemeMonotonicHypothesis, "❤\u{fe0f}", 80, 79);
         assert_eq!(stats.right_edge_widen_conflicts, 1);
+    }
+
+    #[test]
+    fn mode_2027_autowrap_candidate_reflows_late_widened_cluster() {
+        let stats = simulate_grapheme_monotonic(
+            "❤\u{fe0f}",
+            80,
+            79,
+            LateWidenEdgePolicy::Mode2027AutowrapReflowHypothesis,
+        );
+        assert_eq!(stats.right_edge_widen_conflicts, 0);
+        assert_eq!(stats.late_widen_reflows, 1);
+        assert_eq!(stats.wraps, 1);
+        assert_eq!(stats.cursor_col, 2);
     }
 
     #[test]

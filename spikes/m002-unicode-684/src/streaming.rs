@@ -4,7 +4,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Policy {
     LegacyScalar,
-    GraphemeMonotonicHypothesis,
+    GraphemeMutableHypothesis,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,8 +19,8 @@ struct StreamStats {
     wraps: usize,
     joined_scalars: usize,
     late_widens: usize,
+    late_narrows: usize,
     late_widen_reflows: usize,
-    suppressed_narrows: usize,
     right_edge_widen_conflicts: usize,
 }
 
@@ -93,10 +93,11 @@ fn append_to_cluster(
                     stats.right_edge_widen_conflicts += 1;
                 }
                 LateWidenEdgePolicy::Mode2027AutowrapReflowHypothesis => {
-                    // The Terminal Unicode Core draft allows VS16 to widen a
-                    // cluster and reflow that symbol to the next line when
-                    // DECAWM is enabled. This is a spike model of that outcome,
-                    // not yet accepted Seyal wrap-state behavior.
+                    // The mode-2027 contract permits VS16 to widen the active
+                    // cluster and move that same cluster to the next row when
+                    // DECAWM is enabled. This remains spike evidence until the
+                    // history/reflow model in #685 proves the physical/logical
+                    // line transition.
                     stats.wraps += 1;
                     stats.late_widen_reflows += 1;
                     stats.cursor_col = active.committed_width;
@@ -104,13 +105,19 @@ fn append_to_cluster(
             }
         }
     } else if natural_width < active.committed_width {
-        // A cluster already placed on screen must not silently shrink under
-        // this hypothesis; record the attempted narrow instead.
-        stats.suppressed_narrows += 1;
+        // A narrowing selector that is still part of the active, appendable
+        // grapheme is safe to apply: no following cell can have been committed
+        // between two no-break scalars. The terminal can release the former
+        // continuation and move the cursor back by the width delta. Once the
+        // active anchor is invalidated, mutation.rs prevents this path.
+        let delta = active.committed_width - natural_width;
+        active.committed_width = natural_width;
+        stats.late_narrows += 1;
+        stats.cursor_col = stats.cursor_col.saturating_sub(delta);
     }
 }
 
-fn simulate_grapheme_monotonic(
+fn simulate_grapheme_mutable(
     text: &str,
     columns: usize,
     start_col: usize,
@@ -137,7 +144,7 @@ fn simulate_grapheme_monotonic(
 fn simulate(policy: Policy, text: &str, columns: usize, start_col: usize) -> StreamStats {
     match policy {
         Policy::LegacyScalar => simulate_legacy(text, columns, start_col),
-        Policy::GraphemeMonotonicHypothesis => simulate_grapheme_monotonic(
+        Policy::GraphemeMutableHypothesis => simulate_grapheme_mutable(
             text,
             columns,
             start_col,
@@ -150,6 +157,7 @@ pub(crate) fn report_streaming_semantics() {
     const SEQUENCES: &[(&str, &str)] = &[
         ("combining", "e\u{301}"),
         ("late-wide-vs16", "❤\u{fe0f}"),
+        ("late-narrow-vs15", "😐\u{fe0e}"),
         ("emoji-zwj", "👩‍💻"),
         ("emoji-family", "👨‍👩‍👧‍👦"),
         ("regional-flag", "🇮🇳"),
@@ -157,10 +165,10 @@ pub(crate) fn report_streaming_semantics() {
     ];
 
     println!(
-        "STREAM\tlabel\tpolicy\tcursor\twraps\tjoined\tlate_widens\tlate_widen_reflows\tsuppressed_narrows\tright_edge_conflicts"
+        "STREAM\tlabel\tpolicy\tcursor\twraps\tjoined\tlate_widens\tlate_narrows\tlate_widen_reflows\tright_edge_conflicts"
     );
     for (label, text) in SEQUENCES {
-        for policy in [Policy::LegacyScalar, Policy::GraphemeMonotonicHypothesis] {
+        for policy in [Policy::LegacyScalar, Policy::GraphemeMutableHypothesis] {
             let stats = simulate(policy, text, 80, 0);
             println!(
                 "STREAM\t{label}\t{policy:?}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
@@ -168,16 +176,16 @@ pub(crate) fn report_streaming_semantics() {
                 stats.wraps,
                 stats.joined_scalars,
                 stats.late_widens,
+                stats.late_narrows,
                 stats.late_widen_reflows,
-                stats.suppressed_narrows,
                 stats.right_edge_widen_conflicts,
             );
         }
     }
 
     let conflict =
-        simulate_grapheme_monotonic("❤\u{fe0f}", 80, 79, LateWidenEdgePolicy::DetectConflict);
-    let reflow = simulate_grapheme_monotonic(
+        simulate_grapheme_mutable("❤\u{fe0f}", 80, 79, LateWidenEdgePolicy::DetectConflict);
+    let reflow = simulate_grapheme_mutable(
         "❤\u{fe0f}",
         80,
         79,
@@ -199,29 +207,37 @@ mod tests {
 
     #[test]
     fn combining_mark_joins_without_extra_cursor_width() {
-        let stats = simulate(Policy::GraphemeMonotonicHypothesis, "e\u{301}", 80, 0);
+        let stats = simulate(Policy::GraphemeMutableHypothesis, "e\u{301}", 80, 0);
         assert_eq!(stats.cursor_col, 1);
         assert_eq!(stats.joined_scalars, 1);
         assert_eq!(stats.late_widens, 0);
     }
 
     #[test]
-    fn variation_selector_can_widen_an_existing_cluster() {
-        let stats = simulate(Policy::GraphemeMonotonicHypothesis, "❤\u{fe0f}", 80, 0);
+    fn variation_selector_can_widen_an_existing_active_cluster() {
+        let stats = simulate(Policy::GraphemeMutableHypothesis, "❤\u{fe0f}", 80, 0);
         assert_eq!(stats.cursor_col, 2);
         assert_eq!(stats.joined_scalars, 1);
         assert_eq!(stats.late_widens, 1);
     }
 
     #[test]
+    fn variation_selector_can_narrow_only_while_cluster_is_active() {
+        let stats = simulate(Policy::GraphemeMutableHypothesis, "😐\u{fe0e}", 80, 0);
+        assert_eq!(stats.cursor_col, 1);
+        assert_eq!(stats.joined_scalars, 1);
+        assert_eq!(stats.late_narrows, 1);
+    }
+
+    #[test]
     fn late_widen_at_right_edge_is_explicitly_detected() {
-        let stats = simulate(Policy::GraphemeMonotonicHypothesis, "❤\u{fe0f}", 80, 79);
+        let stats = simulate(Policy::GraphemeMutableHypothesis, "❤\u{fe0f}", 80, 79);
         assert_eq!(stats.right_edge_widen_conflicts, 1);
     }
 
     #[test]
     fn mode_2027_autowrap_candidate_reflows_late_widened_cluster() {
-        let stats = simulate_grapheme_monotonic(
+        let stats = simulate_grapheme_mutable(
             "❤\u{fe0f}",
             80,
             79,
@@ -235,7 +251,7 @@ mod tests {
 
     #[test]
     fn family_emoji_is_one_terminal_cluster_under_grapheme_hypothesis() {
-        let stats = simulate(Policy::GraphemeMonotonicHypothesis, "👨‍👩‍👧‍👦", 80, 0);
+        let stats = simulate(Policy::GraphemeMutableHypothesis, "👨‍👩‍👧‍👦", 80, 0);
         assert_eq!(stats.cursor_col, 2);
         assert_eq!(stats.joined_scalars, 6);
     }
@@ -243,7 +259,7 @@ mod tests {
     #[test]
     fn legacy_scalar_and_grapheme_models_are_observably_different() {
         let legacy = simulate(Policy::LegacyScalar, "👩‍💻", 80, 0);
-        let grapheme = simulate(Policy::GraphemeMonotonicHypothesis, "👩‍💻", 80, 0);
+        let grapheme = simulate(Policy::GraphemeMutableHypothesis, "👩‍💻", 80, 0);
         assert_ne!(legacy.cursor_col, grapheme.cursor_col);
         assert_eq!(grapheme.cursor_col, 2);
     }

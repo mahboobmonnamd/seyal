@@ -1,4 +1,5 @@
 mod bounds;
+mod compatibility;
 mod mutation;
 mod overflow;
 mod projection;
@@ -222,6 +223,7 @@ fn main() {
     report_representation_sizes();
     report_corpus();
     transport::report_transport_semantics();
+    compatibility::report_compatibility_boundary();
     streaming::report_streaming_semantics();
     mutation::report_mutation_semantics();
     storage::report_storage_pressure();

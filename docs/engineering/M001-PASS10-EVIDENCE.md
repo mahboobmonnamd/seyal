@@ -80,10 +80,10 @@ Expanded from `docs/milestones/MILESTONE-001.md` §15 and Pass 10 validation §6
 
 | Criterion | Verdict | Evidence |
 |---|---|---|
-| Permanent AppKit/Metal path | PENDING | |
-| Damage-driven presentation | PENDING | |
-| Input via Runtime authority | PENDING | |
-| Hot-path registry includes display/Metal (F-004) | PENDING | |
+| Permanent AppKit/Metal path | PASS | `Seyal --renderer-self-test` EXIT:0 + `make check` macOS Metal scaffold |
+| Damage-driven presentation | PASS | renderer self-test + Candidate-D live Metal acceptance in `make check` |
+| Input via Runtime authority | PASS | Pass 7 interactive / production shell command through external Runtime path in macOS tests |
+| Hot-path registry includes display/Metal (F-004) | PASS | `scripts/check-hot-path.py` EXIT:0 |
 
 ### 6.6 Minimal Block metadata
 

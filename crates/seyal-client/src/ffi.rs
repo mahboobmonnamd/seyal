@@ -883,6 +883,17 @@ fn register_pending_client(client: LocalDisplayClient, origin: u8) -> Result<u64
     Ok(handle)
 }
 
+/// Test-only hook: register an already-connected client as a pending adopt handle.
+/// Used by adversarial FFI misuse tests that need a live handle without going
+/// through discovery.
+#[doc(hidden)]
+pub fn test_register_pending_client(
+    client: LocalDisplayClient,
+    origin: u8,
+) -> Result<u64, ClientError> {
+    register_pending_client(client, origin)
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn seyal_bridge_connect_first() -> i32 {
     let handle = seyal_bridge_open_first();
@@ -1454,9 +1465,8 @@ mod adversarial_ffi_misuse_tests {
 
     #[test]
     fn double_adopt_of_absent_handle_stays_fail_closed() {
-        // A successful adopt removes the pending entry; a second adopt of the
-        // same id therefore cannot succeed. Absent handles cover the same
-        // fail-closed branch without requiring a live Runtime socket.
+        // Absent-handle branch only. Live double-adopt after a successful first
+        // adopt is covered by `tests/ffi_misuse_macos.rs`.
         let handle = 0x0ff1_ceda_u64;
         assert_eq!(seyal_bridge_adopt_handle(handle), -1);
         assert_eq!(seyal_bridge_adopt_handle(handle), -1);
@@ -1464,12 +1474,12 @@ mod adversarial_ffi_misuse_tests {
 
     #[test]
     fn wrong_thread_cannot_select_unadopted_handle() {
+        // Absent-handle / unadopted branch only. Cross-thread select after a
+        // successful adopt is covered by `tests/ffi_misuse_macos.rs`.
         let barrier = Arc::new(Barrier::new(2));
         let handle = 0x7ead_u64;
         let barrier_thread = Arc::clone(&barrier);
         let worker = thread::spawn(move || {
-            // Adoption without a pending client fails; the handle must not
-            // appear on this thread's map either.
             assert_eq!(seyal_bridge_adopt_handle(handle), -1);
             barrier_thread.wait();
             assert_eq!(seyal_bridge_select(handle), -1);
@@ -1481,8 +1491,8 @@ mod adversarial_ffi_misuse_tests {
 
     #[test]
     fn use_after_poll_without_client_keeps_frame_empty() {
-        // Without an active client, poll fails closed and frame stays empty —
-        // there is no borrowed cell pointer that could be retained across poll.
+        // No-client fail-closed branch only. Live poll → disconnect invalidation
+        // is covered by `tests/ffi_misuse_macos.rs`.
         assert_eq!(seyal_bridge_poll(), -1);
         let frame = seyal_bridge_frame();
         assert!(frame.cells.is_null());

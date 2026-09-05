@@ -8,7 +8,7 @@ Seyal OSS welcomes focused, evidence-backed contributions. Start with [CONTRIBUT
 
 The public repository owns the generic terminal foundation. Commercial Pro, Teams, Enterprise, hosted-service, billing, identity, and private-deployment capabilities belong in the separate commercial composition repository and must not become dependencies here.
 
-The foundation architecture is accepted and **Milestone 001 is Done / closed** (Passes 1–10; Issues #5 and #727 closed). Current production work follows the accepted milestone sequence starting at **M002+**. Machine Pass 9 RSS gate remains **`CLIENT_RSS_KIB = 1536`** (unchanged by Pass 10; see #784).
+The foundation architecture is accepted and **Milestone 001 is Done / closed** (Passes 1–10; Issues #5 and #727 closed on final freeze `c536c5454583f6a036910e145fe1187446319630`). Current production work follows the accepted milestone sequence starting at **M002+**. Machine Pass 9 RSS gate remains **`CLIENT_RSS_KIB = 1536`** (unchanged by Pass 10; see #784).
 
 ## Start here
 

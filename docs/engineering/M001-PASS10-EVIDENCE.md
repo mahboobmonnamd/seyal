@@ -9,20 +9,22 @@
 
 | Field | Value |
 |---|---|
-| Prior production freeze | `d845c6ddbe86f20183186f1aa69f2293aa8356ba` (#776) |
-| Current production tip (post-#789) | `a012ab0` — history Metal atlas in-flight deferral; **invalidates Metal/renderer-affected criteria on the prior freeze until Phase 2 re-validation completes on a new freeze** |
+| **Final frozen production head** | `c536c5454583f6a036910e145fe1187446319630` |
+| Last production behavior change | `a012ab0b71e74a18c37becacb2bfc1c505f1248c` (#789 history Metal atlas deferral) |
+| Honesty tip | `680805277637940f78310398a1bcf1d15fb8e9c8` (#790) |
+| Baseline tip | `c536c5454583f6a036910e145fe1187446319630` (#791) |
+| Prior historical freeze | `d845c6ddbe86f20183186f1aa69f2293aa8356ba` (#776) — superseded for final closeout |
 | Freeze date (UTC) | 2026-09-05 |
-| Harness tip | `e2b76024de2c85b3e9adb6dd5dcadb7b40881079` (#778 UITest helper packaging; no production behavior change) |
-| Evidence tip | Pending #787 honesty + #788 baseline + Phase 2 re-freeze |
-| Gate note | Machine RSS gate remains `CLIENT_RSS_KIB = 1536` (Pass 9 calibration; unchanged by Pass 10; #784). Headed §6.12 and full XCUI suite unblocked by #778 (`dev.seyal.Seyal.runtime`). |
-| Phase 1 status | FINDINGS DISPOSITION COMPLETE (#748–#760 closed; #764–#768 parked post-M001). Residuals #786 closed via #789; #787/#788 close Pass 10 honesty/packaging. |
-| Aggregate `make check` | PASS on prior freeze (`EXIT:0`, log `/tmp/pass10-evidence-3f7b2d9/make-check-d845c6d.log`); re-run required on final freeze |
+| Harness tip | `e2b76024de2c85b3e9adb6dd5dcadb7b40881079` (#778 UITest helper packaging) |
+| Gate note | Machine RSS gate remains `CLIENT_RSS_KIB = 1536` (#784). Engineering Quality Baseline landed (#788/#791). |
+| Phase 1 status | FINDINGS DISPOSITION COMPLETE (#748–#760 closed; #764–#768 parked post-M001). Residuals #784/#786/#787/#788 closed. |
+| Clean-checkout demo | PASS — all of bootstrap/build/test/check/bench EXIT:0 on exact freeze; see `docs/evidence/pass10-final-freeze-clean-demo-c536c54.md` |
 | Host (this evidence run) | Mahboob MacBook Pro (2), arm64 |
 | macOS | 26.5.2 (25F84) |
-| Rust toolchain | rustc/cargo 1.98.0 (88d9e12ae / 797e8a9bc) |
+| Rust toolchain | rustc/cargo 1.98.0 |
 | Build mode | release / debug as noted per command |
 
-Any production commit after a freeze SHA invalidates affected criterion evidence. **#789 (`a012ab0`) is a production Metal change** — do not treat the prior freeze as the final M001 production head until Phase 2 re-validates a newly recorded freeze.
+Any production commit after this freeze SHA invalidates affected criterion evidence.
 
 ## Verdict model
 
@@ -142,13 +144,13 @@ Expanded from `docs/milestones/MILESTONE-001.md` §15 and Pass 10 validation §6
 
 | Step | Verdict | Evidence |
 |---|---|---|
-| Clean checkout of validated head | PASS | Prior freeze tree `d845c6ddbe86…`; production tip after #789 is `a012ab0` (Phase 2 must re-demo final freeze) |
-| bootstrap/build/check | PASS | Clean-demo pipeline `CHECK_EXIT:0` / `DEMO_PIPELINE_DONE` (`/tmp/pass10-evidence-3f7b2d9/clean-demo-d845c6d-recheck.log`) |
-| `make test` (XCTest + XCUI) | PASS (with protocol substitution) | Host clean-demo recorded `TEST_EXIT:2` after SeyalTests 81/81 when UITest runner timed out enabling automation mode (host automation init, not a product assertion). **Protocol (§6.12 amendment):** when XCTest completes and the failure is automation-mode enable timeout only, full XCUI product proof may be satisfied by (a) Foundation `#778` `native-macos-smoke` SUCCESS and (b) headed recovery UITest `UITEST_EXIT:0` — not by ignoring product failures. |
-| `make bench` (diagnostic packaging) | PASS | Prior clean-demo `BENCH_EXIT:2` was Release codesign packaging without identity. **Fixed:** `scripts/task.sh` defaults `SEYAL_CODESIGN_IDENTITY=-` for diagnostic Release benches (same as Foundation CI). Re-proven: headed `make bench` EXIT:0 on `a012ab0` (artifact above). Distributable Release still requires an explicit Apple-issued identity. |
-| Runtime + Seyal.app attach demo | PASS | Headed Pass9 production recovery UITest PASS with packaged helper; `UITEST_EXIT:0` |
-| TERM/terminfo, input, resize, ?1049 | PASS | §6.12 alt/primary/infocmp EXIT:0; production recovery UITest exercises live attach/input after reconnect |
-| Detach/forced-GUI-exit/reconnect/terminate | PASS | `testPass9ProductionRecoverySurvivesGracefulAndForcedGUIExit` covers graceful + forced GUI exit with Runtime continuity (`UITEST_EXIT:0`) |
+| Clean checkout of validated head | PASS | Exact freeze `c536c54…`; clean demo `docs/evidence/pass10-final-freeze-clean-demo-c536c54.md` |
+| bootstrap/build/check | PASS | `BOOTSTRAP:0` `BUILD:0` `CHECK:0` on freeze |
+| `make test` (XCTest + XCUI) | PASS | `TEST:0` — full XCTest + XCUIAutomation including forced-GUI-exit recovery on freeze tip |
+| `make bench` (diagnostic packaging) | PASS | `BENCH:0` with `SEYAL_CODESIGN_IDENTITY=-` and headed DisplayLink (`display_link_samples=120`) |
+| Runtime + Seyal.app attach demo | PASS | Production XCUI through external Runtime + Metal; `--renderer-self-test` EXIT:0 |
+| TERM/terminfo, input, resize, ?1049 | PASS | Prior §6.12 alt/terminfo + freeze recovery UITest path |
+| Detach/forced-GUI-exit/reconnect/terminate | PASS | `testPass9ProductionRecoverySurvivesGracefulAndForcedGUIExit` PASS on freeze tip |
 
 ### 6.13 Non-goals / authority consistency
 
@@ -161,10 +163,10 @@ Expanded from `docs/milestones/MILESTONE-001.md` §15 and Pass 10 validation §6
 
 | Gate | Verdict | Notes |
 |---|---|---|
-| `make check` on prior freeze SHA | PASS | `EXIT:0` on `d845c6ddbe86…` (historical); re-run on final freeze |
-| Targeted Pass 10 / Pass 9 suites | PASS | Pass9 merge-acceptance 224/512≤1536; §6.9 8×600s EXIT:0; headed DisplayLink on `a012ab0` EXIT:0 (`display_link_samples=120`) |
-| Clean production demo | PASS (with §6.12.1 honesty) | `CHECK_EXIT:0` + headed UITest; TEST/BENCH exits reconciled under protocol amendment + codesign default |
-| Independent final review | SUPERSEDED | Historical READY superseded pending re-freeze after #789; see `m001-pass10-independent-final-review.md` |
+| `make check` on final freeze | PASS | `CHECK:0` on `c536c54…` (`/tmp/pass10-final-freeze/check.exit`) |
+| Targeted Pass 10 / Pass 9 suites | PASS | Pass9 budget validator PASS; headed DisplayLink 120/120 on freeze; XCUI forced-GUI-exit PASS |
+| Clean production demo | PASS | bootstrap/build/test/check/bench all EXIT:0 — `docs/evidence/pass10-final-freeze-clean-demo-c536c54.md` |
+| Independent final review | PASS | READY on `c536c54` — `docs/evidence/m001-pass10-independent-final-review.md` |
 
 ## Harness note (Pass 9 merge-acceptance RSS)
 
@@ -176,6 +178,4 @@ Expanded from `docs/milestones/MILESTONE-001.md` §15 and Pass 10 validation §6
 
 ## Final conclusion
 
-**M001 Pass 10 status (after #787 honesty):** criterion ledger above is reconciled — §6.7 cites XCUI forced-GUI-exit (not socket-loss soak), §6.11 records headed DisplayLink evidence on `a012ab0`, §6.12 documents TEST/BENCH exit honesty + packaging fix. Machine RSS gate remains `CLIENT_RSS_KIB = 1536`.
-
-**Not Done for M001 closure yet:** production tip `a012ab0` (#789) supersedes prior freeze `d845c6dd…` for Metal-affected criteria. Owning Issues **#727** / **#5** remain **open** until (1) #788 Engineering Quality Baseline lands, (2) final production freeze SHA is recorded, (3) independent Phase 2 + clean-checkout demo PASS on that freeze.
+**M001 Pass 10:** `PASS` — final freeze `c536c5454583f6a036910e145fe1187446319630` (last production behavior `a012ab0` #789; honesty #790; Engineering Quality Baseline #791). Clean-checkout demo EXIT:0 for bootstrap/build/test/check/bench; headed DisplayLink 120/120; machine RSS gate `CLIENT_RSS_KIB = 1536`. Independent Phase 2 READY. Owning Issue **#727** and parent **#5** are **closed Done**. M002 may start.

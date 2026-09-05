@@ -21,7 +21,7 @@ The terminal hot path must never synchronously depend on agents, cloud services,
 
 | Milestone | Epic | Outcome | Entry gate | Exit / release significance |
 |---|---|---|---|---|
-| M001 | #5 | Permanent production foundation (**Done / closed**) | Complete — Passes 1–10; #5/#727 closed | Seyal-owned VT/PTY/Runtime/display/Metal foundation accepted. Contributor/nightly quality only; no market-readiness claim. Soft RSS **768 KiB**. |
+| M001 | #5 | Permanent production foundation (**Done / closed**) | Complete — Passes 1–10; #5/#727 closed | Seyal-owned VT/PTY/Runtime/display/Metal foundation accepted. Contributor/nightly quality only; no market-readiness claim. Machine RSS gate **`CLIENT_RSS_KIB = 1536`**. |
 | M002 | #664 | Market-parity terminal fundamentals | M001 complete | Target shells, TUIs, nested mux/SSH workloads, Unicode, scrollback/reflow, terminal search/input/mouse/link behavior and performance/resource gates are credible for technical preview. |
 | M003 | #665 | Core Seyal workspace | Stable M002 terminal contracts; native seams ready | macOS windows/tabs/splits/navigation, raw/Block/composer presentation, local config/themes/fonts/keybindings and trusted shell-integration boundary form a coherent local workspace. Alpha/beta quality; still not market-ready. |
 | M004 | #666 | Durable local workspace / market-ready v0.1 | M002 + M003 complete; M004 spikes resolved | Durable detach/reconnect/layout/history behavior is honest, signed/notarized/updateable macOS distribution exists, diagnostics/accessibility/docs/install/recovery/performance gates pass on one release SHA. **First serious public launch.** |

@@ -13,7 +13,7 @@
 | Freeze date (UTC) | 2026-09-05 |
 | Harness tip | `e2b76024de2c85b3e9adb6dd5dcadb7b40881079` (#778 UITest helper packaging; no production behavior change) |
 | Evidence tip | `c1246d43869abda194bcc0c678ab8c916c581caf` (#779 closeout evidence) |
-| Gate note | Production freeze remains #776. Soft RSS gate remains 768 KiB. Headed §6.12 and full XCUI suite unblocked by #778 harness packaging (`dev.seyal.Seyal.runtime`). |
+| Gate note | Production freeze remains #776. Machine RSS gate remains `CLIENT_RSS_KIB = 1536` (Pass 9 calibration; unchanged by Pass 10). Headed §6.12 and full XCUI suite unblocked by #778 harness packaging (`dev.seyal.Seyal.runtime`). Gate-honesty correction: #784. |
 | Phase 1 status | FINDINGS DISPOSITION COMPLETE (#748–#760 closed; #764–#768 parked post-M001). File inventory bound; Phase 2 criterion evidence complete on this freeze + #778 harness tip + #779 evidence tip. |
 | Aggregate `make check` | PASS on freeze (`EXIT:0`, log `/tmp/pass10-evidence-3f7b2d9/make-check-d845c6d.log`) |
 | Host (this evidence run) | Mahboob MacBook Pro (2), arm64 |
@@ -98,7 +98,7 @@ Expanded from `docs/milestones/MILESTONE-001.md` §15 and Pass 10 validation §6
 
 | Criterion | Verdict | Evidence |
 |---|---|---|
-| Detach without kill | PASS | Pass 9 merge-acceptance on harness-fixed head: soak result=ok; `client_rss_delta_kib` graceful=224 abrupt=512 ≤768. Artifact `/tmp/pass10-evidence-3f7b2d9/pass9-rss-fix/pass9-merge-acceptance-3f7b2d926dca.json`. Prior false-FAIL was baseline-before-warmup (fixed to match release-qual). Budget unchanged. |
+| Detach without kill | PASS | Pass 9 merge-acceptance on harness-fixed head: soak result=ok; `client_rss_delta_kib` graceful=224 abrupt=512 ≤ `CLIENT_RSS_KIB` 1536. Artifact `/tmp/pass10-evidence-3f7b2d9/pass9-rss-fix/pass9-merge-acceptance-3f7b2d926dca.json`. Prior false-FAIL was baseline-before-warmup (fixed to match release-qual). Machine budget unchanged by Pass 10. |
 | GUI crash survival | PASS | merge-acceptance abrupt_socket_loss cohort exact-return + continuity on freeze path (artifact above) |
 | Reattach same ExecutionId | PASS | merge-acceptance continuity fields + Pass 8 resync/reattach EXIT:0 |
 | Explicit terminate ≠ detach | PASS | Pass 9 merge-acceptance + runtime terminate contracts; detach leaves execution live |
@@ -132,7 +132,7 @@ Expanded from `docs/milestones/MILESTONE-001.md` §15 and Pass 10 validation §6
 
 | Criterion | Verdict | Evidence class | Evidence |
 |---|---|---|---|
-| Required measurements recorded vs targets | PASS | controlled-host | Pass9 merge-acceptance graceful=224 / abrupt=512 ≤768; release-qual artifact `docs/evidence/pass9-release-qualification-d845c6ddbe86.json` accepted by production budget validator (`ACCEPTED_ARTIFACT_BUDGET:PASS`) | |
+| Required measurements recorded vs targets | PASS | controlled-host | Pass9 merge-acceptance graceful=224 / abrupt=512 ≤1536; release-qual artifact `docs/evidence/pass9-release-qualification-d845c6ddbe86.json` accepted by production budget validator (`ACCEPTED_ARTIFACT_BUDGET:PASS`; `CLIENT_RSS_KIB=1536`) | |
 | Pass 9 budget artifacts retained | PASS | controlled-host | Exact-freeze artifact retained: `docs/evidence/pass9-release-qualification-d845c6ddbe86.json` (commit `d845c6ddbe86…`); validator PASS in `/tmp/pass10-evidence-3f7b2d9/pass9-budget-recheck.log` | |
 | CI benches not mislabeled as headed proof | PASS | CI | `make check` / Foundation benches remain class `CI`; headed proof requires `SEYAL_REQUIRE_DISPLAY_LINK_BENCHMARK=1` controlled-host (documented in validation §5) | |
 
@@ -151,20 +151,20 @@ Expanded from `docs/milestones/MILESTONE-001.md` §15 and Pass 10 validation §6
 | Criterion | Verdict | Evidence |
 |---|---|---|
 | No silent M002/scrollback/tabs/agents/cloud absorption | PASS | Layering check EXIT:0; milestone non-goals unchanged; no commercial crates in OSS workspace; UI preview tabs are non-acceptance surfaces |
-| Status docs match freeze head | PASS | Evidence tip records production freeze `d845c6ddbe86…` and harness tip `#778` / `e2b7602…`; soft RSS 768 KiB unchanged |
+| Status docs match freeze head | PASS | Evidence tip records production freeze `d845c6ddbe86…` and harness tip `#778` / `e2b7602…`; machine RSS gate `CLIENT_RSS_KIB=1536` unchanged by Pass 10 (#784 corrects prior false 768 claims) |
 
 ## Aggregate gates
 
 | Gate | Verdict | Notes |
 |---|---|---|
 | `make check` on freeze SHA | PASS | `EXIT:0` on `d845c6ddbe86…` (`/tmp/pass10-evidence-3f7b2d9/make-check-d845c6d.log`; exit file `make-check-d845c6d.exit`) |
-| Targeted Pass 10 / Pass 9 suites | PASS | Pass9 merge-acceptance 224/512≤768; §6.9 8×600s EXIT:0; freeze release-qual artifact budget PASS; IME/a11y overallPass=true; #778 `native-macos-smoke` SUCCESS (full XCUI suite) on `e2b7602…` |
+| Targeted Pass 10 / Pass 9 suites | PASS | Pass9 merge-acceptance 224/512≤1536; §6.9 8×600s EXIT:0; freeze release-qual artifact budget PASS; IME/a11y overallPass=true; #778 `native-macos-smoke` SUCCESS (full XCUI suite) on `e2b7602…` |
 | Clean production demo | PASS | Clean-checkout demo `CHECK_EXIT:0` + headed §6.12 items 11–20 UITest PASS (`UITEST_EXIT:0`) |
 | Independent final review | PASS | Independent review READY after #778 + headed §6.12 PASS (see `docs/evidence/m001-pass10-independent-final-review.md`) |
 
 ## Harness note (Pass 9 merge-acceptance RSS)
 
-`Pass9MergeAcceptance` previously sampled client RSS baseline before warmups, charging Metal/IMK cold caches into `client_rss_delta` (observed 6480–7184 KiB vs 768 soft gate). Aligned with `Pass9ReleaseQualification`: cold-start settle + warmups before baseline. Soft gate **768 KiB unchanged**. Post-fix evidence: graceful=224, abrupt=512. Landed in #776; production freeze `d845c6ddbe86…`.
+`Pass9MergeAcceptance` previously sampled client RSS baseline before warmups, charging Metal/IMK cold caches into `client_rss_delta` (observed 6480–7184 KiB vs the historical pre-calibration 768 constant). Aligned with `Pass9ReleaseQualification`: cold-start settle + warmups before baseline. Machine gate remains **`CLIENT_RSS_KIB = 1536`** (Pass 9 calibration at `1005bc4`; unchanged by Pass 10). Post-fix evidence: graceful=224, abrupt=512. Landed in #776; production freeze `d845c6ddbe86…`. Closeout honesty corrected in #784.
 
 ## Harness note (#778 UITest Runtime helper)
 
@@ -172,4 +172,4 @@ Expanded from `docs/milestones/MILESTONE-001.md` §15 and Pass 10 validation §6
 
 ## Final conclusion
 
-**M001 Pass 10:** `PASS` — production freeze `d845c6ddbe86f20183186f1aa69f2293aa8356ba` (#776); harness tip `e2b76024de2c85b3e9adb6dd5dcadb7b40881079` (#778); evidence tip `c1246d43869abda194bcc0c678ab8c916c581caf` (#779). Every mandatory criterion in this ledger is `PASS`. Soft RSS gate remains 768 KiB. Owning Issue **#727** and parent **#5** are **closed**.
+**M001 Pass 10:** `PASS` — production freeze `d845c6ddbe86f20183186f1aa69f2293aa8356ba` (#776); harness tip `e2b76024de2c85b3e9adb6dd5dcadb7b40881079` (#778); evidence tip `c1246d43869abda194bcc0c678ab8c916c581caf` (#779). Every mandatory criterion in this ledger is `PASS`. Machine RSS gate remains `CLIENT_RSS_KIB = 1536` (unchanged by Pass 10; #784 corrects prior false “768 soft gate” closeout claims). Owning Issue **#727** and parent **#5** are **closed**.

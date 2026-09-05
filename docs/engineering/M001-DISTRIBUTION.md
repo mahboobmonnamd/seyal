@@ -77,7 +77,7 @@ Each pass gets an independent validation Issue if its exit requires cross-task e
 
 Pass 10 is an aggregate **validation** gate, not a catch-all production hardening pass and not a new behavioral specification pass.
 
-**Current state:** M001 is **Done / closed**. Passes 1–10 complete; #727 and #5 closed. Production freeze `d845c6ddbe86f20183186f1aa69f2293aa8356ba` (#776); harness tip `e2b76024de2c85b3e9adb6dd5dcadb7b40881079` (#778); evidence tip `c1246d43869abda194bcc0c678ab8c916c581caf` (#779). Soft RSS gate remains **768 KiB**. Live Pass 10 PASS ledger: `docs/engineering/M001-PASS10-EVIDENCE.md`. Pass 10 protocols remain historical authority: `docs/engineering/M001-PASS10-CODE-QUALITY-REVIEW.md` and `docs/engineering/M001-PASS10-VALIDATION.md`.
+**Current state:** M001 is **Done / closed**. Passes 1–10 complete; #727 and #5 closed. Production freeze `d845c6ddbe86f20183186f1aa69f2293aa8356ba` (#776); harness tip `e2b76024de2c85b3e9adb6dd5dcadb7b40881079` (#778); evidence tip `c1246d43869abda194bcc0c678ab8c916c581caf` (#779). Machine RSS gate remains **`CLIENT_RSS_KIB = 1536`** (Pass 9 calibration; unchanged by Pass 10; #784). Live Pass 10 PASS ledger: `docs/engineering/M001-PASS10-EVIDENCE.md`. Pass 10 protocols remain historical authority: `docs/engineering/M001-PASS10-CODE-QUALITY-REVIEW.md` and `docs/engineering/M001-PASS10-VALIDATION.md`.
 
 > **Historical entry gate (superseded).** Before Pass 9 closed, Pass 10 refinement could begin while Pass 9 was nearing completion, but Pass 10 had to remain `BLOCKED / NOT_READY` until Pass 9 was genuinely complete, its final budgets/evidence were accepted, the M001 candidate head was frozen, and development readiness passed. That Pass-9 blocker is closed.
 

@@ -2,7 +2,7 @@
 
 **Owning Issue:** #727  
 **Starting review candidate:** `1005bc42397aac485b1aeff08cafd0f67790d969`  
-**Status:** PHASE 1 COMPLETE / PHASE 2 DONE — BLOCKING/IMPORTANT finding Issues #748–#760 closed on lineage through `e8431f01…`; domain agent reviews retained; file inventory bound; final validation satisfied on freeze `d845c6ddbe86…` (#776) with harness tip `e2b76024de2c…` (#778) and evidence tip `c1246d43869a…` (#779). Issues #727 and #5 closed. Machine RSS gate remains **`CLIENT_RSS_KIB = 1536`** (#784 corrects prior false 768 closeout claims).
+**Status:** PHASE 1 COMPLETE — BLOCKING/IMPORTANT finding Issues #748–#760 closed on lineage through `e8431f01…`; domain agent reviews retained; file inventory bound. Historical Phase 2 on freeze `d845c6ddbe86…` (#776) / harness `e2b76024de2c…` (#778) was **reopened** after honesty residuals (#784/#787) and production Metal tip `a012ab0` (#789). Issues **#727 and #5 remain open** until a new freeze + independent Phase 2 PASS. Machine RSS gate remains **`CLIENT_RSS_KIB = 1536`** (#784).
 **Normative protocol:** `docs/engineering/M001-PASS10-CODE-QUALITY-REVIEW.md`
 
 This ledger records the exhaustive M001 milestone-closure code and quality review required before independent final Pass 10 validation.
@@ -244,4 +244,4 @@ Production-significant path inventory (domain-mapped to Agent1–10 results, wit
 
 Phase 1 **findings disposition** is complete: every `BLOCKING` finding is resolved and re-reviewed, and every `IMPORTANT` finding is resolved or authoritatively assigned outside M001 (#764–#768).
 
-Full Phase 1 COMPLETE / Phase 2 authorization **was satisfied**: (1) file-level inventory bound for M001-significant paths, (2) authority-doc status aligned with closed #727/#5, (3) green exact-head Foundation/production gates on the freeze, and (4) final validation head re-frozen at `d845c6ddbe86…` (#776). Evidence lives in `docs/engineering/M001-PASS10-EVIDENCE.md`; machine RSS gate remains **`CLIENT_RSS_KIB = 1536`** (#784).
+Full Phase 1 COMPLETE / historical Phase 2 authorization **was satisfied** on freeze `d845c6ddbe86…` (#776), then **reopened** after honesty residuals (#784/#787) and production Metal tip `a012ab0` (#789). Issues **#727 / #5 remain open** until a new freeze + independent Phase 2 PASS. Evidence honesty reconciliation lives in `docs/engineering/M001-PASS10-EVIDENCE.md`; machine RSS gate remains **`CLIENT_RSS_KIB = 1536`** (#784).

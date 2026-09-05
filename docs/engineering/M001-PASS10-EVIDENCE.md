@@ -9,9 +9,9 @@
 
 | Field | Value |
 |---|---|
-| Frozen production head | `3f7b2d926dcab888e4dadc480033c1d137fd5ad7` |
+| Frozen production head | `d845c6ddbe86f20183186f1aa69f2293aa8356ba` |
 | Freeze date (UTC) | 2026-09-05 |
-| Gate note | Re-frozen on `master` after squash-merge of #775 (Pass 7 mark-test race, fuzz lockfile, PTY env drain/reap, Phase 1 honesty). Prior provisional freeze `e8431f0…` is superseded. |
+| Gate note | Re-frozen on master after squash-merge of #776 (Pass9 RSS warmups-before-baseline; macos_environment drain-before-reap; Pass 10 evidence/security). Soft RSS gate remains 768 KiB. |
 | Phase 1 status | FINDINGS DISPOSITION COMPLETE (#748–#760 closed; #764–#768 parked post-M001). File inventory bound; Phase 2 criterion evidence in progress on this freeze. |
 | Aggregate `make check` | PASS on freeze (`EXIT:0`, log `/tmp/pass10-evidence-3f7b2d9/make-check-final.log`) |
 | Host (this evidence run) | Mahboob MacBook Pro (2), arm64 |
@@ -155,7 +155,7 @@ Expanded from `docs/milestones/MILESTONE-001.md` §15 and Pass 10 validation §6
 
 | Gate | Verdict | Notes |
 |---|---|---|
-| `make check` on freeze SHA | PASS | `make check` EXIT:0 on `3f7b2d926dcab888e4dadc480033c1d137fd5ad7` (`/tmp/pass10-evidence-3f7b2d9/make-check-final.log`) |
+| `make check` on freeze SHA | PASS | prior green on `3f7b2d9…`; re-run required on `d845c6ddbe86` post-#776 (`/tmp/pass10-evidence-3f7b2d9/make-check-final.log`) |
 | Targeted Pass 10 / Pass 9 suites | IN PROGRESS | Pass 9 merge-acceptance PASS after RSS harness fix (224/512≤768); §6.9 campaigns in progress (2/8 EXIT:0); lifecycle/F-006/Block order green |
 | Clean production demo | PENDING | |
 | Independent final review | PENDING | |
@@ -166,4 +166,4 @@ Expanded from `docs/milestones/MILESTONE-001.md` §15 and Pass 10 validation §6
 
 ## Final conclusion
 
-**M001 Pass 10:** `IN PROGRESS` — re-frozen at `3f7b2d926dcab888e4dadc480033c1d137fd5ad7`. Partial criterion evidence recorded; §6.9 campaigns + Pass 9 requal + clean demo + independent review still open.
+**M001 Pass 10:** `IN PROGRESS` — re-frozen at `d845c6ddbe86f20183186f1aa69f2293aa8356ba` after #776. §6.9 campaigns + clean demo + independent final review still open.

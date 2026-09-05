@@ -188,7 +188,7 @@ mod tests {
         assert_eq!(row.occupied_cells(), 2);
         row.write_cluster(1, "A");
         assert_eq!(row.occupied_cells(), 1);
-        assert!(matches!(row.cells[2], GridCell::Empty));
+        assert!(matches!(&row.cells[2], GridCell::Empty));
     }
 
     #[test]
@@ -198,7 +198,7 @@ mod tests {
         assert_eq!(row.occupied_cells(), 2);
         row.write_cluster(2, "B");
         assert_eq!(row.occupied_cells(), 1);
-        assert!(matches!(row.cells[1], GridCell::Empty));
-        assert!(matches!(row.cells[2], GridCell::Lead { ref text, width: 1 } if text == "B"));
+        assert!(matches!(&row.cells[1], GridCell::Empty));
+        assert!(matches!(&row.cells[2], GridCell::Lead { text, width: 1 } if text == "B"));
     }
 }

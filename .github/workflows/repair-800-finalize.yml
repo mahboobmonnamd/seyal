@@ -1,0 +1,43 @@
+name: Repair 800 finalize
+
+on:
+  push:
+    branches: [fix/800-restore-foundation-quality]
+    paths:
+      - ".github/workflows/repair-800-finalize.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: fix/800-restore-foundation-quality
+          fetch-depth: 0
+      - name: Bootstrap pinned Rust toolchain
+        run: make bootstrap
+      - name: Apply deterministic baseline cleanup
+        run: |
+          cargo +1.98.0 fmt --all
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("macos/Seyal/Sources/RustDisplayBridge.swift")
+          text = path.read_text(encoding="utf-8")
+          old = "source.setCancelHandler { [teardown] in\n      teardown.sourceCancelled()\n    }"
+          new = "source.setCancelHandler { [teardown = teardown!] in\n      teardown.sourceCancelled()\n    }"
+          if text.count(old) != 2:
+              raise SystemExit(f"expected exactly two teardown capture sites, found {text.count(old)}")
+          path.write_text(text.replace(old, new), encoding="utf-8")
+          PY
+          git diff --check
+      - name: Commit cleanup
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates macos/Seyal/Sources/RustDisplayBridge.swift
+          git commit -m "fix(ci): clear remaining baseline build and format failures"
+          git push origin HEAD:fix/800-restore-foundation-quality

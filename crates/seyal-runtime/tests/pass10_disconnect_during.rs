@@ -13,6 +13,7 @@
 
 use std::{
     io::{Read, Write},
+    os::fd::AsRawFd,
     os::unix::net::UnixStream,
     time::{Duration, Instant},
 };
@@ -534,7 +535,7 @@ fn disconnect_during_block_finalization_retires_execution_without_leak() {
         );
 
         // Reach Current BlockState, then stop reading so finalization frames
-        // remain outstanding when the peer vanishes mid-finalization.
+        // remain unread on the live connection.
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             let (kind, payload) = harness.raw_frame(&mut client);
@@ -547,33 +548,53 @@ fn disconnect_during_block_finalization_retires_execution_without_leak() {
             assert!(Instant::now() < deadline, "Current BlockState timed out");
         }
 
-        // Wait until the child is near exit / Runtime has begun retiring work,
-        // then disconnect while finalization delivery is still owed.
-        let exit_deadline = Instant::now() + Duration::from_secs(5);
-        while harness.runtime.execution_count() != 0 && Instant::now() < exit_deadline {
+        // SPEC-007 §10 retires Block metadata in the same bounded turn that
+        // admits finalization frames, so Block cannot remain observable after
+        // finalization completes. The adversarial cell is therefore: Runtime
+        // finishes finalization while a stalled client still holds unread
+        // finalization bytes, then the peer vanishes before consuming them.
+        let retire_deadline = Instant::now() + Duration::from_secs(10);
+        while harness.runtime.execution_count() != 0 && Instant::now() < retire_deadline {
             harness.pump();
-            // Once Runtime has published completion-side work, the stalled
-            // client still holds a live connection; drop it in that window.
-            if harness.runtime.block(execution_id).is_none()
-                || harness
-                    .runtime
-                    .lookup(execution_id)
-                    .is_some_and(|s| s.lifecycle != ExecutionLifecycle::Running)
-            {
-                break;
-            }
         }
+        assert_eq!(
+            harness.runtime.execution_count(),
+            0,
+            "stalled client must not retain the execution across finalization"
+        );
+        assert_eq!(
+            harness.runtime.block_count(),
+            0,
+            "stalled client must not retain Block metadata across finalization"
+        );
+        assert_eq!(harness.runtime.block(execution_id), None);
+
+        // Prove finalization delivery is still owed before disconnect.
+        let mut peek = [0u8; 1];
+        // SAFETY: MSG_PEEK only inspects the socket receive buffer.
+        let peeked = unsafe {
+            libc::recv(
+                client.stream.as_raw_fd(),
+                peek.as_mut_ptr().cast(),
+                peek.len(),
+                libc::MSG_PEEK | libc::MSG_DONTWAIT,
+            )
+        };
+        assert!(
+            peeked > 0,
+            "expected unread finalization bytes on the stalled connection before disconnect"
+        );
+
         drop(client);
 
-        let retire_deadline = Instant::now() + Duration::from_secs(10);
+        let cleanup_deadline = Instant::now() + Duration::from_secs(5);
         while (harness.runtime.execution_count() != 0 || harness.runtime.block_count() != 0)
-            && Instant::now() < retire_deadline
+            && Instant::now() < cleanup_deadline
         {
             harness.pump();
         }
         assert_eq!(harness.runtime.execution_count(), 0);
         assert_eq!(harness.runtime.block_count(), 0);
-        assert_eq!(harness.runtime.block(execution_id), None);
     }
     assert_eq!(
         fd_count(),

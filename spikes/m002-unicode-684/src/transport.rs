@@ -190,7 +190,11 @@ mod tests {
         let events = decode_with_chunks(&[0xe2, b'A'], &[1, 1], true);
         assert_eq!(
             events,
-            vec![Event::Malformed, Event::Print('\u{fffd}'), Event::Print('A')]
+            vec![
+                Event::Malformed,
+                Event::Print('\u{fffd}'),
+                Event::Print('A')
+            ]
         );
     }
 
@@ -214,7 +218,11 @@ mod tests {
         decoder.finish(&mut events);
         assert_eq!(
             events,
-            vec![Event::Print('e'), Event::Execute(0x07), Event::Print('\u{301}')]
+            vec![
+                Event::Print('e'),
+                Event::Execute(0x07),
+                Event::Print('\u{301}')
+            ]
         );
     }
 }

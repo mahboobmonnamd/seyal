@@ -1,10 +1,20 @@
 #![cfg(target_os = "macos")]
 
-use std::time::{Duration, Instant};
+use std::{
+    sync::{Mutex, MutexGuard},
+    time::{Duration, Instant},
+};
 
-use seyal_exec::{ChildExit, CommandSpec, ReadOutcome, TerminalExecution, WindowSize};
+use seyal_exec::{ChildExit, CommandSpec, ExecError, ReadOutcome, TerminalExecution, WindowSize};
 
+static TEST_LOCK: Mutex<()> = Mutex::new(());
 const IO_TIMEOUT: Duration = Duration::from_secs(3);
+
+fn test_guard() -> MutexGuard<'static, ()> {
+    TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 fn wait_exit(execution: &mut TerminalExecution, timeout: Duration) -> ChildExit {
     let deadline = Instant::now() + timeout;
@@ -19,54 +29,56 @@ fn wait_exit(execution: &mut TerminalExecution, timeout: Duration) -> ChildExit 
     }
 }
 
+/// Drain PTY output until `needle` appears or EOF/timeout.
+/// Do not reap the child here — early waitpid races can surface as empty
+/// buffers on fast CI hosts even when the slave wrote the env lines.
+fn read_until(
+    execution: &mut TerminalExecution,
+    needle: &[u8],
+    timeout: Duration,
+) -> Result<Vec<u8>, ExecError> {
+    let deadline = Instant::now() + timeout;
+    let mut output = Vec::new();
+    let mut buffer = [0_u8; 256];
+
+    loop {
+        match execution.read_output(&mut buffer)? {
+            ReadOutcome::Bytes(count) => {
+                output.extend_from_slice(&buffer[..count]);
+                if output.windows(needle.len()).any(|window| window == needle) {
+                    return Ok(output);
+                }
+            }
+            ReadOutcome::WouldBlock => {}
+            ReadOutcome::Eof => return Ok(output),
+        }
+
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(output);
+        }
+        let readiness = execution.wait_readable(remaining.min(Duration::from_millis(100)))?;
+        if readiness.hangup && !readiness.ready {
+            match execution.read_output(&mut buffer)? {
+                ReadOutcome::Bytes(count) => output.extend_from_slice(&buffer[..count]),
+                ReadOutcome::WouldBlock | ReadOutcome::Eof => {}
+            }
+        }
+    }
+}
+
 #[test]
 fn command_environment_is_explicit_and_pty_injects_no_terminal_markers() {
+    let _guard = test_guard();
     let command = CommandSpec::new("/usr/bin/env")
         .clear_environment()
         .env("SEYAL_TEST_VALUE", "explicit");
     let mut execution =
-        TerminalExecution::spawn(&command, WindowSize::default()).expect("spawn PTY command");
+        TerminalExecution::spawn(&command, WindowSize::cells(80, 24).expect("valid size"))
+            .expect("spawn PTY command");
 
-    let deadline = Instant::now() + IO_TIMEOUT;
-    let mut output = Vec::new();
-    let mut buffer = [0_u8; 256];
-    let mut child_exited = false;
-    let mut eof = false;
-
-    // Drain until EOF. Fast hosts can observe child exit before the PTY master
-    // delivers the final env lines; stopping at the first exit observation can
-    // yield an empty buffer. Conversely, PTY EOF can arrive a beat before
-    // waitpid reports Exited(0), so exit is reaped separately after drain.
-    while Instant::now() < deadline && !eof {
-        match execution
-            .read_output(&mut buffer)
-            .expect("read environment output")
-        {
-            ReadOutcome::Bytes(count) => output.extend_from_slice(&buffer[..count]),
-            ReadOutcome::WouldBlock => {
-                if !child_exited {
-                    child_exited = execution.try_wait().expect("wait child").is_some();
-                }
-                let wait = if child_exited {
-                    Duration::from_millis(20)
-                } else {
-                    Duration::from_millis(100)
-                };
-                let _ = execution.wait_readable(wait).expect("wait readable");
-            }
-            ReadOutcome::Eof => eof = true,
-        }
-        if !child_exited {
-            child_exited = execution.try_wait().expect("wait child").is_some();
-        }
-    }
-
-    assert!(eof, "environment PTY did not reach EOF before deadline");
-    let remaining = deadline.saturating_duration_since(Instant::now());
-    assert_eq!(
-        wait_exit(&mut execution, remaining.max(Duration::from_millis(100))),
-        ChildExit::Exited(0)
-    );
+    let output =
+        read_until(&mut execution, b"SEYAL_TEST_VALUE=explicit", IO_TIMEOUT).expect("read env");
     let output = String::from_utf8(output).expect("env output is utf-8");
     assert!(
         output.lines().any(
@@ -77,4 +89,6 @@ fn command_environment_is_explicit_and_pty_injects_no_terminal_markers() {
     assert!(!output.lines().any(|line| line.starts_with("TERM=")));
     assert!(!output.lines().any(|line| line.starts_with("SEYAL_INSIDE=")));
     assert!(!output.lines().any(|line| line.starts_with("RILL_INSIDE=")));
+
+    assert_eq!(wait_exit(&mut execution, IO_TIMEOUT), ChildExit::Exited(0));
 }

@@ -223,17 +223,17 @@ Re-reviewed the domains touched by merged finding PRs on exact head `e8431f01c79
 - **Fuzz/§6.9 (F-008):** #772 registry/campaign parity + evidence-grade honesty; PR CI alone cannot score §6.9 PASS.
 - **Docs/CI/hot-path/publish (F-001/F-003/F-004/F-005/F-009):** corresponding PRs merged; IMPORTANT module-size follow-ups explicitly parked post-M001 (#765–#768, #764).
 
-No open `BLOCKING` Pass 10 finding Issues remain. Phase 2 final validation is authorized on the frozen head below.
+No open `BLOCKING` Pass 10 finding Issues remain. Finding Issues #748–#760 are disposition-complete; IMPORTANT follow-ups #764–#768 remain parked post-M001.
 
-## Frozen final M001 validation head
+## Provisional freeze (invalidated by Phase 2 branch)
 
 ```text
 e8431f01c797b57d7b6ee6a9be65706f77c7d789
 ```
 
-Branch tip at freeze: `master` / `e8431f0` (“Close Pass 10 fuzz registry/campaign parity and Pass 7/9 surfaces (#772)”).
+Branch tip at that provisional freeze: `master` / `e8431f0` (“Close Pass 10 fuzz registry/campaign parity and Pass 7/9 surfaces (#772)”).
 
-Any later production delta invalidates affected Phase 2 evidence and requires a new freeze + revalidation.
+This SHA is **not** the final Pass 10 validation head. Phase 2 branch production/docs deltas invalidate it; **re-freeze after this PR merges** before claiming any criterion `PASS`. Phase 2 final validation remains **gated** until the Phase 2 entry conditions in `M001-PASS10-VALIDATION.md` §2.2 are met on the re-frozen head.
 
 ## File inventory binding
 
@@ -242,6 +242,6 @@ Production-significant path inventory (domain-mapped to Agent1–10 results, wit
 
 ## Completion condition
 
-Phase 1 of this ledger is complete: every `BLOCKING` finding is resolved and re-reviewed, every `IMPORTANT` finding is resolved or authoritatively assigned outside M001 (#764–#768), and the final M001 validation head is frozen above.
+Phase 1 **findings disposition** is complete: every `BLOCKING` finding is resolved and re-reviewed, and every `IMPORTANT` finding is resolved or authoritatively assigned outside M001 (#764–#768).
 
-Phase 2 independent validation may proceed only after: (1) file-level ledger completeness for M001-significant paths, (2) authority-doc status alignment, and (3) green exact-head Foundation/production gates. Evidence lives in `docs/engineering/M001-PASS10-EVIDENCE.md`.
+Full Phase 1 COMPLETE / Phase 2 authorization still requires: (1) file-level ledger completeness for M001-significant paths (inventory bound; line-level completeness remains a ledger duty), (2) authority-doc status alignment, (3) green exact-head Foundation/production gates, and (4) a re-frozen final validation head after review-driven production deltas. Evidence lives in `docs/engineering/M001-PASS10-EVIDENCE.md`.

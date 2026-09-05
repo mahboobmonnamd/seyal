@@ -28,19 +28,20 @@ Use `.agents/skills/milestone-validation/SKILL.md` as the primary workflow.
 
 ## 2. Entry gate
 
-### 2.1 Phase 1 code/quality review — READY / IN PROGRESS
+### 2.1 Phase 1 code/quality review — findings disposition complete
 
-Pass 9 no longer blocks Pass 10 Phase 1. The following entry conditions are satisfied:
+Pass 9 no longer blocks Pass 10 Phase 1. The following entry conditions were satisfied and Phase 1 review executed:
 
 - Pass 9 production Issue #719 is closed Done;
 - final Pass 9 independent review has no unresolved blocker;
 - Pass 9 calibrated reconnect/cleanup/resource budgets are accepted and retained;
 - current `master` contains the accepted Pass 1–9 production lineage;
-- Phase 1 review candidate is frozen at `1005bc42397aac485b1aeff08cafd0f67790d969`;
+- Phase 1 review candidate was frozen at `1005bc42397aac485b1aeff08cafd0f67790d969`;
 - there is no unresolved architecture/specification question that blocks review;
-- development readiness for #727 returned Ready and Phase 1 was transitioned to IN PROGRESS by user direction.
+- development readiness for #727 returned Ready and Phase 1 was transitioned to IN PROGRESS by user direction;
+- finding Issues #748–#760 are closed; IMPORTANT follow-ups #764–#768 are parked post-M001.
 
-Phase 1 follows `docs/engineering/M001-PASS10-CODE-QUALITY-REVIEW.md`.
+Phase 1 follows `docs/engineering/M001-PASS10-CODE-QUALITY-REVIEW.md`. Findings disposition is complete; claiming full Phase 1 COMPLETE still requires file-level ledger completeness per that protocol.
 
 ### 2.2 Phase 2 final validation — still gated
 
@@ -53,7 +54,7 @@ Independent final milestone-validation execution remains forbidden until all of 
 - a final exact M001 validation head is frozen after review-driven changes;
 - development readiness for the Phase 2 validation execution of #727 returns Ready.
 
-Until those Phase 2 conditions are met, final validation remains `NOT STARTED / GATED`, even though Phase 1 review is authorized and in progress.
+Until those Phase 2 conditions are met, final validation remains `NOT STARTED / GATED`.
 
 M002 implementation must not be started as a dependency bypass while M001 has a failed, missing or inconclusive mandatory Pass 10 criterion.
 

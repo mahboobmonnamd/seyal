@@ -136,7 +136,7 @@ Ranges below are inclusive. Together they cover exactly the 216 IDs in the canon
 
 ## M001 specifications and accepted ADR implications
 
-M001 remains active and is not rewritten by this roadmap. Current authority is #5 and `docs/milestones/MILESTONE-001.md`; Pass 6 implementation is #658 / PR #659 and remains unmerged at this planning baseline.
+M001 is **Done / closed** and is not rewritten by this roadmap. Historical planning-baseline authority was #5 and `docs/milestones/MILESTONE-001.md`; Pass 6 implementation (#658 / PR #659) was unmerged at that planning baseline and later completed under the accepted M001 lineage.
 
 | Authority | Roadmap enforcement |
 |---|---|

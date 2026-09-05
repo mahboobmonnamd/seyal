@@ -594,7 +594,7 @@ Pass 9 production behavior exists on `master`. Pass 10 / M001 closeout documenta
 
 - **User Guide:** document only observable reconnect/lifecycle behavior that has passed its milestone gates; do not claim Runtime-crash PTY survival.
 - **Developer Guide:** Runtime-vs-GUI lifetime, endpoint discovery ownership and reconnect/native interaction lifecycle are governed by this SPEC plus the Pass 9 evidence retained under `docs/evidence/pass9-*` and Issue #719.
-- **Authoritative engineering docs:** this SPEC, the specs index, and M001 Pass 10 protocols must continue to present Pass 9 as Done while Pass 10 remains open.
+- **Authoritative engineering docs:** this SPEC, the specs index, and M001 Pass 10 protocols continue to present Pass 9 as Done; Pass 10 / M001 closeout is also Done (#727 / #5 closed).
 - **Media/screenshots/video:** add only when the reconnect UX is stable enough for procedural user docs.
 
 ## 19. Historical refinement acceptance and Pass 9 readiness (superseded)

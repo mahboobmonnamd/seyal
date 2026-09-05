@@ -2,7 +2,7 @@
 
 **Owning Issue:** #727  
 **Starting review candidate:** `1005bc42397aac485b1aeff08cafd0f67790d969`  
-**Status:** PHASE 1 FINDINGS DISPOSITION COMPLETE — BLOCKING/IMPORTANT finding Issues #748–#760 closed on lineage through `e8431f01…`; domain agent reviews retained. File-level inventory completeness remains an explicit ledger duty under `M001-PASS10-CODE-QUALITY-REVIEW.md` §3/§20 and must be finished before claiming full Phase 1 COMPLETE / Phase 2 authorization.  
+**Status:** PHASE 1 COMPLETE / PHASE 2 DONE — BLOCKING/IMPORTANT finding Issues #748–#760 closed on lineage through `e8431f01…`; domain agent reviews retained; file inventory bound; final validation satisfied on freeze `d845c6ddbe86…` (#776) with harness tip `e2b76024de2c…` (#778) and evidence tip `c1246d43869a…` (#779). Issues #727 and #5 closed. Soft RSS remains **768 KiB**.
 **Normative protocol:** `docs/engineering/M001-PASS10-CODE-QUALITY-REVIEW.md`
 
 This ledger records the exhaustive M001 milestone-closure code and quality review required before independent final Pass 10 validation.
@@ -101,7 +101,7 @@ The repository tree for the starting candidate is the inventory source; director
   - Closed completed/historical with evidence comments: #706 (PR #707 → `4490d89…`), #725 (#719 Done + `docs/evidence/pass9-production-budget-calibration.md`), #730 (PR #731 → `1a1bb43…`), #654 (PR #655 → `c9311ae…`), #73 (PR #74 → `3d98e84…` + `M001-FIRST-UI-DESIGN.md`).
   - Clarified and retitled #663 as post-multipane / later-milestone; kept open; not an M001 Pass 10 blocker; M001 not expanded.
   - Created owning Issue #773 for remaining left-context press-preview work; rehomed open PR #742 from #654 → #773.
-- **Required resolution:** ~~close or retarget stale Issues~~ **done.** Active M001 blockers remain #5 and #727 (plus other open Pass 10 finding Issues).
+- **Required resolution:** ~~close or retarget stale Issues~~ **done.** Issues #5 and #727 are closed; Pass 10 finding Issues #748–#760 are disposition-complete; IMPORTANT follow-ups #764–#768 remain parked post-M001 (not M001 blockers).
 
 ### F-003 — remaining Pass 9 / scaffolding status drift
 
@@ -225,7 +225,7 @@ Re-reviewed the domains touched by merged finding PRs on exact head `e8431f01c79
 
 No open `BLOCKING` Pass 10 finding Issues remain. Finding Issues #748–#760 are disposition-complete; IMPORTANT follow-ups #764–#768 remain parked post-M001.
 
-## Provisional freeze (invalidated by Phase 2 branch)
+## Provisional freeze (historical; superseded by final freeze)
 
 ```text
 e8431f01c797b57d7b6ee6a9be65706f77c7d789
@@ -233,7 +233,7 @@ e8431f01c797b57d7b6ee6a9be65706f77c7d789
 
 Branch tip at that provisional freeze: `master` / `e8431f0` (“Close Pass 10 fuzz registry/campaign parity and Pass 7/9 surfaces (#772)”).
 
-This SHA is **not** the final Pass 10 validation head. Phase 2 branch production/docs deltas invalidate it; **re-freeze after this PR merges** before claiming any criterion `PASS`. Phase 2 final validation remains **gated** until the Phase 2 entry conditions in `M001-PASS10-VALIDATION.md` §2.2 are met on the re-frozen head.
+This SHA was **not** the final Pass 10 validation head. Phase 2 re-froze production at `d845c6ddbe86f20183186f1aa69f2293aa8356ba` (#776). Final validation is **Done / satisfied** on that freeze (harness tip `e2b76024de2c…` / #778; evidence tip `c1246d43869a…` / #779) per `M001-PASS10-VALIDATION.md` §2.2 and `M001-PASS10-EVIDENCE.md`.
 
 ## File inventory binding
 
@@ -244,4 +244,4 @@ Production-significant path inventory (domain-mapped to Agent1–10 results, wit
 
 Phase 1 **findings disposition** is complete: every `BLOCKING` finding is resolved and re-reviewed, and every `IMPORTANT` finding is resolved or authoritatively assigned outside M001 (#764–#768).
 
-Full Phase 1 COMPLETE / Phase 2 authorization still requires: (1) file-level ledger completeness for M001-significant paths (inventory bound; line-level completeness remains a ledger duty), (2) authority-doc status alignment, (3) green exact-head Foundation/production gates, and (4) a re-frozen final validation head after review-driven production deltas. Evidence lives in `docs/engineering/M001-PASS10-EVIDENCE.md`.
+Full Phase 1 COMPLETE / Phase 2 authorization **was satisfied**: (1) file-level inventory bound for M001-significant paths, (2) authority-doc status aligned with closed #727/#5, (3) green exact-head Foundation/production gates on the freeze, and (4) final validation head re-frozen at `d845c6ddbe86…` (#776). Evidence lives in `docs/engineering/M001-PASS10-EVIDENCE.md`; soft RSS remains **768 KiB**.

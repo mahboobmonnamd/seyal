@@ -8,7 +8,7 @@
 | Date (UTC) | 2026-09-05 |
 | Production freeze | `d845c6ddbe86f20183186f1aa69f2293aa8356ba` (#776) |
 | Harness tip | `e2b76024de2c85b3e9adb6dd5dcadb7b40881079` (#778) |
-| Evidence tip consulted | `011a757894dcdfef6e1279e479ea19a583849b49` / `M001-PASS10-EVIDENCE.md` |
+| Evidence tip consulted | `c1246d43869abda194bcc0c678ab8c916c581caf` (#779) / `M001-PASS10-EVIDENCE.md` |
 | Soft RSS gate | **768 KiB** — intact (unchanged) |
 | Pass 9 | Remains Done; not reopened |
 

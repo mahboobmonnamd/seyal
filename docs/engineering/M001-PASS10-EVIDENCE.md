@@ -11,9 +11,10 @@
 |---|---|
 | Frozen production head | `d845c6ddbe86f20183186f1aa69f2293aa8356ba` |
 | Freeze date (UTC) | 2026-09-05 |
-| Harness/evidence tip | `e2b76024de2c85b3e9adb6dd5dcadb7b40881079` (#778 UITest helper packaging; no production behavior change) |
+| Harness tip | `e2b76024de2c85b3e9adb6dd5dcadb7b40881079` (#778 UITest helper packaging; no production behavior change) |
+| Evidence tip | `c1246d43869abda194bcc0c678ab8c916c581caf` (#779 closeout evidence) |
 | Gate note | Production freeze remains #776. Soft RSS gate remains 768 KiB. Headed §6.12 and full XCUI suite unblocked by #778 harness packaging (`dev.seyal.Seyal.runtime`). |
-| Phase 1 status | FINDINGS DISPOSITION COMPLETE (#748–#760 closed; #764–#768 parked post-M001). File inventory bound; Phase 2 criterion evidence complete on this freeze + #778 harness tip. |
+| Phase 1 status | FINDINGS DISPOSITION COMPLETE (#748–#760 closed; #764–#768 parked post-M001). File inventory bound; Phase 2 criterion evidence complete on this freeze + #778 harness tip + #779 evidence tip. |
 | Aggregate `make check` | PASS on freeze (`EXIT:0`, log `/tmp/pass10-evidence-3f7b2d9/make-check-d845c6d.log`) |
 | Host (this evidence run) | Mahboob MacBook Pro (2), arm64 |
 | macOS | 26.5.2 (25F84) |

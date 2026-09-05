@@ -1,6 +1,6 @@
 # ADR-001 — Local Display Projection for macOS M001
 
-**Status:** Accepted — Candidate D split transport is the production M001 text/grid architecture. Controlled physical-Apple-Silicon performance validation passed at benchmark commit `c8c121380002c86a4e42b6737238289db10965af`; Issue #651 remains the closure authority for the complete Pass 5.1 acceptance set.
+**Status:** Accepted — Candidate D split transport is the production M001 text/grid architecture. Controlled physical-Apple-Silicon performance validation passed at benchmark commit `c8c121380002c86a4e42b6737238289db10965af`; Issue #651 closed as the Pass 5.1 acceptance authority (historical).
 
 **Date:** 2026-08-23
 
@@ -307,7 +307,7 @@ A failure before Runtime authority publication leaves no controller lease or att
 
 ## Required Pass-5 validation gate
 
-The architecture decision is accepted, and the controlled physical-M5-Pro production benchmark at `c8c121380002c86a4e42b6737238289db10965af` grants the M001 Pass 5.1 performance sign-off for Candidate D. Issue #651 remains the authority for closing the complete correctness/security/documentation/review gate.
+The architecture decision is accepted, and the controlled physical-M5-Pro production benchmark at `c8c121380002c86a4e42b6737238289db10965af` grants the M001 Pass 5.1 performance sign-off for Candidate D. Issue #651 was the authority for closing the complete correctness/security/documentation/review gate and is **closed** (historical).
 
 The measured path is:
 
@@ -448,7 +448,7 @@ The Candidate-D migration is complete for M001 production text/grid presentation
 3. Production Runtime attachment/display delivery no longer uses per-view shared grids.
 4. Earlier shared-projection code is isolated as non-default comparator/reference support and is not reachable from normal production attachment delivery.
 5. The decisive streaming/fanout matrix has been exercised on the real selected path.
-6. Issue #651 owns final closure after exact-head correctness/security/performance/documentation review and CI are green.
+6. Issue #651 owned final closure after exact-head correctness/security/performance/documentation review and CI were green; #651 is **closed** (historical).
 
 This amendment does not authorize Pass 6+, remote transport, graphics protocol implementation or renderer work.
 

@@ -32,11 +32,6 @@ final class KeyedConstraintOwnership {
   }
 }
 
-private final class SeyalPreviewModeControl: NSSegmentedControl {
-  override func accessibilityRole() -> NSAccessibility.Role? { .radioGroup }
-  override func isAccessibilityElement() -> Bool { true }
-}
-
 @MainActor
 final class SeyalShellView: NSView {
   enum InspectorMode: String, CaseIterable {
@@ -93,6 +88,8 @@ final class SeyalShellView: NSView {
   var isLeftContextVisible = true
   var isInspectorVisible = true
   var inspectorMode: InspectorMode = .context
+
+  let leftContextPress = SeyalLeftContextPressCoordinator()
 
   weak var topChromeView: NSView?
   weak var leftContextView: NSView?
@@ -155,6 +152,7 @@ final class SeyalShellView: NSView {
     blockStacks.removeAll()
     blockViews.removeAll()
     blockConstraintOwnership.removeAll()
+    leftContextPress.reset()
     // TUI takeover belongs to the Pane, not to a transient view tree;
     // preserve it while timeline projection rebuilds the presentation.
     subviews.forEach { $0.removeFromSuperview() }

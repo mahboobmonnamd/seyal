@@ -141,6 +141,13 @@ Contract:
 - selected row uses restrained tint/edge/typographic emphasis;
 - attention state may add one semantic marker without recolouring the whole row.
 
+Interaction contract (must match `/apple-design` feel):
+- kill latency: active emphasis must update on pointer-down (press), not only on click/release completion.
+- direct-manipulation selection: pointer-up commits the corresponding selection only if the pointer is still within the activation region/hysteresis.
+- cancel-by-dragging-away: if the pointer drags away beyond the activation hysteresis before pointer-up, cancel the commit and return the row to the last committed selection emphasis.
+- interruptibility: emphasis preview must be cancelable/redirectable at any time (for example, if the side panel collapses/hides mid-press or focus changes) without input being locked out.
+- reduced-motion: selection emphasis changes must respect reduced-motion preferences (no slides, no delayed motion); prefer an instant or short cross-fade of emphasis state only when motion is allowed.
+
 ## 9. C05 — Top Tab Strip
 
 Purpose: Workspace-scoped Tab navigation.
@@ -154,6 +161,12 @@ Contract:
 - no individual pill cards;
 - `+` and layout actions remain compact;
 - same geometry in single-pane and multipane screens.
+
+Interaction contract (must match `/apple-design` feel):
+- kill latency: active emphasis must update on pointer-down, not only on click/release completion.
+- commit/cancel semantics: pointer-up commits the active Tab only if within activation hysteresis; dragging away before release cancels the commit and returns to the last committed active Tab.
+- interruptibility: switching tabs must not lock input; in-flight emphasis previews must be cancellable/redirectable immediately.
+- reduced-motion: emphasis updates must respect reduced-motion preferences (no animated movement that delays input); keep transitions confined to short opacity/typography/seam emphasis changes when motion is allowed.
 
 ## 10. C06 — Terminal Pane
 

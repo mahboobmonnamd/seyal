@@ -167,7 +167,11 @@ extension SeyalShellView {
 
   func makeTabChip(_ tab: SeyalShellSnapshot.Tab) -> NSView {
     let isActive = tab.id == snapshot.activeTabID
-    let button = NSButton(title: tab.title, target: self, action: #selector(selectTab(_:)))
+    let button = SeyalPressableSelectionButton(
+      title: tab.title,
+      target: self,
+      action: #selector(selectTab(_:))
+    )
     button.identifier = NSUserInterfaceItemIdentifier(tab.id)
     button.setAccessibilityIdentifier("tab.\(tab.id)")
     button.setAccessibilityLabel(tab.title)
@@ -186,6 +190,17 @@ extension SeyalShellView {
     button.imagePosition = .imageLeading
     button.imageScaling = .scaleProportionallyDown
     button.translatesAutoresizingMaskIntoConstraints = false
+
+    let pressPreview = LeftPressPreview.tab(tab.id)
+    button.onPress = { [weak self] in
+      self?.beginLeftPressPreview(pressPreview)
+    }
+    button.onCancel = { [weak self] in
+      self?.cancelLeftPressPreview()
+    }
+    button.onCommit = { [weak self] in
+      self?.commitLeftPressPreview(pressPreview)
+    }
 
     let close = NSButton(title: "", target: self, action: #selector(closeTab(_:)))
     close.identifier = NSUserInterfaceItemIdentifier(tab.id)
@@ -215,19 +230,19 @@ extension SeyalShellView {
       : NSColor.clear.cgColor
     container.addSubview(row)
 
-    if isActive {
-      let accent = NSView()
-      accent.translatesAutoresizingMaskIntoConstraints = false
-      accent.wantsLayer = true
-      accent.layer?.backgroundColor = visual.colors.ns(.focus).cgColor
-      container.addSubview(accent)
-      NSLayoutConstraint.activate([
-        accent.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 10),
-        accent.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -10),
-        accent.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-        accent.heightAnchor.constraint(equalToConstant: 2),
-      ])
-    }
+    // Keep accent always present so press-preview can update it without rebuild.
+    let accent = NSView()
+    accent.translatesAutoresizingMaskIntoConstraints = false
+    accent.wantsLayer = true
+    accent.layer?.backgroundColor = visual.colors.ns(.focus).cgColor
+    accent.isHidden = !isActive
+    container.addSubview(accent)
+    NSLayoutConstraint.activate([
+      accent.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 10),
+      accent.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -10),
+      accent.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+      accent.heightAnchor.constraint(equalToConstant: 2),
+    ])
 
     NSLayoutConstraint.activate([
       row.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 8),
@@ -238,6 +253,11 @@ extension SeyalShellView {
       container.widthAnchor.constraint(
         lessThanOrEqualToConstant: visual.metrics.tabMaxWidth),
     ])
+
+    leftContextPress.registerTabChip(
+      TabChipVisuals(container: container, button: button, accentView: accent),
+      tabID: tab.id
+    )
     return container
   }
 
@@ -423,7 +443,27 @@ extension SeyalShellView {
     dot.translatesAutoresizingMaskIntoConstraints = false
     dot.setContentHuggingPriority(.required, for: .horizontal)
 
-    let button = NSButton(title: primary, target: self, action: action)
+    let previewKind: LeftPressPreview? =
+      accessibilityID.hasPrefix("workspace.")
+      ? .workspace(itemID)
+      : accessibilityID.hasPrefix("agent.")
+      ? .agent(itemID)
+      : accessibilityID.hasPrefix("left-tab.")
+      ? .tab(itemID)
+      : nil
+
+    let button = SeyalPressableSelectionButton(title: primary, target: self, action: action)
+    if let previewKind {
+      button.onPress = { [weak self] in
+        self?.beginLeftPressPreview(previewKind)
+      }
+      button.onCancel = { [weak self] in
+        self?.cancelLeftPressPreview()
+      }
+      button.onCommit = { [weak self] in
+        self?.commitLeftPressPreview(previewKind)
+      }
+    }
     button.identifier = NSUserInterfaceItemIdentifier(itemID)
     button.setAccessibilityIdentifier(accessibilityID)
     button.setAccessibilityLabel(primary)
@@ -439,6 +479,14 @@ extension SeyalShellView {
       ? visual.colors.ns(.textPrimary)
       : visual.colors.ns(.textSecondary)
     button.translatesAutoresizingMaskIntoConstraints = false
+
+    if let previewKind {
+      leftContextPress.registerRow(
+        ContextRowVisuals(container: container, button: button),
+        kind: previewKind,
+        itemID: itemID
+      )
+    }
 
     let trailingField = NSTextField(labelWithString: trailing ?? "")
     trailingField.font = visual.typography[.metadata]
@@ -485,6 +533,30 @@ extension SeyalShellView {
 
     NSLayoutConstraint.activate(constraints)
     return container
+  }
+
+  func beginLeftPressPreview(_ preview: LeftPressPreview) {
+    leftContextPress.begin(preview)
+    applyLeftPressPreviewStyles()
+  }
+
+  func cancelLeftPressPreview() {
+    leftContextPress.cancel()
+    applyLeftPressPreviewStyles()
+  }
+
+  func commitLeftPressPreview(_ preview: LeftPressPreview) {
+    leftContextPress.commit(preview, state: state)
+    rebuildUI()
+  }
+
+  func applyLeftPressPreviewStyles() {
+    leftContextPress.applyStyles(
+      committedWorkspaceID: snapshot.activeWorkspaceID,
+      committedAgentID: state.selectedAgentID,
+      committedTabID: snapshot.activeTabID,
+      visual: visual
+    )
   }
 
   func makeEmptyStateRow(_ text: String) -> NSView {

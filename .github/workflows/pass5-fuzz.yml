@@ -23,6 +23,9 @@ jobs:
         run: |
           rustup toolchain install nightly-2026-08-20 --profile minimal
           cargo install cargo-fuzz --version 0.13.2 --locked
+      - name: Verify fuzz workspace lockfile
+        working-directory: fuzz
+        run: cargo +nightly-2026-08-20 metadata --locked --format-version 1 >/dev/null
       - name: Build production fuzz targets
         working-directory: fuzz
         run: cargo +nightly-2026-08-20 fuzz build
@@ -56,6 +59,9 @@ jobs:
         run: |
           rustup toolchain install nightly-2026-08-20 --profile minimal
           cargo install cargo-fuzz --version 0.13.2 --locked
+      - name: Verify fuzz workspace lockfile
+        working-directory: fuzz
+        run: cargo +nightly-2026-08-20 metadata --locked --format-version 1 >/dev/null
       - name: Build production fuzz targets
         working-directory: fuzz
         run: cargo +nightly-2026-08-20 fuzz build

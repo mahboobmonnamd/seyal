@@ -104,7 +104,26 @@ The final validation record must identify:
 - run/sample count;
 - percentile method;
 - exact commands;
-- CI/workflow run IDs where applicable.
+- CI/workflow run IDs where applicable;
+- **evidence class** for every performance/presentation/fuzz claim: `CI`, `controlled-host`, or `PLATFORM_LIMITED` (and never silently mix them).
+
+### 5.1 CI vs controlled-host vs `PLATFORM_LIMITED`
+
+Label every Pass 10 performance, presentation, fuzz-campaign and resource claim with exactly one provenance class:
+
+| Class | Meaning | May satisfy Pass 10 presentation / absolute perf criteria? |
+|---|---|---|
+| `CI` | GitHub-hosted Foundation / path-filtered workflow output | Only for contracts those jobs actually own (build, check, test smoke, registry smoke, unsigned bench harness). **Not** headed presentation or controlled absolute budgets. |
+| `controlled-host` | Named Apple Silicon (or other) host under documented conditions | Yes, when methodology matches the governing pass/spec |
+| `PLATFORM_LIMITED` | Host/platform ceiling prevented the requested measurement | Only where governing authority explicitly permits that limitation |
+
+Honesty rules:
+
+- Foundation `native-macos-smoke` sets `SEYAL_REQUIRE_DISPLAY_LINK_BENCHMARK=0`. That job’s `make bench` must be labelled `CI` and must **not** be cited as Pass 6 / Pass 10 headed presentation proof.
+- Headed presentation-proxy evidence requires `SEYAL_REQUIRE_DISPLAY_LINK_BENCHMARK=1` (or an equivalent headed session that produces presentation-proxy samples) on a controlled host and must be labelled `controlled-host`.
+- Path-filtered Pass 5 libFuzzer (~30s) and Foundation fuzz-registry smoke are `CI`. They do not substitute for required continuous/campaign fuzz evidence under §6.9.
+- Pass 9 five-cohort production budget artifacts are `controlled-host`. `make check` only self-tests the validator; that self-test is not production budget proof.
+- `macos-latest` / floating Xcode image drift is known CI nondeterminism; do not treat Foundation Metal/terminfo smoke as bit-reproducible controlled-host evidence.
 
 Historical pass evidence may be reused only when repository history proves the relevant production code/behavior is unchanged and the original result has sufficient provenance. Historical green CI, merged PR state, checked Issues and author assertions are not milestone proof by themselves.
 
@@ -113,6 +132,7 @@ A documentation-only evidence commit may follow a measured code head only when t
 Cross-host, changed-OS or changed-toolchain measurements may be useful context but must not be described as controlled same-host regressions or improvements.
 
 A production code change during Pass 10 invalidates the exact-head verdict and requires targeted plus aggregate revalidation on the new frozen head.
+
 
 ## 6. Criterion matrix
 
@@ -268,6 +288,8 @@ Audit the registry against the final production surfaces, then run every applica
 
 The registry being syntactically green is not enough. A required production surface without real fuzz coverage is `INCONCLUSIVE` and blocks milestone completion.
 
+Foundation fuzz-registry smoke is continuous CI proof of registry/adapter integrity only. Path-filtered ~30s libFuzzer jobs are targeted PR evidence and must be labelled `CI`. They are not continuous campaign coverage and must not be cited alone as Pass 10 “fuzz clean.” See `fuzz/README.md` and `docs/engineering/GITHUB-WORKFLOW.md`.
+
 ### 6.10 Security and privacy
 
 Perform a fresh focused M001 threat review covering:
@@ -365,6 +387,7 @@ Do not:
 - increase timeouts to hide a product bottleneck without root-cause evidence;
 - change workloads to create a favorable regression result;
 - treat shared CI absolute latency/CPU/RSS as controlled product evidence;
+- cite Foundation `SEYAL_REQUIRE_DISPLAY_LINK_BENCHMARK=0` benches as headed presentation / Pass 6 presentation proof;
 - describe GPU completion proxy as physical display scanout;
 - combine source PTY throughput with N-viewer aggregate socket throughput;
 - use a different host/OS/toolchain as a same-host A/B comparison;

@@ -79,26 +79,60 @@ A GitHub ruleset/branch-protection configuration should enforce these rules when
 
 The canonical public Seyal repository owns the authoritative GitHub Actions quality gates. The `Foundation Quality` workflow uses minimal `contents: read` permissions, pins external actions by reviewed full commit SHA, cancels superseded runs on the same ref, and keeps fast PR responsibilities explicit.
 
-The required Pass-1 fast PR jobs are:
-
-- **`repository-policy`** — shell syntax, governance structure, local documentation links, architecture layering, test/fuzz harness contracts, and controlled negative fixtures proving repository validators reject invalid inputs;
-- **`rust-and-harness-quality`** — pinned Rust bootstrap, production Rust workspace build, `make check` (format, Clippy with warnings denied, unit tests, layering and harness checks), and benchmark-environment smoke with no performance claim;
-- **`native-macos-smoke`** — full macOS Xcode/Swift/Metal prerequisite validation, Rust plus `Seyal.app` build, unit/harness checks and deterministic native executable smoke.
+### Required Foundation Quality jobs (every PR / master push)
 
 When branch protection/rulesets are configured, these stable job names are the Pass-1 required checks. A renamed/replaced job must update this document and the protection configuration together; a missing check must never be interpreted as a pass.
+
+- **`repository-policy`** (ubuntu) — shell syntax, governance structure, local documentation links, architecture layering, hot-path/benchmark/UI-test contracts, harness contracts, fuzz-registry smoke, and controlled negative fixtures proving repository validators reject invalid inputs.
+- **`rust-and-harness-quality`** (ubuntu) — pinned Rust bootstrap, production Rust workspace build, `make check` (format, Clippy with warnings denied, unit tests, layering and harness checks), and `make bench` as a **portable harness smoke** (macOS-only native benches are skipped; no performance claim).
+- **`native-macos-smoke`** (macos-latest) — pinned Rust plus native toolchain bootstrap; Rust + `Seyal.app` build; `make check`; `make test` (Rust unit/PTY, native executable smoke, XCTest, XCUIAutomation); and `make bench` with:
+  - `SEYAL_REQUIRE_DISPLAY_LINK_BENCHMARK=0` — hosted runners may be headless and cannot deliver `CAMetalDisplayLink` callbacks; presentation-proxy samples are recorded as `PLATFORM_LIMITED` rather than failing the job;
+  - `SEYAL_CODESIGN_IDENTITY=-` — unsigned CI artifact only, not a release/signing proof.
+
+`SEYAL_REQUIRE_DISPLAY_LINK_BENCHMARK=0` is an honesty contract, not a weakened threshold. Interactive/local acceptance and Pass 6/10 headed presentation evidence must run with `SEYAL_REQUIRE_DISPLAY_LINK_BENCHMARK=1` (or an equivalent headed host that produces presentation-proxy samples). **Green Foundation CI with display-link off is not Pass 6 presentation proof and must not be cited as such in Pass 10 evidence.**
+
+### Path-filtered and non-Foundation workflows
+
+These are **not** Foundation required checks. A green Foundation run can therefore succeed without them:
+
+| Workflow / gate | Trigger | What it proves | What it does **not** prove |
+|---|---|---|---|
+| `Docs` (`.github/workflows/docs.yml`) | path-filtered to `site/**`, docs skills, and itself | Astro docs build with SHA-pinned actions and `npm ci` against `site/package-lock.json` | product/runtime correctness |
+| `Pass 5 Production Fuzz` (`.github/workflows/pass5-fuzz.yml`) | path-filtered to runtime/exec/protocol/fuzz surfaces (plus `workflow_dispatch`) | short libFuzzer campaigns (~30s) against locked fuzz workspace deps | continuous / milestone-length fuzz campaigns; Foundation already green without this workflow |
+| Fuzz registry smoke inside `repository-policy` | every Foundation run | registry/corpus/adapter smoke via `scripts/fuzz-smoke.py` | libFuzzer campaign coverage or “fuzz clean” Pass 10 evidence |
+
+Pass 10 continuous fuzz expectations: registry smoke is continuous on Foundation; path-filtered libFuzzer campaigns are targeted PR evidence only. Milestone “fuzz clean” / long-running campaign evidence is **controlled-host or explicit campaign evidence**, never inferred from a green Foundation run alone. Fuzz workspace dependencies are pinned in `fuzz/Cargo.lock`; the path-filtered workflow verifies `--locked` metadata before building.
+
+### Controlled-host-only gates (not CI proof)
+
+Shared CI absolute latency/CPU/RSS and headless display-link-off benches are diagnostic at best. The following remain controlled-host (or otherwise non-CI) evidence by design:
+
+- headed Pass 6 presentation-proxy / `CAMetalDisplayLink` budgets (`SEYAL_REQUIRE_DISPLAY_LINK_BENCHMARK=1`);
+- Pass 9 five-cohort production budget artifacts validated by `scripts/check-pass9-production-budget.py` (CI/`make check` only runs the validator `--self-test`);
+- absolute performance, RSS, thread, GPU, and reconnect/cleanup sign-off tables used for Pass 10 criterion `PASS`;
+- long-running or corpus-expanding fuzz campaigns beyond the short path-filtered PR jobs.
+
+### Host/image nondeterminism (classified, not silently claimed fixed)
+
+`native-macos-smoke` uses `macos-latest` and the runner-provided Xcode/SDK. Metal, WindowServer, and terminfo host behavior can change across GitHub image updates. That is retained as known CI host nondeterminism: it does not invalidate the smoke contract above, and it is **not** a substitute for controlled same-host Pass 10 measurements. Pinning a specific Xcode/image is tracked in #764 and is outside the #755 honesty/supply-chain pass; do not treat floating `macos-latest` as bit-reproducible Metal evidence.
+
+### Action pinning and docs supply chain
+
+External GitHub Actions must be pinned by reviewed full commit SHA (with a human-readable version comment). Floating tags such as `@v4` are forbidden in repository workflows. The Docs workflow pins `actions/checkout` and `actions/setup-node` the same way Foundation does, and installs docs dependencies with `npm ci` against the committed `site/package-lock.json`.
 
 Repository-owned validators are self-tested through safe temporary negative fixtures. The negative suite proves governance, local-link, architecture-layering, workspace and harness validators fail for controlled violations and for the expected reason. Rust compiler/formatter/Clippy and Xcode/native build failures are enforced by their own non-zero tool exits rather than fake production code.
 
 Deeper scheduled/release or targeted gates are added only as their real production surfaces exist:
 
 - retained VT conformance corpus;
-- active fuzz campaigns and sanitizers;
+- active fuzz campaigns and sanitizers beyond registry smoke / short path-filtered PR campaigns;
 - deeper renderer/native validation;
 - broad PTY/runtime failure matrix;
-- performance/RSS/thread/GPU regression suites;
+- performance/RSS/thread/GPU regression suites on controlled hosts;
 - dependency/security scanning.
 
-Pass 1 does not claim these deferred gates are active merely because their harness locations exist. Expensive/noisy checks should be targeted rather than making every PR unusable.
+Pass 1 does not claim these deferred gates are active merely because their harness locations exist. Expensive/noisy checks should be targeted rather than making every PR unusable. Green Foundation CI is incomplete Pass 10 proof; see `docs/engineering/M001-PASS10-VALIDATION.md` for CI vs controlled-host vs `PLATFORM_LIMITED` provenance rules.
+
 
 ## Private `seyal-commercial` CI policy
 

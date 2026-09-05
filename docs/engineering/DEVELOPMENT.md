@@ -130,7 +130,7 @@ Current behavior after Passes 1–9:
 - `make docs` starts the local Starlight documentation site after installing its isolated Node dependencies;
 - `make docs-build` and `make docs-check` validate documentation without becoming dependencies of terminal production execution.
 
-The public `Foundation Quality` workflow separates the fast PR gates into `repository-policy`, `rust-and-harness-quality`, and `native-macos-smoke`. See `docs/engineering/GITHUB-WORKFLOW.md` for the exact responsibility and required-check contract. Linux remains a supported portable-core CI host; native AppKit/Metal build/test steps explicitly skip there instead of introducing a cross-platform GUI abstraction.
+The public `Foundation Quality` workflow separates the fast PR gates into `repository-policy`, `rust-and-harness-quality`, and `native-macos-smoke` (Rust + `Seyal.app` build, `make check`, `make test` including XCTest/XCUIAutomation, and display-link-off `make bench`). See `docs/engineering/GITHUB-WORKFLOW.md` for the exact responsibility, required-check contract, path-filtered Docs/fuzz workflows, and controlled-host-only gates. Linux remains a supported portable-core CI host; native AppKit/Metal build/test steps explicitly skip there instead of introducing a cross-platform GUI abstraction.
 
 Canonical Cargo operations use the pinned toolchain and `--locked` where dependency resolution applies.
 

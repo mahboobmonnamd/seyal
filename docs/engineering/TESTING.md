@@ -74,4 +74,6 @@ Follow the canonical `docs/milestones/MILESTONE-001.md`. Its retained M001 refer
 
 ## CI tiers
 
-Fast PR CI runs deterministic formatting/lints/build/unit/integration/regression smoke checks appropriate to the changed area. Expensive fuzz campaigns, sanitizer matrices, deep renderer checks and performance suites may run scheduled/release, but a PR affecting those areas must provide targeted evidence before merge.
+Fast PR CI (`Foundation Quality`) runs deterministic formatting/lints/build/unit/integration/regression smoke checks appropriate to the changed area. See `docs/engineering/GITHUB-WORKFLOW.md` for the exact job split, including that `native-macos-smoke` runs XCTest/XCUIAutomation and a display-link-off bench (`SEYAL_REQUIRE_DISPLAY_LINK_BENCHMARK=0`) that is **not** headed presentation proof.
+
+Expensive fuzz campaigns, sanitizer matrices, deep renderer checks and performance suites may run path-filtered, scheduled/release, or on controlled hosts. A PR affecting those areas must provide targeted evidence before merge. Green Foundation CI alone is not Pass 10 performance, presentation or continuous-fuzz proof.

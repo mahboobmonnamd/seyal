@@ -11,7 +11,7 @@ Canonical PTY/VT progress must never synchronously depend on a renderer/client.
 The repository enforces this rule in two layers:
 
 1. Deterministic structural CI guardrails reject known forbidden primitives in explicitly registered hot-path functions.
-2. Controlled Apple-Silicon measurements establish absolute latency, CPU, RSS and renderer budgets where shared CI runners are too noisy for trustworthy thresholds.
+2. Controlled Apple-Silicon measurements establish absolute latency, CPU, RSS and renderer budgets where shared CI runners are too noisy for trustworthy thresholds. Foundation `native-macos-smoke` runs `make bench` with `SEYAL_REQUIRE_DISPLAY_LINK_BENCHMARK=0`; that CI output is harness/diagnostic only and must not be treated as headed presentation or Pass 6/10 presentation proof. Headed acceptance uses `SEYAL_REQUIRE_DISPLAY_LINK_BENCHMARK=1` on a controlled host.
 
 A new or renamed terminal hot-path function must be registered in `scripts/check-hot-path.py` in the same PR. Removing a function from that registry requires explicit performance-review justification.
 

@@ -27,7 +27,7 @@ governance-check:
 	@bash scripts/validate-governance.sh
 
 docs-install:
-	@npm --prefix site install --no-package-lock --no-audit --no-fund
+	@npm --prefix site ci --no-audit --no-fund
 
 docs: docs-install
 	@npm --prefix site run dev

@@ -128,7 +128,9 @@ pub(crate) fn report_streaming_semantics() {
         ("tamil-combining", "நி"),
     ];
 
-    println!("STREAM\tlabel\tpolicy\tcursor\twraps\tjoined\tlate_widens\tsuppressed_narrows\tright_edge_conflicts");
+    println!(
+        "STREAM\tlabel\tpolicy\tcursor\twraps\tjoined\tlate_widens\tsuppressed_narrows\tright_edge_conflicts"
+    );
     for (label, text) in SEQUENCES {
         for policy in [Policy::LegacyScalar, Policy::GraphemeMonotonicHypothesis] {
             let stats = simulate(policy, text, 80, 0);
@@ -147,12 +149,7 @@ pub(crate) fn report_streaming_semantics() {
     // Heart starts as width 1 at the final column; VS16 then makes the same
     // extended grapheme width 2. The spike records this as an unresolved edge
     // event rather than inventing wrap semantics here.
-    let edge = simulate(
-        Policy::GraphemeMonotonicHypothesis,
-        "❤\u{fe0f}",
-        80,
-        79,
-    );
+    let edge = simulate(Policy::GraphemeMonotonicHypothesis, "❤\u{fe0f}", 80, 79);
     println!(
         "STREAM_EDGE\tlate-wide-at-right-edge\tcursor={}\tconflicts={}",
         edge.cursor_col, edge.right_edge_widen_conflicts
@@ -165,12 +162,7 @@ mod tests {
 
     #[test]
     fn combining_mark_joins_without_extra_cursor_width() {
-        let stats = simulate(
-            Policy::GraphemeMonotonicHypothesis,
-            "e\u{301}",
-            80,
-            0,
-        );
+        let stats = simulate(Policy::GraphemeMonotonicHypothesis, "e\u{301}", 80, 0);
         assert_eq!(stats.cursor_col, 1);
         assert_eq!(stats.joined_scalars, 1);
         assert_eq!(stats.late_widens, 0);
@@ -178,12 +170,7 @@ mod tests {
 
     #[test]
     fn variation_selector_can_widen_an_existing_cluster() {
-        let stats = simulate(
-            Policy::GraphemeMonotonicHypothesis,
-            "❤\u{fe0f}",
-            80,
-            0,
-        );
+        let stats = simulate(Policy::GraphemeMonotonicHypothesis, "❤\u{fe0f}", 80, 0);
         assert_eq!(stats.cursor_col, 2);
         assert_eq!(stats.joined_scalars, 1);
         assert_eq!(stats.late_widens, 1);
@@ -191,23 +178,13 @@ mod tests {
 
     #[test]
     fn late_widen_at_right_edge_is_explicitly_detected() {
-        let stats = simulate(
-            Policy::GraphemeMonotonicHypothesis,
-            "❤\u{fe0f}",
-            80,
-            79,
-        );
+        let stats = simulate(Policy::GraphemeMonotonicHypothesis, "❤\u{fe0f}", 80, 79);
         assert_eq!(stats.right_edge_widen_conflicts, 1);
     }
 
     #[test]
     fn family_emoji_is_one_terminal_cluster_under_grapheme_hypothesis() {
-        let stats = simulate(
-            Policy::GraphemeMonotonicHypothesis,
-            "👨‍👩‍👧‍👦",
-            80,
-            0,
-        );
+        let stats = simulate(Policy::GraphemeMonotonicHypothesis, "👨‍👩‍👧‍👦", 80, 0);
         assert_eq!(stats.cursor_col, 2);
         assert_eq!(stats.joined_scalars, 6);
     }
@@ -215,12 +192,7 @@ mod tests {
     #[test]
     fn legacy_scalar_and_grapheme_models_are_observably_different() {
         let legacy = simulate(Policy::LegacyScalar, "👩‍💻", 80, 0);
-        let grapheme = simulate(
-            Policy::GraphemeMonotonicHypothesis,
-            "👩‍💻",
-            80,
-            0,
-        );
+        let grapheme = simulate(Policy::GraphemeMonotonicHypothesis, "👩‍💻", 80, 0);
         assert_ne!(legacy.cursor_col, grapheme.cursor_col);
         assert_eq!(grapheme.cursor_col, 2);
     }

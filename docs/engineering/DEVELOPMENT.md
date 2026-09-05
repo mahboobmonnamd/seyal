@@ -15,6 +15,8 @@ Product & Engineering Constitution
 
 Issues and PRs cannot override higher authority. If implementation evidence contradicts an accepted architectural decision: stop implementation, record evidence, run architecture review/ADR, update affected specification and Issue, then resume.
 
+For M002+ engineering expectations (ownership, unsafe/FFI, concurrency, hot-path, Metal, testing/fuzz, security, CI evidence classes, OSS↛commercial), start from the thin index `docs/engineering/ENGINEERING-QUALITY-BASELINE.md`. It points at existing authorities and records M001 carry-forward honesty rules; it does not replace this workflow or the Constitution.
+
 The `.sdlc` context layer is deliberately **not** inserted into the authority chain. It is a compact navigation/provenance layer that helps agents find the relevant authoritative artifacts without rereading the repository.
 
 ## Unit of work

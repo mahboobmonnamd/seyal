@@ -1486,13 +1486,19 @@ impl Runtime {
                 continue;
             } else {
                 materialized += 1;
-                let encoded = self
-                    .entries
-                    .get(&execution_id)
-                    .map(|entry| entry.execution.projection_snapshot())
-                    .and_then(|snapshot| display::encode_snapshot(&snapshot).ok());
+                let encoded = self.encode_projection_snapshot(execution_id);
                 match encoded {
                     Some(batch) => {
+                        if let Some(state) = self.local_ipc.as_mut() {
+                            state.published.insert(
+                                execution_id,
+                                PublishedDisplay {
+                                    generation: batch.generation,
+                                    rows: batch.rows,
+                                    columns: batch.columns,
+                                },
+                            );
+                        }
                         shared_batches.insert(execution_id, batch.clone());
                         Some(batch)
                     }
@@ -1695,18 +1701,20 @@ impl Runtime {
                 continue;
             }
 
-            let dimensions_changed = previous
-                .is_some_and(|value| value.rows != update.rows || value.columns != update.columns);
-            if previous.is_none() || dimensions_changed {
-                let snapshot = self
-                    .entries
-                    .get(&execution_id)
-                    .map(|entry| entry.execution.projection_snapshot());
-                match snapshot.and_then(|value| display::encode_snapshot(&value).ok()) {
+            // `published` tracks the last generation successfully encoded for
+            // fanout. Advancing it after DisplayUnavailable would make later
+            // deltas use a base no viewer received (multi-viewer split-brain).
+            let use_snapshot = match previous {
+                None => true,
+                Some(value) => value.rows != update.rows || value.columns != update.columns,
+            };
+            let encode_ok = if use_snapshot {
+                match self.encode_projection_snapshot(execution_id) {
                     Some(batch) => {
-                        for (_, token) in viewers {
-                            let _ = self.send_snapshot_batch(token, batch.clone());
+                        for (_, token) in &viewers {
+                            let _ = self.send_snapshot_batch(*token, batch.clone());
                         }
+                        true
                     }
                     None => {
                         for (_, token) in viewers {
@@ -1715,12 +1723,14 @@ impl Runtime {
                                 ErrorCode::DisplayUnavailable,
                                 MessageType::DisplaySnapshot as u16,
                             );
+                            self.schedule_snapshot_recovery(token);
                         }
+                        false
                     }
                 }
             } else if let Some(previous) = previous {
                 let base_generation = previous.generation;
-                match display::encode_delta(&update, base_generation) {
+                match self.encode_projection_delta(&update, base_generation) {
                     Ok(delta) => {
                         for (_, token) in viewers {
                             let result = self.local_ipc.as_mut().and_then(|state| {
@@ -1736,6 +1746,7 @@ impl Runtime {
                                 None => self.close_local_connection(token),
                             }
                         }
+                        true
                     }
                     Err(_) => {
                         for (_, token) in viewers {
@@ -1744,21 +1755,54 @@ impl Runtime {
                                 ErrorCode::DisplayUnavailable,
                                 MessageType::DisplayDelta as u16,
                             );
+                            self.schedule_snapshot_recovery(token);
                         }
+                        false
                     }
                 }
-            }
+            } else {
+                false
+            };
 
             if let Some(state) = self.local_ipc.as_mut() {
-                state.published.insert(
-                    execution_id,
-                    PublishedDisplay {
-                        generation: update.source_damage_generation,
-                        rows: update.rows,
-                        columns: update.columns,
-                    },
-                );
+                if encode_ok {
+                    state.published.insert(
+                        execution_id,
+                        PublishedDisplay {
+                            generation: update.source_damage_generation,
+                            rows: update.rows,
+                            columns: update.columns,
+                        },
+                    );
+                } else {
+                    // Drop stale bookkeeping so the next successful fanout or
+                    // resync snapshot re-establishes an authoritative base.
+                    state.published.remove(&execution_id);
+                }
             }
         }
+    }
+
+    fn encode_projection_snapshot(&self, execution_id: ExecutionId) -> Option<EncodedDisplayBatch> {
+        #[cfg(feature = "test-fault-injection")]
+        if test_fault::take(FaultPoint::DisplayEncode) {
+            return None;
+        }
+        self.entries
+            .get(&execution_id)
+            .map(|entry| entry.execution.projection_snapshot())
+            .and_then(|snapshot| display::encode_snapshot(&snapshot).ok())
+    }
+
+    fn encode_projection_delta(
+        &self,
+        update: &seyal_exec::TerminalProjectionUpdate,
+        base_generation: u64,
+    ) -> Result<EncodedDisplayBatch, display::DisplayError> {
+        #[cfg(feature = "test-fault-injection")]
+        if test_fault::take(FaultPoint::DisplayEncode) {
+            return Err(display::DisplayError::InvalidDamage);
+        }
+        display::encode_delta(update, base_generation)
     }
 }

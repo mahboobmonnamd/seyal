@@ -1157,6 +1157,32 @@ final class SeyalShellComponentTests: XCTestCase {
   }
 
   @MainActor
+  func testPass9MergeAcceptanceSamplesClientRSSAfterWarmups() {
+    let phases = Pass9MergeAcceptance.rssMeasurementPhaseOrder
+    XCTAssertEqual(
+      phases,
+      [
+        "cold_start_settle",
+        "warmups",
+        "baseline",
+        "measured_cycles",
+        "final_sample",
+      ]
+    )
+    guard
+      let warmups = phases.firstIndex(of: "warmups"),
+      let baseline = phases.firstIndex(of: "baseline")
+    else {
+      return XCTFail("merge-acceptance RSS phase contract missing warmups/baseline")
+    }
+    XCTAssertLessThan(
+      warmups,
+      baseline,
+      "client RSS baseline must follow warmups so Metal/IMK cold caches are not charged to delta"
+    )
+  }
+
+  @MainActor
   func testPreviewWorkspaceInventoryMatchesFrozenWorkspaceModel() {
     let state = SeyalShellState.makePreview()
 

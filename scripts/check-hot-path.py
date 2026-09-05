@@ -11,6 +11,11 @@ HOT_FUNCTIONS = {
     "crates/seyal-terminal/src/terminal.rs": ["feed", "finish_input"],
     "crates/seyal-runtime/src/runtime.rs": ["poll_once", "drain_control", "service_reads", "service_writes"],
     "crates/seyal-runtime/src/input.rs": ["try_submit"],
+    # Candidate-D display encode/publish (Runtime → UDS presentation).
+    "crates/seyal-runtime/src/display.rs": ["encode_snapshot", "encode_delta", "encode_rows"],
+    "crates/seyal-runtime/src/runtime/local.rs": ["publish_display_updates"],
+    # Metal prepare/present: first `update` is the NativePreparedFrame prepare path.
+    "macos/Seyal/Sources/MetalTerminalRenderer.swift": ["update", "present"],
 }
 
 FORBIDDEN = {
@@ -25,7 +30,12 @@ FORBIDDEN = {
 
 
 def extract_function(source: str, name: str) -> str | None:
-    match = re.search(rf"\bfn\s+{re.escape(name)}\s*\([^)]*\)[^{{]*\{{", source, re.S)
+    # Rust `fn` and Swift `func` production entrypoints share one registry.
+    match = re.search(
+        rf"\b(?:fn|func)\s+{re.escape(name)}\s*\([^)]*\)[^{{]*\{{",
+        source,
+        re.S,
+    )
     if not match:
         return None
     start = match.start()

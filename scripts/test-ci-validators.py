@@ -73,6 +73,18 @@ def main() -> None:
         write(hot / "crates/seyal-terminal/src/terminal.rs", "impl TerminalState { pub fn feed(&mut self, bytes: &[u8]) { let _ = bytes.to_vec(); } pub fn finish_input(&mut self) {} }")
         write(hot / "crates/seyal-runtime/src/runtime.rs", "impl Runtime { fn poll_once(&mut self) {} fn drain_control(&mut self) {} fn service_reads(&mut self) {} fn service_writes(&mut self) {} }")
         write(hot / "crates/seyal-runtime/src/input.rs", "impl InputIngress { pub fn try_submit(&self) {} }")
+        write(
+            hot / "crates/seyal-runtime/src/display.rs",
+            "pub fn encode_snapshot() {} pub fn encode_delta() {} fn encode_rows() {}",
+        )
+        write(
+            hot / "crates/seyal-runtime/src/runtime/local.rs",
+            "impl Runtime { pub(super) fn publish_display_updates(&mut self) {} }",
+        )
+        write(
+            hot / "macos/Seyal/Sources/MetalTerminalRenderer.swift",
+            "func update() {}\nfunc present() {}\n",
+        )
         run_negative(["python3", str(ROOT / "scripts/check-hot-path.py")], hot, "avoidable allocation")
 
         benchmark = base / "benchmark-contract"

@@ -1,6 +1,6 @@
 # SPEC-007 — M001 minimal Block metadata and logical anchors
 
-- **Status:** Accepted for M001 Pass 8; production implementation authorized by #715; wire allocation reconciled with merged Pass 7.1 in PR #721
+- **Status:** Accepted and implemented for M001 Pass 8; production Issue #715 / PR #721 merged reviewed head `54b3a1748effc7c47c409d1f7cfdcbd547e8d1cc` as `d9d21187e8429bbd3dbeb3e1c7cc4d05c1d147e6`; wire allocation reconciled with merged Pass 7.1 in PR #721
 - **Date:** 2026-08-28
 - **Refinement issue:** #708
 - **Implementation issue:** #715
@@ -745,7 +745,9 @@ Pass 8 does not implement or claim:
 
 The roadmap places coherent raw/Block/composer presentation and trusted shell integration in M003. Pass 8 establishes the permanent low-level identity/ownership seam those features will consume.
 
-## 19. Dependency and implementation gate
+## 19. Historical dependency and implementation gate (superseded)
+
+> **Superseded.** Pass 8 production is Done. Issue #715 / PR #721 merged the independently reviewed implementation at reviewed head `54b3a1748effc7c47c409d1f7cfdcbd547e8d1cc` as `d9d21187e8429bbd3dbeb3e1c7cc4d05c1d147e6`. The gates below were the pre-implementation start contract and are retained as historical authority only.
 
 ### 19.1 Refinement authority
 
@@ -770,7 +772,7 @@ Pass 8 production development must not start and the implementation Issue must n
 5. current master is revalidated after Pass 7 for Runtime/client/native seam changes;
 6. the separate Pass 8 implementation Issue records the final accepted SPEC-007 revision and freezes the exact-head Pass 7 benchmark/evidence baseline.
 
-Until then:
+Until then (historical):
 
 ```text
 SPEC-007 refinement may be reviewed
@@ -778,7 +780,9 @@ Pass 8 implementation Issue = Blocked / NOT_READY
 Pass 8 production code = forbidden
 ```
 
-## 20. Refinement Definition of Done
+## 20. Historical refinement Definition of Done (superseded)
+
+> **Superseded.** Issue #708 / the SPEC-007 refinement closed after independent review. Unchecked boxes below are historical checklist form from the refinement PR and must not be read as current unfinished Pass 8 work.
 
 Issue #708 / this refinement PR may close only when:
 

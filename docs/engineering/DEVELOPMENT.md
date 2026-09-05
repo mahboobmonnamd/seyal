@@ -85,7 +85,7 @@ Required before `make bootstrap`:
 
 On macOS, M001 now requires **full Xcode**, selected with `xcode-select`, because the permanent native app surface exists. `make bootstrap` validates `xcodebuild`, the macOS SDK, Swift compiler and Metal shader toolchain through `xcrun`; Command Line Tools alone are no longer sufficient for the canonical macOS build.
 
-The repository pins Rust in `rust-toolchain.toml`. M001 Pass 1 currently uses Rust **1.98.0** with the `minimal` rustup profile plus `rustfmt` and `clippy`. Cargo is supplied by that same pinned Rust toolchain.
+The repository pins Rust in `rust-toolchain.toml`. M001 currently uses Rust **1.98.0** with the `minimal` rustup profile plus `rustfmt` and `clippy`. Cargo is supplied by that same pinned Rust toolchain.
 
 `make bootstrap` is idempotent where rustup permits: it validates host prerequisites, installs/verifies exactly the repository-pinned Rust toolchain/components through rustup, initializes repository-declared pinned submodules if any, and validates the result. It does not run `curl | sh`, invoke Homebrew, install optional MCP/agent tooling, or write credentials.
 
@@ -120,13 +120,13 @@ make docs-check    # run Starlight/Astro documentation validation
 
 `make docs` requires Node.js 22.12 or later. Do not create competing undocumented command paths.
 
-Current behavior after Issue #12:
+Current behavior after Passes 1–9:
 
 - `make bootstrap` provisions/verifies the pinned Rust toolchain and, on macOS, validates full Xcode + Swift + macOS SDK + Metal tooling;
-- `make build` builds the minimal Rust workspace and, on macOS, builds the native `Seyal.app` Xcode target;
-- `make test` validates repository/tooling/workspace and harness invariants, validates the M001 fuzz registry/corpora without pretending pending production targets are active, runs Rust workspace unit tests, and on macOS runs the native app smoke;
-- `make check` runs the deterministic repository checks, harness/fuzz validation, controlled negative fixtures proving custom validators actually reject bad inputs, Rust formatting/Clippy/tests, architecture layering and the macOS native skeleton on Darwin;
-- `make bench` records and round-trips benchmark environment metadata under `target/benchmarks/`, explicitly marks the harness smoke as not a performance result, and runs real Cargo benchmark targets only once they actually exist;
+- `make build` builds the Rust workspace (`seyal-core`, `seyal-terminal`, `seyal-exec`, `seyal-protocol`, `seyal-runtime`, `seyal-render`, `seyal-client`) and, on macOS, builds the native `Seyal.app` Xcode target;
+- `make test` validates repository/tooling/workspace and harness invariants, validates the M001 fuzz registry/corpora, runs Rust workspace unit/integration tests, and on macOS runs the native app smoke plus XCTest/XCUI where configured;
+- `make check` runs the deterministic repository checks, harness/fuzz validation, controlled negative fixtures proving custom validators actually reject bad inputs, Rust formatting/Clippy/tests, architecture layering and the macOS native application on Darwin;
+- `make bench` records and round-trips benchmark environment metadata under `target/benchmarks/` and runs the real Cargo benchmark targets that exist for M001 passes;
 - `make docs` starts the local Starlight documentation site after installing its isolated Node dependencies;
 - `make docs-build` and `make docs-check` validate documentation without becoming dependencies of terminal production execution.
 
@@ -134,13 +134,13 @@ The public `Foundation Quality` workflow separates the fast PR gates into `repos
 
 Canonical Cargo operations use the pinned toolchain and `--locked` where dependency resolution applies.
 
-Issue #9 creates only the `seyal-terminal` physical Rust crate because M001 Pass 2 immediately needs the permanent terminal-semantics owner. Other accepted logical boundaries become physical crates only when their dependency-ordered Issues require them; do not pre-create empty diagram-driven packages.
+The physical Rust workspace is the Passes 1–9 production surface documented in `docs/engineering/REPOSITORY-STRUCTURE.md`. Crates exist only for justified ownership boundaries; do not pre-create empty diagram-driven packages.
 
-Issue #10 establishes the native host under `macos/Seyal` using **Swift + AppKit + Metal**. No Objective-C/Objective-C++ source is required for the current platform boundary. Metal shaders, when introduced by their owning renderer Issue, use Metal Shading Language; future Rust/native interop should cross a coarse C-compatible boundary rather than per-cell language calls.
+The native host under `macos/Seyal` is **Swift + AppKit + Metal** and now includes the permanent Metal terminal renderer, Candidate-D client attachment, native input/resize/focus/IME seams, minimal Block presentation, and Pass 9 detach/reconnect recovery. Metal shaders use Metal Shading Language. Rust/native interop crosses a coarse C-compatible prepared-frame boundary rather than per-cell language calls.
 
-Issue #11 establishes retained harness locations under `tests/`, `fuzz/` and `benches/`. It does not create terminal behavior to make the harnesses look populated. Production-specific fuzz adapters are activated by the pass that introduces the real target API.
+Harness locations under `tests/`, `fuzz/` and `benches/` hold real M001 fixtures, fuzz adapters and pass benchmarks. Deeper Pass 10 aggregate validation remains owned by #727.
 
-Issue #12 makes the Pass-1 CI gates production-shaped: external workflow actions are pinned by reviewed commit SHA, workflow permissions remain minimal, repository validators are negative-fixture tested, and architecture layering is enforced in the public PR path. Deeper conformance/fuzz/performance/security campaigns remain deferred until their real production targets exist.
+Issue #12 made the Pass-1 CI gates production-shaped: external workflow actions are pinned by reviewed commit SHA, workflow permissions remain minimal, repository validators are negative-fixture tested, and architecture layering is enforced in the public PR path. Later passes extended those gates without replacing the canonical root `make` interface.
 
 ## Clean-checkout workflow
 
@@ -169,7 +169,7 @@ To preview the documentation locally (Node.js 22.12+):
 make docs
 ```
 
-On macOS, after `make build`, the current non-terminal native skeleton can be launched manually with:
+On macOS, after `make build`, the native application can be launched manually with:
 
 ```sh
 open target/macos-derived-data/Build/Products/Debug/Seyal.app

@@ -101,7 +101,7 @@ Start with `docs/engineering/DEVELOPMENT.md` and `docs/engineering/REPOSITORY-ST
 
 ## Canonical commands
 
-Use the root task interface. Once M001 Pass 1 creates the workspace, these commands must remain canonical:
+Use the root task interface. These commands remain canonical for the production workspace:
 
 ```sh
 make bootstrap
@@ -113,7 +113,7 @@ make bench
 
 `make bootstrap-agents` is optional developer setup for coding-agent/MCP tooling and the pinned AI-SDLC framework; it is never required by terminal/runtime operation.
 
-Until production scaffolding exists, `make check` validates governance/documentation only and implementation commands explain that Pass 1 has not yet created the workspace.
+`make check` validates repository policy, harness/fuzz contracts, Rust formatting/Clippy/tests, architecture layering, and on macOS the native `Seyal.app` surface. Documentation tooling (`make docs-check` / `make docs-build`) is opt-in and outside the product runtime hot path.
 
 ## Pull requests
 

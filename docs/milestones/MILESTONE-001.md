@@ -1,6 +1,6 @@
 # Milestone 001 — Production Foundation Vertical Slice
 
-**Status:** Ready for implementation
+**Status:** Passes 1–9 Done; Pass 10 remaining (owning Issue #727). Pass 10 Phase 1 milestone-closure code/quality review is in progress from frozen review candidate `1005bc42397aac485b1aeff08cafd0f67790d969`. Independent final validation is still gated on review completion and final-head freeze. M001 itself is not closed.
 
 **Authority:** This document is subordinate to the accepted Seyal foundation architecture, its rationale, and accepted ADRs. It narrows that architecture into an implementable M001 slice; it does not reopen accepted foundation decisions.
 
@@ -742,7 +742,9 @@ Use identical workloads. Record latency, CPU, RSS, copies/bytes, allocations, re
 
 No next pass starts until the current pass is working, tested, demonstrable, and benchmarked where relevant.
 
-### Pass 1 — Repository/build/test foundation
+**Frontier (2026-09-04):** Passes 1–9 are Done on `master`. Pass 10 (#727) is the remaining M001 gate. Required-exit lists below remain the historical pass contracts; they are not open implementation checklists for already-completed passes.
+
+### Pass 1 — Repository/build/test foundation — Done
 
 Implement only build/test skeletons and module boundaries justified by accepted ownership.
 
@@ -755,7 +757,7 @@ Required exits:
 - fuzz targets compile/run smoke corpus;
 - no production terminal code beyond scaffolding.
 
-### Pass 2 — Seyal VT parser/state minimum
+### Pass 2 — Seyal VT parser/state minimum — Done
 
 TDD the `SUPPORTED M001` parser/state behaviors without PTY dependency.
 
@@ -772,7 +774,7 @@ Required exits:
 - conformance work does not pull deferred/full VT behavior into M001;
 - no alternate VT dependency.
 
-### Pass 3 — PTY + TerminalExecution
+### Pass 3 — PTY + TerminalExecution — Done
 
 Add real macOS PTY endpoint and child lifecycle around the same terminal engine.
 
@@ -787,7 +789,7 @@ Required exits:
 - PTY owner is `TerminalExecution`;
 - PTY layer remains free of product `TERM`/terminfo policy.
 
-### Pass 4 — Headless Runtime
+### Pass 4 — Headless Runtime — Done
 
 Move/host execution under the persistent per-user Runtime from the first runnable app architecture.
 
@@ -801,7 +803,7 @@ Required exits:
 - Runtime owns local child capability-environment selection above the PTY layer;
 - M001 local shell launch uses bundled `seyal-m001` terminfo rather than inherited/false standard terminal capability claims.
 
-### Pass 5 — Local attachment/projection
+### Pass 5 — Local attachment/projection — Done
 
 Implement ADR-001 and run the transport benchmark comparator.
 
@@ -824,7 +826,7 @@ Required exits:
 - controller/observer authority is explicit even though M001 exercises one controller;
 - selected mechanism remains justified or ADR amended with evidence.
 
-### Pass 6 — Metal renderer
+### Pass 6 — Metal renderer — Done
 
 Render deterministic projection fixtures and then live Runtime projection through the permanent Metal path.
 
@@ -837,7 +839,7 @@ Required exits:
 - no per-cell language crossing;
 - hidden surface releases/drops dedicated GPU resources.
 
-### Pass 7 — Native input + resize
+### Pass 7 — Native input + resize — Done
 
 Connect AppKit input and resize to Runtime authority.
 
@@ -849,7 +851,7 @@ Required exits:
 - focus/IME/accessibility seams are present without replacing Metal surface;
 - latency instrumentation is active.
 
-### Pass 8 — Minimal Block + logical anchor
+### Pass 8 — Minimal Block + logical anchor — Done
 
 Add minimum Block metadata over the existing execution/history seam.
 
@@ -862,7 +864,7 @@ Required exits:
 - no second PTY/grid/output transcript;
 - PTY→VT→damage path has no synchronous Block dependency.
 
-### Pass 9 — Detach/reconnect + GUI crash survival
+### Pass 9 — Detach/reconnect + GUI crash survival — Done
 
 Prove persistent Runtime ownership through real lifecycle behavior.
 
@@ -875,9 +877,9 @@ Required exits:
 - projection resources from dead client are reclaimed;
 - explicit terminate remains distinct from close/detach.
 
-### Pass 10 — Conformance/performance/failure validation
+### Pass 10 — Conformance/performance/failure validation — In progress
 
-Run the complete M001 suite and publish baselines.
+Run the complete M001 suite and publish baselines. Owning Issue #727. Phase 1 code/quality review is authorized from frozen candidate `1005bc42397aac485b1aeff08cafd0f67790d969`; Phase 2 final validation remains gated on review completion and final-head freeze.
 
 Required exits:
 
@@ -896,6 +898,8 @@ Required exits:
 ## 15. M001 acceptance gates
 
 M001 passes only when every item below is demonstrated, not merely represented by interfaces.
+
+These checkboxes remain the **Pass 10 final milestone-validation ledger**. Passes 1–9 production evidence is necessary but not sufficient; Pass 10 (#727) must still mark each criterion `PASS` on the final frozen M001 head. Do not check them from historical CI, merged PR state, or Issue assertions alone.
 
 ### Architecture
 
@@ -990,7 +994,9 @@ The final M001 demo must be reproducible from a clean checkout/build.
 
 ---
 
-## 17. Readiness check before implementation
+## 17. Historical readiness check before implementation (superseded)
+
+> **Superseded as a current implementation gate.** Architecture readiness for starting M001 passes was satisfied; Passes 1–9 are Done. The remaining open work is Pass 10 review/validation (#727), not re-opening Pass 1–9 implementation.
 
 ```text
 [x] exactly one authoritative VT

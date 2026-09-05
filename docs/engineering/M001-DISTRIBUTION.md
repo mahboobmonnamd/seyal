@@ -77,7 +77,9 @@ Each pass gets an independent validation Issue if its exit requires cross-task e
 
 Pass 10 is an aggregate **validation** gate, not a catch-all production hardening pass and not a new behavioral specification pass.
 
-Its refinement may begin while Pass 9 is nearing completion so the evidence contract can be reviewed, but Pass 10 must remain `BLOCKED / NOT_READY` until Pass 9 is genuinely complete, its final budgets/evidence are accepted, the M001 candidate head is frozen and development readiness passes.
+**Current state (after #719 Done):** Passes 1–9 are complete. Pass 10 Phase 1 milestone-closure code/quality review is authorized and in progress from frozen review candidate `1005bc42397aac485b1aeff08cafd0f67790d969` (owning Issue #727). Pass 9 no longer blocks Pass 10 Phase 1. Independent Phase 2 final milestone validation remains gated on completing the review, resolving required findings, and freezing the resulting final M001 head. See `docs/engineering/M001-PASS10-CODE-QUALITY-REVIEW.md` and `docs/engineering/M001-PASS10-VALIDATION.md`.
+
+> **Historical entry gate (superseded).** Before Pass 9 closed, Pass 10 refinement could begin while Pass 9 was nearing completion, but Pass 10 had to remain `BLOCKED / NOT_READY` until Pass 9 was genuinely complete, its final budgets/evidence were accepted, the M001 candidate head was frozen, and development readiness passed. That Pass-9 blocker is closed.
 
 Pass 10 must expand every mandatory `MILESTONE-001.md` acceptance criterion into direct evidence on the final accepted code. Historical CI, PR state, Issue checkboxes or implementation-agent claims are supporting provenance only; they are not automatic milestone proof.
 

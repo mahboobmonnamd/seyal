@@ -5,7 +5,8 @@
 **Evidence class:** `controlled-host`  
 **Harness:** `Seyal.app --pass663-metal-scalability` (`Pass663MetalScalability.swift`, schema `seyal.pass663.metal-scalability.v2`)  
 **Host:** Apple M5 Pro, arm64, macOS 26.5.2 (Build 25F84)  
-**Commit (matrix run):** `0d6f893895fed2b2dab6f46345e8344eff0cd666` (pre-final polish; evidence regenerated on PR HEAD)
+**Harness HEAD:** `4af5b06` (and later commits on this PR).  
+**Matrix/plateau measurement tree:** controlled-host runs used the v2 harness working tree; regenerate with `SEYAL_PASS663_COMMIT=$(git rev-parse HEAD)` after checkout of the merge commit for exact-SHA archival. Cited numbers below are from the Debug v2 campaign on Apple M5 Pro (synthetic through 250, real_path GPU>0, display_link, one/many noisy, plateau=true @ 300 s).
 
 ## Topology honesty
 

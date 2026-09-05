@@ -255,14 +255,20 @@ enum Pass663MetalScalability {
     let displayOk = skipDisplayLink || rowsOut.contains {
       $0.cohort == "display_link_headed" && $0.status == "MEASURED"
     }
-    let plateauOk = !plateauSoak || rowsOut.contains {
-      $0.cohort == "plateau_soak" && $0.status == "MEASURED"
+    let oneNoisyOk = skipNoisy || rowsOut.contains {
+      $0.cohort == "one_noisy" && $0.status == "MEASURED" && $0.dedicatedGpuBytes > 0
     }
-    let closes =
-      syntheticOk && realOk && displayOk && plateauOk
-      && rowsOut.contains { $0.cohort == "one_noisy" || $0.cohort == "many_noisy" }
+    let manyNoisyOk = skipNoisy || rowsOut.contains {
+      $0.cohort == "many_noisy" && $0.status == "MEASURED"
+    }
+    let plateauOk =
+      !plateauSoak
+      || rowsOut.contains {
+        $0.cohort == "plateau_soak" && $0.status == "MEASURED" && $0.note.contains("plateau=true")
+      }
+    let closes = syntheticOk && realOk && displayOk && oneNoisyOk && manyNoisyOk && plateauOk
     print(
-      "summary synthetic_250=\(syntheticOk ? "MEASURED" : "MISSING") real_path_fanout_gpu=\(realOk ? "MEASURED" : "MISSING") display_link=\(displayOk ? "OK" : "MISSING") plateau=\(plateauOk ? "OK" : "MISSING") closes_issue_663=\(closes) reason=\(closes ? "harness_topology_AC_met_pending_issue_refine_and_report" : "needs_remaining_cohorts_or_gpu_evidence")"
+      "summary synthetic_250=\(syntheticOk ? "MEASURED" : "MISSING") real_path_fanout_gpu=\(realOk ? "MEASURED" : "MISSING") display_link=\(displayOk ? "OK" : "MISSING") one_noisy=\(oneNoisyOk ? "OK" : "MISSING") many_noisy=\(manyNoisyOk ? "OK" : "MISSING") plateau=\(plateauOk ? "OK" : "MISSING") closes_issue_663=\(closes) reason=\(closes ? "harness_topology_AC_met" : "needs_remaining_cohorts_or_gpu_evidence")"
     )
     return !rowsOut.isEmpty
   }

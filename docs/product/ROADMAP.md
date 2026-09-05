@@ -21,7 +21,7 @@ The terminal hot path must never synchronously depend on agents, cloud services,
 
 | Milestone | Epic | Outcome | Entry gate | Exit / release significance |
 |---|---|---|---|---|
-| M001 | #5 | Permanent production foundation | Current architecture/spec authority | Seyal-owned VT/PTy/Runtime/display/Metal foundation is accepted. Contributor/nightly quality only; no market-readiness claim. |
+| M001 | #5 | Permanent production foundation (**Done / closed**) | Complete — Passes 1–10; #5/#727 closed | Seyal-owned VT/PTY/Runtime/display/Metal foundation accepted. Contributor/nightly quality only; no market-readiness claim. Soft RSS **768 KiB**. |
 | M002 | #664 | Market-parity terminal fundamentals | M001 complete | Target shells, TUIs, nested mux/SSH workloads, Unicode, scrollback/reflow, terminal search/input/mouse/link behavior and performance/resource gates are credible for technical preview. |
 | M003 | #665 | Core Seyal workspace | Stable M002 terminal contracts; native seams ready | macOS windows/tabs/splits/navigation, raw/Block/composer presentation, local config/themes/fonts/keybindings and trusted shell-integration boundary form a coherent local workspace. Alpha/beta quality; still not market-ready. |
 | M004 | #666 | Durable local workspace / market-ready v0.1 | M002 + M003 complete; M004 spikes resolved | Durable detach/reconnect/layout/history behavior is honest, signed/notarized/updateable macOS distribution exists, diagnostics/accessibility/docs/install/recovery/performance gates pass on one release SHA. **First serious public launch.** |
@@ -118,7 +118,7 @@ With three contributors, protect the critical path rather than maximizing simult
 
 | Lane | Primary responsibility now | Parallel work allowed | Must not overlap unsafely |
 |---|---|---|---|
-| A — terminal/runtime | Finish M001, then M002 VT/Unicode/reflow/compatibility | terminal fixtures, benchmark design | another lane changing authoritative TerminalState/VT contracts |
+| A — terminal/runtime | M002 VT/Unicode/reflow/compatibility (M001 Done / closed) | terminal fixtures, benchmark design | another lane changing authoritative TerminalState/VT contracts |
 | B — native workspace | M003 AppKit/workspace/config once stable seams exist | UI/layout/config tests | terminal-engine duplication or speculative alternate state |
 | C — quality/look-ahead | conformance, perf/CI evidence, M002–M004 spikes | docs, fixtures, release engineering | weakening exact-head/fuzz/security gates to save time |
 
@@ -140,7 +140,7 @@ Do not plan 5/8/12 contributors as linear multiples of three-person throughput. 
 While implementing milestone **M**, perform only decision work for **M+1** and high-risk architecture spikes for **M+2**. Do not production-implement speculative M+2 work. This keeps expensive uncertainties out of the critical path without letting designs stale before implementation.
 
 Examples:
-- During M001: resolve M002 Unicode/scrollback and M003 shell-integration; also settle M004 durability/update risks.
+- During M001 (completed): resolve M002 Unicode/scrollback and M003 shell-integration; also settle M004 durability/update risks.
 - During M002: M003 implementation may advance behind stable terminal seams; M004 release/durability decisions must be closed; M005 agent R&D can be promoted to implementable specs.
 - During M003: M004 implementation dominates release readiness; M005 implementation packages become Ready; M006 remains R&D/spikes.
 

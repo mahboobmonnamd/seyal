@@ -64,12 +64,12 @@ Revalidation rules:
 
 - Keep a scoped implementation/docs/R&D issue closed when its stated deliverable landed with current Seyal evidence and any remaining product work is represented by an open current backlog owner.
 - Keep R&D issues #48 and #51–#57 closed as completed research/design deliverables; the resulting product implementation remains open under #262/#645 and later implementation issues.
-- Keep #103 closed because its specification/refinement deliverable was completed through PR #104. Pass-5 production implementation remains separately open under #105; closing #103 therefore does not hide unfinished implementation.
+- Keep #103 closed because its specification/refinement deliverable was completed through PR #104. Pass-5 production implementation later closed under #105; closing #103 therefore does not hide unfinished work that belongs to later milestones.
 - Closed milestone/tooling/docs issues remain closed when their specific PR/test evidence exists, even if their body still contains an older `Ready`/`In Progress` snapshot. The current GitHub state, merged evidence and current backlog owner are authoritative over stale prose in the old issue body.
 - Reopen a closed current issue only when its own promised deliverable is actually unfinished **and** there is no valid current owner replacing that scope. Do not reopen merely because a broader feature remains unfinished.
 - Rejected/superseded/historical-only shapes stay closed and point to their current decision/replacement.
 
-The 2026-08-25 closed-current-issue audit found **no non-historical closed issue that requires reopening** under these rules. Unfinished product work is represented by #640–#650, #197, #262 and active milestone/implementation issues such as #105.
+The 2026-08-25 closed-current-issue audit found **no non-historical closed issue that requires reopening** under these rules. Unfinished product work is represented by #640–#650, #197, #262 and active M002+ milestone/implementation issues (M001/#105 are closed).
 
 One important exception remains intentionally open: [#107](https://github.com/mahboobmonnamd/seyal/issues/107). The canonical feature inventory and 511/511 historical import are complete, but #107's stricter requirement for an explicit per-source-issue disposition ledger covering all 511 imported issues has not yet been committed. Do not close #107 until that audit requirement is either completed or explicitly superseded by a reviewed decision.
 

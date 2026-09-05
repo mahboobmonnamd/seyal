@@ -11,6 +11,7 @@ required=(
   .github/copilot-instructions.md
   docs/specs/README.md
   docs/engineering/DEVELOPMENT.md
+  docs/engineering/ENGINEERING-QUALITY-BASELINE.md
   docs/engineering/ISSUE-PROTOCOL.md
   docs/engineering/TESTING.md
   docs/engineering/PERFORMANCE.md

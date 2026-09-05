@@ -148,9 +148,9 @@ pub(crate) fn report_transport_semantics() {
         printable_text(&malformed)
     );
 
-    let interrupted = decode_with_chunks("e\u{301}".as_bytes(), &[1], false);
     let mut decoder = GroundDecoder::default();
-    let mut events = interrupted;
+    let mut events = Vec::new();
+    decoder.feed(b"e", &mut events);
     decoder.feed(&[0x07], &mut events);
     decoder.feed("\u{301}".as_bytes(), &mut events);
     decoder.finish(&mut events);

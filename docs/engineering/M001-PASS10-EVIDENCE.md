@@ -17,7 +17,7 @@
 | Freeze date (UTC) | 2026-09-05 |
 | Harness tip | `e2b76024de2c85b3e9adb6dd5dcadb7b40881079` (#778 UITest helper packaging) |
 | Gate note | Machine RSS gate remains `CLIENT_RSS_KIB = 1536` (#784). Engineering Quality Baseline landed (#788/#791). |
-| Phase 1 status | FINDINGS DISPOSITION COMPLETE (#748–#760 closed; #764–#768 parked post-M001). Residuals #784/#786/#787/#788 closed. |
+| Phase 1 status | FINDINGS DISPOSITION COMPLETE (#748–#760 closed; #764–#768 closed post-M001). Residuals #784/#786/#787/#788 closed. |
 | Clean-checkout demo | PASS — all of bootstrap/build/test/check/bench EXIT:0 on exact freeze; see `docs/evidence/pass10-final-freeze-clean-demo-c536c54.md` |
 | Host (this evidence run) | Mahboob MacBook Pro (2), arm64 |
 | macOS | 26.5.2 (25F84) |

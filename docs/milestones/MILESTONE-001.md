@@ -1,6 +1,6 @@
 # Milestone 001 — Production Foundation Vertical Slice
 
-**Status:** **Done / closed.** Passes 1–10 complete. Pass 10 (#727) and parent M001 (#5) are closed on GitHub. Final freeze `c536c5454583f6a036910e145fe1187446319630` (last production behavior `a012ab0` #789; honesty #790; baseline #791). Harness tip `e2b76024de2c85b3e9adb6dd5dcadb7b40881079` (#778). Machine RSS gate remains **`CLIENT_RSS_KIB = 1536`** (Pass 9 calibration; unchanged by Pass 10; #784). Live Pass 10 PASS ledger: `docs/engineering/M001-PASS10-EVIDENCE.md`. Independent review: `docs/evidence/m001-pass10-independent-final-review.md`. Parked post-M001 cohesion/CI follow-ups (#764–#768) are explicitly outside M001 acceptance.
+**Status:** **Done / closed.** Passes 1–10 complete. Pass 10 (#727) and parent M001 (#5) are closed on GitHub. Final freeze `c536c5454583f6a036910e145fe1187446319630` (last production behavior `a012ab0` #789; honesty #790; baseline #791). Harness tip `e2b76024de2c85b3e9adb6dd5dcadb7b40881079` (#778). Machine RSS gate remains **`CLIENT_RSS_KIB = 1536`** (Pass 9 calibration; unchanged by Pass 10; #784). Live Pass 10 PASS ledger: `docs/engineering/M001-PASS10-EVIDENCE.md`. Independent review: `docs/evidence/m001-pass10-independent-final-review.md`. Post-M001 cohesion/CI follow-ups (#764–#768) were outside M001 acceptance and are closed by their owning post-M001 PRs.
 
 **Authority:** This document is subordinate to the accepted Seyal foundation architecture, its rationale, and accepted ADRs. It narrows that architecture into an implementable M001 slice; it does not reopen accepted foundation decisions.
 
@@ -742,7 +742,7 @@ Use identical workloads. Record latency, CPU, RSS, copies/bytes, allocations, re
 
 No next pass starts until the current pass is working, tested, demonstrable, and benchmarked where relevant.
 
-**Frontier (2026-09-05):** M001 is **Done** on `master` (Passes 1–10). Required-exit lists below remain the historical pass contracts; they are not open implementation checklists. Post-M001 follow-ups (#764–#768) and M002+ are outside this milestone.
+**Frontier (2026-09-05):** M001 is **Done** on `master` (Passes 1–10). Required-exit lists below remain the historical pass contracts; they are not open implementation checklists. Post-M001 follow-ups (#764–#768) are closed by their owning PRs; M002+ remains outside this milestone.
 
 ### Pass 1 — Repository/build/test foundation — Done
 

@@ -49,10 +49,10 @@ not that the oversized modules have already been split.
 
 | Issue | Scope |
 |-------|--------|
-| #765 | Decompose `seyal-client` `local.rs` by ownership boundaries |
-| #766 | Decompose `seyal-runtime` `runtime.rs` / `runtime/local.rs` |
-| #767 | Decompose `seyal-client` `ffi.rs` and advisory `SeyalShellView.swift` cohesion |
-| #768 | Resolve dual `block.rs` / `blocks.rs` naming |
+| #765 | Done — Decompose `seyal-client` `local.rs` by ownership boundaries |
+| #766 | Done — Decompose `seyal-runtime` `runtime.rs` / `runtime/local.rs` |
+| #767 | Done — Decompose `seyal-client` `ffi.rs` and advisory `SeyalShellView.swift` cohesion |
+| #768 | Done — Resolve dual `block.rs` / `blocks.rs` naming |
 
 These Issues must not be treated as M001 exit blockers. Prefer landing after M001 freeze (and after #760 ABI/panic policy for FFI moves).
 

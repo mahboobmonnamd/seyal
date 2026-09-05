@@ -64,6 +64,6 @@ Fix: advance `published` only after successful encode; clear bookkeeping and sch
 
 ## Explicit non-claims
 
-- Does not claim Pass 10 code-quality review is complete overall (#727).
+- Does not reopen Pass 10 / M001; #727 and #5 are closed with PASS evidence elsewhere.
 - Does not authorize speculative module trees or premature cross-milestone abstractions.
 - Does not weaken AGENTS.md cohesion rules for future merges: new oversized handwritten files still need justification or decomposition.

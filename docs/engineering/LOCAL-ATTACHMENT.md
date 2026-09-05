@@ -32,7 +32,7 @@ future large immutable graphics/media
 
 The migration is complete: PR #106 merged Candidate-D as the production attachment/display path, and production Runtime attachment/display delivery uses binary snapshot/delta + generation/resync exclusively. The earlier per-attachment shared-memory grid implementation remains in the tree only as isolated comparator/reference code, gated behind the non-default `benchmark-shared-projection` Cargo feature (`default = []`); it is not compiled into, and is not reachable from, a normal production build or `cargo test`/`cargo build`.
 
-M001 Pass 5's remaining acceptance work is now tracked by Issue #651 (performance-matrix rigor on controlled hardware, failure-injection audit completeness, and final independent review) rather than by this migration, which is done. Do not delete useful shared-projection benchmark evidence before that work concludes, but do not reintroduce the shared-grid path into the production Runtime attachment path merely because future graphics may need shared memory — future bulk graphics has its own transport seam (see ADR-001 §7).
+M001 Pass 5's remaining acceptance work was tracked by Issue #651 (performance-matrix rigor on controlled hardware, failure-injection audit completeness, and final independent review) rather than by this migration, which is done. Issue #651 is **closed** (Pass 5.1 acceptance complete). Do not delete useful shared-projection benchmark evidence, but do not reintroduce the shared-grid path into the production Runtime attachment path merely because future graphics may need shared memory — future bulk graphics has its own transport seam (see ADR-001 §7).
 
 ## Ownership
 

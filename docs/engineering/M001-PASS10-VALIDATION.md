@@ -1,8 +1,8 @@
 # M001 Pass 10 — Final Milestone Validation Protocol
 
-**Status:** Normative final-validation authority — Phase 1 findings disposition complete; Phase 2 final validation not started until exact-head gates are green and readiness is reconfirmed  
-**Owning validation Issue:** #727  
-**Parent M001 Issue:** #5  
+**Status:** Normative final-validation authority (historical) — Phase 1 findings disposition complete; Phase 2 final validation **Done / satisfied** on production freeze `d845c6ddbe86…` (#776) with harness tip `e2b76024de2c…` (#778) and evidence tip `c1246d43869a…` (#779); owning Issues #727 and #5 closed  
+**Owning validation Issue:** #727 — closed Done  
+**Parent M001 Issue:** #5 — closed Done  
 **Pass 9 prerequisite:** #719 — closed Done  
 **Phase 1 review candidate:** `1005bc42397aac485b1aeff08cafd0f67790d969`  
 **Historical refinement base:** `efa365d48565fb09452b683577700a8e5e267fcb`
@@ -43,9 +43,9 @@ Pass 9 no longer blocks Pass 10 Phase 1. The following entry conditions were sat
 
 Phase 1 follows `docs/engineering/M001-PASS10-CODE-QUALITY-REVIEW.md`. Findings disposition is complete; claiming full Phase 1 COMPLETE still requires file-level ledger completeness per that protocol.
 
-### 2.2 Phase 2 final validation — still gated
+### 2.2 Phase 2 final validation — historically satisfied / Done
 
-Independent final milestone-validation execution remains forbidden until all of these are true:
+Independent final milestone-validation execution was forbidden until all of these were true (protocol rules retained):
 
 - Phase 1 review ledger covers every M001-significant file/module;
 - no `BLOCKING` review finding remains;
@@ -54,7 +54,7 @@ Independent final milestone-validation execution remains forbidden until all of 
 - a final exact M001 validation head is frozen after review-driven changes;
 - development readiness for the Phase 2 validation execution of #727 returns Ready.
 
-Until those Phase 2 conditions are met, final validation remains `NOT STARTED / GATED`.
+Those Phase 2 entry conditions were met. Final validation is **Done / satisfied** on the frozen production head with PASS evidence in `docs/engineering/M001-PASS10-EVIDENCE.md`; #727 and #5 are closed. Soft RSS gate remains **768 KiB**.
 
 M002 implementation must not be started as a dependency bypass while M001 has a failed, missing or inconclusive mandatory Pass 10 criterion.
 

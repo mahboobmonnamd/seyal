@@ -359,6 +359,10 @@ final class MetalTerminalRenderer {
         Int(stats.instanceBytes) + glyphAtlas.estimatedResidentBytes
     }
 
+    var atlasResidentBytes: Int {
+        glyphAtlas.estimatedResidentBytes
+    }
+
     func cellPixelSize(backingScale: CGFloat) -> (width: Int, height: Int) {
         let metrics = glyphAtlas.metrics(backingScale: max(backingScale, 1))
         return (metrics.cellWidth, metrics.cellHeight)

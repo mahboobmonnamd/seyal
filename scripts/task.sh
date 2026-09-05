@@ -122,6 +122,10 @@ case "$cmd" in
         # Pass 5 ends at the committed client display cache. Measure the distinct
         # Pass-6 native boundary separately in a Release app and label GPU
         # completion as a presentation proxy rather than claiming display scanout.
+        # Local/CI diagnostic Release benches use ad-hoc signing when unset
+        # (same contract as Foundation native-macos-smoke). Distributable
+        # Release packaging still requires an explicit Apple-issued identity.
+        export SEYAL_CODESIGN_IDENTITY="${SEYAL_CODESIGN_IDENTITY:--}"
         SEYAL_MACOS_CONFIGURATION=Release bash scripts/build-macos.sh
         renderer_binary="${ROOT}/target/macos-derived-data/Build/Products/Release/Seyal.app/Contents/MacOS/Seyal"
         [[ -x "$renderer_binary" ]] || { echo "Pass-6 renderer benchmark binary missing" >&2; exit 1; }

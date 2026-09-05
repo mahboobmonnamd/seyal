@@ -120,7 +120,7 @@ make docs-check    # run Starlight/Astro documentation validation
 
 `make docs` requires Node.js 22.12 or later. Do not create competing undocumented command paths.
 
-Current behavior after Passes 1–10 (M001 Done / closed):
+Current behavior after Passes 1–10 (M001 Pass 10 closeout in progress; #727/#5 open until final freeze + Phase 2 PASS):
 
 - `make bootstrap` provisions/verifies the pinned Rust toolchain and, on macOS, validates full Xcode + Swift + macOS SDK + Metal tooling;
 - `make build` builds the Rust workspace (`seyal-core`, `seyal-terminal`, `seyal-exec`, `seyal-protocol`, `seyal-runtime`, `seyal-render`, `seyal-client`) and, on macOS, builds the native `Seyal.app` Xcode target;
@@ -138,7 +138,7 @@ The physical Rust workspace is the Passes 1–10 / M001 production surface docum
 
 The native host under `macos/Seyal` is **Swift + AppKit + Metal** and now includes the permanent Metal terminal renderer, Candidate-D client attachment, native input/resize/focus/IME seams, minimal Block presentation, and Pass 9 detach/reconnect recovery. Metal shaders use Metal Shading Language. Rust/native interop crosses a coarse C-compatible prepared-frame boundary rather than per-cell language calls.
 
-Harness locations under `tests/`, `fuzz/` and `benches/` hold real M001 fixtures, fuzz adapters and pass benchmarks. Pass 10 aggregate validation is complete (#727 closed); retained evidence lives under `docs/engineering/M001-PASS10-EVIDENCE.md` and `docs/evidence/`.
+Harness locations under `tests/`, `fuzz/` and `benches/` hold real M001 fixtures, fuzz adapters and pass benchmarks. Pass 10 evidence/protocol docs live under `docs/engineering/M001-PASS10-EVIDENCE.md` and `docs/evidence/`; #727 remains open until final freeze + Phase 2 PASS.
 
 Issue #12 made the Pass-1 CI gates production-shaped: external workflow actions are pinned by reviewed commit SHA, workflow permissions remain minimal, repository validators are negative-fixture tested, and architecture layering is enforced in the public PR path. Later passes extended those gates without replacing the canonical root `make` interface.
 

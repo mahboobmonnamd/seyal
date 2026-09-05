@@ -1,11 +1,12 @@
 # M001 Pass 10 — Final Milestone Validation Protocol
 
-**Status:** Normative final-validation authority (historical) — Phase 1 findings disposition complete; Phase 2 final validation **Done / satisfied** on production freeze `d845c6ddbe86…` (#776) with harness tip `e2b76024de2c…` (#778) and evidence tip `c1246d43869a…` (#779); owning Issues #727 and #5 closed  
-**Owning validation Issue:** #727 — closed Done  
-**Parent M001 Issue:** #5 — closed Done  
+**Status:** Normative final-validation authority — Phase 1 findings disposition complete; Phase 2 historically recorded on prior freeze `d845c6ddbe86…` (#776) then **reopened** for honesty residuals (#784/#787) and production Metal fix (#789 → tip `a012ab0`). Owning Issues #727 and #5 are **open** until a new freeze + independent Phase 2 PASS.  
+**Owning validation Issue:** #727 — open (reopened)  
+**Parent M001 Issue:** #5 — open (reopened)  
 **Pass 9 prerequisite:** #719 — closed Done  
 **Phase 1 review candidate:** `1005bc42397aac485b1aeff08cafd0f67790d969`  
 **Historical refinement base:** `efa365d48565fb09452b683577700a8e5e267fcb`
+**Machine RSS gate:** `CLIENT_RSS_KIB = 1536` (#784)
 
 ## 1. Purpose
 
@@ -54,7 +55,7 @@ Independent final milestone-validation execution was forbidden until all of thes
 - a final exact M001 validation head is frozen after review-driven changes;
 - development readiness for the Phase 2 validation execution of #727 returns Ready.
 
-Those Phase 2 entry conditions were met. Final validation is **Done / satisfied** on the frozen production head with PASS evidence in `docs/engineering/M001-PASS10-EVIDENCE.md`; #727 and #5 are closed. Machine RSS gate remains **`CLIENT_RSS_KIB = 1536`** (unchanged by Pass 10; #784).
+Those Phase 2 entry conditions were met for the historical freeze, then invalidated by honesty findings (#784/#787) and production Metal change (#789). Final validation is **not Done** until a new freeze SHA is recorded and independent Phase 2 + clean-checkout demo PASS. Machine RSS gate remains **`CLIENT_RSS_KIB = 1536`** (unchanged by Pass 10; #784).
 
 M002 implementation must not be started as a dependency bypass while M001 has a failed, missing or inconclusive mandatory Pass 10 criterion.
 
@@ -365,6 +366,28 @@ The final demo must use production topology from a clean checkout of the frozen 
 21. present the criterion-level conformance/fuzz/failure/security/performance evidence.
 
 Fake terminal cells, a direct renderer fixture, an in-process substitute Runtime or browser automation cannot replace the real end-to-end demo.
+
+### 6.12.1 Host automation / packaging honesty (Pass 10 amendment)
+
+When documenting clean-checkout exits:
+
+1. **`make bench` / Release diagnostic packaging** — local/CI diagnostic benches may use ad-hoc signing (`SEYAL_CODESIGN_IDENTITY=-`, defaulted by `scripts/task.sh`). That is not distributable Release identity. A prior `BENCH_EXIT:2` caused solely by missing codesign identity is a packaging-gate defect, not a product perf FAIL, once EXIT:0 is re-proven with the diagnostic default.
+2. **`make test` UITest automation-mode timeout** — if SeyalTests complete and the only failure is the UITest runner timing out while *enabling automation mode* (host automation init), product XCUI proof may be satisfied by Foundation `native-macos-smoke` SUCCESS on the harness tip **plus** a headed targeted recovery UITest EXIT:0. Do not use this substitution to ignore failed product assertions.
+3. **Forced GUI exit vs socket-loss** — §6.7 “forced GUI exit survival” must cite XCUI forced-GUI-exit evidence. `abrupt_socket_loss` soak proves socket-loss continuity only.
+
+#### Clean-checkout exit honesty (mandatory)
+
+Record each of `TEST_EXIT`, `CHECK_EXIT`, and `BENCH_EXIT` separately. Do not treat a green later step as erasing a failed earlier exit without an explicit, protocol-legal substitution rule.
+
+Allowed substitutions that do **not** weaken product proof:
+
+| Failed local exit | Allowed substitution | Not a substitution |
+|---|---|---|
+| `TEST_EXIT≠0` after SeyalTests pass when `SeyalUITests-Runner` fails host automation init (`Timed out while enabling automation mode`) | Foundation `native-macos-smoke` full XCUI SUCCESS on the harness tip **plus** headed Pass 9 recovery UITest `UITEST_EXIT:0` (`testPass9ProductionRecoverySurvivesGracefulAndForcedGUIExit`) | Claiming the failed `make test` itself passed |
+| `BENCH_EXIT≠0` solely because Release packaging lacked `SEYAL_CODESIGN_IDENTITY` before the #787 task default | Re-run `make bench` after the packaging fix (ad-hoc `-` default for local/CI diagnostic Release benches) **or** Foundation `native-macos-smoke` `make bench` with explicit `SEYAL_CODESIGN_IDENTITY=-` labelled `CI` | Citing `DISPLAY_LINK=0` CI benches as headed presentation proof |
+| Host cannot deliver `CAMetalDisplayLink` samples under `SEYAL_REQUIRE_DISPLAY_LINK_BENCHMARK=1` | Mark presentation-proxy criterion `PLATFORM_LIMITED` / `INCONCLUSIVE` per §5.1 with the failure reason | Using Foundation `SEYAL_REQUIRE_DISPLAY_LINK_BENCHMARK=0` output as headed proof |
+
+`CHECK_EXIT:0` remains required on the freeze (or harness tip when only harness packaging changed). Product detach/crash continuity for §6.7 forced GUI death must cite XCUI forced-GUI-exit evidence; Pass 9 `abrupt_socket_loss` soak proves socket-loss continuity only and must not be labelled “GUI crash.”
 
 ### 6.13 Non-goals and authority consistency
 

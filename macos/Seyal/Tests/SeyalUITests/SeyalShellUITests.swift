@@ -43,8 +43,43 @@ final class SeyalShellUITests: XCTestCase {
         app.launch()
         let surface = app.descendants(matching: .any)["terminal-surface.pane-local"]
         XCTAssertTrue(surface.waitForExistence(timeout: 5))
-        XCTAssertTrue(wait { self.recoveryFields(surface)?["connection"] == "usable" })
+        // Recovery accessibility publishes connection=usable only after
+        // Runtime attach completes. Allow the full foreground episode budget
+        // rather than the default 5s helper wait used elsewhere in this suite.
+        XCTAssertTrue(
+            wait(timeout: 15) { self.recoveryFields(surface)?["connection"] == "usable" },
+            "production Seyal.app did not reach connection=usable after launch"
+        )
         return surface
+    }
+
+    /// Wait until the separately owned Runtime accepts a production attach
+    /// through the same app binary XCUI will launch. Mirrors the Pass 8 probe
+    /// so endpointMissing → helper-launch never races a still-binding socket.
+    private func waitForExternalRuntimeAttachable(
+        appBinaryURL: URL,
+        runtime: Process,
+        attempts: Int = 40
+    ) throws {
+        var runtimeReady = false
+        for _ in 0..<attempts {
+            let probe = Process()
+            probe.executableURL = appBinaryURL
+            probe.arguments = ["--pass8-native-metadata-self-test"]
+            probe.standardOutput = Pipe()
+            probe.standardError = Pipe()
+            try probe.run()
+            probe.waitUntilExit()
+            if probe.terminationStatus == 0 {
+                runtimeReady = true
+                break
+            }
+            if !runtime.isRunning {
+                break
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        XCTAssertTrue(runtimeReady, "external Runtime did not become attachable")
     }
 
     override func setUpWithError() throws {
@@ -222,6 +257,18 @@ final class SeyalShellUITests: XCTestCase {
             if runtime.isRunning { runtime.terminate() }
             runtime.waitUntilExit()
         }
+
+        let appBinaryURL = repoRoot
+            .appendingPathComponent("target/macos-ui-tests/Build/Products/Debug/Seyal.app/Contents/MacOS/Seyal")
+        // Prefer the DerivedData product under test when present (headed Pass 10
+        // runs use a dedicated derivedDataPath); fall back to the make ui-test path.
+        let headedBinary = repoRoot.appendingPathComponent(
+            "target/macos-ui-tests-headed-arm64/Build/Products/Debug/Seyal.app/Contents/MacOS/Seyal"
+        )
+        let probeBinary = FileManager.default.isExecutableFile(atPath: headedBinary.path)
+            ? headedBinary
+            : appBinaryURL
+        try waitForExternalRuntimeAttachable(appBinaryURL: probeBinary, runtime: runtime)
 
         var surface = launchProductionApp()
         let first = try XCTUnwrap(recoveryFields(surface))

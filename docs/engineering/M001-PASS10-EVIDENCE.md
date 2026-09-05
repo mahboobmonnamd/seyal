@@ -53,7 +53,7 @@ Expanded from `docs/milestones/MILESTONE-001.md` §15 and Pass 10 validation §6
 | Primary + scoped ?1049 alternate screen | PASS | `m001_vt::alternate_screen_preserves_primary_and_is_discarded_on_leave` EXIT:0 |
 | Malformed/parser-fuzz invariants | PASS | `cargo test -p seyal-terminal --test fuzz_smoke --locked` EXIT:0 + registry smoke; campaign evidence pending §6.9 |
 | Real shell TERM=seyal-m001 + bundled terminfo | PASS | `macos_runtime` seyal_term filter + `macos_terminfo_clean` EXIT:0 |
-| Terminfo capability honesty audit | PENDING | |
+| Terminfo capability honesty audit | PASS | Manual audit of `resources/terminfo/seyal-m001.src` vs MILESTONE-001 SUPPORTED table: only am/cols/lines/colors#256/cursor/erase/SGR/256-color setaf/setab/DECTCEM/?1049; no mouse/bracketed-paste/OSC/title/sixel/xterm-256color alias. Resolution smoke `macos_terminfo_clean` EXIT:0 |
 
 ### 6.3 PTY / child / Runtime lifecycle
 
@@ -121,18 +121,18 @@ Expanded from `docs/milestones/MILESTONE-001.md` §15 and Pass 10 validation §6
 
 | Criterion | Verdict | Evidence |
 |---|---|---|
-| Socket ownership/permissions | PENDING | |
-| Same-user auth / attachment identity | PENDING | |
-| Bounds/version validation | PENDING | |
-| Focused M001 threat review recorded | PENDING | |
+| Socket ownership/permissions | PASS | `local_ipc_protocol` + adversarial suites EXIT:0; same-user UDS trust contracts |
+| Same-user auth / attachment identity | PASS | `local_ipc_protocol` / adversarial Observer-Controller auth EXIT:0 |
+| Bounds/version validation | PASS | `local_ipc_adversarial` + `local_ipc_ctrunc` + FFI misuse EXIT:0 |
+| Focused M001 threat review recorded | PASS | `docs/evidence/m001-pass10-security-review.md` (Pass 9 #745 not used as sole proof) |
 
 ### 6.11 Performance / memory / resources
 
 | Criterion | Verdict | Evidence class | Evidence |
 |---|---|---|---|
 | Required measurements recorded vs targets | PENDING | | |
-| Pass 9 budget artifacts retained | PENDING | controlled-host | |
-| CI benches not mislabeled as headed proof | PENDING | CI | |
+| Pass 9 budget artifacts retained | INCONCLUSIVE | controlled-host | Retained `docs/evidence/pass9-release-qualification-*.json` are older SHAs; merge-acceptance PASS on harness-fixed head (224/512≤768). Five-cohort release-qual must re-run on final freeze | |
+| CI benches not mislabeled as headed proof | PASS | CI | `make check` / Foundation benches remain class `CI`; headed proof requires `SEYAL_REQUIRE_DISPLAY_LINK_BENCHMARK=1` controlled-host (documented in validation §5) | |
 
 ### 6.12 Clean-checkout production demo
 
@@ -148,7 +148,7 @@ Expanded from `docs/milestones/MILESTONE-001.md` §15 and Pass 10 validation §6
 
 | Criterion | Verdict | Evidence |
 |---|---|---|
-| No silent M002/scrollback/tabs/agents/cloud absorption | PENDING | |
+| No silent M002/scrollback/tabs/agents/cloud absorption | PASS | Layering check EXIT:0; milestone non-goals unchanged; no commercial crates in OSS workspace; UI preview tabs are non-acceptance surfaces |
 | Status docs match freeze head | PENDING | |
 
 ## Aggregate gates

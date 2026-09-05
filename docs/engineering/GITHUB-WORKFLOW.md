@@ -85,7 +85,7 @@ When branch protection/rulesets are configured, these stable job names are the P
 
 - **`repository-policy`** (ubuntu) — shell syntax, governance structure, local documentation links, architecture layering, hot-path/benchmark/UI-test contracts, harness contracts, fuzz-registry smoke, and controlled negative fixtures proving repository validators reject invalid inputs.
 - **`rust-and-harness-quality`** (ubuntu) — pinned Rust bootstrap, production Rust workspace build, `make check` (format, Clippy with warnings denied, unit tests, layering and harness checks), and `make bench` as a **portable harness smoke** (macOS-only native benches are skipped; no performance claim).
-- **`native-macos-smoke`** (macos-latest) — pinned Rust plus native toolchain bootstrap; Rust + `Seyal.app` build; `make check`; `make test` (Rust unit/PTY, native executable smoke, XCTest, XCUIAutomation); and `make bench` with:
+- **`native-macos-smoke`** (macos-15 + Xcode 16.4) — pinned Rust plus native toolchain bootstrap; Rust + `Seyal.app` build; `make check`; `make test` (Rust unit/PTY, native executable smoke, XCTest, XCUIAutomation); and `make bench` with:
   - `SEYAL_REQUIRE_DISPLAY_LINK_BENCHMARK=0` — hosted runners may be headless and cannot deliver `CAMetalDisplayLink` callbacks; presentation-proxy samples are recorded as `PLATFORM_LIMITED` rather than failing the job;
   - `SEYAL_CODESIGN_IDENTITY=-` — unsigned CI artifact only, not a release/signing proof.
 
@@ -114,7 +114,7 @@ Shared CI absolute latency/CPU/RSS and headless display-link-off benches are dia
 
 ### Host/image nondeterminism (classified, not silently claimed fixed)
 
-`native-macos-smoke` uses `macos-latest` and the runner-provided Xcode/SDK. Metal, WindowServer, and terminfo host behavior can change across GitHub image updates. That is retained as known CI host nondeterminism: it does not invalidate the smoke contract above, and it is **not** a substitute for controlled same-host Pass 10 measurements. Pinning a specific Xcode/image is tracked in #764 and is outside the #755 honesty/supply-chain pass; do not treat floating `macos-latest` as bit-reproducible Metal evidence.
+`native-macos-smoke` and `production-macos-state-fuzz` pin `macos-15` and select `/Applications/Xcode_16.4.app` (#764) so Metal/terminfo smoke is less sensitive to silent GitHub image drift. That pin reduces host nondeterminism; it still does **not** make shared CI a substitute for controlled same-host Pass 10 measurements, and it must not be cited as bit-reproducible Metal/presentation evidence or absolute latency/RSS proof. Keep `SEYAL_REQUIRE_DISPLAY_LINK_BENCHMARK=0` on hosted runners; headed Pass 6/10 presentation evidence remains controlled-host only.
 
 ### Action pinning and docs supply chain
 

@@ -69,12 +69,17 @@ jobs:
 
   native-macos-smoke:
     name: native-macos-smoke
-    runs-on: macos-latest
+    runs-on: macos-15
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+      - name: Select pinned Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode_16.4.app
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-version
       - name: Bootstrap pinned Rust and native toolchains
         run: make bootstrap
       - name: Build Rust plus Seyal.app

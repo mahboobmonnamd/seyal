@@ -1,5 +1,9 @@
+mod bounds;
+mod mutation;
+mod projection;
 mod storage;
 mod streaming;
+mod transport;
 
 use std::{hint::black_box, mem::size_of, time::Instant};
 
@@ -216,8 +220,12 @@ fn main() {
     println!("SPIKE\tnote\tnon-mergeable comparative evidence only");
     report_representation_sizes();
     report_corpus();
+    transport::report_transport_semantics();
     streaming::report_streaming_semantics();
+    mutation::report_mutation_semantics();
     storage::report_storage_pressure();
+    projection::report_projection_pressure();
+    bounds::report_cluster_bounds();
 
     let (seg_ns, seg_checksum) = benchmark_segmentation(segmentation_rounds);
     println!(

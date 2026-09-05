@@ -1,5 +1,7 @@
 # Seyal development workflow
 
+Start with this document and `docs/engineering/ENGINEERING-QUALITY-BASELINE.md` (thin index into testing/performance/security/CI/OSS gates — not a second constitution).
+
 ## Authority chain
 
 ```text

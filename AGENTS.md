@@ -90,6 +90,7 @@ These are merge gates for high-risk Runtime/reactor work, not optional reviewer 
 - `docs/specs/` — observable behavior specifications (when introduced).
 - `docs/milestones/` — bounded vertical milestones and acceptance gates.
 - `docs/engineering/` — development, issue, testing, performance, security, repository and OSS/commercial rules.
+- `docs/engineering/ENGINEERING-QUALITY-BASELINE.md` — thin M002+ quality index into the authorities above (not a second constitution).
 - `docs/engineering/AGENT-TOOLING.md` — canonical skills, generic AI-SDLC pinning and developer MCP/tool policy.
 - `.sdlc/context/` — project-owned portable SDLC metadata/context; never higher authority than source artifacts.
 - `.sdlc/graph/` — compact derived navigation index for low-context agent retrieval.

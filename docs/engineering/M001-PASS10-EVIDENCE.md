@@ -9,11 +9,11 @@
 
 | Field | Value |
 |---|---|
-| Frozen production head | `3f7b2d926dcab888e4dadc480033c1d137fd5ad7` |
+| Frozen production head | `d845c6ddbe86f20183186f1aa69f2293aa8356ba` |
 | Freeze date (UTC) | 2026-09-05 |
-| Gate note | Re-frozen on `master` after squash-merge of #775 (Pass 7 mark-test race, fuzz lockfile, PTY env drain/reap, Phase 1 honesty). Prior provisional freeze `e8431f0…` is superseded. |
+| Gate note | Re-frozen on master after squash-merge of #776 (Pass9 RSS warmups-before-baseline; macos_environment drain-before-reap; Pass 10 evidence/security). Soft RSS gate remains 768 KiB. |
 | Phase 1 status | FINDINGS DISPOSITION COMPLETE (#748–#760 closed; #764–#768 parked post-M001). File inventory bound; Phase 2 criterion evidence in progress on this freeze. |
-| Aggregate `make check` | PASS on freeze (`EXIT:0`, log `/tmp/pass10-evidence-3f7b2d9/make-check-final.log`) |
+| Aggregate `make check` | PASS on freeze (`EXIT:0`, log `/tmp/pass10-evidence-3f7b2d9/make-check-d845c6d.log`) |
 | Host (this evidence run) | Mahboob MacBook Pro (2), arm64 |
 | macOS | 26.5.2 (25F84) |
 | Rust toolchain | rustc/cargo 1.98.0 (88d9e12ae / 797e8a9bc) |
@@ -113,9 +113,9 @@ Expanded from `docs/milestones/MILESTONE-001.md` §15 and Pass 10 validation §6
 
 | Criterion | Verdict | Evidence class | Evidence |
 |---|---|---|---|
-| Registry/campaign parity (F-008) | PENDING | | |
-| Required production surfaces covered or N/A+proof | PENDING | | |
-| Milestone §6.9 grade (ci-smoke alone insufficient) | PENDING | | |
+| Registry/campaign parity (F-008) | PASS | controlled-host | 8/8 production fuzz targets `EXIT:0` @600s (`/tmp/pass10-evidence-3f7b2d9/fuzz/campaigns/`; `ALL_EXIT:0`). Campaigns run on `3f7b2d9` worktree; `3f7b2d9..d845c6d` delta is Pass9 RSS harness + `macos_environment` test only — fuzz crates/targets unchanged |
+| Required production surfaces covered or N/A+proof | PASS | controlled-host | Targets: `vt_byte_parser`, `parser_state_mutation`, `local_binary_protocol_decode`, `display_decode`, `display_state_machine`, `reconnect_resync_state_machine`, `pass7_protocol_decode`, `pass8_block_state_decode` |
+| Milestone §6.9 grade (ci-smoke alone insufficient) | PASS | controlled-host | Controlled 600s campaigns (not ci-smoke); summary `/tmp/pass10-evidence-3f7b2d9/fuzz/campaigns/summary.txt` |
 
 ### 6.10 Security and privacy
 
@@ -155,9 +155,9 @@ Expanded from `docs/milestones/MILESTONE-001.md` §15 and Pass 10 validation §6
 
 | Gate | Verdict | Notes |
 |---|---|---|
-| `make check` on freeze SHA | PASS | `make check` EXIT:0 on `3f7b2d926dcab888e4dadc480033c1d137fd5ad7` (`/tmp/pass10-evidence-3f7b2d9/make-check-final.log`) |
-| Targeted Pass 10 / Pass 9 suites | IN PROGRESS | Pass 9 merge-acceptance PASS after RSS harness fix (224/512≤768); §6.9 campaigns in progress (2/8 EXIT:0); lifecycle/F-006/Block order green |
-| Clean production demo | PENDING | |
+| `make check` on freeze SHA | PASS | `EXIT:0` on `d845c6ddbe86…` (`/tmp/pass10-evidence-3f7b2d9/make-check-d845c6d.log`; exit file `make-check-d845c6d.exit`) |
+| Targeted Pass 10 / Pass 9 suites | IN PROGRESS | Pass 9 merge-acceptance PASS after RSS harness fix (224/512≤768); §6.9 campaigns 8/8 EXIT:0; lifecycle/F-006/Block order green; Pass9 five-cohort release-qual still INCONCLUSIVE on freeze |
+| Clean production demo | PENDING | Clean tree at freeze; bootstrap+build EXIT:0; test/check re-run in progress with Homebrew Python 3.14 (system 3.9 lacks `tomllib`) |
 | Independent final review | PENDING | |
 
 ## Harness note (Pass 9 merge-acceptance RSS)
@@ -166,4 +166,4 @@ Expanded from `docs/milestones/MILESTONE-001.md` §15 and Pass 10 validation §6
 
 ## Final conclusion
 
-**M001 Pass 10:** `IN PROGRESS` — re-frozen at `3f7b2d926dcab888e4dadc480033c1d137fd5ad7`. Partial criterion evidence recorded; §6.9 campaigns + Pass 9 requal + clean demo + independent review still open.
+**M001 Pass 10:** `IN PROGRESS` — re-frozen at `d845c6ddbe86f20183186f1aa69f2293aa8356ba` after #776. `make check` + §6.9 controlled fuzz PASS on freeze lineage; clean production demo + Pass9 five-cohort requal + independent final review still open.

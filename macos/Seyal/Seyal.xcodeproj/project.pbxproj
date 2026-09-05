@@ -23,6 +23,7 @@
 		A1000000000000000000002F /* SeyalShellTranscriptCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000002F /* SeyalShellTranscriptCoordinator.swift */; };
 		A10000000000000000000030 /* SeyalShellChromeControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000030 /* SeyalShellChromeControls.swift */; };
 		A10000000000000000000031 /* SeyalLeftContextPressCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000031 /* SeyalLeftContextPressCoordinator.swift */; };
+		A10000000000000000000032 /* Pass663MetalScalability.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000032 /* Pass663MetalScalability.swift */; };
 		A1000000000000000000000D /* SeyalShellPreviewFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000F /* SeyalShellPreviewFactory.swift */; };
 		A10000000000000000000016 /* SeyalShellProductionFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000019 /* SeyalShellProductionFactory.swift */; };
 		C10000000000000000000001 /* SeyalShellComponentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000003 /* SeyalShellComponentTests.swift */; };
@@ -93,6 +94,7 @@
 		A2000000000000000000002F /* SeyalShellTranscriptCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeyalShellTranscriptCoordinator.swift; sourceTree = "<group>"; };
 		A20000000000000000000030 /* SeyalShellChromeControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeyalShellChromeControls.swift; sourceTree = "<group>"; };
 		A20000000000000000000031 /* SeyalLeftContextPressCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeyalLeftContextPressCoordinator.swift; sourceTree = "<group>"; };
+		A20000000000000000000032 /* Pass663MetalScalability.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Pass663MetalScalability.swift; sourceTree = "<group>"; };
 		A2000000000000000000000F /* SeyalShellPreviewFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeyalShellPreviewFactory.swift; sourceTree = "<group>"; };
 		C20000000000000000000001 /* SeyalTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SeyalTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		C20000000000000000000002 /* SeyalUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SeyalUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -198,6 +200,7 @@
 				A2000000000000000000002F /* SeyalShellTranscriptCoordinator.swift */,
 				A20000000000000000000030 /* SeyalShellChromeControls.swift */,
 				A20000000000000000000031 /* SeyalLeftContextPressCoordinator.swift */,
+				A20000000000000000000032 /* Pass663MetalScalability.swift */,
 				A2000000000000000000000F /* SeyalShellPreviewFactory.swift */,
 				A20000000000000000000019 /* SeyalShellProductionFactory.swift */,
 				A2000000000000000000001A /* CommandBlockBodyView.swift */,
@@ -411,6 +414,7 @@
 				A1000000000000000000002F /* SeyalShellTranscriptCoordinator.swift in Sources */,
 				A10000000000000000000030 /* SeyalShellChromeControls.swift in Sources */,
 				A10000000000000000000031 /* SeyalLeftContextPressCoordinator.swift in Sources */,
+				A10000000000000000000032 /* Pass663MetalScalability.swift in Sources */,
 				A1000000000000000000000D /* SeyalShellPreviewFactory.swift in Sources */,
 				A10000000000000000000016 /* SeyalShellProductionFactory.swift in Sources */,
 				A10000000000000000000017 /* CommandBlockBodyView.swift in Sources */,

@@ -232,7 +232,6 @@ enum Pass9MergeAcceptance {
       rendererBox: rendererBox,
       geometry: geometry
     )
-    // Detach to the SPEC quiescent point before baseline sampling.
     detach(
       mode: .gracefulDetach,
       bridge: bridge,
@@ -240,13 +239,28 @@ enum Pass9MergeAcceptance {
       renderer: renderer
     )
     waitQuiescent(bridge: bridge, coordinator: coordinator, renderer: renderer, timeout: 2)
-    let baseline = sample(
-      bridge: bridge,
-      coordinator: coordinator,
-      renderer: renderer,
-      runtimePid: runtimePid,
-      connectedExpectation: false
-    )
+
+    // Cold-start settle: align with Pass9ReleaseQualification. First attach after a
+    // Debug rebuild otherwise charges Metal/IMK one-time caches into
+    // client_rss_delta and false-fails the 768 KiB soft gate without proving a leak.
+    do {
+      try awaitConnected(bridge: bridge, coordinator: coordinator, timeout: 5)
+      try presentConnectedSurface(
+        bridge: bridge,
+        coordinator: coordinator,
+        renderer: renderer,
+        rendererBox: rendererBox,
+        geometry: geometry
+      )
+      detach(
+        mode: mode,
+        bridge: bridge,
+        coordinator: coordinator,
+        renderer: renderer
+      )
+      waitQuiescent(bridge: bridge, coordinator: coordinator, renderer: renderer, timeout: 2)
+      Thread.sleep(forTimeInterval: 1.0)
+    }
 
     var reconnectSamplesNs = [UInt64]()
     reconnectSamplesNs.reserveCapacity(options.cycles)
@@ -257,6 +271,8 @@ enum Pass9MergeAcceptance {
     var peakGpu = 0
     var geometryApplied = false
 
+    // Warmups before baseline so baseline/final compare post-steady-state
+    // quiescent RSS (SPEC-009 §16.1), matching release-qualification ordering.
     for _ in 0..<options.warmups {
       _ = try cycle(
         mode: mode,
@@ -274,6 +290,21 @@ enum Pass9MergeAcceptance {
         geometryApplied: &geometryApplied
       )
     }
+
+    detach(
+      mode: .gracefulDetach,
+      bridge: bridge,
+      coordinator: coordinator,
+      renderer: renderer
+    )
+    waitQuiescent(bridge: bridge, coordinator: coordinator, renderer: renderer, timeout: 2)
+    let baseline = sample(
+      bridge: bridge,
+      coordinator: coordinator,
+      renderer: renderer,
+      runtimePid: runtimePid,
+      connectedExpectation: false
+    )
 
     for _ in 0..<options.cycles {
       let elapsed = try cycle(

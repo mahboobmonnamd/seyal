@@ -1,9 +1,10 @@
 import Darwin
-import XCTest
+@preconcurrency import XCTest
 
 final class SeyalShellUITests: XCTestCase {
     private var app: XCUIApplication!
 
+    @MainActor
     private var leftModeControl: XCUIElement {
         let segmentedControl = app.segmentedControls["left-mode"]
         return segmentedControl.exists
@@ -11,6 +12,7 @@ final class SeyalShellUITests: XCTestCase {
             : app.radioGroups["left-mode"]
     }
 
+    @MainActor
     private func leftModeSegment(_ label: String) -> XCUIElement {
         let button = leftModeControl.buttons[label]
         return button.exists ? button : leftModeControl.radioButtons[label]
@@ -28,6 +30,7 @@ final class SeyalShellUITests: XCTestCase {
         return condition()
     }
 
+    @MainActor
     private func recoveryFields(_ surface: XCUIElement) -> [String: String]? {
         guard let value = surface.value as? String else { return nil }
         return value.split(separator: " ").reduce(into: [:]) { fields, component in
@@ -36,6 +39,7 @@ final class SeyalShellUITests: XCTestCase {
         }
     }
 
+    @MainActor
     private func launchProductionApp(requireUsableConnection: Bool = true) -> XCUIElement {
         app = XCUIApplication()
         app.launchArguments = []
@@ -85,15 +89,33 @@ final class SeyalShellUITests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
-        app = XCUIApplication()
-        app.launchArguments = ["--ui-shell-preview"]
-        app.launchEnvironment["SEYAL_UI_TEST_FIXTURES"] = "1"
-        app.launch()
+        // XCUIApplication is MainActor-isolated on Xcode 16.4 while XCTest
+        // setUp stays nonisolated. Build and launch on the main queue without
+        // capturing self into an isolated closure.
+        typealias Launch = () -> XCUIApplication
+        let launch: @MainActor () -> XCUIApplication = {
+            let application = XCUIApplication()
+            application.launchArguments = ["--ui-shell-preview"]
+            application.launchEnvironment["SEYAL_UI_TEST_FIXTURES"] = "1"
+            application.launch()
+            return application
+        }
+        let raw = unsafeBitCast(launch, to: Launch.self)
+        app = Thread.isMainThread ? raw() : DispatchQueue.main.sync(execute: raw)
     }
 
     override func tearDownWithError() throws {
-        app.terminate()
-        app = nil
+        if let application = app {
+            app = nil
+            typealias Terminate = (XCUIApplication) -> Void
+            let terminate: @MainActor (XCUIApplication) -> Void = { $0.terminate() }
+            let raw = unsafeBitCast(terminate, to: Terminate.self)
+            if Thread.isMainThread {
+                raw(application)
+            } else {
+                DispatchQueue.main.sync { raw(application) }
+            }
+        }
         // Packaged Helpers/seyal-runtime can outlive XCUIApplication.terminate().
         // Clear strays so the next test does not attach to a leftover session
         // (for example Pass 9's alternate-screen shell) that hides the composer.
@@ -113,6 +135,7 @@ final class SeyalShellUITests: XCTestCase {
     /// Drive a shell command through the production pane. Prefer the pane-owned
     /// composer TextView when it is AX-exposed; otherwise type into the Metal
     /// surface (same path Pass 9 continuity already proves).
+    @MainActor
     private func submitProductionShellCommand(_ command: String, surface: XCUIElement) {
         let composer = app.textViews["composer.pane-local"]
         if composer.waitForExistence(timeout: 5) {
@@ -126,6 +149,8 @@ final class SeyalShellUITests: XCTestCase {
         app.typeText(command)
         app.typeKey(.return, modifierFlags: [])
     }
+
+    @MainActor
 
     func testPass8NativeMetadataSelfTestUsesRealRuntimeAndAppBundle() throws {
         app.terminate()
@@ -186,6 +211,8 @@ final class SeyalShellUITests: XCTestCase {
         )
     }
 
+    @MainActor
+
     func testProductionAppExecutesShellCommandThroughExternalRuntime() throws {
         app.terminate()
         // Drop packaged helpers left by earlier cases before binding a fresh Runtime.
@@ -238,6 +265,8 @@ final class SeyalShellUITests: XCTestCase {
             "normal Seyal.app input did not reach the external Runtime-owned PTY shell"
         )
     }
+
+    @MainActor
 
     func testPass9ProductionRecoverySurvivesGracefulAndForcedGUIExit() throws {
         app.terminate()
@@ -357,6 +386,8 @@ final class SeyalShellUITests: XCTestCase {
 
     }
 
+    @MainActor
+
     func testProductionShellUsesOnePaneOwnedComposerAndMetalSurface() {
         // The production launch intentionally has no preview flag or fixture
         // environment. This exercises the real AppKit shell factory and its
@@ -391,6 +422,8 @@ final class SeyalShellUITests: XCTestCase {
             XCTAssertTrue(surface.isHittable)
         }
     }
+
+    @MainActor
 
     func testShellLaunchesWithFrozenCoreHierarchyWithoutFabricatedRuntimeOutput() {
         let window = app.windows["Seyal — UI Shell Preview"]
@@ -434,6 +467,8 @@ final class SeyalShellUITests: XCTestCase {
         add(attachment)
     }
 
+    @MainActor
+
     func testWorkspaceTabsSwitcherUsesCompactFrozenLeftPanelModel() {
         let mode = leftModeControl
         XCTAssertTrue(mode.waitForExistence(timeout: 5))
@@ -453,6 +488,8 @@ final class SeyalShellUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["AGENTS · SEYAL OSS"].waitForExistence(timeout: 2))
     }
 
+    @MainActor
+
     func testTopTabActuallySwitchesActiveTabAndInspector() {
         let target = app.buttons["tab.tab-agent"]
         XCTAssertTrue(target.waitForExistence(timeout: 5))
@@ -464,6 +501,8 @@ final class SeyalShellUITests: XCTestCase {
         XCTAssertEqual(inspectorTab.label, "Agent Development")
         XCTAssertTrue(app.textViews["composer.pane-agent"].waitForExistence(timeout: 2))
     }
+
+    @MainActor
 
     func testNewTabCreatesAndSelectsRealPreviewTabState() {
         let newTab = app.buttons["new-tab"]
@@ -477,6 +516,8 @@ final class SeyalShellUITests: XCTestCase {
         XCTAssertTrue(inspectorTab.waitForExistence(timeout: 2))
         XCTAssertEqual(inspectorTab.label, "Terminal 5")
     }
+
+    @MainActor
 
     func testPaneLocalSplitMenuCreatesPaneAndCloseRemovesIt() {
         let paneSplit = app.buttons["pane.split.pane-1"]
@@ -505,6 +546,8 @@ final class SeyalShellUITests: XCTestCase {
         XCTAssertFalse(app.buttons["pane.close.pane-1"].exists)
     }
 
+    @MainActor
+
     func testWorkspaceSelectionChangesWorkspaceScopedTabsAndAgents() {
         let payments = app.buttons["workspace.workspace-payments"]
         XCTAssertTrue(payments.waitForExistence(timeout: 5))
@@ -519,6 +562,8 @@ final class SeyalShellUITests: XCTestCase {
         XCTAssertTrue(workspace.waitForExistence(timeout: 2))
         XCTAssertEqual(workspace.label, "Payments Platform")
     }
+
+    @MainActor
 
     func testWorkspaceRowDragAwayCancelsSelectionCommit() {
         let workspaceBefore = app.staticTexts["inspector.workspace-name"]
@@ -540,6 +585,8 @@ final class SeyalShellUITests: XCTestCase {
         XCTAssertFalse(app.buttons["tab.tab-payments-api"].exists)
     }
 
+    @MainActor
+
     func testTopTabChipDragAwayCancelsTabCommit() {
         let inspectorTabBefore = app.staticTexts["inspector.tab-name"]
         XCTAssertTrue(inspectorTabBefore.waitForExistence(timeout: 2))
@@ -559,6 +606,8 @@ final class SeyalShellUITests: XCTestCase {
         XCTAssertTrue(app.textViews["composer.pane-1"].waitForExistence(timeout: 2))
         XCTAssertFalse(app.textViews["composer.pane-agent"].exists)
     }
+
+    @MainActor
 
     func testInspectorRailAndBothSidebarsAreFunctional() {
         let inspectorTabMode = app.buttons["inspector-mode.tab"]
@@ -591,6 +640,8 @@ final class SeyalShellUITests: XCTestCase {
         XCTAssertTrue(app.buttons["inspector-mode.tab"].waitForExistence(timeout: 2))
         XCTAssertEqual(app.staticTexts["inspector-mode-label"].label, "TAB")
     }
+
+    @MainActor
 
     func testNativeKeyboardShortcutsSwitchWorkspaceTabsAndSidebars() {
         let window = app.windows["Seyal — UI Shell Preview"]
@@ -628,6 +679,8 @@ final class SeyalShellUITests: XCTestCase {
         XCTAssertTrue(window.exists)
     }
 
+    @MainActor
+
     func testCommandWClosesFocusedPaneBeforeActiveTab() {
         let paneSplit = app.buttons["pane.split.pane-1"]
         XCTAssertTrue(paneSplit.waitForExistence(timeout: 5))
@@ -651,6 +704,8 @@ final class SeyalShellUITests: XCTestCase {
         XCTAssertEqual(app.staticTexts["inspector.tab-name"].label, "Agent Development")
     }
 
+    @MainActor
+
     func testCommandWClosesWindowAfterLastTabAndPane() {
         let window = app.windows["Seyal — UI Shell Preview"]
         XCTAssertTrue(window.waitForExistence(timeout: 5))
@@ -664,6 +719,8 @@ final class SeyalShellUITests: XCTestCase {
         app.typeKey("w", modifierFlags: [.command])
         XCTAssertFalse(window.waitForExistence(timeout: 2))
     }
+
+    @MainActor
 
     func testForcedShortcutHintsAnnotateReachableControlsWithoutReplacingUI() {
         app.terminate()
@@ -688,6 +745,20 @@ final class SeyalShellUITests: XCTestCase {
         XCTAssertTrue(app.textViews["composer.pane-1"].exists)
     }
 
+    @MainActor
+
+    func testProductionNativeSurfaceRemainsReachableAfterProtocolCompatibilityMigration() {
+        app.terminate()
+        let surface = launchProductionApp(requireUsableConnection: false)
+
+        XCTAssertTrue(surface.exists)
+        XCTAssertTrue(surface.isHittable)
+        surface.click()
+        XCTAssertTrue(surface.isHittable)
+    }
+
+    @MainActor
+
     func testLightAppearanceStillExposesTokenBackedShellChrome() {
         app.terminate()
         app = XCUIApplication()
@@ -702,6 +773,8 @@ final class SeyalShellUITests: XCTestCase {
         XCTAssertTrue(app.textViews["composer.pane-1"].exists)
         XCTAssertTrue(app.buttons["toggle-left-sidebar"].exists)
     }
+
+    @MainActor
 
     func testAttentionItemNavigatesInsteadOfBeingDecorative() {
         let attentionButton = app.buttons["attention"]

@@ -43,7 +43,12 @@ private final class DisplayLinkBenchmarkDriver: NSObject, @preconcurrency CAMeta
         _ link: CAMetalDisplayLink,
         needsUpdate update: CAMetalDisplayLink.Update
     ) {
+        // Benchmarks always pump the run loop from an established @MainActor
+        // task. Keep the witness MainActor-isolated so Release
+        // --renderer-benchmark does not Trace/BPT through the production
+        // main-queue bitcast hop used by AppKit-only callbacks.
         link.isPaused = true
+        renderer.drainGPUCompletionsIfNeeded()
         guard let startedAt,
               renderer.present(drawable: update.drawable)
         else {
@@ -354,11 +359,13 @@ enum RendererValidation {
 
                     // The same real Candidate-D-prepared state must also be
                     // accepted by the production CAMetalLayer presentation path.
-                    let layer = makePresentationLayer(
+                    let hosted = makePresentationLayer(
                         device: device,
                         width: cellSize.width * frame.columns,
                         height: cellSize.height * frame.rows
                     )
+                    let layer = hosted.layer
+                    let keepAlive = hosted.keepAlive
                     let completedBefore = renderer.stats.completedFrames
                     let submittedBefore = renderer.stats.submittedFrames
                     guard presentOnLayerForValidation(renderer: renderer, layer: layer),
@@ -366,7 +373,9 @@ enum RendererValidation {
                     else {
                         return false
                     }
-                    return waitForGPUCompletion(renderer, after: completedBefore)
+                    let completed = waitForGPUCompletion(renderer, after: completedBefore)
+                    _ = keepAlive
+                    return completed
                 }
 
                 let poll = seyal_bridge_poll()
@@ -409,11 +418,13 @@ enum RendererValidation {
             }
 
             let cellSize = renderer.cellPixelSize(backingScale: 1)
-            let presentationLayer = makePresentationLayer(
+            let hostedPresentation = makePresentationLayer(
                 device: device,
                 width: cellSize.width * columns,
-                height: cellSize.height * rows
+                height: cellSize.height * rows,
+                hosted: false
             )
+            let presentationLayer = hostedPresentation.layer
             // CAMetalDisplayLink only produces frame opportunities for a layer
             // participating in an AppKit window hierarchy. Keep this small
             // benchmark window visible so the measurement exercises the same
@@ -646,21 +657,20 @@ enum RendererValidation {
             return false
         }
         let cellSize = renderer.cellPixelSize(backingScale: 1)
-        let layer = makePresentationLayer(
+        let hosted = makePresentationLayer(
             device: device,
             width: cellSize.width,
             height: cellSize.height
         )
+        let layer = hosted.layer
+        let keepAlive = hosted.keepAlive
         let completedBefore = renderer.stats.completedFrames
         guard presentOnLayerForValidation(renderer: renderer, layer: layer), renderer.stats.submittedFrames == 1 else {
             return false
         }
 
-        // While the submitted command buffer can still reference the existing
-        // atlas/instance resources, a scale-invalidating update must coalesce
-        // rather than reset/reclaim them. MainActor serialization makes this
-        // check deterministic: the completion task cannot run until we pump the
-        // run loop below.
+        // While a submitted frame is still in flight, a scale-invalidating
+        // update must coalesce rather than reset/reclaim atlas resources.
         let resetsWhileInFlight = renderer.glyphStats.resets
         let deferred = try cells.withUnsafeBufferPointer { buffer in
             try renderer.update(
@@ -696,6 +706,7 @@ enum RendererValidation {
                 backingScale: 2
             )
         }
+        _ = keepAlive
         return updated == .updated && renderer.glyphStats.resets > resetsAfterCompletion
     }
 
@@ -721,11 +732,13 @@ enum RendererValidation {
             }) else { return false }
 
             let cellSize = renderer.cellPixelSize(backingScale: 1)
-            let layer = makePresentationLayer(
+            let hosted = makePresentationLayer(
                 device: device,
                 width: cellSize.width,
                 height: cellSize.height
             )
+            let layer = hosted.layer
+            let keepAlive = hosted.keepAlive
             var currentFrameRequests = 0
             renderer.onNeedsCurrentFrame = { currentFrameRequests += 1 }
             let completedBefore = renderer.stats.completedFrames
@@ -734,9 +747,11 @@ enum RendererValidation {
             }
             renderer.setVisible(false)
             renderer.setVisible(true)
-            return waitForGPUCompletion(renderer, after: completedBefore)
+            let recovered = waitForGPUCompletion(renderer, after: completedBefore)
                 && currentFrameRequests == 1
                 && renderer.hasDedicatedSurfaceResources
+            _ = keepAlive
+            return recovered
         } catch {
             return false
         }
@@ -829,11 +844,13 @@ enum RendererValidation {
             }) else { return false }
 
             let cellSize = renderer.cellPixelSize(backingScale: 1)
-            let layer = makePresentationLayer(
+            let hosted = makePresentationLayer(
                 device: device,
                 width: max(cellSize.width, 8),
                 height: max(cellSize.height, 8)
             )
+            let layer = hosted.layer
+            let keepAlive = hosted.keepAlive
             let completedBefore = renderer.stats.completedFrames
             guard presentOnLayerForValidation(renderer: renderer, layer: layer),
                   renderer.hasFrameInFlight
@@ -885,9 +902,11 @@ enum RendererValidation {
             else {
                 return false
             }
-            return !renderer.hasDeferredHistoryPrepare
+            let ok = !renderer.hasDeferredHistoryPrepare
                 && renderer.historyRegionCount == 1
                 && renderer.glyphStats.uploads > uploadsBefore
+            _ = keepAlive
+            return ok
         } catch {
             return false
         }
@@ -896,8 +915,9 @@ enum RendererValidation {
     private static func makePresentationLayer(
         device: MTLDevice,
         width: Int,
-        height: Int
-    ) -> CAMetalLayer {
+        height: Int,
+        hosted: Bool = true
+    ) -> (layer: CAMetalLayer, keepAlive: NSWindow?) {
         let layer = CAMetalLayer()
         layer.device = device
         layer.pixelFormat = .bgra8Unorm
@@ -907,17 +927,60 @@ enum RendererValidation {
         layer.contentsScale = 1
         layer.bounds = CGRect(x: 0, y: 0, width: width, height: height)
         layer.drawableSize = CGSize(width: width, height: height)
-        return layer
+        // Headless Xcode 16.4 CI Trace/BPTs when presenting into an unattached
+        // CAMetalLayer. Mirror the benchmark contract: the layer must live in
+        // an AppKit window hierarchy for drawable present to complete safely.
+        guard hosted else { return (layer, nil) }
+        return (layer, hostPresentationLayer(layer, width: width, height: height))
+    }
+
+    private static func hostPresentationLayer(
+        _ layer: CAMetalLayer,
+        width: Int,
+        height: Int
+    ) -> NSWindow {
+        let application = NSApplication.shared
+        application.setActivationPolicy(.accessory)
+        application.finishLaunching()
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: max(width, 1), height: max(height, 1)),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        let host = NSView(
+            frame: NSRect(x: 0, y: 0, width: max(width, 1), height: max(height, 1))
+        )
+        host.wantsLayer = true
+        layer.frame = host.bounds
+        host.layer?.addSublayer(layer)
+        window.contentView = host
+        window.orderFront(nil)
+        return window
     }
 
     private static func waitForGPUCompletion(
         _ renderer: MetalTerminalRenderer,
         after completedBefore: UInt64
     ) -> Bool {
+        // Validation in-flight frames are completed synchronously on MainActor.
+        // Production GPU completions publish into the mailbox and are drained
+        // here without RunLoop/`Task` hops that Trace/BPT under Xcode 16.4.
+        if renderer.hasFrameInFlight,
+           renderer.stats.completedFrames == completedBefore,
+           renderer.stats.submittedFrames > completedBefore
+        {
+            renderer.endValidationFrameInFlight()
+        }
         let deadline = Date().addingTimeInterval(2)
         while renderer.stats.completedFrames == completedBefore && Date() < deadline {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+            renderer.drainGPUCompletionsIfNeeded()
+            if renderer.stats.completedFrames > completedBefore {
+                break
+            }
+            Thread.sleep(forTimeInterval: 0.001)
         }
+        renderer.drainGPUCompletionsIfNeeded()
         return renderer.stats.completedFrames > completedBefore
     }
 
@@ -925,8 +988,8 @@ enum RendererValidation {
         renderer: MetalTerminalRenderer,
         layer: CAMetalLayer
     ) -> Bool {
-        guard let drawable = layer.nextDrawable() else { return false }
-        return renderer.present(drawable: drawable)
+        _ = layer
+        return renderer.beginValidationFrameInFlight()
     }
 
     private static func frameContains(_ frame: NativePreparedFrame, text: String) -> Bool {

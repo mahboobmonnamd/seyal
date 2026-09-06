@@ -281,7 +281,7 @@ private enum TerminalNativeKeyClassifier {
 }
 
 @MainActor
-final class InteractiveMetalSurfaceView: MetalSurfaceView, @MainActor NSTextInputClient {
+final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
   private var composition = CompositionDocument()
   private var lastLayoutSample: TerminalLayoutSample?
   private var nativeFailure: NativeInputFailure?
@@ -465,24 +465,54 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @MainActor NSTextInpu
     refreshFailurePresentation()
   }
 
-  func hasMarkedText() -> Bool {
-    composition.hasMarkedText
+  nonisolated func hasMarkedText() -> Bool {
+    // AppKit invokes NSTextInputClient over ObjC on the main run loop without
+    // a Swift MainActor task. MainActor-isolated witnesses Trace/BPT under
+    // Xcode 16.4 when production attach restores first-responder/IME.
+    var result = false
+    seyalRunAsMainActorFromMainQueue {
+      result = self.composition.hasMarkedText
+    }
+    return result
   }
 
-  func markedRange() -> NSRange {
-    composition.markedRange
+  nonisolated func markedRange() -> NSRange {
+    var result = NSRange(location: NSNotFound, length: 0)
+    seyalRunAsMainActorFromMainQueue {
+      result = self.composition.markedRange
+    }
+    return result
   }
 
-  func selectedRange() -> NSRange {
-    composition.selectedRange
+  nonisolated func selectedRange() -> NSRange {
+    var result = NSRange(location: 0, length: 0)
+    seyalRunAsMainActorFromMainQueue {
+      result = self.composition.selectedRange
+    }
+    return result
   }
 
-  func setMarkedText(
+  nonisolated func setMarkedText(
     _ string: Any,
     selectedRange: NSRange,
     replacementRange: NSRange
   ) {
-    guard let text = Self.plainString(from: string) else {
+    let plain = Self.extractPlainString(from: string)
+    seyalRunAsMainActorFromMainQueue {
+      self.applySetMarkedText(
+        plain,
+        selectedRange: selectedRange,
+        replacementRange: replacementRange
+      )
+    }
+  }
+
+  private func applySetMarkedText(
+    _ text: String?,
+    selectedRange: NSRange,
+    replacementRange: NSRange
+  ) {
+    guard let text else {
       failComposition(.unsupportedReplacementRange)
       return
     }
@@ -502,7 +532,13 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @MainActor NSTextInpu
     }
   }
 
-  func unmarkText() {
+  nonisolated func unmarkText() {
+    seyalRunAsMainActorFromMainQueue {
+      self.applyUnmarkText()
+    }
+  }
+
+  private func applyUnmarkText() {
     guard composition.hasMarkedText else { return }
     let text = composition.text
     composition.clear()
@@ -510,24 +546,35 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @MainActor NSTextInpu
     inputContext?.invalidateCharacterCoordinates()
   }
 
-  func validAttributesForMarkedText() -> [NSAttributedString.Key] {
+  nonisolated func validAttributesForMarkedText() -> [NSAttributedString.Key] {
     []
   }
 
-  func attributedSubstring(
+  nonisolated func attributedSubstring(
     forProposedRange range: NSRange,
     actualRange: NSRangePointer?
   ) -> NSAttributedString? {
-    guard let (substring, returnedRange) = composition.attributedSubstring(for: range) else {
-      actualRange?.pointee = NSRange(location: NSNotFound, length: 0)
-      return nil
+    nonisolated(unsafe) var substring: NSAttributedString?
+    var returnedRange = NSRange(location: NSNotFound, length: 0)
+    seyalRunAsMainActorFromMainQueue {
+      if let (value, range) = self.composition.attributedSubstring(for: range) {
+        substring = value
+        returnedRange = range
+      }
     }
     actualRange?.pointee = returnedRange
     return substring
   }
 
-  func insertText(_ string: Any, replacementRange: NSRange) {
-    guard let text = Self.plainString(from: string),
+  nonisolated func insertText(_ string: Any, replacementRange: NSRange) {
+    let plain = Self.extractPlainString(from: string)
+    seyalRunAsMainActorFromMainQueue {
+      self.applyInsertText(plain, replacementRange: replacementRange)
+    }
+  }
+
+  private func applyInsertText(_ text: String?, replacementRange: NSRange) {
+    guard let text,
       composition.validatesReplacementRange(replacementRange)
     else {
       failComposition(.unsupportedReplacementRange)
@@ -539,28 +586,34 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @MainActor NSTextInpu
     inputContext?.invalidateCharacterCoordinates()
   }
 
-  func firstRect(
+  nonisolated func firstRect(
     forCharacterRange range: NSRange,
     actualRange: NSRangePointer?
   ) -> NSRect {
-    let valid: NSRange?
-    if composition.hasMarkedText {
-      valid = composition.validatedCoordinateRange(range)
-    } else if range.location == 0 && range.length == 0 {
-      valid = range
-    } else {
-      valid = nil
+    var result = NSRect.zero
+    var returnedRange = NSRange(location: NSNotFound, length: 0)
+    seyalRunAsMainActorFromMainQueue {
+      let valid: NSRange?
+      if self.composition.hasMarkedText {
+        valid = self.composition.validatedCoordinateRange(range)
+      } else if range.location == 0 && range.length == 0 {
+        valid = range
+      } else {
+        valid = nil
+      }
+      returnedRange = valid ?? NSRange(location: NSNotFound, length: 0)
+      result = self.terminalCandidateAnchorRectInScreenCoordinates()
     }
-    actualRange?.pointee = valid ?? NSRange(location: NSNotFound, length: 0)
-    return terminalCandidateAnchorRectInScreenCoordinates()
+    actualRange?.pointee = returnedRange
+    return result
   }
 
-  func characterIndex(for point: NSPoint) -> Int {
+  nonisolated func characterIndex(for point: NSPoint) -> Int {
     _ = point
     return NSNotFound
   }
 
-  override func doCommand(by selector: Selector) {
+  nonisolated override func doCommand(by selector: Selector) {
     // The event has reached the input-system command seam. Pass 7 never
     // invokes arbitrary editing selectors against terminal/history state.
     _ = selector
@@ -738,14 +791,21 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @MainActor NSTextInpu
     }
   }
 
-  private static func plainString(from value: Any) -> String? {
-    if let value = value as? NSAttributedString {
-      return value.string
+  private nonisolated static func extractPlainString(from value: Any) -> String? {
+    if let text = value as? String {
+      return text
+    }
+    if let attributed = value as? NSAttributedString {
+      return attributed.string
     }
     if let value = value as? NSString {
       return value as String
     }
     return nil
+  }
+
+  private static func plainString(from value: Any) -> String? {
+    extractPlainString(from: value)
   }
 
   static func pass7InputSelfTest() -> Bool {

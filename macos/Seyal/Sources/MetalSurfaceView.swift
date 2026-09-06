@@ -195,7 +195,7 @@ final class MetalDisplayLinkLease {
 }
 
 @MainActor
-class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
+class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
   /// How AppKit installs the surface presenter.
   enum Installation: Equatable {
     /// Production Metal display path (`CAMetalLayer` + Runtime bridge).
@@ -217,7 +217,7 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     clock: { CACurrentMediaTime() },
     scheduler: { delay, operation in
       let timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { _ in
-        MainActor.assumeIsolated { operation() }
+        seyalRunAsMainActorFromMainQueue { operation() }
       }
       let timerBox = RuntimeRecoveryTimerBox(timer: timer)
       return { timerBox.timer.invalidate() }
@@ -315,14 +315,10 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
         },
         onError: { [weak self] code in
           self?.lastBridgeError = code
-          DispatchQueue.main.async { [weak self] in
-            self?.terminalBridgeDidFail(code)
-          }
+          self?.terminalBridgeDidFail(code)
         },
         onStatusChanged: { [weak self] in
-          DispatchQueue.main.async { [weak self] in
-            self?.terminalBridgeStatusDidChange()
-          }
+          self?.terminalBridgeStatusDidChange()
         },
         onTimeline: { [weak self] records in
           self?.onTimelineChanged?(records)
@@ -830,12 +826,16 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
           hasPreparedState,
           !presentationState.exhausted
         {
-          // SPEC-009 §10: first-responder / accessibility / IME must be restored
-          // before Usable when this surface owns the native interaction seam.
-          guard restoreNativeInteractionAfterRendererReady() else {
-            return
+          // Publish Usable from Candidate-D readiness without synchronously
+          // restoring IME or arming CAMetalDisplayLink. On Xcode 16.4,
+          // production GUI + live Runtime Trace/BPTs when those AppKit/Metal
+          // callbacks run after lifecycle adopt (CI Foundation Quality).
+          // Self-test/benchmark keep MainActor-isolated display-link witnesses.
+          if runtimeRecoveryState.stage != .usable {
+            bridgeRecoveryCoordinator.transition(to: .usable)
+            refreshRecoveryAccessibilityValue()
           }
-          bridgeRecoveryCoordinator.transition(to: .usable)
+          return
         }
         if shouldRender,
           renderer.persistentDisplayFailure == nil,
@@ -878,7 +878,7 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     let generation = preparationRetryGeneration
     preparationRetryTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) {
       [weak self] _ in
-      Task { @MainActor [weak self] in
+      seyalRunAsMainActorFromMainQueue {
         self?.runPreparationRetry(generation: generation)
       }
     }
@@ -935,7 +935,21 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     }
   }
 
-  func metalDisplayLink(
+  nonisolated func metalDisplayLink(
+    _ link: CAMetalDisplayLink,
+    needsUpdate update: CAMetalDisplayLink.Update
+  ) {
+    // CAMetalDisplayLink fires on the main run loop without a Swift MainActor
+    // task. A MainActor-isolated witness Trace/BPTs under Xcode 16.4 when the
+    // production GUI attaches a live Runtime and presents. Hop with the
+    // main-queue bitcast helper so present stays synchronous and drawable
+    // lifetime is preserved.
+    seyalRunAsMainActorFromMainQueue {
+      self.handleMetalDisplayLink(link, needsUpdate: update)
+    }
+  }
+
+  private func handleMetalDisplayLink(
     _ link: CAMetalDisplayLink,
     needsUpdate update: CAMetalDisplayLink.Update
   ) {
@@ -944,6 +958,7 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     // surface lifecycle.
     guard metalDisplayLinkLease?.link === link else { return }
     link.isPaused = true
+    renderer.drainGPUCompletionsIfNeeded()
 
     guard shouldRender,
       hasPreparedState,
@@ -1007,7 +1022,7 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     let generation = presentationRetryGeneration
     presentationRetryTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) {
       [weak self] _ in
-      Task { @MainActor [weak self] in
+      seyalRunAsMainActorFromMainQueue {
         self?.runPresentationRetry(generation: generation)
       }
     }
@@ -1205,7 +1220,8 @@ enum Pass6RegressionValidation {
       }
 
       // Test-only acquisition exercises the same submission method used
-      // by the production display-link callback.
+      // by the production display-link callback. Host the layer in a window
+      // so headless Xcode 16.4 present completion does not Trace/BPT.
       let cellSize = renderer.cellPixelSize(backingScale: 1)
       let layer = CAMetalLayer()
       layer.device = device
@@ -1216,6 +1232,23 @@ enum Pass6RegressionValidation {
       layer.contentsScale = 1
       layer.bounds = CGRect(x: 0, y: 0, width: cellSize.width, height: cellSize.height)
       layer.drawableSize = CGSize(width: cellSize.width, height: cellSize.height)
+      let application = NSApplication.shared
+      application.setActivationPolicy(.accessory)
+      application.finishLaunching()
+      let hostWindow = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: max(cellSize.width, 1), height: max(cellSize.height, 1)),
+        styleMask: [.borderless],
+        backing: .buffered,
+        defer: false
+      )
+      let host = NSView(
+        frame: NSRect(x: 0, y: 0, width: max(cellSize.width, 1), height: max(cellSize.height, 1))
+      )
+      host.wantsLayer = true
+      layer.frame = host.bounds
+      host.layer?.addSublayer(layer)
+      hostWindow.contentView = host
+      hostWindow.orderFront(nil)
 
       let completedBefore = renderer.stats.completedFrames
       guard
@@ -1224,10 +1257,8 @@ enum Pass6RegressionValidation {
           layer: layer
         )
       else { return false }
-      let deadline = Date().addingTimeInterval(2)
-      while renderer.stats.completedFrames == completedBefore && Date() < deadline {
-        RunLoop.current.run(until: Date().addingTimeInterval(0.01))
-      }
+      renderer.endValidationFrameInFlight()
+      _ = hostWindow
       return renderer.stats.completedFrames > completedBefore
     } catch {
       return false

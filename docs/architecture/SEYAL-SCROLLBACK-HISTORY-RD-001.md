@@ -4,100 +4,148 @@
 - **Issue:** #685
 - **Parent:** #664
 - **Purpose:** evidence for the permanent M002 scrollback, retained-history and resize-reflow architecture
-- **Prototype PR:** #803 (`spike/685-m002-scrollback-rd`) — isolated, non-mergeable, must be closed rather than merged
-- **Evidence run:** GitHub Actions run `34000268655`, artifact digest `sha256:7bc9eed7672e3248da3a9a651fbcd9711aee192acdcb403c1776553fc5ee7a51`
+- **Prototype PR:** #803 (`spike/685-m002-scrollback-rd`) — isolated, non-mergeable, close rather than merge
+- **Final evidence run:** GitHub Actions `34012058371`
+- **Final artifact digest:** `sha256:2157590d29c48d8f3830e4e29c29bf49ef4ffed2af7b19f0c72639e7f4a8d8db`
 
 ## Question
 
 Choose a retained-history representation and reflow model that extends the one authoritative `TerminalState` without introducing a second terminal/history authority, remains bounded for many detached executions, preserves durable content anchors through visual reflow, and leaves a clean asynchronous seam for later cold persistence.
 
-This R&D does **not** choose Seyal's final grapheme/width payload. Issue #684 owns that question. The experiments use a compact synthetic atom containing scalar/style/width/combining metadata only so representation shape and scaling can be compared without pre-empting #684.
+This R&D does **not** choose Seyal's final grapheme/width payload. Issue #684 owns that question. Synthetic experiments use a compact atom carrying scalar/style/width/combining metadata so representation shape can be compared without pre-empting #684.
 
 ## Existing authority and current limitation
 
-Existing architecture constrains the solution:
+Existing architecture constrains the answer:
 
 - `TerminalState` remains the single canonical terminal semantic owner (ADR-004).
 - `LineId` is terminal-lifetime, monotonic and non-reused; viewport row number is not a durable history/Block anchor (ADR-004 / SPEC-001).
 - completed scrollback is cold/evictable and must not stay hot merely because an execution is detached (ADR-007).
 - persistence, indexing, agents, Blocks and presentation may not synchronously gate `PTY -> VT/parser -> TerminalState -> damage` (ADR-007).
 
-The current M001 seam is intentionally temporary: primary history is a fixed 8,192-entry `VecDeque<(LineId, Vec<Cell>)>` of visual rows, and resize preserves/truncates the existing rectangular rows rather than performing production logical reflow.
+M001 intentionally keeps a temporary primary history: a fixed 8,192-entry `VecDeque<(LineId, Vec<Cell>)>` of visual rows. M001 resize is rectangular/non-reflowing and the current history projection does not expose hard-break versus soft-autowrap lineage. That representation therefore cannot be the permanent M002 reflow authority.
 
 ## Candidates exercised
 
 ### A. Visual-row snapshots
 
-A bounded deque of 80-column visual fragments. Logical identity is repeated across fragments and eviction removes all fragments belonging to the oldest retained logical line.
-
-This approximates extending today's visual-row-oriented history representation.
+A bounded deque of width-derived visual fragments. This approximates extending M001's visual-row history.
 
 ### B. Per-logical-line ring
 
-A bounded `VecDeque` with one variable-length allocation per logical line.
+A bounded deque with one variable-length allocation per logical source line. This is the simple logical-history reference baseline.
 
-This is the simplest correct logical-history baseline.
+### C. Compact immutable segmented source history + mutable tail
 
-### C. Immutable segmented logical history + mutable tail
+A mutable append tail seals into immutable segments containing compact source-line metadata and contiguous payload. Segment metadata preserves source `LineId` ranges/offsets for lookup and later persistence.
 
-A mutable append tail is periodically sealed into immutable segments containing compact line metadata plus a contiguous atom arena. Segments carry `LineId` ranges for indexing and are evicted as units.
+The first candidate used a fixed 64 logical lines per segment only to expose allocation/index behavior. Calibration proved that fixed line count is the wrong permanent boundary, so ADR-010 selects byte-targeted segments instead.
 
-The first experiment used 64 logical lines per segment to expose the allocation/indexing behavior. A second calibration replaced fixed line count with a target segment payload because terminal line lengths are workload-dependent and potentially very uneven.
+## Real retained-VT fixture replay
 
-## Correctness fixtures
+The final run replayed Seyal's existing retained M001 VT corpus through the real `seyal_terminal::TerminalState`, then reconstructed already-retained primary rows through ring and compact segmented candidate storage.
 
-The isolated harness exercised:
+Corpus:
 
-- logical lines spanning eight 80-column rows;
-- wide-cell metadata and combining/grapheme-side metadata;
-- non-contiguous `LineId`s simulating IDs consumed by alternate-screen lifetimes;
-- repeated 40/48/64/80/96/132/160-column resize/reflow oscillation;
-- search over retained logical content;
-- selection anchors represented as `(LineId, atom offset)` across reflow;
-- bounded whole-logical-line / whole-segment eviction;
-- 10k, 100k and 1M retained-atom workloads;
-- 1, 10, 50 and 100 hidden/detached execution populations;
-- raw serialization plus a deliberately simple space-RLE persistence/compression seam.
+- `m001-basic`
+- `m001-deferred-osc`
+- `m001-ecma48-core`
+- `m001-ecma48-erase-save`
+- `m001-xterm-private`
+- `m001-utf8`
 
-The prototype is synthetic evidence, not conformance proof. Production implementation must repeat correctness against repository VT fixtures and the accepted #684 text-unit/width model.
+Across 128 replay rounds:
 
-## Core measurements
+- retained primary rows: `639`;
+- retained cells: `5,112`;
+- styled retained cells: `4,328`;
+- non-ASCII retained cells: `127`;
+- non-contiguous retained `LineId` gaps: `127`;
+- 512-cell-target compact segments: `10`;
+- ring reconstruction exactly matched canonical retained `(LineId, Cell[])` rows;
+- segmented reconstruction exactly matched canonical retained `(LineId, Cell[])` rows;
+- pre-existing retained payload survived resize oscillation unchanged;
+- alternate-screen content remained excluded from primary history.
 
-Runner: Linux x86_64 GitHub-hosted VM, Rust `1.98.0`. RSS is process delta from a fresh child per candidate/size. Absolute numbers are allocator/runner dependent; relative slopes and representation behavior are the useful evidence.
+The replay exposed the key M002 schema requirement: M001 retained rows do **not** expose whether adjacent rows are connected by soft autowrap. Production M002 must record `HardBreak` versus `SoftWrap` in canonical terminal state at mutation time; reconstructing it later from row text or geometry is not correct.
 
-| candidate | target atoms | retained atoms | RSS KiB | append ms | representation allocation units | reflow p95 us | search p95 us | selection ns/op |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| visual rows | 10,000 | 9,880 | 316 | 0.24 | 175 | 16.06 | 7.62 | 32 |
-| logical ring | 10,000 | 9,880 | 196 | 0.11 | 91 | 14.32 | 6.85 | 21 |
-| segmented 64-line | 10,000 | 3,817 | 228 | 0.13 | 6 | 5.41 | 2.73 | 10 |
-| visual rows | 100,000 | 99,936 | 2,244 | 2.29 | 1,683 | 175.46 | 93.00 | 322 |
-| logical ring | 100,000 | 99,936 | 1,288 | 1.05 | 856 | 153.12 | 68.82 | 157 |
-| segmented 64-line | 100,000 | 93,938 | 1,340 | 1.11 | 30 | 137.20 | 64.91 | 24 |
-| visual rows | 1,000,000 | 999,940 | 20,196 | 22.12 | 16,636 | 2,818.35 | 1,769.21 | 3,892 |
-| logical ring | 1,000,000 | 999,940 | 12,196 | 10.53 | 8,466 | 1,484.51 | 720.70 | 1,441 |
-| segmented 64-line | 1,000,000 | 993,877 | 12,444 | 11.54 | 268 | 1,457.40 | 740.81 | 71 |
+## Synthetic correctness/stress coverage
 
-At the 1M scale, visual-row snapshots used about **66% more RSS** than the logical-line ring (`20,196` vs `12,196` KiB), took about **2.1x** the append time, and had materially worse reflow/search latency.
+The isolated representation harness additionally exercised behavior not yet expressible by M001's scalar/visual-row history API:
 
-The logical ring and segmented representation had similar payload-level RSS and append/reflow/search behavior at large scale, but segmentation reduced representation allocation units from `8,466` to `268` in the 1M case and made `LineId`-range anchor lookup substantially cheaper. This is the main reason to prefer segmentation over a per-line heap/deque as the permanent shape.
+- one logical chain spanning eight 80-column rows;
+- wide-cell and combining/grapheme-side metadata;
+- non-contiguous `LineId`s simulating alternate-screen allocator consumption;
+- repeated 40/48/64/80/96/132/160-column reflow oscillation;
+- search across retained logical content;
+- selection anchors as `(LineId, canonical-unit offset)` surviving reflow;
+- bounded eviction;
+- 10k/100k/1M retained-unit scales;
+- 1/10/50/100 detached/hidden execution populations;
+- raw serialization plus a simple space-RLE cold-compression seam.
 
-### Hidden/detached population slope
+Synthetic wide/grapheme metadata is representation stress only; #684 remains semantic authority for real Unicode/width behavior.
 
-Each execution retained approximately 10k atoms.
+## Representation latency/allocation evidence
 
-| candidate | executions | retained atoms | RSS KiB | build ms |
-|---|---:|---:|---:|---:|
-| visual rows | 100 | 988,000 | 20,476 | 22.90 |
-| logical ring | 100 | 988,000 | 12,360 | 11.00 |
-| segmented 64-line | 100 | 381,700 | 6,720 | 9.16 |
+Runner: Linux x86_64 GitHub-hosted VM, Rust `1.98.0`. Numbers are comparative R&D evidence, not production release thresholds.
 
-The 64-line segmented row is **not** a like-for-like memory win at 10k per execution because it retained only 38.17% of the requested payload. That result exposed an eviction-granularity defect and must not be cited as proof that 64-line chunks are better for detached populations.
+At approximately 1M retained synthetic atoms:
+
+| candidate | retained atoms | append ms | representation allocation units | reflow p50/p95/p99 us | search p50/p95 us | selection ns/op |
+|---|---:|---:|---:|---:|---:|---:|
+| visual rows | 999,940 | 19.40 | 16,636 | 1543 / 1643 / 1817 | 977 / 996 | 3,084 |
+| logical ring | 999,940 | 8.57 | 8,466 | 1360 / 1446 / 1448 | 850 / 917 | 1,724 |
+| fixed-64 segmented prototype | 993,877 | 9.27 | 268 | 1321 / 1412 / 1417 | 798 / 823 | 78 |
+
+Interpretation:
+
+- visual-row snapshots have clearly worse append/allocation behavior and make layout geometry canonical;
+- the logical ring is a strong simple baseline;
+- compact segmentation preserves ring-like sequential performance while reducing representation object/allocation count dramatically and providing a natural immutable indexing/persistence unit;
+- the fixed-64 result is **not** accepted as the segment policy because its small-history eviction granularity is incorrect.
+
+## Independent actual-RSS calibration
+
+A second harness measures each candidate in a fresh child process so allocator reuse from one candidate cannot contaminate another. The segmented candidate seals builder capacity into exact boxed immutable slices before RSS is read, matching the selected compact-segment architecture.
+
+Baseline process VmRSS was `2,096 KiB`; table values below are baseline-subtracted deltas.
+
+### Single execution
+
+| candidate | retained units | 10k delta KiB | 100k delta KiB | 1M delta KiB | storage objects at 1M |
+|---|---:|---:|---:|---:|---:|
+| visual rows | 10k / 100k / 1M | 196 | 1,364 | 13,072 | 25,143 |
+| logical ring | 10k / 100k / 1M | 132 | 1,336 | 12,780 | 22,349 |
+| compact segmented | 10k / 100k / 1M | 208 | 1,316 | 12,388 | 2,235 |
+
+At 1M retained units, compact segmentation used about `3.1%` less measured RSS than the ring and about `5.2%` less than visual rows in this isolated model, while reducing storage-object count by roughly `10x` versus the ring and `11x` versus visual rows.
+
+The 10k result is too close to process/allocator granularity to treat as a memory winner; segment-size/retention calibration is more important at that scale.
+
+### 1/10/50/100 execution population
+
+Each execution retained 100,000 canonical synthetic units.
+
+| candidate | 1 exec delta KiB | 10 exec delta KiB | 50 exec delta KiB | 100 exec delta KiB | 100-exec storage objects |
+|---|---:|---:|---:|---:|---:|
+| visual rows | 1,360 | 13,128 | 65,428 | 130,792 | 251,600 |
+| logical ring | 1,340 | 12,784 | 63,816 | 127,556 | 223,600 |
+| compact segmented | 1,312 | 12,440 | 61,752 | 123,464 | 22,400 |
+
+At 100 executions, compact segmentation measured about `3.2%` lower RSS than the ring and `5.6%` lower than visual rows while retaining an order-of-magnitude fewer storage objects.
+
+### RSS measurement correction
+
+An intermediate RSS-only calibration mistakenly kept each segment as a live `Vec` with full 512-unit reserved capacity after sealing. That measured builder slack, not the selected immutable compact representation, and made segmented RSS appear roughly 15% worse. It was rejected as a harness-model defect. The final run seals payload/metadata into exact boxed slices before measuring and is the authoritative RSS calibration for this R&D.
+
+This correction is why #685 does not treat a benchmark harness as authority merely because it produced a number.
 
 ## Segment-granularity calibration
 
-Fixed logical-line counts are unsuitable as the permanent segment boundary. A later calibration sealed at logical-line boundaries using a target payload size (synthetic atoms as a proxy for bytes):
+A fixed number of logical lines is unsuitable because line lengths are workload-dependent and unbounded. Calibration instead sealed at source/logical boundaries using a target synthetic payload size as a proxy for future encoded bytes:
 
-| target atoms per segment | history budget | retained | retention | sealed segments |
+| target units/segment | history budget | retained | retention | sealed segments |
 |---:|---:|---:|---:|---:|
 | 512 | 10,000 | 9,880 | 98.80% | 23 |
 | 1,024 | 10,000 | 9,545 | 95.45% | 11 |
@@ -108,75 +156,79 @@ Fixed logical-line counts are unsuitable as the permanent segment boundary. A la
 | 512 | 1,000,000 | 999,940 | 99.99% | 2,181 |
 | 1,024 | 1,000,000 | 999,605 | 99.96% | 1,047 |
 
-For 100 executions at a 10k-atom history budget, 512-target segments retained 98.80% of the requested content and used 14,404 KiB RSS; 1,024-target segments retained 95.45% and used 12,652 KiB. This exposes the expected trade-off between eviction precision and segment/allocation overhead.
+For 100 executions with a 10k-unit history budget, a 512-target prototype retained 98.8% of requested content; larger targets increasingly traded away minimum-budget retention precision.
 
-The architecture therefore must specify a **byte-targeted bounded segment**, not a fixed number of lines and not the synthetic atom counts above. The exact production byte target remains an internal tuning constant selected against the final #684 payload and macOS benchmarks. It is not a user-visible compatibility contract.
+The architectural conclusion is **byte-targeted compact segmentation**, not “512 atoms.” The production byte target is a measured implementation constant selected after #684 fixes the real canonical payload and macOS benchmarks are available.
+
+## LineId / anchor compatibility experiment
+
+Reflow must not silently redefine ADR-004's existing `LineId` contract. The schema experiment therefore kept each retained source row's current `LineId`, grouped soft-connected source records into a logical chain, and mapped canonical-unit offsets through the group.
+
+A chain captured at width 80 and reflowed at 40/120 preserved its original constituent row IDs. An anchor to the second constituent `LineId` remained resolvable after both reflows.
+
+Decision consequence:
+
+- no new competing logical-line ID allocator;
+- retained logical chains own ordered source records carrying existing `LineId`s;
+- durable content coordinates are `(ExecutionId, LineId, canonical-unit offset)`/ranges;
+- visual rows are derived source spans and may contain more than one source `LineId`.
+
+## Persistence/compression evidence
+
+The representation harness serialized the same canonical synthetic payload from all candidates. Simple space-RLE produced roughly `0.84` of raw size in that synthetic workload and demonstrated that immutable ranges can be serialized/compressed independently.
+
+This is **not** evidence to standardize RLE. It only validates the seam:
+
+- seal immutable segment in terminal state;
+- hand off bounded immutable data asynchronously;
+- compression/write/fsync happen outside PTY mutation;
+- persistence stores backing data for the same canonical segment rather than reparsing terminal output;
+- cold history does not claim to restore a live PTY.
+
+Codec, durable format, corruption recovery and paging remain later measured persistence decisions.
 
 ## Decision evidence
 
 ### Reject visual-row history as canonical retained history
 
-Reasons:
+- wrapping is presentation geometry, not content authority;
+- current M001 projection lacks hard/soft lineage required for correct reflow;
+- substantially more representation objects/allocations in stress measurements;
+- resize/search/selection become simpler and stable when visual rows are derived source spans.
 
-- visual wrapping is layout, not content authority;
-- substantially worse memory and append scaling in the experiment;
-- resize requires rewriting/reconstructing row snapshots instead of deriving a new layout;
-- search/selection must reason across artificial row boundaries;
-- it encourages viewport coordinates to leak into durable history/Block semantics.
+### Keep per-logical-line ring as a reference baseline, not the permanent shape
 
-### Keep a per-logical-line ring only as a reference baseline
+The ring is simple and performs well, but one allocation/object per source line provides no natural immutable range for coarse lookup, bounded paging/persistence or batch eviction. Final RSS also shows no memory advantage over compact exact-sealed segments at 100k/1M scales.
 
-It is simple and performed well, but one allocation per logical line creates avoidable allocation/indexing overhead, and it gives no natural immutable unit for cold persistence, compression or coarse eviction.
-
-### Select logical retained content in size-targeted immutable segments plus a mutable tail
+### Select canonical source history in compact byte-targeted immutable segments plus a mutable tail
 
 This gives:
 
-- one canonical logical content stream inside `TerminalState`;
+- one history authority inside `TerminalState`;
+- hard/soft lineage recorded once at terminal mutation time;
 - no full-history rewrite on resize;
-- compact contiguous payload storage;
-- dramatically fewer representation allocations than per-line heap storage;
-- cheap segment-level `LineId` range lookup;
-- natural immutable units for asynchronous cold persistence/compression;
-- bounded eviction without making a second history authority.
+- contiguous immutable payload storage;
+- order-of-magnitude fewer representation objects in the measured model;
+- stable source anchors across reflow;
+- natural immutable units for asynchronous cold persistence/paging;
+- explicit byte/resource bounds for detached populations.
 
-Segments must be allowed to split storage payload at canonical text-unit boundaries when a single logical line would otherwise violate the hard segment/memory bound. Storage fragmentation never creates a new terminal logical identity; the segment metadata carries the owning `LineId` and logical offset.
+Oversized logical chains may cross storage segments at canonical text-unit boundaries. Storage fragmentation never creates a new terminal identity or hard line break.
 
-## Reflow direction
+## Production gates after #685
 
-Reflow is a **derived layout operation** over canonical logical history:
+Merging the #685 architecture/specification does **not** make production scrollback implementation automatically Ready.
 
-1. primary terminal content records hard line termination versus soft autowrap continuation;
-2. retained logical content is not rewritten when viewport width changes;
-3. a width-specific derived layout/index maps logical `(LineId, text-unit offset)` ranges to visual rows;
-4. resize invalidates only affected layout/index caches, not canonical history or durable anchors;
-5. search operates on logical content, not visual wrapped rows;
-6. selection/Block/history anchors remain content-relative, never viewport-row-relative;
-7. alternate-screen content does not enter primary scrollback; alternate-screen resize remains screen-state behavior and may consume global `LineId`s without implying primary-history continuity.
+Before implementation begins:
 
-A production implementation may eagerly materialize the active/near-visible window and lazily derive older visual rows by segment. Any lazy index is rebuildable/derived and cannot become a second canonical history.
-
-## Persistence and compression direction
-
-A sealed immutable segment is the handoff unit for future P3 cold history persistence (ADR-007), but persistence is not allowed to gate terminal feed/render progress.
-
-- sealing a segment is an in-memory terminal-state operation;
-- persistence/compression work is queued asynchronously after sealing;
-- failure to persist cannot block or corrupt live terminal semantics;
-- durable history recovery never claims to restore a live PTY;
-- compression format is not chosen by this spike;
-- the simple RLE experiment only proves a serialization/compression seam exists and is not evidence to standardize RLE.
-
-## Remaining production gates
-
-Before M002 scrollback/reflow production work can be Ready:
-
-1. accept the architecture decision derived from this R&D;
-2. accept #684's canonical Unicode/grapheme/width representation or restrict the first implementation slice to an already accepted compatible payload seam;
-3. define the M002 terminal specification for hard/soft-wrap mutations, resize/reflow, anchor invalidation on eviction, history limits and alternate-screen behavior;
-4. repeat benchmarks on macOS with the final representation, including 1/10/50/100 execution profiles;
-5. add repository VT fixtures/property tests/fuzz cases for reflow, wide/grapheme content, resize oscillation, alternate screen, search/selection anchors and bounded eviction.
+1. #684 must accept the canonical Unicode/grapheme/width text-unit authority, or an explicitly accepted compatible implementation slice must exist;
+2. the implementation Issue must select measured segment byte target and per-execution/Runtime aggregate history limits using the real payload;
+3. macOS production-path benchmarks must establish append/reflow/search/selection p50/p95/p99 and 1/10/50/100 execution RSS/resource gates;
+4. tests must cover long wraps, hard/soft lineage, width/grapheme semantics, resize oscillation, alternate screen, source anchors, eviction, cache rebuild equivalence and fuzz/property cases;
+5. persistence remains separate work unless explicitly in scope and may never gate terminal I/O.
 
 ## Conclusion
 
-The spike supports a permanent architecture of **canonical logical history + mutable tail + immutable byte-targeted segments + derived lazy/eager-windowed reflow indexes**. It rejects canonical visual-row scrollback, rejects fixed line-count segmentation, and keeps persistence/compression asynchronous and subordinate to the one `TerminalState` authority.
+The #685 evidence supports **canonical retained source history + mutable tail + compact byte-targeted immutable segments + derived bounded reflow/search indexes**.
+
+It rejects canonical visual-row scrollback, rejects fixed line-count segmentation, preserves existing `LineId` compatibility through source anchors, and keeps cold persistence/compression asynchronous and subordinate to the one `TerminalState` authority.

@@ -1,6 +1,6 @@
 # SPEC-010 — M002 Scrollback, Retained History, and Resize Reflow
 
-- **Status:** Active on acceptance of ADR-010
+- **Status:** Active
 - **Issue:** #685
 - **Architecture:** `docs/architecture/ADR-010-SCROLLBACK-HISTORY-REFLOW.md`
 - **Research:** `docs/architecture/SEYAL-SCROLLBACK-HISTORY-RD-001.md`

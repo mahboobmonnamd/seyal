@@ -32,6 +32,10 @@ jobs:
         run: |
           rustc --edition=2024 -O spikes/issue-685-scrollback/src/segment_calibration.rs -o /tmp/segment-calibration
           /tmp/segment-calibration
+      - name: Measure actual RSS
+        run: |
+          rustc --edition=2024 -O spikes/issue-685-scrollback/src/rss_measure.rs -o /tmp/rss-measure
+          /tmp/rss-measure
       - name: Preserve evidence and diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -41,6 +45,7 @@ jobs:
             spike-report.md
             segment-calibration.md
             fixture-replay.md
+            rss-measurement.md
             spike-check.log
             spike-run.log
             fixture-replay.log

@@ -1,10 +1,12 @@
 name: Foundation Quality
 
 on:
+  # PR-only: master is gated by required status checks on these jobs, so a
+  # post-merge push re-run would duplicate the same Foundation suite without
+  # adding merge protection. Docs stays path-filtered on push; fuzz uses
+  # schedule/workflow_dispatch for non-PR evidence.
   pull_request:
     types: [opened, synchronize, reopened, edited]
-  push:
-    branches: [master]
 
 permissions:
   contents: read

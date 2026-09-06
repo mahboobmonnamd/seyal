@@ -33,4 +33,5 @@ pub use protocol_reply::{ProtocolReply, MAX_PROTOCOL_REPLIES, MAX_PROTOCOL_REPLY
 pub use style::Style;
 pub use terminal::{
     Diagnostics, PreparedResize, ShellIntegrationEvent, ShellIntegrationToken, TerminalState,
+    MAX_TERMINAL_COLUMNS, MAX_TERMINAL_ROWS,
 };

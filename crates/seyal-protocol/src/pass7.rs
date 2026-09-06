@@ -5,10 +5,10 @@ use crate::{
 };
 
 pub const MAX_COMPOSER_COMMAND_BYTES: usize = 16 * 1024;
-// A full replacement timeline must fit in one bounded IPC frame even when
-// every command reaches the 16 KiB admission limit. Larger histories are
-// intentionally rejected at the Runtime boundary until a separately
-// versioned continuation protocol exists.
+// A replacement timeline must fit in one bounded IPC frame. Per-record text
+// stays at 16 KiB; Runtime admits/evicts so the encoded timeline never exceeds
+// MAX_FRAME_PAYLOAD. Larger histories require a separately versioned
+// continuation protocol.
 pub const MAX_COMMAND_BLOCK_RECORDS: usize = 128;
 /// History range requests are deliberately independent from BlockTimeline.
 /// They carry only a bounded primary-screen projection and never change block
@@ -611,6 +611,25 @@ mod command_block_tests {
             revision: 1,
             records: vec![record; MAX_COMMAND_BLOCK_RECORDS + 1],
         };
+        assert_eq!(timeline.try_encode(), Err(FramingError::OversizedPayload));
+    }
+
+    #[test]
+    fn timeline_try_encode_rejects_cumulative_command_bytes_over_frame() {
+        let large = "x".repeat(MAX_COMPOSER_COMMAND_BYTES);
+        let timeline = BlockTimeline {
+            revision: 1,
+            records: (1..=16)
+                .map(|id| CommandBlock {
+                    id,
+                    command: large.clone(),
+                    start_line: id,
+                    end_line: Some(id + 1),
+                    state: CommandBlockState::Completed { exit_status: 0 },
+                })
+                .collect(),
+        };
+        assert!(timeline.records.len() <= MAX_COMMAND_BLOCK_RECORDS);
         assert_eq!(timeline.try_encode(), Err(FramingError::OversizedPayload));
     }
 

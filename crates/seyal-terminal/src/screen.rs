@@ -32,6 +32,10 @@ impl Screen {
         if cols == 0 || rows == 0 {
             return Err(TerminalError::InvalidSize);
         }
+        if cols > crate::terminal::MAX_TERMINAL_COLUMNS || rows > crate::terminal::MAX_TERMINAL_ROWS
+        {
+            return Err(TerminalError::InvalidSize);
+        }
         if !line_ids.can_allocate(usize::from(rows)) {
             return Err(TerminalError::LineIdentityExhausted);
         }
@@ -89,17 +93,19 @@ impl Screen {
         self.line_ids.get(usize::from(row)).copied()
     }
 
-    pub(crate) fn history_line(&self, id: LineId) -> Option<&[Cell]> {
-        if let Some((_, cells)) = self.history.iter().find(|(line_id, _)| *line_id == id) {
-            return Some(cells);
-        }
-        self.line_ids
+    /// Oldest-to-newest retained primary history entries (storage order).
+    pub(crate) fn history_entries(&self) -> impl Iterator<Item = (LineId, &[Cell])> {
+        self.history
             .iter()
-            .position(|line_id| *line_id == id)
-            .map(|row| {
-                let start = row * usize::from(self.cols);
-                &self.cells[start..start + usize::from(self.cols)]
-            })
+            .map(|(id, cells)| (*id, cells.as_slice()))
+    }
+
+    pub(crate) fn cell_row(&self, row: u16) -> Option<&[Cell]> {
+        if row >= self.rows {
+            return None;
+        }
+        let start = usize::from(row) * usize::from(self.cols);
+        Some(&self.cells[start..start + usize::from(self.cols)])
     }
 
     /// Builds the next screen buffers and allocates any new line identities
@@ -112,6 +118,10 @@ impl Screen {
         line_ids: &mut LineIdAllocator,
     ) -> Result<PreparedScreen, TerminalError> {
         if cols == 0 || rows == 0 {
+            return Err(TerminalError::InvalidSize);
+        }
+        if cols > crate::terminal::MAX_TERMINAL_COLUMNS || rows > crate::terminal::MAX_TERMINAL_ROWS
+        {
             return Err(TerminalError::InvalidSize);
         }
         if cols == self.cols && rows == self.rows {

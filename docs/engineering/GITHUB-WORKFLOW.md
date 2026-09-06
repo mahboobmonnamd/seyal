@@ -75,6 +75,17 @@ The policy is fixed even when repository settings cannot be inspected or configu
 
 A GitHub ruleset/branch-protection configuration should enforce these rules when available. Lack of platform-level enforcement is a governance-hardening item, not permission to bypass the policy and not a blocker for the current owner-controlled M001 work.
 
+### Residual risk (AUD-P2-004, documented)
+
+As of the foundation audit at `1f3c0ed`, the live `master` ruleset requires pull requests but does **not** yet require status checks or approving reviews (`required_approving_review_count: 0`). That means an admin can merge without green Foundation Quality unless process discipline prevents it.
+
+**Intended hardening (not automatically applied by remediation PRs):**
+
+1. Require status checks for exact job names `repository-policy`, `rust-and-harness-quality`, and `native-macos-smoke` on `master`.
+2. Keep independent review as a process gate while the repository remains solo-owned; requiring `required_approving_review_count ≥ 1` is weak without a second trusted reviewer identity.
+
+Until those platform settings are applied, CI evidence and independent review remain **policy**, not merge-button enforcement.
+
 ## Public OSS repository CI
 
 The canonical public Seyal repository owns the authoritative GitHub Actions quality gates. The `Foundation Quality` workflow uses minimal `contents: read` permissions, pins external actions by reviewed full commit SHA, cancels superseded runs on the same ref, and keeps fast PR responsibilities explicit.

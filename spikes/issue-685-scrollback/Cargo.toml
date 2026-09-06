@@ -9,6 +9,13 @@ autobins = false
 name = "seyal-issue-685-scrollback-spike"
 path = "src/spike.rs"
 
+[[bin]]
+name = "fixture-replay"
+path = "src/fixture_replay.rs"
+
+[dependencies]
+seyal-terminal = { path = "../../crates/seyal-terminal" }
+
 [workspace]
 
 [lints.rust]

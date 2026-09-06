@@ -26,6 +26,10 @@ jobs:
         run: cargo check --manifest-path spikes/issue-685-scrollback/Cargo.toml 2>&1 | tee spike-check.log
       - name: Run experiments
         run: cargo run --manifest-path spikes/issue-685-scrollback/Cargo.toml --release 2>&1 | tee spike-run.log
+      - name: Calibrate segment granularity
+        run: |
+          rustc --edition=2024 -O spikes/issue-685-scrollback/src/segment_calibration.rs -o /tmp/segment-calibration
+          /tmp/segment-calibration
       - name: Preserve evidence and diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -33,6 +37,7 @@ jobs:
           name: issue-685-scrollback-spike-report
           path: |
             spike-report.md
+            segment-calibration.md
             spike-check.log
             spike-run.log
           if-no-files-found: warn

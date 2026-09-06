@@ -23,9 +23,11 @@ jobs:
       - name: Format temporary checkout
         run: cargo fmt --manifest-path spikes/issue-685-scrollback/Cargo.toml
       - name: Compile spike
-        run: cargo check --manifest-path spikes/issue-685-scrollback/Cargo.toml 2>&1 | tee spike-check.log
-      - name: Run experiments
-        run: cargo run --manifest-path spikes/issue-685-scrollback/Cargo.toml --release 2>&1 | tee spike-run.log
+        run: cargo check --manifest-path spikes/issue-685-scrollback/Cargo.toml --all-targets 2>&1 | tee spike-check.log
+      - name: Run representation experiments
+        run: cargo run --manifest-path spikes/issue-685-scrollback/Cargo.toml --release --bin seyal-issue-685-scrollback-spike 2>&1 | tee spike-run.log
+      - name: Replay retained VT fixtures
+        run: cargo run --manifest-path spikes/issue-685-scrollback/Cargo.toml --release --bin fixture-replay 2>&1 | tee fixture-replay.log
       - name: Calibrate segment granularity
         run: |
           rustc --edition=2024 -O spikes/issue-685-scrollback/src/segment_calibration.rs -o /tmp/segment-calibration
@@ -38,6 +40,8 @@ jobs:
           path: |
             spike-report.md
             segment-calibration.md
+            fixture-replay.md
             spike-check.log
             spike-run.log
+            fixture-replay.log
           if-no-files-found: warn

@@ -11,7 +11,7 @@ path = "src/spike.rs"
 
 [[bin]]
 name = "fixture-replay"
-path = "src/fixture_replay_v2.rs"
+path = "src/fixture_replay_v3.rs"
 
 [dependencies]
 seyal-terminal = { path = "../../crates/seyal-terminal" }

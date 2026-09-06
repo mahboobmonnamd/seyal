@@ -4,7 +4,7 @@
 //! VT, terminal grid, renderer, transcript or background task, so retained RSS
 //! can be attributed to the metadata structure itself.
 
-use crate::{ExecutionId, WorkspaceId, activity_block_timeline::ActivityBlockTimeline};
+use crate::{activity_block_timeline::ActivityBlockTimeline, ExecutionId, WorkspaceId};
 
 #[doc(hidden)]
 #[derive(Default)]

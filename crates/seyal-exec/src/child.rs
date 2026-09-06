@@ -7,7 +7,7 @@ use std::{
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 
-use crate::{ExecError, platform};
+use crate::{platform, ExecError};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChildExit {

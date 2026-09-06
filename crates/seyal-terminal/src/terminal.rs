@@ -1,9 +1,9 @@
 use crate::{
-    Cell, CursorState, Damage, LineId, ModeState, TerminalError,
     damage::{DamageTracker, Mutation},
     line::LineIdAllocator,
     parser::{Actions, Parser},
     screen::Screen,
+    Cell, CursorState, Damage, LineId, ModeState, TerminalError,
 };
 use std::collections::VecDeque;
 

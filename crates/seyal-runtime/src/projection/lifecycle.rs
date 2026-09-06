@@ -10,7 +10,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use crate::projection::layout::{MAX_REGION_BYTES, REGION_HEADER_LEN, RegionHeader};
+use crate::projection::layout::{RegionHeader, MAX_REGION_BYTES, REGION_HEADER_LEN};
 use crate::projection::writer::RegionMemory;
 
 #[cfg(feature = "test-fault-injection")]
@@ -332,7 +332,7 @@ fn injected_error(stage: &str) -> io::Error {
 mod tests {
     use super::*;
     use crate::projection::layout::{CellRecord, ModeFlags, WireAttributes, WireColor};
-    use crate::projection::writer::{SnapshotWrite, Writer, read_latest, read_region_header};
+    use crate::projection::writer::{read_latest, read_region_header, SnapshotWrite, Writer};
 
     fn sample_header(region_bytes: u64) -> RegionHeader {
         RegionHeader {

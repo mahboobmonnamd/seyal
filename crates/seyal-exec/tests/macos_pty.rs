@@ -352,12 +352,10 @@ fn terminal_execution_feeds_the_single_authoritative_terminal_state() {
         }
     }
 
-    assert!(
-        execution
-            .terminal()
-            .row_text(0)
-            .is_some_and(|row| row.starts_with("abc"))
-    );
+    assert!(execution
+        .terminal()
+        .row_text(0)
+        .is_some_and(|row| row.starts_with("abc")));
     assert_eq!(
         wait_exit(&mut execution, IO_TIMEOUT).expect("execution exit"),
         ChildExit::Exited(0)

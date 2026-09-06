@@ -13,16 +13,16 @@ use std::{
 
 use seyal_exec::{CommandSpec, WindowSize};
 use seyal_runtime::{
-    ExecutionId, LocalIpcMode, Runtime, RuntimeConfig,
     local_ipc::{
         connection::MAX_CONNECTIONS,
         discovery::CONTROL_SOCKET_NAME,
         framing::{
-            Attach, Attached, ClientHello, FrameHeader, HEADER_LEN, MessageType, Role, ServerHello,
-            encode_frame,
+            encode_frame, Attach, Attached, ClientHello, FrameHeader, MessageType, Role,
+            ServerHello, HEADER_LEN,
         },
     },
     test_fault::{self, FaultPoint},
+    ExecutionId, LocalIpcMode, Runtime, RuntimeConfig,
 };
 
 // `cargo test`'s default runner executes every `#[test]` in this file as a

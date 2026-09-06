@@ -3,9 +3,9 @@ use std::time::Duration;
 use seyal_terminal::{LineId, ShellIntegrationEvent, TerminalState};
 
 use crate::{
-    ChildExit, CommandSpec, ExecError, ProjectionDamage, ReadOutcome, Readiness, SignalDisposition,
-    TerminalProjectionSnapshot, TerminalProjectionUpdate, TerminationPolicy, WindowSize,
-    WriteOutcome, endpoint::TerminalEndpoint, projection,
+    endpoint::TerminalEndpoint, projection, ChildExit, CommandSpec, ExecError, ProjectionDamage,
+    ReadOutcome, Readiness, SignalDisposition, TerminalProjectionSnapshot,
+    TerminalProjectionUpdate, TerminationPolicy, WindowSize, WriteOutcome,
 };
 
 pub struct TerminalExecution {

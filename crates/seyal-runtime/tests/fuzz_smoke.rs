@@ -12,14 +12,15 @@ use std::{
 
 use seyal_exec::{CommandSpec, WindowSize};
 use seyal_runtime::{
-    AttachmentId, ExecutionId, LocalIpcMode, Runtime, RuntimeConfig, display,
+    display,
     local_ipc::{
         fd_transfer::{self, RecvFd},
         framing::{
-            Attach, Attached, ClientHello, Detach, FrameHeader, HEADER_LEN, MessageType, Resync,
-            Role, ServerHello, decode_message, encode_frame,
+            decode_message, encode_frame, Attach, Attached, ClientHello, Detach, FrameHeader,
+            MessageType, Resync, Role, ServerHello, HEADER_LEN,
         },
     },
+    AttachmentId, ExecutionId, LocalIpcMode, Runtime, RuntimeConfig,
 };
 
 fn input() -> Vec<u8> {

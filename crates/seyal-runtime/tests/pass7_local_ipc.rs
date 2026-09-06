@@ -10,13 +10,13 @@ use std::{
 use seyal_exec::test_fault::{self, FaultPoint};
 use seyal_exec::{CommandSpec, WindowSize};
 use seyal_runtime::{
-    AttachmentId, LocalIpcMode, Runtime, RuntimeConfig,
-    display::{DecodedDisplayChunk, DisplayCache, decode_chunk, empty_cache},
+    display::{decode_chunk, empty_cache, DecodedDisplayChunk, DisplayCache},
     local_ipc::framing::{
-        Attach, Attached, CAP_CORRELATED_RESIZE, CAP_SEMANTIC_TERMINAL_KEY, ClientHello,
-        FrameHeader, HEADER_LEN, MessageType, ResizeRequest, ResizeResult, ResizeResultCode, Role,
-        ServerHello, TerminalKey, TerminalKeyKind, TerminalKeyModifiers, encode_frame,
+        encode_frame, Attach, Attached, ClientHello, FrameHeader, MessageType, ResizeRequest,
+        ResizeResult, ResizeResultCode, Role, ServerHello, TerminalKey, TerminalKeyKind,
+        TerminalKeyModifiers, CAP_CORRELATED_RESIZE, CAP_SEMANTIC_TERMINAL_KEY, HEADER_LEN,
     },
+    AttachmentId, LocalIpcMode, Runtime, RuntimeConfig,
 };
 
 fn config() -> RuntimeConfig {

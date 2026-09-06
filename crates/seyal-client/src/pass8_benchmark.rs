@@ -3,7 +3,7 @@
 //! This module exists only with `benchmark-instrumentation`; production code
 //! does not gain a second cache or alternate metadata path.
 
-use seyal_protocol::{ExecutionId, pass8::BlockState};
+use seyal_protocol::{pass8::BlockState, ExecutionId};
 
 use crate::block_cache::BlockCache;
 

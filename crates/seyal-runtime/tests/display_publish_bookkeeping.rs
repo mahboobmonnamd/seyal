@@ -12,13 +12,13 @@ use std::{
 
 use seyal_exec::{CommandSpec, WindowSize};
 use seyal_runtime::{
-    ExecutionId, LocalIpcMode, Runtime, RuntimeConfig,
-    display::{DecodedDisplayChunk, DisplayCache, decode_chunk, empty_cache},
+    display::{decode_chunk, empty_cache, DecodedDisplayChunk, DisplayCache},
     local_ipc::framing::{
-        Attach, Attached, ClientHello, ErrorCode, ErrorMessage, FrameHeader, HEADER_LEN, InputRef,
-        MessageType, Role, ServerHello, encode_frame,
+        encode_frame, Attach, Attached, ClientHello, ErrorCode, ErrorMessage, FrameHeader,
+        InputRef, MessageType, Role, ServerHello, HEADER_LEN,
     },
     test_fault::{self, FaultPoint},
+    ExecutionId, LocalIpcMode, Runtime, RuntimeConfig,
 };
 
 fn config() -> RuntimeConfig {

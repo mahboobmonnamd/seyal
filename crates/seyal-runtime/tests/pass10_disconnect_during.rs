@@ -20,19 +20,19 @@ use std::{
 
 use seyal_exec::{CommandSpec, WindowSize};
 use seyal_protocol::pass8::{
-    BLOCK_STATE_MESSAGE_TYPE, BlockLifecycle, BlockState, CAP_BLOCK_METADATA,
+    BlockLifecycle, BlockState, BLOCK_STATE_MESSAGE_TYPE, CAP_BLOCK_METADATA,
 };
 use seyal_runtime::{
-    ExecutionId, ExecutionLifecycle, LocalIpcMode, Runtime, RuntimeConfig,
     display::{decode_chunk, empty_cache},
     local_ipc::{
         connection::MAX_CONNECTIONS,
         framing::{
-            Attach, Attached, ClientHello, ErrorCode, ErrorMessage, FrameHeader, HEADER_LEN,
+            encode_frame, Attach, Attached, ClientHello, ErrorCode, ErrorMessage, FrameHeader,
             InputRef, MessageType, ResizeRequest, ResizeResult, ResizeResultCode, Role,
-            ServerHello, encode_frame,
+            ServerHello, HEADER_LEN,
         },
     },
+    ExecutionId, ExecutionLifecycle, LocalIpcMode, Runtime, RuntimeConfig,
 };
 
 static TEST_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());

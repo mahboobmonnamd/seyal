@@ -7,11 +7,11 @@
 use crate::{AttachmentId, ExecutionId};
 
 pub use crate::pass7::{
-    BlockTimeline, CAP_CORRELATED_RESIZE, CAP_SEMANTIC_TERMINAL_KEY, CommandBlock,
-    CommandBlockState, ComposerCommandRef, ComposerEligibility, ComposerResult, ComposerResultCode,
-    ComposerStatus, HistoryCell, HistoryRangeRequest, HistoryRangeSnapshot, HistoryRangeStatus,
-    HistoryRow, ResizeRequest, ResizeResult, ResizeResultCode, TerminalKey, TerminalKeyKind,
-    TerminalKeyModifiers,
+    BlockTimeline, CommandBlock, CommandBlockState, ComposerCommandRef, ComposerEligibility,
+    ComposerResult, ComposerResultCode, ComposerStatus, HistoryCell, HistoryRangeRequest,
+    HistoryRangeSnapshot, HistoryRangeStatus, HistoryRow, ResizeRequest, ResizeResult,
+    ResizeResultCode, TerminalKey, TerminalKeyKind, TerminalKeyModifiers, CAP_CORRELATED_RESIZE,
+    CAP_SEMANTIC_TERMINAL_KEY,
 };
 
 pub const MAGIC: [u8; 8] = *b"SEYALIPC";

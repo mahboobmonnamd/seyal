@@ -1,6 +1,6 @@
 use crate::{
-    Cell, Color, CursorState, LineId, Style, TerminalError, cursor::Cursor, damage::Mutation,
-    line::LineIdAllocator,
+    cursor::Cursor, damage::Mutation, line::LineIdAllocator, Cell, Color, CursorState, LineId,
+    Style, TerminalError,
 };
 use std::collections::VecDeque;
 

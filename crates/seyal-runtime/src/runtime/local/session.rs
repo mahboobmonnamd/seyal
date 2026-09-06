@@ -1,27 +1,29 @@
-use seyal_exec::LineId;
-use seyal_protocol::pass8::{CAP_BLOCK_METADATA, encode_block_state_frame};
+use seyal_protocol::pass8::{encode_block_state_frame, CAP_BLOCK_METADATA};
 
 use crate::{
-    AttachmentId, RuntimeError,
-    display::{self, EncodedDisplayBatch, MAX_DISPLAY_COLUMNS, MAX_DISPLAY_ROWS},
+    display,
     local_ipc::{
-        attachment::{AttachmentError, MAX_LIVE_ATTACHMENTS},
+        attachment::MAX_LIVE_ATTACHMENTS,
         connection::ConnectionState as LocalIpcConnState,
         framing::{
-            self, Attach as WireAttach, Attached as WireAttached, CAP_COMMAND_BLOCKS, ErrorCode,
-            ExecutionList, ExecutionListEntry, Lifecycle as WireLifecycle, MessageType, Role,
+            self, Attach as WireAttach, Attached as WireAttached, ErrorCode, ExecutionList,
+            ExecutionListEntry, Lifecycle as WireLifecycle, MessageType, Role, CAP_COMMAND_BLOCKS,
         },
     },
+    AttachmentId,
 };
-use seyal_exec::WindowSize;
 
-use super::connection::ConnectionMeta;
-use super::display_publish::PublishedDisplay;
-use super::super::Runtime;
 use super::super::ExecutionLifecycle;
+use super::super::Runtime;
+use super::display_publish::PublishedDisplay;
 
 impl Runtime {
-    pub(super) fn dispatch_local_ipc_frame(&mut self, token: u64, message_type: u16, payload: &[u8]) {
+    pub(super) fn dispatch_local_ipc_frame(
+        &mut self,
+        token: u64,
+        message_type: u16,
+        payload: &[u8],
+    ) {
         let Some(current_state) = self
             .local_ipc
             .as_ref()

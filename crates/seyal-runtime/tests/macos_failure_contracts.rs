@@ -46,11 +46,9 @@ fn shutdown(runtime: &mut Runtime) {
 #[test]
 fn invalid_command_rolls_back_registry_and_workspace_publication() {
     let mut runtime = Runtime::new(config("invalid-command")).unwrap();
-    assert!(
-        runtime
-            .create_execution(CommandSpec::new("/definitely/not/a/seyal-command"), size())
-            .is_err()
-    );
+    assert!(runtime
+        .create_execution(CommandSpec::new("/definitely/not/a/seyal-command"), size())
+        .is_err());
     assert_eq!(runtime.execution_count(), 0);
     assert!(runtime.list().is_empty());
     assert_eq!(runtime.aggregate_accepted_but_unwritten_bytes(), 0);

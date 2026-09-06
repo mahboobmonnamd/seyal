@@ -37,7 +37,11 @@ impl Runtime {
         Ok(())
     }
 
-    pub(super) fn enter_drain(&mut self, id: ExecutionId, exit: ChildExit) -> Result<(), RuntimeError> {
+    pub(super) fn enter_drain(
+        &mut self,
+        id: ExecutionId,
+        exit: ChildExit,
+    ) -> Result<(), RuntimeError> {
         let entry = self
             .entries
             .get_mut(&id)

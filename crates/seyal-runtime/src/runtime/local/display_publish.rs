@@ -1,24 +1,22 @@
-use std::collections::HashMap;
-
 use crate::{
-    ExecutionId, RuntimeError,
     display::{self, EncodedDisplayBatch},
     local_ipc::{
         connection::ConnectionState as LocalIpcConnState,
         connection::DeltaEnqueueResult,
         framing::{self, ErrorCode, MessageType},
     },
+    ExecutionId,
 };
 
 #[cfg(feature = "test-fault-injection")]
 use crate::test_fault::{self, FaultPoint};
-use seyal_protocol::pass8::{CAP_BLOCK_METADATA, encode_block_state_frame};
+use seyal_protocol::pass8::{encode_block_state_frame, CAP_BLOCK_METADATA};
 
-use super::super::Runtime;
 use super::super::lifecycle::BlockCompletion;
+use super::super::Runtime;
 
 #[derive(Clone, Copy)]
-pub(super) struct PublishedDisplay {
+pub(in crate::runtime) struct PublishedDisplay {
     pub(super) generation: u64,
     pub(super) rows: u16,
     pub(super) columns: u16,
@@ -271,7 +269,10 @@ impl Runtime {
         }
     }
 
-    pub(super) fn encode_projection_snapshot(&self, execution_id: ExecutionId) -> Option<EncodedDisplayBatch> {
+    pub(super) fn encode_projection_snapshot(
+        &self,
+        execution_id: ExecutionId,
+    ) -> Option<EncodedDisplayBatch> {
         #[cfg(feature = "test-fault-injection")]
         if test_fault::take(FaultPoint::DisplayEncode) {
             return None;

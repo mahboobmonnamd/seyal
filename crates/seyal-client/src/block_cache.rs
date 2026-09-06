@@ -9,8 +9,8 @@ use std::{
 };
 
 use seyal_protocol::{
-    ExecutionId,
     pass8::{BlockLifecycle, BlockState},
+    ExecutionId,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -139,8 +139,8 @@ pub(crate) fn is_epoch_quarantined(runtime_id: u128, execution_id: ExecutionId) 
 #[cfg(test)]
 mod tests {
     use seyal_protocol::{
-        BlockId,
         pass8::{BlockKind, BlockLifecycle},
+        BlockId,
     };
 
     use super::*;

@@ -3,11 +3,11 @@ use std::time::Instant;
 
 use seyal_exec::{ReadOutcome, WriteOutcome};
 
-use crate::{ExecutionId, RuntimeError};
 use crate::input::ControlMessage;
+use crate::{ExecutionId, RuntimeError};
 use std::sync::mpsc::TryRecvError;
 
-use super::config::{CONTROL_DISPATCH_QUANTUM, PtyEofReapProbe};
+use super::config::{PtyEofReapProbe, CONTROL_DISPATCH_QUANTUM};
 use super::lifecycle::Lifecycle;
 use super::Runtime;
 

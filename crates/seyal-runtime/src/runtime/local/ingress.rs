@@ -1,16 +1,16 @@
 use crate::{
-    RuntimeError,
     local_ipc::{
         attachment::AttachmentError,
         framing::{
-            self, CAP_COMMAND_BLOCKS, ComposerCommandRef, ComposerResult, ComposerResultCode,
-            ErrorCode, MessageType, TerminalKey as WireTerminalKey, TerminalKeyKind,
+            self, ComposerCommandRef, ComposerResult, ComposerResultCode, ErrorCode, MessageType,
+            TerminalKey as WireTerminalKey, TerminalKeyKind, CAP_COMMAND_BLOCKS,
         },
     },
+    RuntimeError,
 };
 
-use super::super::Runtime;
 use super::super::shell_integration::ComposerAdmission;
+use super::super::Runtime;
 
 fn encode_terminal_key(key: WireTerminalKey) -> Vec<u8> {
     match key.kind {
@@ -38,7 +38,6 @@ fn encode_terminal_key(key: WireTerminalKey) -> Vec<u8> {
         }
     }
 }
-
 
 impl Runtime {
     pub(super) fn handle_input(&mut self, token: u64, payload: &[u8]) {

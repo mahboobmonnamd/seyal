@@ -1,7 +1,7 @@
 use crate::{
-    AttachmentId,
     display::{MAX_DISPLAY_COLUMNS, MAX_DISPLAY_ROWS},
     framing::{ErrorCode, FramingError},
+    AttachmentId,
 };
 
 pub const MAX_COMPOSER_COMMAND_BYTES: usize = 16 * 1024;

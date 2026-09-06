@@ -1,9 +1,9 @@
 use std::{env, fs, path::PathBuf};
 
 use seyal_protocol::framing::{
-    BlockTimeline, ComposerCommandRef, ComposerResult, ComposerStatus, FrameHeader, HEADER_LEN,
+    decode_message, BlockTimeline, ComposerCommandRef, ComposerResult, ComposerStatus, FrameHeader,
     HistoryRangeRequest, HistoryRangeSnapshot, MessageType, ResizeRequest, ResizeResult,
-    TerminalKey, decode_message,
+    TerminalKey, HEADER_LEN,
 };
 
 fn input() -> Vec<u8> {

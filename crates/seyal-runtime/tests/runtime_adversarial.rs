@@ -3,8 +3,8 @@
 
 use std::{
     sync::{
-        Mutex, MutexGuard,
         atomic::{AtomicU64, Ordering},
+        Mutex, MutexGuard,
     },
     thread,
     time::{Duration, Instant},
@@ -23,7 +23,7 @@ use seyal_runtime::{ExecutionLifecycle, LocalIpcMode, Runtime, RuntimeConfig};
 use seyal_exec::test_fault::{self as exec_fault, FaultPoint as ExecFaultPoint};
 #[cfg(feature = "test-fault-injection")]
 use seyal_runtime::{
-    local_ipc::framing::{ClientHello, FrameHeader, HEADER_LEN, MessageType, encode_frame},
+    local_ipc::framing::{encode_frame, ClientHello, FrameHeader, MessageType, HEADER_LEN},
     test_fault::{self, FaultPoint},
 };
 

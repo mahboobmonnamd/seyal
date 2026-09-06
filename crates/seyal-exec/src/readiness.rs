@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::{ExecError, platform};
+use crate::{platform, ExecError};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Readiness {

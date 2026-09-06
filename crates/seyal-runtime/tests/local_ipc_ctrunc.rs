@@ -10,12 +10,12 @@ use std::{
 
 use seyal_exec::{CommandSpec, WindowSize};
 use seyal_runtime::{
-    ExecutionId, LocalIpcMode, Runtime, RuntimeConfig,
     display::{decode_chunk, empty_cache},
     local_ipc::framing::{
-        Attach, Attached, ClientHello, FrameHeader, HEADER_LEN, MessageType, Role, ServerHello,
-        encode_frame,
+        encode_frame, Attach, Attached, ClientHello, FrameHeader, MessageType, Role, ServerHello,
+        HEADER_LEN,
     },
+    ExecutionId, LocalIpcMode, Runtime, RuntimeConfig,
 };
 
 fn config() -> RuntimeConfig {

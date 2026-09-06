@@ -1,27 +1,27 @@
+#[cfg(feature = "benchmark-instrumentation")]
+use std::collections::HashMap;
 use std::{
     collections::{HashSet, VecDeque},
     path::Path,
     sync::{
-        Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
     },
     time::Instant,
 };
-#[cfg(feature = "benchmark-instrumentation")]
-use std::collections::HashMap;
 
 use seyal_exec::{CommandSpec, SignalDisposition, TerminalExecution, WindowSize};
 
-#[cfg(target_os = "macos")]
-use crate::command_block_timeline::CommandBlockTimeline;
-use crate::{
-    AttachmentId, BlockSummary, ExecutionId, InputIngress, RuntimeError, RuntimeId, WorkspaceId,
-};
 use super::entry::{Entry, ExecutionSummary};
 use super::lifecycle::{BlockCompletion, Lifecycle};
 #[cfg(target_os = "macos")]
 use super::shell_integration::shell_integration_mode;
 use super::Runtime;
+#[cfg(target_os = "macos")]
+use crate::command_block_timeline::CommandBlockTimeline;
+use crate::{
+    AttachmentId, BlockSummary, ExecutionId, InputIngress, RuntimeError, RuntimeId, WorkspaceId,
+};
 
 impl Runtime {
     pub fn local_ipc_socket_path(&self) -> Option<&Path> {

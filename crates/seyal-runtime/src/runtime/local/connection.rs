@@ -1,14 +1,11 @@
 use seyal_exec::RegistrationToken;
 use seyal_protocol::pass8::CAP_BLOCK_METADATA;
 
-use crate::{
-    AttachmentId,
-    local_ipc::connection::MAX_CONNECTIONS,
-};
+use crate::{local_ipc::connection::MAX_CONNECTIONS, AttachmentId};
 
 use super::super::Runtime;
 
-pub(super) struct ConnectionMeta {
+pub(in crate::runtime) struct ConnectionMeta {
     pub(super) attachment: Option<AttachmentId>,
     pub(super) reactor_token: RegistrationToken,
     pub(super) last_resize_request_id: u64,

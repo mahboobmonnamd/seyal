@@ -4,10 +4,10 @@
 use std::{env, fs, path::PathBuf};
 
 use seyal_runtime::projection::layout::{
-    CELL_LEN, CellRecord, DAMAGE_LEN, DamageRecord, MAX_REGION_BYTES, REGION_HEADER_LEN,
-    SLOT_HEADER_LEN, SlotHeader,
+    CellRecord, DamageRecord, SlotHeader, CELL_LEN, DAMAGE_LEN, MAX_REGION_BYTES,
+    REGION_HEADER_LEN, SLOT_HEADER_LEN,
 };
-use seyal_runtime::projection::writer::{RegionMemory, read_latest, read_region_header};
+use seyal_runtime::projection::writer::{read_latest, read_region_header, RegionMemory};
 
 fn input() -> Vec<u8> {
     let path =

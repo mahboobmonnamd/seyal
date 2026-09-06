@@ -10,15 +10,15 @@ use std::{
 
 use seyal_exec::{CommandSpec, WindowSize};
 use seyal_protocol::pass8::{
-    BLOCK_STATE_MESSAGE_TYPE, BlockLifecycle as WireBlockLifecycle, BlockState, CAP_BLOCK_METADATA,
+    BlockLifecycle as WireBlockLifecycle, BlockState, BLOCK_STATE_MESSAGE_TYPE, CAP_BLOCK_METADATA,
 };
 use seyal_runtime::{
-    BlockLifecycle, ExecutionId, LocalIpcMode, Runtime, RuntimeConfig,
-    display::{DecodedDisplayChunk, DisplayCache, decode_chunk, empty_cache},
+    display::{decode_chunk, empty_cache, DecodedDisplayChunk, DisplayCache},
     local_ipc::framing::{
-        Attach, Attached, ClientHello, FrameHeader, HEADER_LEN, Lifecycle, LifecycleMessage,
-        MessageType, Role, ServerHello, encode_frame,
+        encode_frame, Attach, Attached, ClientHello, FrameHeader, Lifecycle, LifecycleMessage,
+        MessageType, Role, ServerHello, HEADER_LEN,
     },
+    BlockLifecycle, ExecutionId, LocalIpcMode, Runtime, RuntimeConfig,
 };
 
 fn config() -> RuntimeConfig {

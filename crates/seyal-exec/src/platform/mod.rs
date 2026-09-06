@@ -5,8 +5,8 @@ use std::{process::Command, time::Duration};
 
 #[cfg(not(target_os = "macos"))]
 use crate::{
-    ExecError, WindowSize,
     readiness::{Interest, Readiness},
+    ExecError, WindowSize,
 };
 
 pub(crate) type MasterHandle = File;
@@ -44,9 +44,9 @@ pub(crate) use macos::{
 
 #[cfg(target_os = "macos")]
 pub(crate) use macos_reactor::{
-    KqueueHandle, MAX_NATIVE_EVENTS, NativeEvent, NativeEventBuffer, NativeFilter, create_kqueue,
-    deregister_process_exit, deregister_read, deregister_write, register_process_exit,
-    register_read, register_write, trigger_control, wait_events,
+    create_kqueue, deregister_process_exit, deregister_read, deregister_write,
+    register_process_exit, register_read, register_write, trigger_control, wait_events,
+    KqueueHandle, NativeEvent, NativeEventBuffer, NativeFilter, MAX_NATIVE_EVENTS,
 };
 
 #[cfg(not(target_os = "macos"))]

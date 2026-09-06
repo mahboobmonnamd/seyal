@@ -1,9 +1,9 @@
 use std::{
     collections::HashMap,
     sync::{
-        Arc,
         atomic::AtomicUsize,
-        mpsc::{Receiver, SyncSender, sync_channel},
+        mpsc::{sync_channel, Receiver, SyncSender},
+        Arc,
     },
     time::{Duration, Instant},
 };
@@ -13,10 +13,8 @@ use seyal_exec::{
 };
 
 use crate::{
-    ExecutionId, RuntimeError, RuntimeId, WorkspaceId,
-    activity_block_timeline::ActivityBlockTimeline,
-    input::ControlMessage,
-    singleton::SingletonGuard,
+    activity_block_timeline::ActivityBlockTimeline, input::ControlMessage,
+    singleton::SingletonGuard, ExecutionId, RuntimeError, RuntimeId, WorkspaceId,
 };
 
 mod config;
@@ -37,9 +35,9 @@ pub use lifecycle::ExecutionLifecycle;
 #[cfg(feature = "benchmark-instrumentation")]
 pub use config::BenchmarkRuntimeDiagnostics;
 
-use config::{EVENT_CAPACITY, READ_BUFFER_SIZE, ROLLBACK_REAP_TICK};
 #[cfg(feature = "benchmark-instrumentation")]
 use config::BenchmarkRuntimeState;
+use config::{EVENT_CAPACITY, READ_BUFFER_SIZE, ROLLBACK_REAP_TICK};
 use entry::Entry;
 #[cfg(target_os = "macos")]
 use local::LocalIpcState;

@@ -6,8 +6,8 @@
 
 use std::{
     sync::{
-        Mutex, MutexGuard, OnceLock,
         atomic::{AtomicU64, AtomicUsize, Ordering},
+        Mutex, MutexGuard, OnceLock,
     },
     time::Instant,
 };

@@ -3,13 +3,17 @@ import AppKit
 import Metal
 @preconcurrency import QuartzCore
 
-@MainActor
+/// CAMetalDisplayLink invokes its witness on the main run loop without a Swift
+/// MainActor task. Keep this driver off MainActor isolation so the hop closure
+/// can capture state without the compiler inserting `assumeIsolated` (which
+/// Trace/BPTs under Xcode 16.4 Release `--renderer-benchmark`).
 private final class DisplayLinkBenchmarkDriver: NSObject, @preconcurrency CAMetalDisplayLinkDelegate {
-    private let renderer: MetalTerminalRenderer
+    nonisolated(unsafe) private let renderer: MetalTerminalRenderer
     private let link: CAMetalDisplayLink
-    private var startedAt: UInt64?
-    private(set) var samples = [UInt64]()
+    nonisolated(unsafe) private var startedAt: UInt64?
+    nonisolated(unsafe) private(set) var samples = [UInt64]()
 
+    @MainActor
     init(renderer: MetalTerminalRenderer, layer: CAMetalLayer) {
         self.renderer = renderer
         link = CAMetalDisplayLink(metalLayer: layer)
@@ -19,6 +23,7 @@ private final class DisplayLinkBenchmarkDriver: NSObject, @preconcurrency CAMeta
         link.add(to: .main, forMode: .common)
     }
 
+    @MainActor
     func submitOne() -> Bool {
         guard startedAt == nil else { return false }
         renderer.requestPresent()
@@ -39,26 +44,26 @@ private final class DisplayLinkBenchmarkDriver: NSObject, @preconcurrency CAMeta
         return receivedSample
     }
 
-    func metalDisplayLink(
+    nonisolated func metalDisplayLink(
         _ link: CAMetalDisplayLink,
         needsUpdate update: CAMetalDisplayLink.Update
     ) {
-        // Benchmarks always pump the run loop from an established @MainActor
-        // task. Keep the witness MainActor-isolated so Release
-        // --renderer-benchmark does not Trace/BPT through the production
-        // main-queue bitcast hop used by AppKit-only callbacks.
-        link.isPaused = true
-        renderer.drainGPUCompletionsIfNeeded()
-        guard let startedAt,
-              renderer.present(drawable: update.drawable)
-        else {
+        let renderer = self.renderer
+        seyalRunAsMainActorFromMainQueue {
+            link.isPaused = true
+            renderer.drainGPUCompletionsIfNeeded()
+            guard let startedAt = self.startedAt,
+                  renderer.present(drawable: update.drawable)
+            else {
+                self.startedAt = nil
+                return
+            }
+            self.samples.append(DispatchTime.now().uptimeNanoseconds - startedAt)
             self.startedAt = nil
-            return
         }
-        samples.append(DispatchTime.now().uptimeNanoseconds - startedAt)
-        self.startedAt = nil
     }
 
+    @MainActor
     func invalidate() {
         link.delegate = nil
         link.invalidate()

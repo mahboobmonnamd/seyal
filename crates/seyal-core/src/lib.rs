@@ -5,8 +5,8 @@
 use std::{
     fmt,
     sync::{
-        OnceLock,
         atomic::{AtomicU64, Ordering},
+        OnceLock,
     },
     time::{SystemTime, UNIX_EPOCH},
 };

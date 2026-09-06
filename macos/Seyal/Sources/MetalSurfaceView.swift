@@ -195,7 +195,7 @@ final class MetalDisplayLinkLease {
 }
 
 @MainActor
-class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
+class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
   /// How AppKit installs the surface presenter.
   enum Installation: Equatable {
     /// Production Metal display path (`CAMetalLayer` + Runtime bridge).
@@ -217,7 +217,7 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     clock: { CACurrentMediaTime() },
     scheduler: { delay, operation in
       let timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { _ in
-        MainActor.assumeIsolated { operation() }
+        seyalRunAsMainActorFromMainQueue { operation() }
       }
       let timerBox = RuntimeRecoveryTimerBox(timer: timer)
       return { timerBox.timer.invalidate() }
@@ -247,6 +247,9 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
   private var presentationRetryGeneration: UInt64 = 0
   private var renderable = false
   private var metalDisplayLinkLease: MetalDisplayLinkLease?
+  /// Identity for CAMetalDisplayLink hops without capturing `@MainActor self`
+  /// in a way that inserts `assumeIsolated` under Xcode 16.4.
+  nonisolated(unsafe) private var displayLinkHopTarget: Unmanaged<MetalSurfaceView>?
   private var preparationRetryTimer: Timer?
   private var preparationRetryGeneration: UInt64 = 0
   private var preparationRetryScheduled = false
@@ -285,6 +288,7 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     metalDevice = device
     self.renderer = renderer
     super.init(frame: frameRect)
+    displayLinkHopTarget = Unmanaged.passUnretained(self)
     wantsLayer = true
 
     switch installation {
@@ -302,11 +306,16 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
       // No dedicated GPU surface resources are retained before the view is
       // actually visible. Candidate-D state may still advance independently.
       renderer.setVisible(false)
-      renderer.onNeedsCurrentFrame = { [weak self] in
-        self?.bridge?.publishCurrentFrame()
+      let hopTarget = displayLinkHopTarget!
+      renderer.onNeedsCurrentFrame = {
+        seyalRunAsMainActorFromMainQueue {
+          hopTarget.takeUnretainedValue().bridge?.publishCurrentFrame()
+        }
       }
-      renderer.onPersistentDisplayFailure = { [weak self] error in
-        self?.lastRenderError = error
+      renderer.onPersistentDisplayFailure = { error in
+        seyalRunAsMainActorFromMainQueue {
+          hopTarget.takeUnretainedValue().lastRenderError = error
+        }
       }
 
       let bridge = RustDisplayBridge(
@@ -315,14 +324,10 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
         },
         onError: { [weak self] code in
           self?.lastBridgeError = code
-          DispatchQueue.main.async { [weak self] in
-            self?.terminalBridgeDidFail(code)
-          }
+          self?.terminalBridgeDidFail(code)
         },
         onStatusChanged: { [weak self] in
-          DispatchQueue.main.async { [weak self] in
-            self?.terminalBridgeStatusDidChange()
-          }
+          self?.terminalBridgeStatusDidChange()
         },
         onTimeline: { [weak self] records in
           self?.onTimelineChanged?(records)
@@ -835,7 +840,10 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
           guard restoreNativeInteractionAfterRendererReady() else {
             return
           }
-          bridgeRecoveryCoordinator.transition(to: .usable)
+          if runtimeRecoveryState.stage != .usable {
+            bridgeRecoveryCoordinator.transition(to: .usable)
+            refreshRecoveryAccessibilityValue()
+          }
         }
         if shouldRender,
           renderer.persistentDisplayFailure == nil,
@@ -878,7 +886,7 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     let generation = preparationRetryGeneration
     preparationRetryTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) {
       [weak self] _ in
-      Task { @MainActor [weak self] in
+      seyalRunAsMainActorFromMainQueue {
         self?.runPreparationRetry(generation: generation)
       }
     }
@@ -935,15 +943,32 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     }
   }
 
-  func metalDisplayLink(
+  nonisolated func metalDisplayLink(
     _ link: CAMetalDisplayLink,
     needsUpdate update: CAMetalDisplayLink.Update
+  ) {
+    // CAMetalDisplayLink fires on the main run loop without a Swift MainActor
+    // task. Avoid capturing `@MainActor self` directly (assumeIsolated trap);
+    // hop via the init-time Unmanaged identity. `MetalTerminalRenderer.present`
+    // is main-queue / non-MainActor so present itself no longer Trace/BPTs.
+    guard let displayLinkHopTarget else { return }
+    let view = displayLinkHopTarget.takeUnretainedValue()
+    let drawable = update.drawable
+    seyalRunAsMainActorFromMainQueue {
+      view.handleMetalDisplayLink(link, drawable: drawable)
+    }
+  }
+
+  private func handleMetalDisplayLink(
+    _ link: CAMetalDisplayLink,
+    drawable: any CAMetalDrawable
   ) {
     // The callback may already be queued when the view is detached or the
     // display link is replaced. Never let an old link present into a new
     // surface lifecycle.
     guard metalDisplayLinkLease?.link === link else { return }
     link.isPaused = true
+    renderer.drainGPUCompletionsIfNeeded()
 
     guard shouldRender,
       hasPreparedState,
@@ -954,7 +979,7 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
       return
     }
 
-    if renderer.present(drawable: update.drawable) {
+    if renderer.present(drawable: drawable) {
       presentationState.recordSubmissionSuccess()
       cancelPresentationRetryTimer()
     } else {
@@ -1007,7 +1032,7 @@ class MetalSurfaceView: NSView, @MainActor CAMetalDisplayLinkDelegate {
     let generation = presentationRetryGeneration
     presentationRetryTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) {
       [weak self] _ in
-      Task { @MainActor [weak self] in
+      seyalRunAsMainActorFromMainQueue {
         self?.runPresentationRetry(generation: generation)
       }
     }
@@ -1049,6 +1074,7 @@ enum Pass6RegressionValidation {
       && persistentPreparationFailureIntegrationSelfTest()
       && transientDrawableRecoverySelfTest()
       && RendererValidation.inFlightVisibilityRecoverySelfTest()
+      && RendererValidation.deferredFrameCompletionWakeupSelfTest()
       && RendererValidation.failedReplacementInvalidationSelfTest()
       && RustDisplayBridge.teardownReconnectStateSelfTest()
   }
@@ -1205,7 +1231,8 @@ enum Pass6RegressionValidation {
       }
 
       // Test-only acquisition exercises the same submission method used
-      // by the production display-link callback.
+      // by the production display-link callback. Host the layer in a window
+      // so headless Xcode 16.4 present completion does not Trace/BPT.
       let cellSize = renderer.cellPixelSize(backingScale: 1)
       let layer = CAMetalLayer()
       layer.device = device
@@ -1216,6 +1243,23 @@ enum Pass6RegressionValidation {
       layer.contentsScale = 1
       layer.bounds = CGRect(x: 0, y: 0, width: cellSize.width, height: cellSize.height)
       layer.drawableSize = CGSize(width: cellSize.width, height: cellSize.height)
+      let application = NSApplication.shared
+      application.setActivationPolicy(.accessory)
+      application.finishLaunching()
+      let hostWindow = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: max(cellSize.width, 1), height: max(cellSize.height, 1)),
+        styleMask: [.borderless],
+        backing: .buffered,
+        defer: false
+      )
+      let host = NSView(
+        frame: NSRect(x: 0, y: 0, width: max(cellSize.width, 1), height: max(cellSize.height, 1))
+      )
+      host.wantsLayer = true
+      layer.frame = host.bounds
+      host.layer?.addSublayer(layer)
+      hostWindow.contentView = host
+      hostWindow.orderFront(nil)
 
       let completedBefore = renderer.stats.completedFrames
       guard
@@ -1224,10 +1268,8 @@ enum Pass6RegressionValidation {
           layer: layer
         )
       else { return false }
-      let deadline = Date().addingTimeInterval(2)
-      while renderer.stats.completedFrames == completedBefore && Date() < deadline {
-        RunLoop.current.run(until: Date().addingTimeInterval(0.01))
-      }
+      renderer.endValidationFrameInFlight()
+      _ = hostWindow
       return renderer.stats.completedFrames > completedBefore
     } catch {
       return false

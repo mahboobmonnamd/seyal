@@ -231,12 +231,16 @@ private final class RustBridgeTeardownCoordinator: @unchecked Sendable {
     lock.unlock()
 
     if Thread.isMainThread {
-      finishDisconnectOnMain()
+      seyalRunAsMainActorFromMainQueue {
+        self.finishDisconnectOnMain()
+      }
       return
     }
 
     DispatchQueue.main.async { [self] in
-      finishDisconnectOnMain()
+      seyalRunAsMainActorFromMainQueue {
+        self.finishDisconnectOnMain()
+      }
     }
   }
 
@@ -261,12 +265,12 @@ private final class RustBridgeTeardownCoordinator: @unchecked Sendable {
 
 @MainActor
 final class RustDisplayBridge {
-  typealias FrameHandler = (SeyalPreparedFrame) -> Void
-  typealias TimelineHandler = ([NativeBlockRecord]) -> Void
-  typealias HistoryHandler = (NativeHistoryRange) -> Void
-  typealias ComposerResultHandler = (NativeComposerResult) -> Void
-  typealias ErrorHandler = (Int32) -> Void
-  typealias StatusHandler = () -> Void
+  typealias FrameHandler = @MainActor (SeyalPreparedFrame) -> Void
+  typealias TimelineHandler = @MainActor ([NativeBlockRecord]) -> Void
+  typealias HistoryHandler = @MainActor (NativeHistoryRange) -> Void
+  typealias ComposerResultHandler = @MainActor (NativeComposerResult) -> Void
+  typealias ErrorHandler = @MainActor (Int32) -> Void
+  typealias StatusHandler = @MainActor () -> Void
 
   struct RecoveryResult: Equatable {
     let stage: UInt8
@@ -499,9 +503,11 @@ final class RustDisplayBridge {
     runtimeBlockMetadata = currentBlockMetadata()
     let source = DispatchSource.makeReadSource(fileDescriptor: fileDescriptor, queue: .main)
     source.setEventHandler { [weak self] in
-      self?.drainReadyDisplayWork()
+      seyalRunAsMainActorFromMainQueue {
+        self?.drainReadyDisplayWork()
+      }
     }
-    source.setCancelHandler { [teardown] in
+    source.setCancelHandler { [teardown = teardown!] in
       teardown.sourceCancelled()
     }
     teardown.sourceCreated()
@@ -977,9 +983,11 @@ final class RustDisplayBridge {
       queue: .main
     )
     source.setEventHandler { [weak self] in
-      self?.flushReadyControlWork()
+      seyalRunAsMainActorFromMainQueue {
+        self?.flushReadyControlWork()
+      }
     }
-    source.setCancelHandler { [teardown] in
+    source.setCancelHandler { [teardown = teardown!] in
       teardown.sourceCancelled()
     }
     teardown.sourceCreated()

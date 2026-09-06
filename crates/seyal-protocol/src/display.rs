@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use crate::framing::{FrameHeader, HEADER_LEN, MessageType};
+use crate::framing::{FrameHeader, MessageType, HEADER_LEN};
 
 pub const DISPLAY_CHUNK_HEADER_LEN: usize = 40;
 pub const DISPLAY_CELL_LEN: usize = 16;

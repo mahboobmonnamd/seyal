@@ -1,14 +1,14 @@
 use seyal_exec::{Color, LineId};
 
 use crate::{
-    ExecutionId, RuntimeError,
     local_ipc::{
         attachment::AttachmentError,
         framing::{
-            self, BlockTimeline, CAP_COMMAND_BLOCKS, CommandBlock, CommandBlockState, ErrorCode,
-            MessageType,
+            self, BlockTimeline, CommandBlock, CommandBlockState, ErrorCode, MessageType,
+            CAP_COMMAND_BLOCKS,
         },
     },
+    ExecutionId,
 };
 
 use super::super::Runtime;
@@ -141,10 +141,12 @@ impl Runtime {
                 start_line: record.start_line,
                 end_line: record.end_line,
                 state: match record.lifecycle {
-                    crate::command_block_timeline::CommandBlockLifecycle::Running => CommandBlockState::Running,
-                    crate::command_block_timeline::CommandBlockLifecycle::Completed { exit_status } => {
-                        CommandBlockState::Completed { exit_status }
+                    crate::command_block_timeline::CommandBlockLifecycle::Running => {
+                        CommandBlockState::Running
                     }
+                    crate::command_block_timeline::CommandBlockLifecycle::Completed {
+                        exit_status,
+                    } => CommandBlockState::Completed { exit_status },
                 },
             })
             .collect();

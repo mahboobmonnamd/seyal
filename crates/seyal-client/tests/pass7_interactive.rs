@@ -12,7 +12,7 @@ use std::{
 
 use seyal_client::{ClientError, GridGeometry, InputAdmissionFailure, LocalDisplayClient};
 use seyal_exec::{CommandSpec, WindowSize};
-use seyal_runtime::{ExecutionId, LocalIpcMode, Runtime, RuntimeConfig, local_ipc::framing::Role};
+use seyal_runtime::{local_ipc::framing::Role, ExecutionId, LocalIpcMode, Runtime, RuntimeConfig};
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 

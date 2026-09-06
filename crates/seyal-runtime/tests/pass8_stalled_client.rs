@@ -8,13 +8,13 @@ use std::{
 
 use seyal_exec::{CommandSpec, WindowSize};
 use seyal_protocol::pass8::{
-    BLOCK_STATE_MESSAGE_TYPE, BlockLifecycle, BlockState, CAP_BLOCK_METADATA,
+    BlockLifecycle, BlockState, BLOCK_STATE_MESSAGE_TYPE, CAP_BLOCK_METADATA,
 };
 use seyal_runtime::{
-    LocalIpcMode, Runtime, RuntimeConfig,
     local_ipc::framing::{
-        Attach, ClientHello, FrameHeader, HEADER_LEN, MessageType, Role, encode_frame,
+        encode_frame, Attach, ClientHello, FrameHeader, MessageType, Role, HEADER_LEN,
     },
+    LocalIpcMode, Runtime, RuntimeConfig,
 };
 
 fn config() -> RuntimeConfig {

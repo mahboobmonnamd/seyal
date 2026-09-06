@@ -13,9 +13,14 @@ mod error;
 mod line;
 mod modes;
 mod parser;
+mod protocol_reply;
 mod screen;
 mod style;
 mod terminal;
+
+#[cfg(feature = "test-fault-injection")]
+#[doc(hidden)]
+pub mod test_fault;
 
 pub use cell::Cell;
 pub use color::Color;
@@ -24,5 +29,8 @@ pub use damage::Damage;
 pub use error::TerminalError;
 pub use line::LineId;
 pub use modes::ModeState;
+pub use protocol_reply::{ProtocolReply, MAX_PROTOCOL_REPLIES, MAX_PROTOCOL_REPLY_BYTES};
 pub use style::Style;
-pub use terminal::{Diagnostics, ShellIntegrationEvent, ShellIntegrationToken, TerminalState};
+pub use terminal::{
+    Diagnostics, PreparedResize, ShellIntegrationEvent, ShellIntegrationToken, TerminalState,
+};

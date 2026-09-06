@@ -1,10 +1,13 @@
 use std::cell::Cell;
 
-use crate::{ClientError, local::{InputAdmissionFailure, ResizeFailure}};
+use crate::{
+    local::{InputAdmissionFailure, ResizeFailure},
+    ClientError,
+};
 
 use super::{
-    ACTIVE_HANDLE, CLIENTS, LAST_RECOVERY_RESULT, active_handle, identity_words, pending_clients,
-    with_active_client, SeyalPass9DiagSnapshot, SeyalRecoveryResult,
+    identity_words, pending_clients, with_active_client, SeyalPass9DiagSnapshot,
+    SeyalRecoveryResult, ACTIVE_HANDLE, CLIENTS, LAST_RECOVERY_RESULT,
 };
 
 #[unsafe(no_mangle)]

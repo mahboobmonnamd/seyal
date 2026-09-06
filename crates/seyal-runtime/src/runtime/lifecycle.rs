@@ -2,7 +2,9 @@ use std::time::{Duration, Instant};
 
 use seyal_exec::ChildExit;
 
-use super::config::{TERMINATION_FAILED_REAP_LIMIT, TERMINATION_FAILED_RETRY_INITIAL, TERMINATION_FAILED_RETRY_MAX};
+use super::config::{
+    TERMINATION_FAILED_REAP_LIMIT, TERMINATION_FAILED_RETRY_INITIAL, TERMINATION_FAILED_RETRY_MAX,
+};
 use crate::BlockSummary;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

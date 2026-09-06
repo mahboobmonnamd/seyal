@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use crate::{AttachmentId, ExecutionId, local_ipc::framing::Role};
+use crate::{local_ipc::framing::Role, AttachmentId, ExecutionId};
 
 pub const MAX_LIVE_ATTACHMENTS: usize = 16;
 
@@ -245,11 +245,9 @@ mod tests {
         );
         assert_eq!(registry.authorize_mutation(1, first), Ok(exec(1)));
         registry.detach_for_connection(1, first).unwrap();
-        assert!(
-            registry
-                .create_attachment(exec(1), Role::Controller, 2)
-                .is_ok()
-        );
+        assert!(registry
+            .create_attachment(exec(1), Role::Controller, 2)
+            .is_ok());
     }
 
     #[test]

@@ -9,9 +9,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::projection::layout::{
-    CELL_LEN, CellRecord, DAMAGE_LEN, DamageRecord, LayoutError, ModeFlags,
-    PUBLICATION_WORD_OFFSET, REGION_HEADER_LEN, RegionHeader, SLOT_HEADER_LEN,
-    SLOT_SEQUENCE_OFFSET, SlotHeader,
+    CellRecord, DamageRecord, LayoutError, ModeFlags, RegionHeader, SlotHeader, CELL_LEN,
+    DAMAGE_LEN, PUBLICATION_WORD_OFFSET, REGION_HEADER_LEN, SLOT_HEADER_LEN, SLOT_SEQUENCE_OFFSET,
 };
 
 #[derive(Clone, Copy)]
@@ -712,8 +711,8 @@ mod tests {
 
     #[test]
     fn aggressive_concurrent_writer_and_reader_never_observe_a_torn_generation() {
-        use std::sync::Arc;
         use std::sync::atomic::AtomicBool;
+        use std::sync::Arc;
 
         let region = small_region_header(3, 5, 4096);
         let (storage, memory) = aligned_region(region.region_bytes as usize);

@@ -16,6 +16,11 @@ mod readiness;
 #[cfg(all(target_os = "macos", feature = "test-fault-injection"))]
 #[doc(hidden)]
 pub mod test_fault;
+#[cfg(feature = "test-fault-injection")]
+#[doc(hidden)]
+pub mod terminal_test_fault {
+    pub use seyal_terminal::test_fault::*;
+}
 mod winsize;
 
 pub use child::{ChildExit, SignalDisposition, TerminationPolicy};
@@ -35,5 +40,7 @@ pub use reactor::{
     ExecutionReactor, ReactorEvent, ReactorEventKind, ReactorWaker, RegistrationToken,
 };
 pub use readiness::Readiness;
-pub use seyal_terminal::{Color, LineId, ShellIntegrationEvent, ShellIntegrationToken};
+pub use seyal_terminal::{
+    Color, LineId, ProtocolReply, ShellIntegrationEvent, ShellIntegrationToken,
+};
 pub use winsize::WindowSize;

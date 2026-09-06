@@ -18,6 +18,8 @@ runtime_failure_matrix() {
     --test runtime_adversarial \
     --test pass8_block_failures \
     --test display_publish_bookkeeping
+  cargo_pinned test -p seyal-exec --locked --features test-fault-injection \
+    --test macos_pty
 }
 
 case "$cmd" in

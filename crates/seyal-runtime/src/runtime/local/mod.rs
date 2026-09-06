@@ -9,12 +9,8 @@ use seyal_exec::{ExecutionReactor, RegistrationToken};
 #[cfg(feature = "test-fault-injection")]
 use crate::test_fault::{self, FaultPoint};
 use crate::{
+    local_ipc::{attachment::AttachmentRegistry, connection::LocalIpcServer, discovery},
     ExecutionId, RuntimeError,
-    local_ipc::{
-        attachment::AttachmentRegistry,
-        connection::LocalIpcServer,
-        discovery,
-    },
 };
 
 use connection::ConnectionMeta;

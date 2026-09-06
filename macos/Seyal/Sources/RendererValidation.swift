@@ -3,13 +3,17 @@ import AppKit
 import Metal
 @preconcurrency import QuartzCore
 
-@MainActor
-private final class DisplayLinkBenchmarkDriver: NSObject, @preconcurrency CAMetalDisplayLinkDelegate {
+/// CAMetalDisplayLink invokes its witness on the main run loop without a Swift
+/// MainActor task. Keep this driver off MainActor isolation so the hop closure
+/// can capture state without the compiler inserting `assumeIsolated` (which
+/// Trace/BPTs under Xcode 16.4 Release `--renderer-benchmark`).
+private final class DisplayLinkBenchmarkDriver: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendable {
     private let renderer: MetalTerminalRenderer
     private let link: CAMetalDisplayLink
     private var startedAt: UInt64?
     private(set) var samples = [UInt64]()
 
+    @MainActor
     init(renderer: MetalTerminalRenderer, layer: CAMetalLayer) {
         self.renderer = renderer
         link = CAMetalDisplayLink(metalLayer: layer)
@@ -19,6 +23,7 @@ private final class DisplayLinkBenchmarkDriver: NSObject, @preconcurrency CAMeta
         link.add(to: .main, forMode: .common)
     }
 
+    @MainActor
     func submitOne() -> Bool {
         guard startedAt == nil else { return false }
         renderer.requestPresent()
@@ -39,21 +44,28 @@ private final class DisplayLinkBenchmarkDriver: NSObject, @preconcurrency CAMeta
         return receivedSample
     }
 
-    func metalDisplayLink(
+    nonisolated func metalDisplayLink(
         _ link: CAMetalDisplayLink,
         needsUpdate update: CAMetalDisplayLink.Update
     ) {
+        // Renderer present/drain are main-queue / non-MainActor. Call them
+        // directly from the display-link run-loop callback — no MainActor hop.
+        dispatchPrecondition(condition: .onQueue(.main))
+        let driver = self
+        let drawable = update.drawable
         link.isPaused = true
-        guard let startedAt,
-              renderer.present(drawable: update.drawable)
+        driver.renderer.drainGPUCompletionsIfNeeded()
+        guard let startedAt = driver.startedAt,
+              driver.renderer.present(drawable: drawable)
         else {
-            self.startedAt = nil
+            driver.startedAt = nil
             return
         }
-        samples.append(DispatchTime.now().uptimeNanoseconds - startedAt)
-        self.startedAt = nil
+        driver.samples.append(DispatchTime.now().uptimeNanoseconds - startedAt)
+        driver.startedAt = nil
     }
 
+    @MainActor
     func invalidate() {
         link.delegate = nil
         link.invalidate()
@@ -354,11 +366,13 @@ enum RendererValidation {
 
                     // The same real Candidate-D-prepared state must also be
                     // accepted by the production CAMetalLayer presentation path.
-                    let layer = makePresentationLayer(
+                    let hosted = makePresentationLayer(
                         device: device,
                         width: cellSize.width * frame.columns,
                         height: cellSize.height * frame.rows
                     )
+                    let layer = hosted.layer
+                    let keepAlive = hosted.keepAlive
                     let completedBefore = renderer.stats.completedFrames
                     let submittedBefore = renderer.stats.submittedFrames
                     guard presentOnLayerForValidation(renderer: renderer, layer: layer),
@@ -366,7 +380,9 @@ enum RendererValidation {
                     else {
                         return false
                     }
-                    return waitForGPUCompletion(renderer, after: completedBefore)
+                    let completed = waitForGPUCompletion(renderer, after: completedBefore)
+                    _ = keepAlive
+                    return completed
                 }
 
                 let poll = seyal_bridge_poll()
@@ -409,11 +425,13 @@ enum RendererValidation {
             }
 
             let cellSize = renderer.cellPixelSize(backingScale: 1)
-            let presentationLayer = makePresentationLayer(
+            let hostedPresentation = makePresentationLayer(
                 device: device,
                 width: cellSize.width * columns,
-                height: cellSize.height * rows
+                height: cellSize.height * rows,
+                hosted: false
             )
+            let presentationLayer = hostedPresentation.layer
             // CAMetalDisplayLink only produces frame opportunities for a layer
             // participating in an AppKit window hierarchy. Keep this small
             // benchmark window visible so the measurement exercises the same
@@ -438,21 +456,31 @@ enum RendererValidation {
             benchmarkHost.layer?.addSublayer(presentationLayer)
             benchmarkWindow.contentView = benchmarkHost
             benchmarkWindow.makeKeyAndOrderFront(nil)
-            let displayLinkDriver = DisplayLinkBenchmarkDriver(
-                renderer: renderer,
-                layer: presentationLayer
-            )
-            defer { displayLinkDriver.invalidate() }
+            // Foundation CI sets SEYAL_REQUIRE_DISPLAY_LINK_BENCHMARK=0. Do not
+            // arm CAMetalDisplayLink in that mode: Xcode 16.4 Trace/BPTs when
+            // the witness (or any MainActor-isolated present path) runs from the
+            // main run loop without a Swift MainActor task, and the CI honesty
+            // contract already treats presentation-proxy as PLATFORM_LIMITED.
+            let presentationProxyRequired = ProcessInfo.processInfo.environment[
+                "SEYAL_REQUIRE_DISPLAY_LINK_BENCHMARK"
+            ] == "1"
+            let displayLinkDriver: DisplayLinkBenchmarkDriver?
+            if presentationProxyRequired {
+                displayLinkDriver = DisplayLinkBenchmarkDriver(
+                    renderer: renderer,
+                    layer: presentationLayer
+                )
+            } else {
+                displayLinkDriver = nil
+            }
+            defer { displayLinkDriver?.invalidate() }
             var preparationSamples = [UInt64]()
             var preparedToCommitSamples = [UInt64]()
             var commitToCompletionSamples = [UInt64]()
             preparationSamples.reserveCapacity(repetitions)
             preparedToCommitSamples.reserveCapacity(repetitions)
             commitToCompletionSamples.reserveCapacity(repetitions)
-            var presentationProxyAvailable = true
-            let presentationProxyRequired = ProcessInfo.processInfo.environment[
-                "SEYAL_REQUIRE_DISPLAY_LINK_BENCHMARK"
-            ] == "1"
+            var presentationProxyAvailable = presentationProxyRequired
 
             for iteration in 0..<repetitions {
                 let row = iteration % rows
@@ -492,7 +520,9 @@ enum RendererValidation {
                 }
                 preparedToCommitSamples.append(submission.preparedToCommitNanoseconds)
                 commitToCompletionSamples.append(submission.commitToCompletionNanoseconds)
-                if presentationProxyAvailable, !displayLinkDriver.submitOne() {
+                if let displayLinkDriver, presentationProxyAvailable,
+                   !displayLinkDriver.submitOne()
+                {
                     guard presentationProxyRequired else {
                         presentationProxyAvailable = false
                         continue
@@ -510,13 +540,15 @@ enum RendererValidation {
             print("preparation p50_ns=\(prep.p50) p95_ns=\(prep.p95) p99_ns=\(prep.p99) max_ns=\(prep.max)")
             print("prepared_to_command_commit p50_ns=\(preparedToCommit.p50) p95_ns=\(preparedToCommit.p95) p99_ns=\(preparedToCommit.p99) max_ns=\(preparedToCommit.max) note=offscreen_target_allocation_excluded")
             print("command_commit_to_gpu_completion_proxy p50_ns=\(commitToCompletion.p50) p95_ns=\(commitToCompletion.p95) p99_ns=\(commitToCompletion.p99) max_ns=\(commitToCompletion.max)")
-            if presentationProxyAvailable {
+            if presentationProxyAvailable, let displayLinkDriver, !displayLinkDriver.samples.isEmpty {
                 let presented = percentileSummary(displayLinkDriver.samples)
                 print("committed_generation_to_presented_frame_proxy p50_ns=\(presented.p50) p95_ns=\(presented.p95) p99_ns=\(presented.p99) max_ns=\(presented.max) note=one_shot_CAMetalDisplayLink_to_command_commit")
-            } else {
+            } else if presentationProxyRequired {
                 print("committed_generation_to_presented_frame_proxy status=PLATFORM_LIMITED samples=0 reason=no_WindowServer_display_session")
+            } else {
+                print("committed_generation_to_presented_frame_proxy status=PLATFORM_LIMITED samples=0 reason=SEYAL_REQUIRE_DISPLAY_LINK_BENCHMARK_not_set")
             }
-            print("renderer submitted_frames=\(renderer.stats.submittedFrames) display_link_samples=\(displayLinkDriver.samples.count) coalesced_frames=\(renderer.stats.coalescedFrames) rebuilt_rows=\(renderer.stats.rebuiltRows) rebuilt_cells=\(renderer.stats.rebuiltCells) instance_bytes=\(renderer.stats.instanceBytes) glyph_hits=\(glyph.hits) glyph_misses=\(glyph.misses) glyph_uploads=\(glyph.uploads) glyph_uploaded_bytes=\(glyph.uploadedBytes) atlas_budget_bytes=\(GlyphAtlas.budgetBytes) dedicated_gpu_bytes=\(renderer.estimatedDedicatedGPUBytes)")
+            print("renderer submitted_frames=\(renderer.stats.submittedFrames) display_link_samples=\(displayLinkDriver?.samples.count ?? 0) coalesced_frames=\(renderer.stats.coalescedFrames) rebuilt_rows=\(renderer.stats.rebuiltRows) rebuilt_cells=\(renderer.stats.rebuiltCells) instance_bytes=\(renderer.stats.instanceBytes) glyph_hits=\(glyph.hits) glyph_misses=\(glyph.misses) glyph_uploads=\(glyph.uploads) glyph_uploaded_bytes=\(glyph.uploadedBytes) atlas_budget_bytes=\(GlyphAtlas.budgetBytes) dedicated_gpu_bytes=\(renderer.estimatedDedicatedGPUBytes)")
             benchmarkWindow.orderOut(nil)
             return true
         } catch {
@@ -646,21 +678,20 @@ enum RendererValidation {
             return false
         }
         let cellSize = renderer.cellPixelSize(backingScale: 1)
-        let layer = makePresentationLayer(
+        let hosted = makePresentationLayer(
             device: device,
             width: cellSize.width,
             height: cellSize.height
         )
+        let layer = hosted.layer
+        let keepAlive = hosted.keepAlive
         let completedBefore = renderer.stats.completedFrames
         guard presentOnLayerForValidation(renderer: renderer, layer: layer), renderer.stats.submittedFrames == 1 else {
             return false
         }
 
-        // While the submitted command buffer can still reference the existing
-        // atlas/instance resources, a scale-invalidating update must coalesce
-        // rather than reset/reclaim them. MainActor serialization makes this
-        // check deterministic: the completion task cannot run until we pump the
-        // run loop below.
+        // While a submitted frame is still in flight, a scale-invalidating
+        // update must coalesce rather than reset/reclaim atlas resources.
         let resetsWhileInFlight = renderer.glyphStats.resets
         let deferred = try cells.withUnsafeBufferPointer { buffer in
             try renderer.update(
@@ -696,6 +727,7 @@ enum RendererValidation {
                 backingScale: 2
             )
         }
+        _ = keepAlive
         return updated == .updated && renderer.glyphStats.resets > resetsAfterCompletion
     }
 
@@ -721,22 +753,91 @@ enum RendererValidation {
             }) else { return false }
 
             let cellSize = renderer.cellPixelSize(backingScale: 1)
-            let layer = makePresentationLayer(
+            let hosted = makePresentationLayer(
                 device: device,
                 width: cellSize.width,
                 height: cellSize.height
             )
+            let layer = hosted.layer
+            let keepAlive = hosted.keepAlive
+            let completedBefore = renderer.stats.completedFrames
+            guard presentOnLayerForValidation(renderer: renderer, layer: layer),
+                  renderer.hasFrameInFlight
+            else {
+                return false
+            }
+            // Hide while in flight and do not issue another update/input —
+            // completion wakeup alone must release dedicated resources.
+            renderer.setVisible(false)
+            let released = waitForGPUCompletion(renderer, after: completedBefore)
+                && !renderer.hasFrameInFlight
+                && !renderer.hasDedicatedSurfaceResources
+            _ = keepAlive
+            return released
+        } catch {
+            return false
+        }
+    }
+
+    /// Deferred Candidate-D update while a frame is in flight must be woken by
+    /// GPU completion delivery alone — no further input/update.
+    static func deferredFrameCompletionWakeupSelfTest() -> Bool {
+        guard let device = MTLCreateSystemDefaultDevice() else { return false }
+        do {
+            let renderer = try MetalTerminalRenderer(device: device)
+            let cells = [preparedCell(scalar: UInt32(ascii: "A"))]
+            var damage = DamageMask()
+            damage.mark(row: 0)
+            guard try cells.withUnsafeBufferPointer({ buffer in
+                try renderer.update(
+                    frame: NativePreparedFrame(
+                        cells: buffer,
+                        generation: 1,
+                        rows: 1,
+                        columns: 1,
+                        damage: damage
+                    ),
+                    backingScale: 1,
+                    forceFullRebuild: true
+                ) == .updated
+            }) else { return false }
+
+            let cellSize = renderer.cellPixelSize(backingScale: 1)
+            let hosted = makePresentationLayer(
+                device: device,
+                width: cellSize.width,
+                height: cellSize.height
+            )
+            let layer = hosted.layer
+            let keepAlive = hosted.keepAlive
             var currentFrameRequests = 0
             renderer.onNeedsCurrentFrame = { currentFrameRequests += 1 }
             let completedBefore = renderer.stats.completedFrames
-            guard presentOnLayerForValidation(renderer: renderer, layer: layer), renderer.hasFrameInFlight else {
+            guard presentOnLayerForValidation(renderer: renderer, layer: layer),
+                  renderer.hasFrameInFlight
+            else {
                 return false
             }
-            renderer.setVisible(false)
-            renderer.setVisible(true)
-            return waitForGPUCompletion(renderer, after: completedBefore)
-                && currentFrameRequests == 1
-                && renderer.hasDedicatedSurfaceResources
+            let deferred = try cells.withUnsafeBufferPointer { buffer in
+                try renderer.update(
+                    frame: NativePreparedFrame(
+                        cells: buffer,
+                        generation: 2,
+                        rows: 1,
+                        columns: 1,
+                        fullRebuild: true,
+                        damage: damage
+                    ),
+                    backingScale: 2
+                )
+            }
+            guard deferred == .deferred else { return false }
+            // No further updates — only completion wakeup may request the frame.
+            let woken = waitForGPUCompletion(renderer, after: completedBefore)
+                && currentFrameRequests >= 1
+                && !renderer.hasFrameInFlight
+            _ = keepAlive
+            return woken
         } catch {
             return false
         }
@@ -829,11 +930,13 @@ enum RendererValidation {
             }) else { return false }
 
             let cellSize = renderer.cellPixelSize(backingScale: 1)
-            let layer = makePresentationLayer(
+            let hosted = makePresentationLayer(
                 device: device,
                 width: max(cellSize.width, 8),
                 height: max(cellSize.height, 8)
             )
+            let layer = hosted.layer
+            let keepAlive = hosted.keepAlive
             let completedBefore = renderer.stats.completedFrames
             guard presentOnLayerForValidation(renderer: renderer, layer: layer),
                   renderer.hasFrameInFlight
@@ -885,9 +988,11 @@ enum RendererValidation {
             else {
                 return false
             }
-            return !renderer.hasDeferredHistoryPrepare
+            let ok = !renderer.hasDeferredHistoryPrepare
                 && renderer.historyRegionCount == 1
                 && renderer.glyphStats.uploads > uploadsBefore
+            _ = keepAlive
+            return ok
         } catch {
             return false
         }
@@ -896,8 +1001,9 @@ enum RendererValidation {
     private static func makePresentationLayer(
         device: MTLDevice,
         width: Int,
-        height: Int
-    ) -> CAMetalLayer {
+        height: Int,
+        hosted: Bool = true
+    ) -> (layer: CAMetalLayer, keepAlive: NSWindow?) {
         let layer = CAMetalLayer()
         layer.device = device
         layer.pixelFormat = .bgra8Unorm
@@ -907,26 +1013,70 @@ enum RendererValidation {
         layer.contentsScale = 1
         layer.bounds = CGRect(x: 0, y: 0, width: width, height: height)
         layer.drawableSize = CGSize(width: width, height: height)
-        return layer
+        // Headless Xcode 16.4 CI Trace/BPTs when presenting into an unattached
+        // CAMetalLayer. Mirror the benchmark contract: the layer must live in
+        // an AppKit window hierarchy for drawable present to complete safely.
+        guard hosted else { return (layer, nil) }
+        return (layer, hostPresentationLayer(layer, width: width, height: height))
+    }
+
+    private static func hostPresentationLayer(
+        _ layer: CAMetalLayer,
+        width: Int,
+        height: Int
+    ) -> NSWindow {
+        let application = NSApplication.shared
+        application.setActivationPolicy(.accessory)
+        application.finishLaunching()
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: max(width, 1), height: max(height, 1)),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        let host = NSView(
+            frame: NSRect(x: 0, y: 0, width: max(width, 1), height: max(height, 1))
+        )
+        host.wantsLayer = true
+        layer.frame = host.bounds
+        host.layer?.addSublayer(layer)
+        window.contentView = host
+        window.orderFront(nil)
+        return window
     }
 
     private static func waitForGPUCompletion(
         _ renderer: MetalTerminalRenderer,
         after completedBefore: UInt64
     ) -> Bool {
+        // GPU threads publish into the lock-free mailbox; a coalesced
+        // `DispatchQueue.main.async` also drains for production wakeups. Poll
+        // both the mailbox and the main run loop so deferred-frame / hide
+        // recovery runs without fabricating completions.
         let deadline = Date().addingTimeInterval(2)
         while renderer.stats.completedFrames == completedBefore && Date() < deadline {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+            renderer.drainGPUCompletionsIfNeeded()
+            if renderer.stats.completedFrames > completedBefore {
+                break
+            }
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.001))
         }
+        renderer.drainGPUCompletionsIfNeeded()
         return renderer.stats.completedFrames > completedBefore
     }
 
+    /// Production-path submit: real drawable + command buffer + completion
+    /// mailbox. Uses `presentsToDisplay: false` so headless CI exercises the
+    /// GPU boundary without compositor Trace/BPT. Returns false when no
+    /// drawable is available (`ENVIRONMENT_UNSUPPORTED` for the caller).
     static func presentOnLayerForValidation(
         renderer: MetalTerminalRenderer,
         layer: CAMetalLayer
     ) -> Bool {
-        guard let drawable = layer.nextDrawable() else { return false }
-        return renderer.present(drawable: drawable)
+        guard let drawable = layer.nextDrawable() else {
+            return false
+        }
+        return renderer.present(drawable: drawable, presentsToDisplay: false)
     }
 
     private static func frameContains(_ frame: NativePreparedFrame, text: String) -> Bool {

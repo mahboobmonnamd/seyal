@@ -1,7 +1,7 @@
 use std::sync::{
-    Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},
     mpsc::{SyncSender, TrySendError},
+    Arc,
 };
 
 use seyal_exec::ReactorWaker;
@@ -183,7 +183,7 @@ impl InputIngress {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, atomic::AtomicUsize};
+    use std::sync::{atomic::AtomicUsize, Arc};
 
     use super::InputReservation;
 

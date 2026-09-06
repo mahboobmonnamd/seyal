@@ -13,8 +13,8 @@ use std::{
 use seyal_client::pass8_benchmark::BenchmarkBlockCache;
 #[cfg(target_os = "macos")]
 use seyal_protocol::{
-    BlockId, ExecutionId,
     pass8::{BlockKind, BlockLifecycle, BlockState},
+    BlockId, ExecutionId,
 };
 #[cfg(target_os = "macos")]
 use seyal_runtime::pass8_benchmark::BenchmarkBlockTimeline;

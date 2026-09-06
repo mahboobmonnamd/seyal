@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+test-fault-injection = []
+
 [[bench]]
 name = "vt_parser_state"
 harness = false

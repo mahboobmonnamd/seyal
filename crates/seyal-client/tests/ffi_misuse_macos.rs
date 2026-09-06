@@ -6,21 +6,20 @@
 use std::{
     path::PathBuf,
     sync::{
-        Arc, Barrier,
         atomic::{AtomicU64, Ordering},
-        mpsc,
+        mpsc, Arc, Barrier,
     },
     thread,
     time::{Duration, Instant},
 };
 
 use seyal_client::{
-    LocalDisplayClient, seyal_bridge_adopt_handle, seyal_bridge_disconnect_handle,
-    seyal_bridge_ensure_prepared, seyal_bridge_frame, seyal_bridge_poll, seyal_bridge_select,
-    test_register_pending_client,
+    seyal_bridge_adopt_handle, seyal_bridge_disconnect_handle, seyal_bridge_ensure_prepared,
+    seyal_bridge_frame, seyal_bridge_poll, seyal_bridge_select, test_register_pending_client,
+    LocalDisplayClient,
 };
 use seyal_exec::{CommandSpec, WindowSize};
-use seyal_runtime::{ExecutionId, LocalIpcMode, Runtime, RuntimeConfig, local_ipc::framing::Role};
+use seyal_runtime::{local_ipc::framing::Role, ExecutionId, LocalIpcMode, Runtime, RuntimeConfig};
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 

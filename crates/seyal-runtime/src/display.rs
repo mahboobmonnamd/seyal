@@ -20,10 +20,10 @@ use seyal_protocol::framing::HEADER_LEN;
 use seyal_protocol::framing::{self, MAX_FRAME_PAYLOAD};
 
 pub use seyal_protocol::display::{
-    DISPLAY_CELL_LEN, DISPLAY_CHUNK_HEADER_LEN, DecodedDisplayChunk, DisplayAttributes,
-    DisplayCache, DisplayCell, DisplayColor, DisplayError, DisplayKind, EncodedDisplayBatch,
-    MAX_DISPLAY_BATCH_BYTES, MAX_DISPLAY_CELLS, MAX_DISPLAY_COLUMNS, MAX_DISPLAY_ROWS,
-    decode_chunk, empty_cache,
+    decode_chunk, empty_cache, DecodedDisplayChunk, DisplayAttributes, DisplayCache, DisplayCell,
+    DisplayColor, DisplayError, DisplayKind, EncodedDisplayBatch, DISPLAY_CELL_LEN,
+    DISPLAY_CHUNK_HEADER_LEN, MAX_DISPLAY_BATCH_BYTES, MAX_DISPLAY_CELLS, MAX_DISPLAY_COLUMNS,
+    MAX_DISPLAY_ROWS,
 };
 
 #[cfg(feature = "benchmark-instrumentation")]
@@ -388,12 +388,10 @@ mod tests {
         let snapshot = sample_snapshot(256, 512, 8);
         let batch = encode_snapshot(&snapshot).unwrap();
         assert!(batch.frames.len() > 1);
-        assert!(
-            batch
-                .frames
-                .iter()
-                .all(|frame| frame.len() <= HEADER_LEN + MAX_FRAME_PAYLOAD as usize)
-        );
+        assert!(batch
+            .frames
+            .iter()
+            .all(|frame| frame.len() <= HEADER_LEN + MAX_FRAME_PAYLOAD as usize));
         let mut cache = empty_cache();
         cache.apply_batch(&batch).unwrap();
         assert_eq!(cache.cells.len(), 131_072);

@@ -20,7 +20,7 @@ use crate::{
     local_ipc::{
         auth,
         fd_transfer::{self, RecvFd},
-        framing::{FrameHeader, HEADER_LEN, MAX_FRAME_PAYLOAD, MessageType},
+        framing::{FrameHeader, MessageType, HEADER_LEN, MAX_FRAME_PAYLOAD},
     },
 };
 

@@ -7,13 +7,13 @@ use std::{
 };
 
 use seyal_exec::{CommandSpec, WindowSize};
-use seyal_protocol::pass8::{BLOCK_STATE_MESSAGE_TYPE, BlockState, CAP_BLOCK_METADATA};
+use seyal_protocol::pass8::{BlockState, BLOCK_STATE_MESSAGE_TYPE, CAP_BLOCK_METADATA};
 use seyal_runtime::{
-    LocalIpcMode, Runtime, RuntimeConfig,
     local_ipc::framing::{
-        Attach, Attached, ClientHello, Detach, Detached, FrameHeader, HEADER_LEN, MessageType,
-        Resync, Role, encode_frame,
+        encode_frame, Attach, Attached, ClientHello, Detach, Detached, FrameHeader, MessageType,
+        Resync, Role, HEADER_LEN,
     },
+    LocalIpcMode, Runtime, RuntimeConfig,
 };
 
 fn config() -> RuntimeConfig {

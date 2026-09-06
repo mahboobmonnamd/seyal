@@ -405,9 +405,9 @@ enum Pass663MetalScalability {
     }
     pumpRunLoop(0.05)
 
-    let dedicated = renderers.reduce(0) { $0 + $1.estimatedDedicatedGPUBytes }
-    let instance = renderers.reduce(0) { $0 + Int($1.stats.instanceBytes) }
-    let atlas = renderers.reduce(0) { $0 + $1.atlasResidentBytes }
+    let dedicated = renderers.map(\.estimatedDedicatedGPUBytes).reduce(0, +)
+    let instance = renderers.map { Int($0.stats.instanceBytes) }.reduce(0, +)
+    let atlas = renderers.map(\.atlasResidentBytes).reduce(0, +)
     let prep = percentileSummary(prepSamples)
     let atlasDuplicated = panes > 1 && atlas > GlyphAtlas.budgetBytes
 
@@ -551,9 +551,9 @@ enum Pass663MetalScalability {
     }
 
     // Measure while surfaces remain visible — hiding first zeroed GPU evidence.
-    let dedicated = renderers.reduce(0) { $0 + $1.estimatedDedicatedGPUBytes }
-    let instance = renderers.reduce(0) { $0 + Int($1.stats.instanceBytes) }
-    let atlas = renderers.reduce(0) { $0 + $1.atlasResidentBytes }
+    let dedicated = renderers.map(\.estimatedDedicatedGPUBytes).reduce(0, +)
+    let instance = renderers.map { Int($0.stats.instanceBytes) }.reduce(0, +)
+    let atlas = renderers.map(\.atlasResidentBytes).reduce(0, +)
     let prep = percentileSummary(prepSamples.values)
     let rss = physFootprintKib()
 
@@ -675,9 +675,9 @@ enum Pass663MetalScalability {
       driver.invalidate()
     }
 
-    let dedicated = renderers.reduce(0) { $0 + $1.estimatedDedicatedGPUBytes }
-    let instance = renderers.reduce(0) { $0 + Int($1.stats.instanceBytes) }
-    let atlas = renderers.reduce(0) { $0 + $1.atlasResidentBytes }
+    let dedicated = renderers.map(\.estimatedDedicatedGPUBytes).reduce(0, +)
+    let instance = renderers.map { Int($0.stats.instanceBytes) }.reduce(0, +)
+    let atlas = renderers.map(\.atlasResidentBytes).reduce(0, +)
     let present = percentileSummary(presentSamples)
     guard !presentSamples.isEmpty else {
       throw ScalabilityError.displayLinkUnavailable
@@ -770,9 +770,9 @@ enum Pass663MetalScalability {
       pumpRunLoop(0.001)
     }
 
-    let dedicated = renderers.reduce(0) { $0 + $1.estimatedDedicatedGPUBytes }
-    let instance = renderers.reduce(0) { $0 + Int($1.stats.instanceBytes) }
-    let atlas = renderers.reduce(0) { $0 + $1.atlasResidentBytes }
+    let dedicated = renderers.map(\.estimatedDedicatedGPUBytes).reduce(0, +)
+    let instance = renderers.map { Int($0.stats.instanceBytes) }.reduce(0, +)
+    let atlas = renderers.map(\.atlasResidentBytes).reduce(0, +)
     let prep = percentileSummary(prepSamples)
 
     return Row(
@@ -881,9 +881,9 @@ enum Pass663MetalScalability {
 
     let last = Array(rssSamples.suffix(max(3, rssSamples.count / 3)))
     let plateau = isPlateau(last)
-    let dedicated = renderers.reduce(0) { $0 + $1.estimatedDedicatedGPUBytes }
-    let instance = renderers.reduce(0) { $0 + Int($1.stats.instanceBytes) }
-    let atlas = renderers.reduce(0) { $0 + $1.atlasResidentBytes }
+    let dedicated = renderers.map(\.estimatedDedicatedGPUBytes).reduce(0, +)
+    let instance = renderers.map { Int($0.stats.instanceBytes) }.reduce(0, +)
+    let atlas = renderers.map(\.atlasResidentBytes).reduce(0, +)
 
     return Row(
       panes: panes,
@@ -1070,11 +1070,13 @@ private final class Pass663SampleBox: @unchecked Sendable {
   var values = [UInt64]()
 }
 
-@MainActor
-private final class Pass663DisplayLinkDriver: NSObject, @preconcurrency CAMetalDisplayLinkDelegate {
+/// Main-queue display-link driver for Pass 663 evidence. Not MainActor-isolated:
+/// CAMetalDisplayLink fires without a Swift MainActor task on Xcode 16.4.
+private final class Pass663DisplayLinkDriver: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendable {
   private let renderer: MetalTerminalRenderer
   private let link: CAMetalDisplayLink
   private var startedAt: UInt64?
+  private var lastSample: UInt64?
 
   init(renderer: MetalTerminalRenderer, layer: CAMetalLayer) {
     self.renderer = renderer
@@ -1086,6 +1088,7 @@ private final class Pass663DisplayLinkDriver: NSObject, @preconcurrency CAMetalD
   }
 
   func submitOne(timeout: TimeInterval) -> UInt64? {
+    dispatchPrecondition(condition: .onQueue(.main))
     guard startedAt == nil else { return nil }
     renderer.requestPresent()
     startedAt = DispatchTime.now().uptimeNanoseconds
@@ -1094,10 +1097,6 @@ private final class Pass663DisplayLinkDriver: NSObject, @preconcurrency CAMetalD
     var sample: UInt64?
     while sample == nil, Date() < deadline {
       RunLoop.current.run(until: Date().addingTimeInterval(0.001))
-      if let startedAt, link.isPaused {
-        // Delegate stores via side channel below.
-        _ = startedAt
-      }
       if let captured = lastSample {
         sample = captured
         lastSample = nil
@@ -1110,24 +1109,27 @@ private final class Pass663DisplayLinkDriver: NSObject, @preconcurrency CAMetalD
     return sample
   }
 
-  private var lastSample: UInt64?
-
-  func metalDisplayLink(
+  nonisolated func metalDisplayLink(
     _ link: CAMetalDisplayLink,
     needsUpdate update: CAMetalDisplayLink.Update
   ) {
+    dispatchPrecondition(condition: .onQueue(.main))
     link.isPaused = true
-    guard let startedAt,
-      renderer.present(drawable: update.drawable)
+    let driver = self
+    let drawable = update.drawable
+    driver.renderer.drainGPUCompletionsIfNeeded()
+    guard let startedAt = driver.startedAt,
+          driver.renderer.present(drawable: drawable)
     else {
-      self.startedAt = nil
+      driver.startedAt = nil
       return
     }
-    lastSample = DispatchTime.now().uptimeNanoseconds &- startedAt
-    self.startedAt = nil
+    driver.lastSample = DispatchTime.now().uptimeNanoseconds &- startedAt
+    driver.startedAt = nil
   }
 
   func invalidate() {
+    dispatchPrecondition(condition: .onQueue(.main))
     link.delegate = nil
     link.invalidate()
   }

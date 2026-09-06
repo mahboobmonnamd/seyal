@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use seyal_exec::WindowSize;
 
 use crate::{
-    ExecutionId, RuntimeError,
     display::{EncodedDisplayBatch, MAX_DISPLAY_COLUMNS, MAX_DISPLAY_ROWS},
     local_ipc::{
         attachment::AttachmentError,
@@ -12,11 +11,12 @@ use crate::{
             ResizeResultCode,
         },
     },
+    ExecutionId, RuntimeError,
 };
 
+use super::super::Runtime;
 use super::display_publish::PublishedDisplay;
 use super::RESYNC_SNAPSHOT_BUDGET_PER_POLL;
-use super::super::Runtime;
 
 fn resize_error_code(error: &RuntimeError) -> ErrorCode {
     match error {

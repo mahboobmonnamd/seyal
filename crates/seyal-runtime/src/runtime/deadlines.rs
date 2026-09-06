@@ -37,7 +37,11 @@ impl Runtime {
         Ok(())
     }
 
-    pub(super) fn enter_drain(&mut self, id: ExecutionId, exit: ChildExit) -> Result<(), RuntimeError> {
+    pub(super) fn enter_drain(
+        &mut self,
+        id: ExecutionId,
+        exit: ChildExit,
+    ) -> Result<(), RuntimeError> {
         let entry = self
             .entries
             .get_mut(&id)
@@ -45,6 +49,7 @@ impl Runtime {
         entry.pty_eof_reap_probe = None;
         entry.ingress_active.store(false, Ordering::Release);
         entry.pending_input.clear();
+        entry.execution.clear_pending_protocol_replies();
         self.reactor.set_writable(entry.token, false)?;
         entry.lifecycle = Lifecycle::DrainingAfterPrimaryExit {
             deadline: Instant::now() + self.config.final_drain,

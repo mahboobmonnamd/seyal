@@ -12,9 +12,9 @@ use std::{
 };
 
 use crate::{
-    ExecError, WindowSize,
     platform::{PtyPair, Signal, SignalOutcome},
     readiness::{Interest, Readiness},
+    ExecError, WindowSize,
 };
 
 pub(crate) fn open_pty(size: WindowSize) -> Result<PtyPair, ExecError> {

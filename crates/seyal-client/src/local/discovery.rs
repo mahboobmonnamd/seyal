@@ -8,19 +8,18 @@ use std::{
 use seyal_runtime::{
     local_ipc::{
         discovery::{
-            DiscoveryError, control_socket_path, darwin_user_runtime_dir,
-            ensure_verified_runtime_dir,
+            control_socket_path, darwin_user_runtime_dir, ensure_verified_runtime_dir,
+            DiscoveryError,
         },
         framing::{
-            CAP_BINARY_DISPLAY, CAP_COMMAND_BLOCKS, CAP_CORRELATED_RESIZE, CAP_SEMANTIC_TERMINAL_KEY,
-            ClientHello, ErrorMessage, MessageType, ServerHello,
-            encode_frame,
+            encode_frame, ClientHello, ErrorMessage, MessageType, ServerHello, CAP_BINARY_DISPLAY,
+            CAP_COMMAND_BLOCKS, CAP_CORRELATED_RESIZE, CAP_SEMANTIC_TERMINAL_KEY,
         },
     },
     pass8::CAP_BLOCK_METADATA,
 };
 
-use super::{ClientError, server_error};
+use super::{server_error, ClientError};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DiscoveryFailure {
@@ -44,7 +43,10 @@ pub enum DiscoveryFailure {
     InvalidPath,
 }
 
-pub(crate) fn connect_stream_until(path: &Path, deadline: Instant) -> Result<UnixStream, ClientError> {
+pub(crate) fn connect_stream_until(
+    path: &Path,
+    deadline: Instant,
+) -> Result<UnixStream, ClientError> {
     startup_remaining(deadline)?;
     let stream = UnixStream::connect(path).map_err(classify_connect_error)?;
     configure_startup_timeout(&stream, deadline)?;
@@ -58,7 +60,10 @@ pub(crate) fn startup_remaining(deadline: Instant) -> Result<Duration, ClientErr
         .ok_or(ClientError::StartupDeadlineExceeded)
 }
 
-pub(crate) fn configure_startup_timeout(stream: &UnixStream, deadline: Instant) -> Result<(), ClientError> {
+pub(crate) fn configure_startup_timeout(
+    stream: &UnixStream,
+    deadline: Instant,
+) -> Result<(), ClientError> {
     startup_remaining(deadline)?;
     stream.set_nonblocking(true).map_err(|_| ClientError::Io)
 }
@@ -285,7 +290,7 @@ pub(crate) fn send_control_until(
 
 #[cfg(test)]
 mod connect_error_tests {
-    use super::{ClientError, DiscoveryFailure, classify_connect_error, classify_discovery_error};
+    use super::{classify_connect_error, classify_discovery_error, ClientError, DiscoveryFailure};
     use seyal_runtime::local_ipc::discovery::DiscoveryError;
     use std::io;
 

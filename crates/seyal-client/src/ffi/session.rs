@@ -4,22 +4,22 @@ use std::{
 };
 
 use seyal_runtime::{
-    ExecutionId,
     local_ipc::{
         discovery::{
-            DiscoveryError, control_socket_path, darwin_user_runtime_dir, verify_connected_peer_fd,
-            verify_control_socket_leaf, verify_runtime_dir,
+            control_socket_path, darwin_user_runtime_dir, verify_connected_peer_fd,
+            verify_control_socket_leaf, verify_runtime_dir, DiscoveryError,
         },
         framing::{ErrorCode, Role},
     },
+    ExecutionId,
 };
 
 use crate::{ClientError, DiscoveryFailure, LocalDisplayClient};
 
 use super::{
-    ACTIVE_HANDLE, CLIENTS, DEFAULT_RECOVERY_BUDGET_MICROS, LAST_RECOVERY_RESULT, PendingClient,
     active_handle, allocate_handle, identity_words, pending_clients, with_active_client,
-    SeyalRecoveryResult,
+    PendingClient, SeyalRecoveryResult, ACTIVE_HANDLE, CLIENTS, DEFAULT_RECOVERY_BUDGET_MICROS,
+    LAST_RECOVERY_RESULT,
 };
 
 pub(crate) fn set_recovery_failure(error: ClientError) {

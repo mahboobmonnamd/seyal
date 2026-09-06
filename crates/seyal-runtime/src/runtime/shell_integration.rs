@@ -1,7 +1,5 @@
 #[cfg(target_os = "macos")]
 use seyal_exec::{CommandSpec, ShellIntegrationEvent, ShellIntegrationToken};
-#[cfg(all(test, target_os = "macos"))]
-use seyal_exec::CommandSpec;
 
 #[cfg(target_os = "macos")]
 use crate::command_block_timeline::{CommandBlockId, MAX_COMMAND_BYTES};
@@ -152,7 +150,10 @@ impl Runtime {
     /// to TerminalState. The Runtime records only trusted anchors; this path
     /// never reads a prompt, row text, or terminal cell payload.
     #[cfg(target_os = "macos")]
-    pub(super) fn observe_shell_integration_events(&mut self, id: ExecutionId) -> Result<(), RuntimeError> {
+    pub(super) fn observe_shell_integration_events(
+        &mut self,
+        id: ExecutionId,
+    ) -> Result<(), RuntimeError> {
         let mut changed = false;
         {
             let entry = self
@@ -217,7 +218,10 @@ impl Runtime {
     /// still drain parser events so a raw execution cannot retain a bounded
     /// queue of shell-integration notifications indefinitely.
     #[cfg(not(target_os = "macos"))]
-    pub(super) fn observe_shell_integration_events(&mut self, id: ExecutionId) -> Result<(), RuntimeError> {
+    pub(super) fn observe_shell_integration_events(
+        &mut self,
+        id: ExecutionId,
+    ) -> Result<(), RuntimeError> {
         let entry = self
             .entries
             .get_mut(&id)

@@ -2,6 +2,65 @@ import Foundation
 import Metal
 import QuartzCore
 
+/// Run `operation` while already on the GCD main queue, without
+/// `MainActor.assumeIsolated`.
+///
+/// Apple platforms serialize MainActor work on the main dispatch queue, but
+/// Swift 6.0 / Xcode 16.4's `assumeIsolated` checks `_taskIsCurrentExecutor`
+/// rather than the queue. AppKit run-loop callbacks (CAMetalDisplayLink,
+/// Timer) and GCD main-queue work therefore Trace/BPT if they call
+/// `assumeIsolated` or enter a MainActor-isolated protocol witness, even
+/// though mutual exclusion still holds. Use only after
+/// `dispatchPrecondition(condition: .onQueue(.main))`.
+func seyalRunAsMainActorFromMainQueue(_ operation: @MainActor () -> Void) {
+    dispatchPrecondition(condition: .onQueue(.main))
+    withoutActuallyEscaping(operation) { (fn: @escaping @MainActor () -> Void) in
+        let raw = unsafeBitCast(fn, to: (() -> Void).self)
+        raw()
+    }
+}
+
+/// Single-slot GPU completion mailbox (`maximumFramesInFlight == 1`).
+///
+/// Metal completion handlers run off the main queue; main-queue code drains.
+/// Uses a lock-free atomic slot instead of `NSLock` so present/update hot paths
+/// do not take a blocking Foundation lock.
+private final class GPUCompletionMailbox: @unchecked Sendable {
+    /// 0 = empty, 1 = success pending, 2 = failure pending
+    private let slot = UnsafeMutablePointer<Int32>.allocate(capacity: 1)
+
+    init() {
+        slot.initialize(to: 0)
+    }
+
+    deinit {
+        slot.deinitialize(count: 1)
+        slot.deallocate()
+    }
+
+    func push(failed: Bool) {
+        let value: Int32 = failed ? 2 : 1
+        while true {
+            let current = slot.pointee
+            if OSAtomicCompareAndSwap32Barrier(current, value, slot) {
+                return
+            }
+        }
+    }
+
+    func drain() -> [Bool] {
+        while true {
+            let current = slot.pointee
+            if current == 0 {
+                return []
+            }
+            if OSAtomicCompareAndSwap32Barrier(current, 0, slot) {
+                return [current == 2]
+            }
+        }
+    }
+}
+
 private let preparedBoldFlag: UInt16 = 1 << 0
 private let preparedUnderlineFlag: UInt16 = 1 << 1
 private let instanceGlyphFlag: UInt32 = 1 << 0
@@ -241,8 +300,15 @@ struct MetalSubmissionTiming {
     let commitToCompletionNanoseconds: UInt64
 }
 
-@MainActor
-final class MetalTerminalRenderer {
+/// Main-queue-only Metal presenter.
+///
+/// Intentionally **not** `@MainActor`: CAMetalDisplayLink and other AppKit
+/// run-loop callbacks invoke `present` / `drainGPUCompletionsIfNeeded` on the
+/// GCD main queue without a Swift MainActor task. Xcode 16.4 Trace/BPTs on
+/// MainActor method entry (`_taskIsCurrentExecutor`) even though main-queue
+/// mutual exclusion still holds. Callers must only touch this type from the
+/// main queue (AppKit/`dispatchPrecondition`).
+final class MetalTerminalRenderer: @unchecked Sendable {
     static let maximumFramesInFlight = 1
 
     let device: MTLDevice
@@ -273,6 +339,9 @@ final class MetalTerminalRenderer {
     private var needsPresent = false
     private var needsCurrentFrameWhenIdle = false
     private var gpuCompletionRetryState = GPUCompletionRetryState()
+    private let gpuCompletionMailbox = GPUCompletionMailbox()
+    /// Coalesces main-queue drain wakeups from GPU completion handlers.
+    private let gpuCompletionWakeScheduled = UnsafeMutablePointer<Int32>.allocate(capacity: 1)
 
     private(set) var stats = MetalRendererStats()
     private(set) var persistentDisplayFailure: MetalTerminalRendererError?
@@ -280,6 +349,7 @@ final class MetalTerminalRenderer {
     var onPersistentDisplayFailure: ((MetalTerminalRendererError) -> Void)?
 
     init(device: MTLDevice, terminalFont: SeyalResolvedFontSpec = .canonicalTerminal) throws {
+        gpuCompletionWakeScheduled.initialize(to: 0)
         self.device = device
         guard MemoryLayout<TerminalInstance>.stride == 48 else {
             throw MetalTerminalRendererError.invalidInstanceLayout
@@ -327,6 +397,11 @@ final class MetalTerminalRenderer {
         )
     }
 
+    deinit {
+        gpuCompletionWakeScheduled.deinitialize(count: 1)
+        gpuCompletionWakeScheduled.deallocate()
+    }
+
     var hasDedicatedSurfaceResources: Bool {
         instanceBuffer != nil || glyphAtlas.estimatedResidentBytes != 0
     }
@@ -369,11 +444,14 @@ final class MetalTerminalRenderer {
     }
 
     func requestPresent() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        drainGPUCompletionsIfNeeded()
         guard visible, persistentDisplayFailure == nil, instanceBuffer != nil else { return }
         needsPresent = true
     }
 
     func setVisible(_ value: Bool) {
+        drainGPUCompletionsIfNeeded()
         guard visible != value else { return }
         visible = value
         if value {
@@ -407,6 +485,7 @@ final class MetalTerminalRenderer {
         backingScale: CGFloat,
         forceFullRebuild: Bool = false
     ) throws -> RendererUpdateResult {
+        drainGPUCompletionsIfNeeded()
         guard frame.rows > 0,
               frame.columns > 0,
               frame.rows <= 256,
@@ -703,8 +782,16 @@ final class MetalTerminalRenderer {
     /// Submit a frame to a drawable supplied by the platform frame scheduler.
     /// Production presentation must not call `CAMetalLayer.nextDrawable()`
     /// here because that API can wait while all drawables are in use.
+    ///
+    /// - Parameter presentsToDisplay: When false, encode/commit only (no
+    ///   `commandBuffer.present`). Deterministic self-tests on headless
+    ///   Xcode 16.4 Trace/BPT when presenting into a compositor-backed
+    ///   drawable; validation still covers in-flight coalescing via the same
+    ///   completion mailbox.
     @discardableResult
-    func present(drawable: any CAMetalDrawable) -> Bool {
+    func present(drawable: any CAMetalDrawable, presentsToDisplay: Bool = true) -> Bool {
+        dispatchPrecondition(condition: .onQueue(.main))
+        drainGPUCompletionsIfNeeded()
         guard visible,
               persistentDisplayFailure == nil,
               needsPresent,
@@ -729,15 +816,70 @@ final class MetalTerminalRenderer {
         framesInFlight = 1
         needsPresent = false
         stats.submittedFrames &+= 1
-        commandBuffer.present(drawable)
+        if presentsToDisplay {
+            commandBuffer.present(drawable)
+        }
+        // Metal completion runs off the main queue. Publish into the mailbox
+        // and schedule a coalesced main-queue drain — do not use
+        // `Task { @MainActor }` (Xcode 16.4 Trace/BPT). Renderer is main-queue
+        // `@unchecked Sendable`, so `DispatchQueue.main.async` is safe.
+        let mailbox = gpuCompletionMailbox
         commandBuffer.addCompletedHandler { [weak self] completed in
-            let failed = completed.status == .error
-            Task { @MainActor [weak self] in
-                self?.commandCompleted(failed: failed)
-            }
+            mailbox.push(failed: completed.status == .error)
+            self?.scheduleGPUCompletionDrainWakeup()
         }
         commandBuffer.commit()
         return true
+    }
+
+    /// Bounded event-driven wakeup: at most one main-queue drain is queued
+    /// while completions are outstanding.
+    private func scheduleGPUCompletionDrainWakeup() {
+        guard OSAtomicCompareAndSwap32Barrier(0, 1, gpuCompletionWakeScheduled) else {
+            return
+        }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            OSAtomicCompareAndSwap32Barrier(1, 0, self.gpuCompletionWakeScheduled)
+            self.drainGPUCompletionsIfNeeded()
+        }
+    }
+
+    /// Apply any GPU completions published off the main queue. Safe to call
+    /// reentrantly from main-queue entry points (display link, update, timers).
+    func drainGPUCompletionsIfNeeded() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        for failed in gpuCompletionMailbox.drain() {
+            commandCompleted(failed: failed)
+        }
+    }
+
+    /// Deterministic validation substitute used only when a real drawable
+    /// cannot be obtained. Prefer `present(drawable:presentsToDisplay:)` for
+    /// production-path regression coverage.
+    @discardableResult
+    func beginValidationFrameInFlight() -> Bool {
+        drainGPUCompletionsIfNeeded()
+        guard visible,
+              persistentDisplayFailure == nil,
+              needsPresent,
+              framesInFlight == 0,
+              instanceBuffer != nil,
+              instanceCount > 0
+        else {
+            return false
+        }
+        framesInFlight = 1
+        needsPresent = false
+        stats.submittedFrames &+= 1
+        return true
+    }
+
+    /// Completes a validation in-flight frame started by
+    /// `beginValidationFrameInFlight()`.
+    func endValidationFrameInFlight(failed: Bool = false) {
+        guard framesInFlight > 0 else { return }
+        commandCompleted(failed: failed)
     }
 
     /// Deterministic offscreen validation only. Production presentation never

@@ -9,11 +9,18 @@ ROOT = Path(os.environ.get("SEYAL_VALIDATION_ROOT", Path(__file__).resolve().par
 
 HOT_FUNCTIONS = {
     "crates/seyal-terminal/src/terminal.rs": ["feed", "finish_input"],
-    "crates/seyal-runtime/src/runtime.rs": ["poll_once", "drain_control", "service_reads", "service_writes"],
+    # Runtime dispatch ownership after #799: poll_once remains in the facade,
+    # while control/read/write service loops live in reactor_io.
+    "crates/seyal-runtime/src/runtime/mod.rs": ["poll_once"],
+    "crates/seyal-runtime/src/runtime/reactor_io.rs": [
+        "drain_control",
+        "service_reads",
+        "service_writes",
+    ],
     "crates/seyal-runtime/src/input.rs": ["try_submit"],
     # Candidate-D display encode/publish (Runtime → UDS presentation).
     "crates/seyal-runtime/src/display.rs": ["encode_snapshot", "encode_delta", "encode_rows"],
-    "crates/seyal-runtime/src/runtime/local.rs": ["publish_display_updates"],
+    "crates/seyal-runtime/src/runtime/local/display_publish.rs": ["publish_display_updates"],
     # Metal prepare/present: first `update` is the NativePreparedFrame prepare path.
     "macos/Seyal/Sources/MetalTerminalRenderer.swift": ["update", "present"],
 }

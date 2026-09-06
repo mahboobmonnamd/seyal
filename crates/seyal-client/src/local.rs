@@ -12,22 +12,20 @@ use std::{
 
 use seyal_render::{PreparationResult, PreparedSurface, RowDamage};
 use seyal_runtime::{
-    AttachmentId, ExecutionId,
-    display::{DisplayCache, decode_chunk},
+    display::{decode_chunk, DisplayCache},
     local_ipc::framing::{
-        BlockTimeline, ComposerResult, ComposerResultCode, ErrorCode, FrameHeader, HEADER_LEN,
-        HistoryRangeRequest, HistoryRangeSnapshot, Lifecycle, MAX_FRAME_PAYLOAD, MessageType,
-        ResizeResult, Role, encode_frame,
+        encode_frame, BlockTimeline, ComposerResult, ComposerResultCode, ErrorCode, FrameHeader,
+        HistoryRangeRequest, HistoryRangeSnapshot, Lifecycle, MessageType, ResizeResult, Role,
+        HEADER_LEN, MAX_FRAME_PAYLOAD,
     },
-    pass8::{BLOCK_STATE_MESSAGE_TYPE, BlockLifecycle, BlockState},
+    pass8::{BlockLifecycle, BlockState, BLOCK_STATE_MESSAGE_TYPE},
+    AttachmentId, ExecutionId,
 };
 
-use crate::block_cache::{BlockApply, BlockCache, quarantine_epoch};
+use crate::block_cache::{quarantine_epoch, BlockApply, BlockCache};
 
 pub use discovery::DiscoveryFailure;
-pub use input_resize::{
-    GridGeometry, InputAdmissionFailure, ResizeFailure, derive_grid_geometry,
-};
+pub use input_resize::{derive_grid_geometry, GridGeometry, InputAdmissionFailure, ResizeFailure};
 
 pub(crate) const READ_CHUNK_BYTES: usize = 64 * 1024;
 pub(crate) const MAX_BUFFERED_BYTES: usize = (MAX_FRAME_PAYLOAD as usize + HEADER_LEN) * 2;
@@ -481,7 +479,13 @@ mod tests {
         let fallback = discovery::requested_capabilities(false);
         assert_ne!(full & CAP_BLOCK_METADATA, 0);
         assert_eq!(fallback & CAP_BLOCK_METADATA, 0);
-        assert_ne!(full & seyal_runtime::local_ipc::framing::CAP_COMMAND_BLOCKS, 0);
-        assert_ne!(fallback & seyal_runtime::local_ipc::framing::CAP_COMMAND_BLOCKS, 0);
+        assert_ne!(
+            full & seyal_runtime::local_ipc::framing::CAP_COMMAND_BLOCKS,
+            0
+        );
+        assert_ne!(
+            fallback & seyal_runtime::local_ipc::framing::CAP_COMMAND_BLOCKS,
+            0
+        );
     }
 }

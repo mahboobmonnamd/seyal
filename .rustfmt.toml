@@ -1,0 +1,5 @@
+# Rust language edition and rustfmt style edition are intentionally independent.
+# Seyal uses Rust 2024 semantics, while the existing production tree remains
+# formatted with the pre-2024 style. Pin this explicitly so toolchain upgrades
+# do not create repository-wide formatting churn inside unrelated work.
+style_edition = "2021"

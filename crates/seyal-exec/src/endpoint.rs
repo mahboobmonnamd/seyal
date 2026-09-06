@@ -8,10 +8,10 @@ use std::{
 use std::os::fd::AsRawFd;
 
 use crate::{
-    ChildExit, CommandSpec, ExecError, Readiness, SignalDisposition, TerminationPolicy, WindowSize,
     child::ChildLifecycle,
     platform,
-    readiness::{Interest, wait},
+    readiness::{wait, Interest},
+    ChildExit, CommandSpec, ExecError, Readiness, SignalDisposition, TerminationPolicy, WindowSize,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

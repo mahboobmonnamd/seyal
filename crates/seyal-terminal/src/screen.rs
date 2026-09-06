@@ -1,6 +1,6 @@
 use crate::{
-    Cell, Color, CursorState, LineId, Style, TerminalError, cursor::Cursor, damage::Mutation,
-    line::LineIdAllocator,
+    cursor::Cursor, damage::Mutation, line::LineIdAllocator, Cell, Color, CursorState, LineId,
+    Style, TerminalError,
 };
 use std::collections::VecDeque;
 
@@ -102,17 +102,20 @@ impl Screen {
             })
     }
 
-    pub(crate) fn resize(
-        &mut self,
+    /// Builds the next screen buffers and allocates any new line identities
+    /// without mutating the live screen. Dropping the result burns allocated
+    /// identities but leaves observable geometry/damage unchanged.
+    pub(crate) fn prepare_resize(
+        &self,
         cols: u16,
         rows: u16,
         line_ids: &mut LineIdAllocator,
-    ) -> Result<Mutation, TerminalError> {
+    ) -> Result<PreparedScreen, TerminalError> {
         if cols == 0 || rows == 0 {
             return Err(TerminalError::InvalidSize);
         }
         if cols == self.cols && rows == self.rows {
-            return Ok(Mutation::none());
+            return Ok(PreparedScreen::noop());
         }
 
         let old_cols = self.cols;
@@ -142,15 +145,37 @@ impl Screen {
             }
         }
 
-        self.cols = cols;
-        self.rows = rows;
-        self.cells = next;
-        self.line_ids = next_line_ids;
-        self.cursor.clamp(cols, rows);
-        if let Some(saved) = &mut self.saved_cursor {
+        let mut cursor = self.cursor;
+        cursor.clamp(cols, rows);
+        let mut saved_cursor = self.saved_cursor;
+        if let Some(saved) = &mut saved_cursor {
             saved.cursor.clamp(cols, rows);
         }
-        Ok(Mutation::full(rows))
+
+        Ok(PreparedScreen {
+            cols,
+            rows,
+            cells: next,
+            line_ids: next_line_ids,
+            cursor,
+            saved_cursor,
+            unchanged: false,
+        })
+    }
+
+    /// Infallible swap of a prepared resize into the live screen.
+    pub(crate) fn commit_prepared(&mut self, prepared: PreparedScreen) -> Mutation {
+        if prepared.unchanged {
+            return Mutation::none();
+        }
+        let rows = prepared.rows;
+        self.cols = prepared.cols;
+        self.rows = prepared.rows;
+        self.cells = prepared.cells;
+        self.line_ids = prepared.line_ids;
+        self.cursor = prepared.cursor;
+        self.saved_cursor = prepared.saved_cursor;
+        Mutation::full(rows)
     }
 
     pub(crate) fn print(
@@ -414,5 +439,30 @@ impl Screen {
 
     fn index(&self, col: u16, row: u16) -> usize {
         usize::from(row) * usize::from(self.cols) + usize::from(col)
+    }
+}
+
+/// Fallible resize preparation held until canonical commit.
+pub(crate) struct PreparedScreen {
+    cols: u16,
+    rows: u16,
+    cells: Vec<Cell>,
+    line_ids: Vec<LineId>,
+    cursor: Cursor,
+    saved_cursor: Option<SavedCursor>,
+    unchanged: bool,
+}
+
+impl PreparedScreen {
+    fn noop() -> Self {
+        Self {
+            cols: 0,
+            rows: 0,
+            cells: Vec::new(),
+            line_ids: Vec::new(),
+            cursor: Cursor::default(),
+            saved_cursor: None,
+            unchanged: true,
+        }
     }
 }

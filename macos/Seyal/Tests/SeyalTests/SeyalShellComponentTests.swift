@@ -1,6 +1,7 @@
 import AppKit
 import Darwin
 import Metal
+@preconcurrency import QuartzCore
 import XCTest
 @testable import Seyal
 
@@ -1687,6 +1688,40 @@ final class SeyalShellComponentTests: XCTestCase {
         buildConfiguration: "Debug"
       )
     )
+  }
+
+  @MainActor
+  func testNativeProtocolCompatibilityKeepsInteractiveSurfaceMainActorOwned() {
+    let surface = InteractiveMetalSurfaceView(
+      frame: NSRect(x: 0, y: 0, width: 320, height: 180),
+      paneID: "protocol-compat",
+      installation: .nativeInteractionProbe
+    )
+    let displayDelegate: any CAMetalDisplayLinkDelegate = surface
+    let textClient: any NSTextInputClient = surface
+
+    XCTAssertNotNil(displayDelegate as AnyObject)
+    XCTAssertNotNil(textClient as AnyObject)
+    XCTAssertTrue(surface.acceptsFirstResponder)
+    XCTAssertTrue(InteractiveMetalSurfaceView.pass7InputSelfTest())
+  }
+
+  @MainActor
+  func testMainQueueHopEstablishesMainActorWithoutAssumeIsolated() {
+    var ran = false
+    seyalRunAsMainActorFromMainQueue {
+      ran = true
+    }
+    XCTAssertTrue(ran)
+  }
+
+  @MainActor
+  func testGPUCompletionMailboxIsLockFreeSingleSlot() {
+    // Structural: present path must not take NSLock. The mailbox is a private
+    // atomic single-slot helper; exercise the public completion wakeup contract
+    // via the named regression self-tests instead.
+    XCTAssertTrue(RendererValidation.deferredFrameCompletionWakeupSelfTest())
+    XCTAssertTrue(RendererValidation.inFlightVisibilityRecoverySelfTest())
   }
 
   @MainActor

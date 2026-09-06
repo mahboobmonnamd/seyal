@@ -188,9 +188,12 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
   /// serial even while AppKit is busy rendering a frame.
   typealias ScheduledOperation = @Sendable () -> Void
   typealias Scheduler = @Sendable (TimeInterval, @escaping ScheduledOperation) -> Cancellation
-  typealias Launcher = () -> Void
+  /// Bundled helper launch and recovered-handle adoption touch @MainActor
+  /// AppKit/bridge state. Call sites must hop via
+  /// `seyalRunAsMainActorFromMainQueue` when returning from the lifecycle queue.
+  typealias Launcher = @MainActor () -> Void
   typealias Attempt = () -> RuntimeRecoveryAttemptOutcome
-  typealias HandleAdopter = (UInt64) -> Bool
+  typealias HandleAdopter = @MainActor (UInt64) -> Bool
   typealias HandleDisposer = @Sendable (UInt64) -> Void
 
   /// Production attempts are always dispatched to the lifecycle queue. The
@@ -433,11 +436,16 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
         outcome = .retryable
       }
       DispatchQueue.main.async { [weak self] in
-        guard let self else {
-          disposeRuntimeRecoveryOutcome(outcome, using: handleDisposer)
-          return
+        // Lifecycle work returns on the GCD main queue without a Swift
+        // MainActor task. Xcode 16.4 Trace/BPTs if we enter @MainActor
+        // adopt/first-frame work directly from that callback.
+        seyalRunAsMainActorFromMainQueue {
+          guard let self else {
+            disposeRuntimeRecoveryOutcome(outcome, using: handleDisposer)
+            return
+          }
+          self.completeAttempt(outcome, generation: generation)
         }
-        self.completeAttempt(outcome, generation: generation)
       }
     }
     inFlightAttempt = work
@@ -462,7 +470,16 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
     case .connected:
       finishConnected(generation: generation)
     case let .opened(handle):
-      guard handleAdopter(handle) else {
+      // Adoption publishes the first Candidate-D frame on @MainActor bridge
+      // state. Even when this method is already inside a main-queue hop, the
+      // adopter closure itself is MainActor-isolated and must be entered
+      // through the hop helper — a plain call from this nonisolated method
+      // Trace/BPTs under Xcode 16.4.
+      var adopted = false
+      seyalRunAsMainActorFromMainQueue {
+        adopted = self.handleAdopter(handle)
+      }
+      guard adopted else {
         handleDisposer(handle)
         state.transition(to: .blocked)
         self.deadline = nil
@@ -473,7 +490,9 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
       state.transition(to: .startingRuntime)
       if !launchClaimed {
         launchClaimed = true
-        launcher()
+        seyalRunAsMainActorFromMainQueue {
+          self.launcher()
+        }
         if let launchError = BundledRuntimeLauncher.consumeLastLaunchError() {
           blockedLaunchError = launchError
           cancelScheduled?()

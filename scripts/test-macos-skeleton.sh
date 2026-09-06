@@ -33,6 +33,9 @@ for required in \
   PaneComposerShellView.swift \
   TerminalSurfaceHostView.swift \
   SeyalShellView.swift \
+  SeyalShellChrome.swift \
+  SeyalShellPaneLayout.swift \
+  SeyalShellTranscriptCoordinator.swift \
   SeyalShellPreviewFactory.swift; do
   [[ -f "$SOURCES/$required" ]] || fail "missing native UI shell source: $required"
 done
@@ -73,23 +76,23 @@ if grep -q 'NSScrollView' "$SOURCES/BlockView.swift"; then
   fail "BlockView must not own nested output scrolling; the Pane transcript is the single normal-scroll owner"
 fi
 
-grep -q 'private func makeTranscript(paneID: String) -> PaneTranscriptView' "$SOURCES/SeyalShellView.swift" \
+grep -q 'func makeTranscript(paneID: String) -> PaneTranscriptView' "$SOURCES/SeyalShellTranscriptCoordinator.swift" \
   || fail "UI shell must keep Pane-owned transcript scrolling explicit"
 grep -q 'final class PaneTranscriptView: NSScrollView' "$SOURCES/CommandBlockBodyView.swift" \
   || fail "Pane transcript must remain the single normal-scroll owner"
-grep -q 'NSSegmentedControl' "$SOURCES/SeyalShellView.swift" \
+grep -q 'NSSegmentedControl' "$SOURCES/SeyalShellChrome.swift" \
   || fail "compact Workspaces/Tabs switcher is missing from the frozen left-panel model"
-grep -q 'toggle-left-sidebar' "$SOURCES/SeyalShellView.swift" \
+grep -q 'toggle-left-sidebar' "$SOURCES/SeyalShellChrome.swift" \
   || fail "left context panel must have a functional hide/reopen control"
-grep -q 'toggle-inspector' "$SOURCES/SeyalShellView.swift" \
+grep -q 'toggle-inspector' "$SOURCES/SeyalShellChrome.swift" \
   || fail "Inspector must have a functional hide/reopen control"
-grep -Fq 'private func makeInspectorRail() -> NSView' "$SOURCES/SeyalShellView.swift" \
+grep -Fq 'func makeInspectorRail() -> NSView' "$SOURCES/SeyalShellChrome.swift" \
   || fail "frozen Inspector vertical mode rail builder is missing"
-grep -Fq 'setAccessibilityIdentifier("inspector-mode.\(mode.rawValue)")' "$SOURCES/SeyalShellView.swift" \
+grep -Fq 'setAccessibilityIdentifier("inspector-mode.\(mode.rawValue)")' "$SOURCES/SeyalShellChrome.swift" \
   || fail "Inspector rail modes must expose deterministic dynamic accessibility identifiers"
-grep -q 'pane.split.' "$SOURCES/SeyalShellView.swift" \
+grep -q 'pane.split.' "$SOURCES/SeyalShellPaneLayout.swift" \
   || fail "Pane-local split control is missing"
-grep -q 'pane.close.' "$SOURCES/SeyalShellView.swift" \
+grep -q 'pane.close.' "$SOURCES/SeyalShellPaneLayout.swift" \
   || fail "Pane-local close control is missing"
 grep -q 'inspector.trailingAnchor.constraint(equalTo: trailingAnchor)' "$SOURCES/SeyalShellView.swift" \
   || fail "Inspector must remain pinned to the shell trailing edge"

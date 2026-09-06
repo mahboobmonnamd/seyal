@@ -1,10 +1,10 @@
 use seyal_protocol::{
-    AttachmentId,
     framing::{
-        CAP_CORRELATED_RESIZE, CAP_SEMANTIC_TERMINAL_KEY, ErrorCode, FrameHeader, FramingError,
-        Message, MessageType, ResizeRequest, ResizeResult, ResizeResultCode, TerminalKey,
-        TerminalKeyKind, TerminalKeyModifiers, decode_message,
+        decode_message, ErrorCode, FrameHeader, FramingError, Message, MessageType, ResizeRequest,
+        ResizeResult, ResizeResultCode, TerminalKey, TerminalKeyKind, TerminalKeyModifiers,
+        CAP_CORRELATED_RESIZE, CAP_SEMANTIC_TERMINAL_KEY,
     },
+    AttachmentId,
 };
 
 fn attachment_id() -> AttachmentId {

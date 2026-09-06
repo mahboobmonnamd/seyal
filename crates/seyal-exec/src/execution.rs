@@ -1,17 +1,26 @@
-use std::time::Duration;
+use std::{collections::VecDeque, time::Duration};
 
-use seyal_terminal::{LineId, ShellIntegrationEvent, TerminalState};
+use seyal_terminal::{
+    LineId, PreparedResize, ProtocolReply, ShellIntegrationEvent, TerminalState,
+    MAX_PROTOCOL_REPLIES,
+};
 
 use crate::{
-    ChildExit, CommandSpec, ExecError, ProjectionDamage, ReadOutcome, Readiness, SignalDisposition,
-    TerminalProjectionSnapshot, TerminalProjectionUpdate, TerminationPolicy, WindowSize,
-    WriteOutcome, endpoint::TerminalEndpoint, projection,
+    endpoint::TerminalEndpoint, projection, ChildExit, CommandSpec, ExecError, ProjectionDamage,
+    ReadOutcome, Readiness, SignalDisposition, TerminalProjectionSnapshot,
+    TerminalProjectionUpdate, TerminationPolicy, WindowSize, WriteOutcome,
 };
+
+struct PendingProtocolReply {
+    reply: ProtocolReply,
+    offset: u8,
+}
 
 pub struct TerminalExecution {
     endpoint: TerminalEndpoint,
     terminal: TerminalState,
     initial_primary_line_id: Option<LineId>,
+    pending_protocol_replies: VecDeque<PendingProtocolReply>,
 }
 
 impl TerminalExecution {
@@ -27,6 +36,7 @@ impl TerminalExecution {
             endpoint,
             terminal,
             initial_primary_line_id,
+            pending_protocol_replies: VecDeque::with_capacity(MAX_PROTOCOL_REPLIES),
         })
     }
 
@@ -49,6 +59,20 @@ impl TerminalExecution {
     /// canonical VT parser. No terminal cells or parser state leave here.
     pub fn take_shell_integration_event(&mut self) -> Option<ShellIntegrationEvent> {
         self.terminal.take_shell_integration_event()
+    }
+
+    /// Transfers one complete terminal-generated protocol reply for PTY write.
+    /// Prefer [`write_protocol_replies`] from Runtime write service. Returns
+    /// `None` while a partially written reply remains at the front of the queue.
+    pub fn take_protocol_reply(&mut self) -> Option<ProtocolReply> {
+        self.capture_protocol_replies();
+        let pending = self.pending_protocol_replies.front()?;
+        if pending.offset != 0 {
+            return None;
+        }
+        self.pending_protocol_replies
+            .pop_front()
+            .map(|pending| pending.reply)
     }
 
     /// Copies the complete current canonical visible terminal state into an
@@ -80,7 +104,12 @@ impl TerminalExecution {
         if let ReadOutcome::Bytes(count) = outcome
             && count > 0
         {
-            self.terminal.feed(&buffer[..count])?;
+            // Capture replies even when feed returns a sticky fault: query
+            // handlers may have enqueued protocol bytes earlier in the same
+            // chunk, and those must still reach the child PTY.
+            let feed_result = self.terminal.feed(&buffer[..count]);
+            self.capture_protocol_replies();
+            feed_result?;
         }
         Ok(outcome)
     }
@@ -97,6 +126,44 @@ impl TerminalExecution {
         self.endpoint.write_all_bounded(bytes, timeout)
     }
 
+    /// True when terminal-generated replies remain queued for the PTY.
+    pub fn has_pending_protocol_replies(&self) -> bool {
+        !self.pending_protocol_replies.is_empty()
+    }
+
+    /// Writes queued protocol replies toward the child PTY, preferring them
+    /// ahead of host-originated input. Returns bytes written this call.
+    pub fn write_protocol_replies(&mut self, max_bytes: usize) -> Result<usize, ExecError> {
+        let mut written_total = 0usize;
+        while written_total < max_bytes {
+            let Some(front) = self.pending_protocol_replies.front_mut() else {
+                break;
+            };
+            let remaining = &front.reply.as_bytes()[usize::from(front.offset)..];
+            if remaining.is_empty() {
+                self.pending_protocol_replies.pop_front();
+                continue;
+            }
+            let quantum = max_bytes - written_total;
+            let slice = &remaining[..remaining.len().min(quantum)];
+            match self.endpoint.write(slice)? {
+                WriteOutcome::Bytes(0) | WriteOutcome::WouldBlock => break,
+                WriteOutcome::Bytes(count) => {
+                    front.offset = front.offset.saturating_add(count as u8);
+                    written_total += count;
+                    if usize::from(front.offset) >= front.reply.as_bytes().len() {
+                        self.pending_protocol_replies.pop_front();
+                    }
+                }
+            }
+        }
+        Ok(written_total)
+    }
+
+    pub fn clear_pending_protocol_replies(&mut self) {
+        self.pending_protocol_replies.clear();
+    }
+
     pub fn wait_readable(&self, timeout: Duration) -> Result<Readiness, ExecError> {
         self.endpoint.wait_readable(timeout)
     }
@@ -105,9 +172,13 @@ impl TerminalExecution {
         self.endpoint.wait_writable(timeout)
     }
 
+    /// Cross-layer resize transaction: prepare canonical state, commit PTY
+    /// geometry, then infallibly commit TerminalState. Geometry cannot diverge
+    /// on any `Result` return path.
     pub fn resize(&mut self, size: WindowSize) -> Result<(), ExecError> {
+        let prepared: PreparedResize = self.terminal.prepare_resize(size.columns(), size.rows())?;
         self.endpoint.set_window_size(size)?;
-        self.terminal.resize(size.columns(), size.rows())?;
+        self.terminal.commit_resize(prepared);
         Ok(())
     }
 
@@ -134,5 +205,18 @@ impl TerminalExecution {
     #[cfg(target_os = "macos")]
     pub(crate) fn reactor_fd(&self) -> i32 {
         self.endpoint.master_fd()
+    }
+
+    fn capture_protocol_replies(&mut self) {
+        while let Some(reply) = self.terminal.take_protocol_reply() {
+            if self.pending_protocol_replies.len() >= MAX_PROTOCOL_REPLIES {
+                break;
+            }
+            self.pending_protocol_replies
+                .push_back(PendingProtocolReply { reply, offset: 0 });
+        }
+        // Drop any surplus still sitting on TerminalState so a stalled write
+        // path cannot grow unbounded parser-side effects.
+        while self.terminal.take_protocol_reply().is_some() {}
     }
 }

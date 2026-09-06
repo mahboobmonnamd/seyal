@@ -4,8 +4,8 @@
 //! Workspace Block lifecycle, terminal state, authorization, transport, or UI.
 
 use crate::{
-    BlockId, ExecutionId,
     framing::{FrameHeader, HEADER_LEN},
+    BlockId, ExecutionId,
 };
 
 /// SPEC-007 capability bit for the read-only Block metadata projection.

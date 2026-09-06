@@ -106,7 +106,7 @@ mod macos {
 
         let limited = report
             .iter()
-            .any(|row| row.1 == "real" && row.6.0 == "PLATFORM_LIMITED");
+            .any(|row| row.1 == "real" && row.6 .0 == "PLATFORM_LIMITED");
         let decision = if limited { "PLATFORM_LIMITED" } else { "GREEN" };
         let mut summary = File::create(&summary_path).expect("create summary");
         writeln!(summary, "# Execution scalability evidence\n").expect("write summary");

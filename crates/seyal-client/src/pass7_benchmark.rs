@@ -6,8 +6,8 @@
 
 use std::{
     sync::{
-        OnceLock,
         atomic::{AtomicU64, AtomicUsize, Ordering},
+        OnceLock,
     },
     time::Instant,
 };

@@ -1,6 +1,6 @@
 # ADR-010 — Production Scrollback, Retained History, and Resize Reflow
 
-- **Status:** Proposed for acceptance
+- **Status:** Accepted
 - **Date:** 2026-09-06
 - **Issue:** #685
 - **Parent:** #664

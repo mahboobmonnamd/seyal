@@ -8,11 +8,13 @@ use std::{
 
 #[cfg(feature = "test-fault-injection")]
 use seyal_exec::test_fault::{self, FaultPoint};
+use seyal_exec::LineId;
 use seyal_exec::{CommandSpec, WindowSize};
 use seyal_runtime::{
     display::{decode_chunk, empty_cache, DecodedDisplayChunk, DisplayCache},
     local_ipc::framing::{
-        encode_frame, Attach, Attached, ClientHello, FrameHeader, MessageType, ResizeRequest,
+        encode_frame, Attach, Attached, ClientHello, FrameHeader, HistoryRangeRequest,
+        HistoryRangeSnapshot, HistoryRangeStatus, InputRef, MessageType, ResizeRequest,
         ResizeResult, ResizeResultCode, Role, ServerHello, TerminalKey, TerminalKeyKind,
         TerminalKeyModifiers, CAP_CORRELATED_RESIZE, CAP_SEMANTIC_TERMINAL_KEY, HEADER_LEN,
     },
@@ -72,6 +74,45 @@ impl Harness {
         self.runtime
             .poll_once(Some(Duration::from_millis(5)))
             .expect("poll");
+    }
+
+    /// Read and discard every complete frame until the socket is quiet and the
+    /// local buffer is empty. Keeps stream framing aligned for the next request.
+    fn quiesce(&mut self) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut idle_rounds = 0u8;
+        while Instant::now() < deadline {
+            self.pump();
+            let mut made_progress = false;
+            let mut buf = [0u8; 64 * 1024];
+            match self.stream.read(&mut buf) {
+                Ok(0) => panic!("socket closed during quiesce"),
+                Ok(count) => {
+                    self.buffered.extend_from_slice(&buf[..count]);
+                    made_progress = true;
+                    idle_rounds = 0;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(error) => panic!("read: {error}"),
+            }
+            while self.buffered.len() >= HEADER_LEN {
+                let header = FrameHeader::decode(&self.buffered[..HEADER_LEN]).unwrap();
+                let total = HEADER_LEN + header.payload_len as usize;
+                if self.buffered.len() < total {
+                    break;
+                }
+                let _ = self.buffered.drain(..total);
+                made_progress = true;
+                idle_rounds = 0;
+            }
+            if !made_progress && self.buffered.is_empty() {
+                idle_rounds += 1;
+                if idle_rounds >= 3 {
+                    return;
+                }
+            }
+        }
+        panic!("quiesce timeout (buffered={} bytes)", self.buffered.len());
     }
 
     fn send(&mut self, kind: MessageType, payload: &[u8]) {
@@ -379,4 +420,100 @@ fn unauthorized_resize_cannot_poison_request_id_sequence() {
         ResizeResult::decode(&payload).unwrap().result_code,
         ResizeResultCode::Applied
     );
+}
+
+#[test]
+fn history_range_over_wire_budget_returns_truncated_not_capacity_error() {
+    let (mut harness, execution_id) = Harness::new(CommandSpec::new("/bin/cat"));
+    harness.hello();
+    let (attached, mut cache) = harness.attach(execution_id, Role::Controller);
+
+    // Fill primary history past the ~151-row wire budget at 80 columns while
+    // staying inside production max_lines/max_cells (512 / 131072).
+    let mut body = String::new();
+    for i in 0..230 {
+        body.push_str(&format!("{i:080}\n"));
+    }
+    harness.send(
+        MessageType::Input,
+        &InputRef {
+            attachment_id: attached.attachment_id,
+            bytes: body.as_bytes(),
+        }
+        .encode(),
+    );
+
+    let fill_deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let rows = harness
+            .runtime
+            .execution(execution_id)
+            .expect("execution")
+            .terminal()
+            .primary_history_range(LineId(1), LineId(u64::MAX), 512);
+        if rows.len() >= 200 {
+            break;
+        }
+        assert!(
+            Instant::now() < fill_deadline,
+            "timed out waiting for ≥200 retained history rows (have {})",
+            rows.len()
+        );
+        harness.pump();
+        let mut buf = [0u8; 64 * 1024];
+        match harness.stream.read(&mut buf) {
+            Ok(0) => panic!("socket closed while filling history"),
+            Ok(count) => harness.buffered.extend_from_slice(&buf[..count]),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(error) => panic!("read: {error}"),
+        }
+        while harness.buffered.len() >= HEADER_LEN {
+            let header = FrameHeader::decode(&harness.buffered[..HEADER_LEN]).unwrap();
+            let total = HEADER_LEN + header.payload_len as usize;
+            if harness.buffered.len() < total {
+                break;
+            }
+            let _ = harness.buffered.drain(..total);
+        }
+    }
+    harness.quiesce();
+    let _ = &mut cache;
+
+    harness.send(
+        MessageType::HistoryRangeRequest,
+        &HistoryRangeRequest {
+            attachment_id: attached.attachment_id,
+            request_id: 1,
+            block_id: 7,
+            start_line: 1,
+            end_line: u64::MAX,
+            max_lines: 512,
+            max_cells: 131_072,
+        }
+        .encode(),
+    );
+
+    let reply_deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(Instant::now() < reply_deadline, "history snapshot timeout");
+        let (kind, payload) = harness.frame();
+        match MessageType::from_u16(kind) {
+            Some(MessageType::HistoryRangeSnapshot) => {
+                let snapshot = HistoryRangeSnapshot::decode(&payload).expect("snapshot");
+                assert_eq!(snapshot.status, HistoryRangeStatus::Truncated);
+                assert!(!snapshot.rows.is_empty());
+                assert!(
+                    snapshot.rows.len() < 200,
+                    "wire admission must stop before 200 full-width rows, got {}",
+                    snapshot.rows.len()
+                );
+                return;
+            }
+            Some(MessageType::Error) => {
+                panic!("history wire overflow must not send Error/CapacityExceeded");
+            }
+            Some(MessageType::DisplaySnapshot | MessageType::DisplayDelta) => continue,
+            other => panic!("unexpected reply while waiting for history: {other:?}"),
+        }
+    }
 }

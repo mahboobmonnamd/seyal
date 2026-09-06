@@ -192,6 +192,13 @@ pub(crate) fn classify_server_error(
     {
         return Ok(Some(InputAdmissionFailure::ClientBackpressure));
     }
+    // History presentation capacity is a per-request refusal. Never tear down
+    // a healthy attachment because a Block body exceeded the wire byte budget.
+    if error.error_code == ErrorCode::CapacityExceeded as u16
+        && error.offending_message_type == MessageType::HistoryRangeRequest as u16
+    {
+        return Ok(None);
+    }
     Err(server_error(error.error_code))
 }
 
@@ -852,6 +859,22 @@ mod tests {
                 detail_code: 0,
             }),
             Err(ClientError::Server(ErrorCode::InvalidExecution))
+        );
+        assert_eq!(
+            classify_server_error(ErrorMessage {
+                error_code: ErrorCode::CapacityExceeded as u16,
+                offending_message_type: MessageType::HistoryRangeRequest as u16,
+                detail_code: 0,
+            }),
+            Ok(None)
+        );
+        assert_eq!(
+            classify_server_error(ErrorMessage {
+                error_code: ErrorCode::CapacityExceeded as u16,
+                offending_message_type: MessageType::BlockTimeline as u16,
+                detail_code: 0,
+            }),
+            Err(ClientError::Server(ErrorCode::CapacityExceeded))
         );
     }
 

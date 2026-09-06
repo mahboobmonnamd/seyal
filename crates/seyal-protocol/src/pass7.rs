@@ -268,6 +268,16 @@ pub struct HistoryRow {
     pub cells: Vec<HistoryCell>,
 }
 
+impl HistoryRow {
+    pub const ENCODED_HEADER_LEN: usize = 16;
+    pub const ENCODED_CELL_LEN: usize = 16;
+
+    pub fn encoded_len(&self) -> usize {
+        Self::ENCODED_HEADER_LEN
+            .saturating_add(self.cells.len().saturating_mul(Self::ENCODED_CELL_LEN))
+    }
+}
+
 /// Canonical terminal cells retain style as well as scalar. The packed colors
 /// use the same tagged representation as `PreparedCell` and are resolved by
 /// the native renderer, so the UI never reconstructs style from text.
@@ -294,7 +304,44 @@ pub struct HistoryRangeSnapshot {
 }
 
 impl HistoryRangeSnapshot {
-    const HEADER_LEN: usize = 32;
+    pub const ENCODED_HEADER_LEN: usize = 32;
+
+    /// Admit rows under line, cell, and encoded-byte budgets.
+    ///
+    /// Wire admission is the authoritative stop for `MAX_HISTORY_RANGE_BYTES` /
+    /// `MAX_FRAME_PAYLOAD`. Callers must treat a `true` truncated flag as
+    /// `HistoryRangeStatus::Truncated` and must not surface `CapacityExceeded`
+    /// merely because more retained history remains.
+    pub fn admit_rows(
+        rows: impl IntoIterator<Item = HistoryRow>,
+        max_lines: usize,
+        max_cells: usize,
+    ) -> (Vec<HistoryRow>, bool) {
+        let byte_limit = MAX_HISTORY_RANGE_BYTES.min(crate::framing::MAX_FRAME_PAYLOAD as usize);
+        let mut truncated = false;
+        let mut cell_budget = max_cells;
+        let mut used = Self::ENCODED_HEADER_LEN;
+        let mut out = Vec::new();
+        for row in rows {
+            if max_lines == 0 || out.len() >= max_lines {
+                truncated = true;
+                break;
+            }
+            if row.cells.len() > cell_budget {
+                truncated = true;
+                break;
+            }
+            let row_len = row.encoded_len();
+            if used.saturating_add(row_len) > byte_limit {
+                truncated = true;
+                break;
+            }
+            cell_budget -= row.cells.len();
+            used = used.saturating_add(row_len);
+            out.push(row);
+        }
+        (out, truncated)
+    }
 
     pub fn try_encode(&self) -> Result<Vec<u8>, FramingError> {
         if self.rows.len() > MAX_HISTORY_RANGE_LINES
@@ -302,7 +349,7 @@ impl HistoryRangeSnapshot {
         {
             return Err(FramingError::OversizedPayload);
         }
-        let mut out = Vec::with_capacity(Self::HEADER_LEN);
+        let mut out = Vec::with_capacity(Self::ENCODED_HEADER_LEN);
         out.extend_from_slice(&self.request_id.to_le_bytes());
         out.extend_from_slice(&self.block_id.to_le_bytes());
         out.extend_from_slice(&self.revision.to_le_bytes());
@@ -343,7 +390,7 @@ impl HistoryRangeSnapshot {
         {
             return Err(FramingError::OversizedPayload);
         }
-        if bytes.len() < Self::HEADER_LEN || bytes[25] != 0 || bytes[28..32] != [0; 4] {
+        if bytes.len() < Self::ENCODED_HEADER_LEN || bytes[25] != 0 || bytes[28..32] != [0; 4] {
             return Err(FramingError::MalformedPayload);
         }
         let status = match bytes[24] {
@@ -357,7 +404,7 @@ impl HistoryRangeSnapshot {
         if count > MAX_HISTORY_RANGE_LINES {
             return Err(FramingError::MalformedPayload);
         }
-        let mut offset = Self::HEADER_LEN;
+        let mut offset = Self::ENCODED_HEADER_LEN;
         let mut total_cells = 0usize;
         let mut rows = Vec::with_capacity(count);
         for _ in 0..count {
@@ -736,6 +783,62 @@ mod command_block_tests {
             }],
         };
         assert_eq!(too_many.try_encode(), Err(FramingError::OversizedPayload));
+    }
+
+    #[test]
+    fn history_admit_rows_truncates_before_wire_byte_budget() {
+        fn full_row(line_id: u64, cols: usize) -> HistoryRow {
+            HistoryRow {
+                line_id,
+                cells: vec![
+                    HistoryCell {
+                        scalar: b'x' as u32,
+                        foreground: 0,
+                        background: 0,
+                        flags: 0,
+                        reserved: 0,
+                    };
+                    cols
+                ],
+            }
+        }
+
+        // Production native requests max_lines=512 / max_cells=131072. At 80
+        // columns, ~152 full-width rows exceed MAX_HISTORY_RANGE_BYTES while
+        // still inside the line/cell admit limits — the P1 disconnect path.
+        let dense: Vec<_> = (1..=200).map(|id| full_row(id, 80)).collect();
+        let without_wire = HistoryRangeSnapshot {
+            request_id: 1,
+            block_id: 2,
+            revision: 3,
+            status: HistoryRangeStatus::Complete,
+            rows: dense.clone(),
+        };
+        assert_eq!(
+            without_wire.try_encode(),
+            Err(FramingError::OversizedPayload)
+        );
+
+        let (admitted, truncated) = HistoryRangeSnapshot::admit_rows(
+            dense,
+            MAX_HISTORY_RANGE_LINES,
+            MAX_HISTORY_RANGE_CELLS,
+        );
+        assert!(truncated);
+        assert!(admitted.len() < 200);
+        assert!(!admitted.is_empty());
+        let snapshot = HistoryRangeSnapshot {
+            request_id: 1,
+            block_id: 2,
+            revision: 3,
+            status: HistoryRangeStatus::Truncated,
+            rows: admitted,
+        };
+        let encoded = snapshot
+            .try_encode()
+            .expect("wire-admitted snapshot encodes");
+        assert!(encoded.len() <= MAX_HISTORY_RANGE_BYTES);
+        assert_eq!(HistoryRangeSnapshot::decode(&encoded), Ok(snapshot));
     }
 
     #[test]

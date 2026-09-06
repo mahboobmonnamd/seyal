@@ -7,11 +7,11 @@ import Metal
 /// MainActor task. Keep this driver off MainActor isolation so the hop closure
 /// can capture state without the compiler inserting `assumeIsolated` (which
 /// Trace/BPTs under Xcode 16.4 Release `--renderer-benchmark`).
-private final class DisplayLinkBenchmarkDriver: NSObject, @preconcurrency CAMetalDisplayLinkDelegate {
-    nonisolated(unsafe) private let renderer: MetalTerminalRenderer
+private final class DisplayLinkBenchmarkDriver: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendable {
+    private let renderer: MetalTerminalRenderer
     private let link: CAMetalDisplayLink
-    nonisolated(unsafe) private var startedAt: UInt64?
-    nonisolated(unsafe) private(set) var samples = [UInt64]()
+    private var startedAt: UInt64?
+    private(set) var samples = [UInt64]()
 
     @MainActor
     init(renderer: MetalTerminalRenderer, layer: CAMetalLayer) {
@@ -48,18 +48,21 @@ private final class DisplayLinkBenchmarkDriver: NSObject, @preconcurrency CAMeta
         _ link: CAMetalDisplayLink,
         needsUpdate update: CAMetalDisplayLink.Update
     ) {
-        let renderer = self.renderer
+        // Capture unchecked-Sendable self by identity; the hop body runs
+        // synchronously on the main queue where MainActor mutual exclusion holds.
+        let driver = self
+        let drawable = update.drawable
         seyalRunAsMainActorFromMainQueue {
             link.isPaused = true
-            renderer.drainGPUCompletionsIfNeeded()
-            guard let startedAt = self.startedAt,
-                  renderer.present(drawable: update.drawable)
+            driver.renderer.drainGPUCompletionsIfNeeded()
+            guard let startedAt = driver.startedAt,
+                  driver.renderer.present(drawable: drawable)
             else {
-                self.startedAt = nil
+                driver.startedAt = nil
                 return
             }
-            self.samples.append(DispatchTime.now().uptimeNanoseconds - startedAt)
-            self.startedAt = nil
+            driver.samples.append(DispatchTime.now().uptimeNanoseconds - startedAt)
+            driver.startedAt = nil
         }
     }
 

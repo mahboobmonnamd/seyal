@@ -271,6 +271,7 @@ impl Runtime {
         entry.pty_eof_reap_probe = None;
         entry.ingress_active.store(false, Ordering::Release);
         entry.pending_input.clear();
+        entry.execution.clear_pending_protocol_replies();
         self.reactor.set_writable(entry.token, false)?;
         match entry.execution.signal_terminate()? {
             SignalDisposition::AlreadyReaped(exit) => {
@@ -348,6 +349,7 @@ impl Runtime {
         };
         entry.ingress_active.store(false, Ordering::Release);
         entry.pending_input.clear();
+        entry.execution.clear_pending_protocol_replies();
         self.by_token.remove(&entry.token);
         let deregister_result = self.reactor.deregister(entry.token);
         drop(entry);

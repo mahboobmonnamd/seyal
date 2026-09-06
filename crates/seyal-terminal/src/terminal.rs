@@ -2,7 +2,8 @@ use crate::{
     damage::{DamageTracker, Mutation},
     line::LineIdAllocator,
     parser::{Actions, Parser},
-    screen::Screen,
+    protocol_reply::{encode_decrqm_private, encode_dsr_cpr, ProtocolReply, MAX_PROTOCOL_REPLIES},
+    screen::{PreparedScreen, Screen},
     Cell, CursorState, Damage, LineId, ModeState, TerminalError,
 };
 use std::collections::VecDeque;
@@ -107,8 +108,28 @@ impl TerminalState {
         self.core.fault.map_or(Ok(()), Err)
     }
 
+    /// Convenience prepare+commit for VT-only consumers. Prefer
+    /// [`prepare_resize`] / [`commit_resize`] when coordinating with a PTY.
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), TerminalError> {
-        self.core.resize(cols, rows)
+        let prepared = self.prepare_resize(cols, rows)?;
+        self.commit_resize(prepared);
+        Ok(())
+    }
+
+    /// Fallible canonical resize preparation. Does not mutate live geometry or
+    /// damage. Must be completed with [`commit_resize`] or dropped.
+    pub fn prepare_resize(
+        &mut self,
+        cols: u16,
+        rows: u16,
+    ) -> Result<PreparedResize, TerminalError> {
+        self.core.prepare_resize(cols, rows)
+    }
+
+    /// Infallible commit of a prepared resize. Damage/projection become
+    /// observable only after this returns.
+    pub fn commit_resize(&mut self, prepared: PreparedResize) {
+        self.core.commit_resize(prepared);
     }
 
     pub fn cols(&self) -> u16 {
@@ -188,6 +209,20 @@ impl TerminalState {
     pub fn take_shell_integration_event(&mut self) -> Option<ShellIntegrationEvent> {
         self.core.shell_events.pop_front()
     }
+
+    /// Transfers one bounded terminal-generated protocol reply. Transport
+    /// layers write these opaque bytes to the child PTY without interpreting
+    /// query semantics.
+    pub fn take_protocol_reply(&mut self) -> Option<ProtocolReply> {
+        self.core.protocol_replies.pop_front()
+    }
+}
+
+/// Opaque prepared resize held until [`TerminalState::commit_resize`].
+pub struct PreparedResize {
+    rows: u16,
+    primary: PreparedScreen,
+    alternate: Option<PreparedScreen>,
 }
 
 struct TerminalCore {
@@ -199,6 +234,7 @@ struct TerminalCore {
     diagnostics: Diagnostics,
     fault: Option<TerminalError>,
     shell_events: VecDeque<ShellIntegrationEvent>,
+    protocol_replies: VecDeque<ProtocolReply>,
 }
 
 impl TerminalCore {
@@ -217,6 +253,7 @@ impl TerminalCore {
             diagnostics: Diagnostics::default(),
             fault: None,
             shell_events: VecDeque::with_capacity(16),
+            protocol_replies: VecDeque::with_capacity(MAX_PROTOCOL_REPLIES),
         })
     }
 
@@ -241,12 +278,17 @@ impl TerminalCore {
         self.damage.mark(mutation);
     }
 
-    fn resize(&mut self, cols: u16, rows: u16) -> Result<(), TerminalError> {
+    fn prepare_resize(&mut self, cols: u16, rows: u16) -> Result<PreparedResize, TerminalError> {
         if let Some(error) = self.fault {
             return Err(error);
         }
         if cols == 0 || rows == 0 {
             return Err(TerminalError::InvalidSize);
+        }
+
+        #[cfg(feature = "test-fault-injection")]
+        if crate::test_fault::take(crate::test_fault::FaultPoint::ResizePrepare) {
+            return Err(TerminalError::LineIdentityExhausted);
         }
 
         let mut required_ids = usize::from(rows.saturating_sub(self.primary.rows()));
@@ -257,15 +299,71 @@ impl TerminalCore {
             return Err(TerminalError::LineIdentityExhausted);
         }
 
-        let primary = self.primary.resize(cols, rows, &mut self.line_ids)?;
-        let alternate = if let Some(screen) = &mut self.alternate {
-            screen.resize(cols, rows, &mut self.line_ids)?
+        let primary = self
+            .primary
+            .prepare_resize(cols, rows, &mut self.line_ids)?;
+        let alternate = if let Some(screen) = &self.alternate {
+            Some(screen.prepare_resize(cols, rows, &mut self.line_ids)?)
+        } else {
+            None
+        };
+        Ok(PreparedResize {
+            rows,
+            primary,
+            alternate,
+        })
+    }
+
+    fn commit_resize(&mut self, prepared: PreparedResize) {
+        let primary = self.primary.commit_prepared(prepared.primary);
+        let alternate = if let Some(prepared_alt) = prepared.alternate {
+            if let Some(screen) = &mut self.alternate {
+                screen.commit_prepared(prepared_alt)
+            } else {
+                Mutation::none()
+            }
         } else {
             Mutation::none()
         };
-        self.apply(primary.merge(alternate).merge(Mutation::full(rows)));
+        self.apply(
+            primary
+                .merge(alternate)
+                .merge(Mutation::full(prepared.rows)),
+        );
         self.damage.commit();
-        Ok(())
+    }
+
+    fn enqueue_protocol_reply(&mut self, reply: ProtocolReply) {
+        if self.protocol_replies.len() == self.protocol_replies.capacity() {
+            self.record_deferred();
+            return;
+        }
+        self.protocol_replies.push_back(reply);
+    }
+
+    fn reply_dsr_cpr(&mut self) {
+        let cursor = self.current().cursor(self.modes.cursor_visible);
+        if let Some(reply) = encode_dsr_cpr(cursor.row, cursor.col) {
+            self.enqueue_protocol_reply(reply);
+        } else {
+            self.record_deferred();
+        }
+    }
+
+    fn reply_decrqm(&mut self, params: &[u16]) {
+        for mode in params {
+            match *mode {
+                25 => {
+                    let status = if self.modes.cursor_visible { 1 } else { 2 };
+                    if let Some(reply) = encode_decrqm_private(25, status) {
+                        self.enqueue_protocol_reply(reply);
+                    } else {
+                        self.record_deferred();
+                    }
+                }
+                _ => self.record_deferred(),
+            }
+        }
     }
 
     fn set_cursor_visible(&mut self, visible: bool) {
@@ -363,7 +461,14 @@ impl Actions for TerminalCore {
             return;
         }
         if ignored {
-            self.record_deferred();
+            // DECRQM uses intermediate `$` which the ECMA-48 parser marks as
+            // ignored; handle the known private-mode query without advertising
+            // unsupported modes.
+            if private == Some(b'?') && final_byte == b'p' {
+                self.reply_decrqm(params);
+            } else {
+                self.record_deferred();
+            }
             return;
         }
 
@@ -413,6 +518,13 @@ impl Actions for TerminalCore {
             b'm' => {
                 if self.current_mut().apply_sgr(params) {
                     self.record_deferred();
+                }
+                Mutation::none()
+            }
+            b'n' => {
+                match param_zero(params, 0) {
+                    6 => self.reply_dsr_cpr(),
+                    _ => self.record_unknown(),
                 }
                 Mutation::none()
             }
@@ -616,5 +728,101 @@ mod tests {
                 .starts_with("one")
         }));
         assert!(terminal.primary_history_range(first, last, 0).is_empty());
+    }
+
+    #[test]
+    fn prepare_resize_leaves_geometry_and_damage_unchanged_until_commit() {
+        let mut terminal = TerminalState::new(4, 2).unwrap();
+        let _ = terminal.take_damage();
+        let generation = terminal.damage_generation();
+        let prepared = terminal.prepare_resize(8, 4).expect("prepare");
+        assert_eq!((terminal.cols(), terminal.rows()), (4, 2));
+        assert_eq!(terminal.damage_generation(), generation);
+        assert!(terminal.take_damage().is_none());
+
+        terminal.commit_resize(prepared);
+        assert_eq!((terminal.cols(), terminal.rows()), (8, 4));
+        let damage = terminal.take_damage().expect("damage after commit");
+        assert!(damage.full);
+        assert!(terminal.damage_generation() > generation);
+    }
+
+    #[test]
+    fn dsr_cpr_emits_ordered_replies_with_chunk_equivalence() {
+        let mut one_shot = TerminalState::new(80, 24).unwrap();
+        one_shot.feed(b"\x1b[10;20H\x1b[6n").unwrap();
+        let expected = one_shot.take_protocol_reply().expect("cpr reply");
+        assert_eq!(expected.as_bytes(), b"\x1b[10;20R");
+        assert!(one_shot.take_protocol_reply().is_none());
+
+        let mut chunked = TerminalState::new(80, 24).unwrap();
+        for byte in b"\x1b[10;20H\x1b[6n" {
+            chunked.feed(std::slice::from_ref(byte)).unwrap();
+        }
+        assert_eq!(
+            chunked.take_protocol_reply().map(|r| r.as_bytes().to_vec()),
+            Some(expected.as_bytes().to_vec())
+        );
+    }
+
+    #[test]
+    fn multiple_queries_preserve_reply_order_and_bound() {
+        let mut terminal = TerminalState::new(80, 24).unwrap();
+        terminal.feed(b"\x1b[1;1H\x1b[6n\x1b[2;3H\x1b[6n").unwrap();
+        assert_eq!(
+            terminal.take_protocol_reply().unwrap().as_bytes(),
+            b"\x1b[1;1R"
+        );
+        assert_eq!(
+            terminal.take_protocol_reply().unwrap().as_bytes(),
+            b"\x1b[2;3R"
+        );
+
+        let mut flood = TerminalState::new(80, 24).unwrap();
+        let before = flood.diagnostics().deferred_sequences;
+        for _ in 0..(MAX_PROTOCOL_REPLIES + 4) {
+            flood.feed(b"\x1b[6n").unwrap();
+        }
+        let mut drained = 0usize;
+        while flood.take_protocol_reply().is_some() {
+            drained += 1;
+        }
+        assert_eq!(drained, MAX_PROTOCOL_REPLIES);
+        assert!(flood.diagnostics().deferred_sequences > before);
+    }
+
+    #[test]
+    fn decrqm_mode_25_and_unknown_queries_are_safe() {
+        let mut terminal = TerminalState::new(80, 24).unwrap();
+        terminal.feed(b"\x1b[?25l\x1b[?25$p").unwrap();
+        assert_eq!(
+            terminal.take_protocol_reply().unwrap().as_bytes(),
+            b"\x1b[?25;2$y"
+        );
+
+        let unknown_before = terminal.diagnostics().unknown_sequences;
+        let deferred_before = terminal.diagnostics().deferred_sequences;
+        terminal.feed(b"\x1b[0n\x1b[?2027$p\x1b[?999$p").unwrap();
+        assert!(terminal.take_protocol_reply().is_none());
+        assert!(terminal.diagnostics().unknown_sequences > unknown_before);
+        assert!(terminal.diagnostics().deferred_sequences > deferred_before);
+    }
+
+    #[test]
+    fn replies_enqueued_before_feed_fault_remain_takeable() {
+        let mut terminal = TerminalState::new(2, 1).expect("valid terminal");
+        terminal.core.line_ids = LineIdAllocator::with_next(Some(u64::MAX));
+        terminal
+            .feed(b"A\r\n")
+            .expect("consume final available line id");
+        assert_eq!(
+            terminal.feed(b"\x1b[6n\r\n"),
+            Err(TerminalError::LineIdentityExhausted)
+        );
+        assert_eq!(
+            terminal.take_protocol_reply().unwrap().as_bytes(),
+            b"\x1b[1;1R"
+        );
+        assert!(terminal.take_protocol_reply().is_none());
     }
 }

@@ -43,6 +43,7 @@ impl Runtime {
                 .ok_or(RuntimeError::UnknownExecution)?;
             entry.ingress_active.store(false, Ordering::Release);
             entry.pending_input.clear();
+            entry.execution.clear_pending_protocol_replies();
             entry.token
         };
         self.reactor.set_writable(token, false)?;
@@ -112,6 +113,22 @@ impl Runtime {
                 ReadOutcome::Bytes(count) => {
                     consumed += count;
                     self.observe_shell_integration_events(id)?;
+                    let wants_write = {
+                        let entry = self
+                            .entries
+                            .get_mut(&id)
+                            .ok_or(RuntimeError::UnknownExecution)?;
+                        entry.execution.has_pending_protocol_replies()
+                            || !entry.pending_input.is_empty()
+                    };
+                    if wants_write {
+                        let token = self
+                            .entries
+                            .get(&id)
+                            .ok_or(RuntimeError::UnknownExecution)?
+                            .token;
+                        self.reactor.set_writable(token, true)?;
+                    }
                     #[cfg(feature = "benchmark-instrumentation")]
                     {
                         self.benchmark.pty_bytes_read =
@@ -143,10 +160,20 @@ impl Runtime {
                 .ok_or(RuntimeError::UnknownExecution)?;
             if !entry.terminal_io_active() {
                 entry.pending_input.clear();
+                entry.execution.clear_pending_protocol_replies();
                 token = entry.token;
                 pending = false;
             } else {
                 while written_total < self.config.write_dispatch_bytes {
+                    if entry.execution.has_pending_protocol_replies() {
+                        let quantum = self.config.write_dispatch_bytes - written_total;
+                        let wrote = entry.execution.write_protocol_replies(quantum)?;
+                        if wrote == 0 {
+                            break;
+                        }
+                        written_total += wrote;
+                        continue;
+                    }
                     let Some(front) = entry.pending_input.front_mut() else {
                         break;
                     };
@@ -165,7 +192,8 @@ impl Runtime {
                     }
                 }
                 token = entry.token;
-                pending = !entry.pending_input.is_empty();
+                pending = entry.execution.has_pending_protocol_replies()
+                    || !entry.pending_input.is_empty();
             }
         }
         self.reactor.set_writable(token, pending)?;

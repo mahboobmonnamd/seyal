@@ -11,7 +11,7 @@ publish = false
 seyal-terminal = { path = "../seyal-terminal" }
 
 [features]
-test-fault-injection = []
+test-fault-injection = ["seyal-terminal/test-fault-injection"]
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "=0.2.189"

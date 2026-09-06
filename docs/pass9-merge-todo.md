@@ -1,5 +1,20 @@
 # Pass 9 final merge TODO
 
+> **Historical / superseded.** This checklist was the delivery boundary for
+> Issue #719 / PR #734 during Pass 9. M001 is **Done / closed**. Do not treat
+> unchecked items below as a live merge gate.
+>
+> Authoritative M001 acceptance and freeze evidence:
+> - [`docs/milestones/MILESTONE-001.md`](milestones/MILESTONE-001.md) (Status: Done / closed)
+> - [`docs/engineering/M001-PASS10-EVIDENCE.md`](engineering/M001-PASS10-EVIDENCE.md)
+> - [`docs/evidence/m001-pass10-independent-final-review.md`](evidence/m001-pass10-independent-final-review.md)
+> - [`docs/evidence/pass10-final-freeze-clean-demo-c536c54.md`](evidence/pass10-final-freeze-clean-demo-c536c54.md)
+>
+> The investigation narrative and checklist body are retained as historical
+> evidence. Later Pass 9 input/IME/VoiceOver qualification and Pass 10 freeze
+> work superseded several unchecked evidence boxes without rewriting this
+> document’s contemporaneous checklist state.
+
 This checklist is the delivery boundary for Issue #719 and PR #734. It mirrors
 the closure rebaseline in Issue #719 comment `5498085185` and keeps production
 implementation separate from acceptance evidence. A checked implementation
@@ -388,6 +403,10 @@ substantial separate effort), VoiceOver/dead-key/real-IME validation,
 Release-path signing verification, durable CI-retained package inspection,
 and — the gate no code change can satisfy — a review from an identity
 independent of the implementer.
+
+**Historical note:** The **Merge status: BLOCKED** wording below reflects the
+Pass 9/#719 contemporaneous gate. It is superseded by M001 Pass 10 closeout
+(see banner at top of this document). Retain for audit trail only.
 
 **Merge status: BLOCKED** — CI is green and the concrete test-failure blocker
 is resolved, but the independent-review gate and the remaining evidence items

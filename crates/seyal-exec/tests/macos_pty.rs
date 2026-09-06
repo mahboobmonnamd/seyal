@@ -361,3 +361,168 @@ fn terminal_execution_feeds_the_single_authoritative_terminal_state() {
         ChildExit::Exited(0)
     );
 }
+
+#[cfg(feature = "test-fault-injection")]
+mod resize_transaction {
+    use super::*;
+    use seyal_exec::terminal_test_fault::{
+        fail_times as terminal_fail_times, remaining as terminal_remaining,
+        FaultPoint as TerminalFaultPoint,
+    };
+    use seyal_exec::test_fault::{fail_times, remaining, FaultPoint};
+
+    #[test]
+    fn endpoint_resize_failure_leaves_canonical_terminal_unchanged() {
+        let _guard = test_guard();
+        let initial = WindowSize::cells(80, 24).expect("initial size");
+        let resized = WindowSize::cells(100, 33).expect("resized");
+        let mut execution = TerminalExecution::spawn(&sh("cat"), initial).expect("spawn PTY");
+        let generation = execution.terminal().damage_generation();
+        let _ = execution.take_projection_update();
+
+        fail_times(FaultPoint::ResizeWinsize, 1);
+        let err = execution.resize(resized).expect_err("winsize fault");
+        assert!(matches!(err, ExecError::Io(_)));
+        assert_eq!(remaining(FaultPoint::ResizeWinsize), 0);
+        assert_eq!(execution.window_size().expect("winsize"), initial);
+        assert_eq!(execution.terminal().cols(), 80);
+        assert_eq!(execution.terminal().rows(), 24);
+        assert_eq!(execution.terminal().damage_generation(), generation);
+        assert!(execution.take_projection_update().is_none());
+    }
+
+    #[test]
+    fn canonical_prepare_failure_leaves_endpoint_and_terminal_unchanged() {
+        let _guard = test_guard();
+        let initial = WindowSize::cells(80, 24).expect("initial size");
+        let resized = WindowSize::cells(100, 33).expect("resized");
+        let mut execution = TerminalExecution::spawn(&sh("cat"), initial).expect("spawn PTY");
+        let generation = execution.terminal().damage_generation();
+
+        terminal_fail_times(TerminalFaultPoint::ResizePrepare, 1);
+        let err = execution.resize(resized).expect_err("prepare fault");
+        assert!(matches!(err, ExecError::Terminal(_)));
+        assert_eq!(terminal_remaining(TerminalFaultPoint::ResizePrepare), 0);
+        assert_eq!(execution.window_size().expect("winsize"), initial);
+        assert_eq!(execution.terminal().cols(), 80);
+        assert_eq!(execution.terminal().rows(), 24);
+        assert_eq!(execution.terminal().damage_generation(), generation);
+    }
+
+    #[test]
+    fn successful_resize_updates_both_and_exposes_damage_only_after_commit() {
+        let _guard = test_guard();
+        let initial = WindowSize::cells(40, 12).expect("initial size");
+        let resized = WindowSize::cells(60, 20).expect("resized");
+        let mut execution = TerminalExecution::spawn(&sh("cat"), initial).expect("spawn PTY");
+        let _ = execution.take_projection_update();
+        let generation = execution.terminal().damage_generation();
+
+        execution.resize(resized).expect("resize");
+        assert_eq!(execution.window_size().expect("winsize"), resized);
+        assert_eq!(execution.terminal().cols(), 60);
+        assert_eq!(execution.terminal().rows(), 20);
+        assert!(execution.terminal().damage_generation() > generation);
+        let update = execution
+            .take_projection_update()
+            .expect("damage after commit");
+        assert!(update.damage.full);
+    }
+
+    #[test]
+    fn prepare_failure_then_retry_remains_coherent() {
+        let _guard = test_guard();
+        let initial = WindowSize::cells(80, 24).expect("initial size");
+        let resized = WindowSize::cells(90, 30).expect("resized");
+        let mut execution = TerminalExecution::spawn(&sh("cat"), initial).expect("spawn PTY");
+
+        terminal_fail_times(TerminalFaultPoint::ResizePrepare, 2);
+        assert!(execution.resize(resized).is_err());
+        assert!(execution.resize(resized).is_err());
+        assert_eq!(execution.window_size().expect("winsize"), initial);
+        assert_eq!(
+            (execution.terminal().cols(), execution.terminal().rows()),
+            (80, 24)
+        );
+
+        execution.resize(resized).expect("retry succeeds");
+        assert_eq!(execution.window_size().expect("winsize"), resized);
+        assert_eq!(
+            (execution.terminal().cols(), execution.terminal().rows()),
+            (90, 30)
+        );
+    }
+
+    #[test]
+    fn alternate_screen_row_growth_resize_stays_coherent() {
+        let _guard = test_guard();
+        let initial = WindowSize::cells(20, 5).expect("initial size");
+        let resized = WindowSize::cells(20, 8).expect("resized");
+        let mut execution = TerminalExecution::spawn(&sh("printf '\\033[?1049h'; cat"), initial)
+            .expect("spawn PTY");
+        let _ = read_until(&mut execution, b"\x1b[?1049h", IO_TIMEOUT).expect("alt enter");
+        // Sequence was fed into TerminalState via read_output.
+        assert!(execution.terminal().modes().alternate_screen);
+
+        execution.resize(resized).expect("resize with alternate");
+        assert_eq!(execution.window_size().expect("winsize"), resized);
+        assert_eq!(
+            (execution.terminal().cols(), execution.terminal().rows()),
+            (20, 8)
+        );
+        assert!(execution.terminal().modes().alternate_screen);
+    }
+}
+
+#[test]
+fn dsr_cpr_protocol_reply_reaches_child_over_pty() {
+    let _guard = test_guard();
+    // Child emits DSR CPR, reads the reply through stdin until 'R', then echoes it.
+    let script = r#"
+printf '\033[6n'
+reply=
+while IFS= read -r -n1 -t 2 ch; do
+  reply="${reply}${ch}"
+  case "$ch" in R) break ;; esac
+done
+printf 'GOT:%s' "$reply"
+"#;
+    let mut execution =
+        TerminalExecution::spawn(&sh(script), WindowSize::cells(80, 24).expect("size"))
+            .expect("spawn");
+    let deadline = Instant::now() + IO_TIMEOUT;
+    let mut buffer = [0_u8; 4096];
+    let mut saw_got = false;
+    while Instant::now() < deadline {
+        match execution.read_output(&mut buffer).expect("read") {
+            ReadOutcome::Bytes(_) => {
+                let _ = execution
+                    .write_protocol_replies(4096)
+                    .expect("write replies");
+                for row in 0..execution.terminal().rows() {
+                    if let Some(text) = execution.terminal().row_text(row)
+                        && text.contains("GOT:")
+                        && text.contains('R')
+                    {
+                        saw_got = true;
+                        break;
+                    }
+                }
+                if saw_got {
+                    break;
+                }
+            }
+            ReadOutcome::WouldBlock => {
+                let _ = execution
+                    .write_protocol_replies(4096)
+                    .expect("write replies");
+                let _ = execution.wait_readable(Duration::from_millis(50));
+            }
+            ReadOutcome::Eof => break,
+        }
+    }
+    assert!(
+        saw_got,
+        "child did not observe DSR CPR reply bytes on its stdin"
+    );
+}

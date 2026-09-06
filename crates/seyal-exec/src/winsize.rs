@@ -22,6 +22,11 @@ impl WindowSize {
         if columns == 0 || rows == 0 {
             return Err(ExecError::InvalidWindowSize);
         }
+        if columns > seyal_terminal::MAX_TERMINAL_COLUMNS
+            || rows > seyal_terminal::MAX_TERMINAL_ROWS
+        {
+            return Err(ExecError::InvalidWindowSize);
+        }
         Ok(Self {
             columns,
             rows,
@@ -55,5 +60,27 @@ impl Default for WindowSize {
             pixel_width: 0,
             pixel_height: 0,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_geometry_above_terminal_caps() {
+        assert!(matches!(
+            WindowSize::cells(seyal_terminal::MAX_TERMINAL_COLUMNS + 1, 24),
+            Err(ExecError::InvalidWindowSize)
+        ));
+        assert!(matches!(
+            WindowSize::cells(80, seyal_terminal::MAX_TERMINAL_ROWS + 1),
+            Err(ExecError::InvalidWindowSize)
+        ));
+        assert!(WindowSize::cells(
+            seyal_terminal::MAX_TERMINAL_COLUMNS,
+            seyal_terminal::MAX_TERMINAL_ROWS
+        )
+        .is_ok());
     }
 }

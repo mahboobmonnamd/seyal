@@ -150,15 +150,46 @@ impl Runtime {
                 },
             })
             .collect();
-        let payload = BlockTimeline {
+        let payload = match (BlockTimeline {
             revision: entry.block_revision,
             records,
-        }
+        })
         .try_encode()
-        .unwrap_or_default();
-        if payload.is_empty() {
-            return;
-        }
+        {
+            Ok(payload) => payload,
+            Err(_) => {
+                // Admission enforces the wire budget; encode failure here means
+                // an invariant break. Never leave clients on a silently stale
+                // replacement timeline — drop the frame and surface capacity
+                // on every attached block-capable connection.
+                let tokens = self
+                    .local_ipc
+                    .as_ref()
+                    .map(|state| {
+                        state
+                            .connections
+                            .iter()
+                            .filter_map(|(&token, meta)| {
+                                let supports_blocks =
+                                    meta.client_capabilities & CAP_COMMAND_BLOCKS != 0;
+                                let attached_here = meta.attachment.and_then(|attachment| {
+                                    state.attachments.execution_of(attachment).ok()
+                                }) == Some(execution_id);
+                                (supports_blocks && attached_here).then_some(token)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                for token in tokens {
+                    self.send_error(
+                        token,
+                        ErrorCode::CapacityExceeded,
+                        MessageType::BlockTimeline as u16,
+                    );
+                }
+                return;
+            }
+        };
         let frame = framing::encode_frame(MessageType::BlockTimeline, &payload);
         let tokens = self
             .local_ipc

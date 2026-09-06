@@ -8,6 +8,11 @@ use crate::{
 };
 use std::collections::VecDeque;
 
+/// Soft ceiling aligned with Candidate-D display maxima. Larger geometries are
+/// rejected cheaply so embedders cannot force multi-gigabyte grid allocations.
+pub const MAX_TERMINAL_COLUMNS: u16 = 512;
+pub const MAX_TERMINAL_ROWS: u16 = 256;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Diagnostics {
     pub deferred_sequences: u64,
@@ -17,7 +22,8 @@ pub struct Diagnostics {
 
 /// Bounded shell-integration metadata emitted by the canonical VT parser.
 /// Terminal cells and arbitrary OSC payloads are never exposed through this
-/// interface.
+/// interface. Correlation of tokens to workspace/Block lifecycle is owned by
+/// Runtime/application integration, not by this crate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShellIntegrationEvent {
     CommandStarted {
@@ -30,8 +36,8 @@ pub enum ShellIntegrationEvent {
 }
 
 /// Runtime-issued nonce carried by the shell integration marker. A marker is
-/// only meaningful when it matches a command currently pending in Runtime;
-/// arbitrary OSC 133 traffic is ignored by the block timeline.
+/// only meaningful when an external integrator correlates it with pending
+/// work; arbitrary OSC 133 traffic remains bounded and is otherwise ignored.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ShellIntegrationToken([u8; 16]);
 
@@ -163,6 +169,9 @@ impl TerminalState {
     /// Returns a bounded primary-screen history range. The returned rows are
     /// an explicit read-only projection; alternate-screen content is never
     /// treated as command output history.
+    ///
+    /// Work is bounded by retained history plus visible rows, never by the
+    /// numeric distance between `start` and `end` (LineIds may be sparse).
     pub fn primary_history_range(
         &self,
         start: LineId,
@@ -173,15 +182,35 @@ impl TerminalState {
             return Vec::new();
         }
         let mut lines = Vec::new();
-        let mut id = start;
-        while id <= end && lines.len() < max_lines {
-            if let Some(cells) = self.core.primary.history_line(id) {
-                lines.push((id, cells.to_vec()));
+        for (id, cells) in self.core.primary.history_entries() {
+            if id < start {
+                continue;
             }
-            let Some(next) = id.0.checked_add(1) else {
+            if id > end {
                 break;
+            }
+            lines.push((id, cells.to_vec()));
+            if lines.len() >= max_lines {
+                return lines;
+            }
+        }
+        for row in 0..self.core.primary.rows() {
+            let Some(id) = self.core.primary.line_id(row) else {
+                continue;
             };
-            id = LineId(next);
+            if id < start || id > end {
+                continue;
+            }
+            if lines.iter().any(|(existing, _)| *existing == id) {
+                continue;
+            }
+            let Some(cells) = self.core.primary.cell_row(row) else {
+                continue;
+            };
+            lines.push((id, cells.to_vec()));
+            if lines.len() >= max_lines {
+                break;
+            }
         }
         lines
     }
@@ -283,6 +312,9 @@ impl TerminalCore {
             return Err(error);
         }
         if cols == 0 || rows == 0 {
+            return Err(TerminalError::InvalidSize);
+        }
+        if cols > MAX_TERMINAL_COLUMNS || rows > MAX_TERMINAL_ROWS {
             return Err(TerminalError::InvalidSize);
         }
 
@@ -824,5 +856,51 @@ mod tests {
             b"\x1b[1;1R"
         );
         assert!(terminal.take_protocol_reply().is_none());
+    }
+
+    #[test]
+    fn huge_sparse_history_span_is_bounded_by_retained_storage() {
+        use std::time::{Duration, Instant};
+
+        let mut terminal = TerminalState::new(4, 2).unwrap();
+        terminal.feed(b"one\r\ntwo\r\nthree\r\nfour").unwrap();
+        // Alternate screen burns LineIds, creating gaps in primary identity space.
+        terminal.feed(b"\x1b[?1049h\x1b[?1049l").unwrap();
+        terminal.feed(b"five\r\nsix").unwrap();
+
+        let started = Instant::now();
+        let rows = terminal.primary_history_range(LineId(1), LineId(u64::MAX), 512);
+        assert!(
+            started.elapsed() < Duration::from_millis(100),
+            "history lookup must not scale with numeric LineId distance"
+        );
+        assert!(rows.len() <= 512);
+        assert!(!rows.is_empty());
+
+        let absent = terminal.primary_history_range(LineId(u64::MAX - 10), LineId(u64::MAX), 8);
+        assert!(absent.is_empty());
+    }
+
+    #[test]
+    fn oversized_geometry_is_rejected_without_mutating_state() {
+        assert!(matches!(
+            TerminalState::new(MAX_TERMINAL_COLUMNS, MAX_TERMINAL_ROWS + 1),
+            Err(TerminalError::InvalidSize)
+        ));
+        assert!(matches!(
+            TerminalState::new(MAX_TERMINAL_COLUMNS + 1, MAX_TERMINAL_ROWS),
+            Err(TerminalError::InvalidSize)
+        ));
+        let mut terminal = TerminalState::new(80, 24).unwrap();
+        let generation = terminal.damage_generation();
+        assert!(matches!(
+            terminal.prepare_resize(u16::MAX, u16::MAX),
+            Err(TerminalError::InvalidSize)
+        ));
+        assert_eq!((terminal.cols(), terminal.rows()), (80, 24));
+        assert_eq!(terminal.damage_generation(), generation);
+        terminal
+            .prepare_resize(MAX_TERMINAL_COLUMNS, MAX_TERMINAL_ROWS)
+            .expect("max accepted geometry prepares");
     }
 }

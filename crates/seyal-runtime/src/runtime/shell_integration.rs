@@ -17,6 +17,7 @@ fn issue_shell_integration_token() -> Result<ShellIntegrationToken, RuntimeError
     source.read_exact(&mut token)?;
     Ok(ShellIntegrationToken::from_bytes(token))
 }
+
 #[cfg(all(test, target_os = "macos"))]
 mod composer_wrapper_tests {
     use super::*;
@@ -29,6 +30,20 @@ mod composer_wrapper_tests {
         assert!(wrapped.contains("133;C;%s"));
         assert!(wrapped.contains("133;D;%s;%s"));
         assert!(!wrapped.contains("eval "));
+        // $? must be captured before any conditional in precmd.
+        let precmd = wrapped
+            .split("_seyal_block_precmd() {")
+            .nth(1)
+            .expect("precmd present");
+        let status_pos = precmd
+            .find("local _seyal_status=$?")
+            .expect("status capture");
+        let gate_pos = precmd
+            .find("[[ -n \"$_seyal_active_token\" ]]")
+            .expect("token gate");
+        assert!(status_pos < gate_pos);
+        // Marker function itself emits C so first-command install works.
+        assert!(wrapped.contains("__seyal_block__() { _seyal_active_token=$1;"));
     }
 
     #[test]
@@ -48,7 +63,103 @@ mod composer_wrapper_tests {
         assert_eq!(ComposerAdmission::Busy, ComposerAdmission::Busy);
         assert_ne!(ComposerAdmission::Busy, ComposerAdmission::Unsupported);
     }
+
+    #[test]
+    fn composer_wrap_is_marker_first_after_optional_install() {
+        let token = ShellIntegrationToken::from_bytes([0x11u8; 16]);
+        let wrapped = zsh_composer_command("false", token);
+        let marker = "__seyal_block__ 11111111111111111111111111111111";
+        let marker_pos = wrapped.find(marker).expect("marker present");
+        let command_pos = wrapped.rfind("; false").expect("user command present");
+        assert!(marker_pos < command_pos);
+        // Install bootstrap must not prefix the observed marker line after install.
+        assert!(wrapped.ends_with(&format!("{marker}; false")));
+    }
+
+    #[test]
+    fn live_zsh_pty_emits_trusted_c_and_real_exit_status_for_first_and_second_commands() {
+        use std::time::{Duration, Instant};
+
+        use seyal_exec::{
+            CommandSpec, ReadOutcome, ShellIntegrationEvent, TerminalExecution, WindowSize,
+        };
+
+        let size = WindowSize::cells(80, 24).expect("size");
+        let mut execution =
+            TerminalExecution::spawn(&CommandSpec::new("/bin/zsh").args(["-i", "-f"]), size)
+                .expect("spawn interactive zsh");
+
+        let first_token = ShellIntegrationToken::from_bytes([0xABu8; 16]);
+        let first = format!("{}\r", zsh_composer_command("false", first_token));
+        execution
+            .write_input_bounded(first.as_bytes(), Duration::from_secs(2))
+            .expect("write first wrap");
+
+        let mut saw_start = false;
+        let mut finished_status = None;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut buffer = [0u8; 4096];
+        while Instant::now() < deadline && finished_status.is_none() {
+            match execution.read_output(&mut buffer).expect("read") {
+                ReadOutcome::Bytes(_) => {
+                    while let Some(event) = execution.take_shell_integration_event() {
+                        match event {
+                            ShellIntegrationEvent::CommandStarted { token } => {
+                                assert_eq!(token, first_token);
+                                saw_start = true;
+                            }
+                            ShellIntegrationEvent::CommandFinished { token, exit_status } => {
+                                assert_eq!(token, first_token);
+                                finished_status = Some(exit_status);
+                            }
+                        }
+                    }
+                }
+                ReadOutcome::WouldBlock => {
+                    let _ = execution.wait_readable(Duration::from_millis(50));
+                }
+                ReadOutcome::Eof => break,
+            }
+        }
+        assert!(saw_start, "first composer wrap must emit trusted C");
+        assert_eq!(finished_status, Some(1), "false must report exit status 1");
+
+        let second_token = ShellIntegrationToken::from_bytes([0xCDu8; 16]);
+        let second = format!("{}\r", zsh_composer_command("true", second_token));
+        execution
+            .write_input_bounded(second.as_bytes(), Duration::from_secs(2))
+            .expect("write second wrap");
+
+        saw_start = false;
+        finished_status = None;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline && finished_status.is_none() {
+            match execution.read_output(&mut buffer).expect("read") {
+                ReadOutcome::Bytes(_) => {
+                    while let Some(event) = execution.take_shell_integration_event() {
+                        match event {
+                            ShellIntegrationEvent::CommandStarted { token } => {
+                                assert_eq!(token, second_token);
+                                saw_start = true;
+                            }
+                            ShellIntegrationEvent::CommandFinished { token, exit_status } => {
+                                assert_eq!(token, second_token);
+                                finished_status = Some(exit_status);
+                            }
+                        }
+                    }
+                }
+                ReadOutcome::WouldBlock => {
+                    let _ = execution.wait_readable(Duration::from_millis(50));
+                }
+                ReadOutcome::Eof => break,
+            }
+        }
+        assert!(saw_start, "second composer wrap must emit trusted C");
+        assert_eq!(finished_status, Some(0), "true must report exit status 0");
+    }
 }
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg(target_os = "macos")]
 pub(super) enum ShellIntegrationMode {
@@ -63,14 +174,30 @@ pub(super) fn shell_integration_mode(command: &CommandSpec) -> ShellIntegrationM
         _ => ShellIntegrationMode::Unsupported,
     }
 }
+
 #[cfg(target_os = "macos")]
 fn zsh_composer_command(command: &str, token: ShellIntegrationToken) -> String {
     let mut token_hex = String::with_capacity(32);
     token.write_hex(&mut token_hex);
+    // Install hooks once. Emit OSC-133 C from `__seyal_block__` itself so the
+    // first wrapped command does not depend on preexec seeing an already-
+    // installed hook, and so later lines are marker-first (`__seyal_block__
+    // <token>; <command>`) rather than bootstrap-prefixed. Capture `$?` as
+    // the first statement in precmd before any conditional can clobber it.
     format!(
-        "if (( ! $+functions[_seyal_block_preexec] )); then autoload -Uz add-zsh-hook; _seyal_active_token=; _seyal_block_preexec() {{ if [[ \"$1\" == __seyal_block__\\ * ]]; then local _seyal_marker=${{1#* }}; _seyal_marker=${{_seyal_marker%%[;\\n]*}}; _seyal_active_token=$_seyal_marker; printf '\\033]133;C;%s\\007' \"$_seyal_active_token\"; fi }}; _seyal_block_precmd() {{ if [[ -n \"$_seyal_active_token\" ]]; then local _seyal_status=$?; printf '\\033]133;D;%s;%s\\007' \"$_seyal_active_token\" \"$_seyal_status\"; _seyal_active_token=; fi }}; add-zsh-hook preexec _seyal_block_preexec; add-zsh-hook precmd _seyal_block_precmd; __seyal_block__() {{ :; }}; fi; __seyal_block__ {token_hex}; {command}"
+        "if (( ! $+functions[_seyal_block_precmd] )); then \
+         autoload -Uz add-zsh-hook; \
+         _seyal_active_token=; \
+         __seyal_block__() {{ _seyal_active_token=$1; printf '\\033]133;C;%s\\007' \"$1\"; }}; \
+         _seyal_block_precmd() {{ local _seyal_status=$?; if [[ -n \"$_seyal_active_token\" ]]; then \
+         printf '\\033]133;D;%s;%s\\007' \"$_seyal_active_token\" \"$_seyal_status\"; \
+         _seyal_active_token=; fi }}; \
+         add-zsh-hook precmd _seyal_block_precmd; \
+         fi; \
+         __seyal_block__ {token_hex}; {command}"
     )
 }
+
 /// Result of a Pass 7.1 composer admission attempt. Busy is a correlated
 /// application result, not a transport failure, so the Pane keeps its draft
 /// and remains connected.
@@ -85,7 +212,7 @@ pub(crate) enum ComposerAdmission {
 impl Runtime {
     /// Admit one complete Pane-composer command. This deliberately uses a
     /// distinct Runtime operation from raw terminal input: only a trusted
-    /// OSC-133 start event can turn this pending metadata into a Block.
+    /// OSC-133 start event can turn this pending metadata into a Running Block.
     #[cfg(target_os = "macos")]
     pub(crate) fn submit_composer_command(
         &mut self,
@@ -136,16 +263,20 @@ impl Runtime {
             .unwrap_or(1);
         let block_id = entry
             .block_timeline
-            .start(command.clone(), start_line)
+            .allocate_id()
             .map_err(|_| RuntimeError::CapacityExceeded)?;
-        entry.active_block = Some(block_id);
-        // The control admission above is bounded and synchronous. Record only
-        // after success so rejected composer input cannot manufacture a Block.
+        // Pending only: Running Block metadata is published after trusted C.
         entry
             .pending_composer_commands
-            .push_back(PendingComposerCommand::new(token, &command));
+            .push_back(PendingComposerCommand {
+                token,
+                command,
+                block_id,
+                start_line,
+            });
         Ok(ComposerAdmission::Accepted(block_id))
     }
+
     /// Consume bounded canonical parser events after their bytes were applied
     /// to TerminalState. The Runtime records only trusted anchors; this path
     /// never reads a prompt, row text, or terminal cell payload.
@@ -180,10 +311,18 @@ impl Runtime {
                             .pending_composer_commands
                             .remove(position)
                             .expect("pending composer position remains valid");
-                        if entry.active_block.is_some() {
-                            entry.active_block_token = Some(pending.token);
-                            changed = true;
+                        if entry
+                            .block_timeline
+                            .start(pending.block_id, pending.command, pending.start_line)
+                            .is_err()
+                        {
+                            // Admission already succeeded on the PTY; keep the
+                            // shell usable but do not publish stale Running state.
+                            continue;
                         }
+                        entry.active_block = Some(pending.block_id);
+                        entry.active_block_token = Some(pending.token);
+                        changed = true;
                     }
                     ShellIntegrationEvent::CommandFinished { token, exit_status } => {
                         let Some(block_id) = entry.active_block else {

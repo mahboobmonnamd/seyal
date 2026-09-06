@@ -6,10 +6,17 @@
 
 use std::collections::VecDeque;
 
-// Keep the replacement projection within one MAX_FRAME_PAYLOAD frame while
-// retaining the full bounded command text for every record.
-pub(crate) const MAX_BLOCKS_PER_EXECUTION: usize = 128;
+use seyal_protocol::framing::MAX_FRAME_PAYLOAD;
+
+/// Per-command text admission limit (matches wire `MAX_COMPOSER_COMMAND_BYTES`).
 pub(crate) const MAX_COMMAND_BYTES: usize = 16 * 1024;
+
+/// Maximum retained records. The authoritative bound is encoded size ≤
+/// [`MAX_FRAME_PAYLOAD`]; this count is a secondary guard only.
+pub(crate) const MAX_BLOCKS_PER_EXECUTION: usize = 128;
+
+const TIMELINE_HEADER_BYTES: usize = 16;
+const RECORD_HEADER_BYTES: usize = 36;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct CommandBlockId(u64);
@@ -37,8 +44,8 @@ pub(crate) struct CommandBlockRecord {
 
 /// Bounded, append-only logical timeline for one `ExecutionId`.
 ///
-/// Callers must invoke `start` only after trusted shell integration accepts a
-/// complete composer command and returns its canonical primary-history anchor.
+/// Callers must invoke `start` only after a trusted shell-integration start
+/// event correlates a pending composer admission.
 #[derive(Default)]
 pub(crate) struct CommandBlockTimeline {
     next_id: u64,
@@ -46,31 +53,30 @@ pub(crate) struct CommandBlockTimeline {
 }
 
 impl CommandBlockTimeline {
-    pub(crate) fn start(
-        &mut self,
-        command: String,
-        start_line: u64,
-    ) -> Result<CommandBlockId, CommandBlockTimelineError> {
-        if command.is_empty() || command.len() > MAX_COMMAND_BYTES {
-            return Err(CommandBlockTimelineError::InvalidCommand);
-        }
-        if self.records.len() == MAX_BLOCKS_PER_EXECUTION {
-            // Retain active work and roll the oldest completed projection out
-            // of the disposable timeline. Runtime lifecycle truth remains in
-            // the execution, so eviction never invalidates a running block.
-            let Some(index) = self.records.iter().position(|record| {
-                matches!(record.lifecycle, CommandBlockLifecycle::Completed { .. })
-            }) else {
-                return Err(CommandBlockTimelineError::Capacity);
-            };
-            self.records.remove(index);
-        }
+    /// Reserve a stable Block identity before the trusted start transition.
+    pub(crate) fn allocate_id(&mut self) -> Result<CommandBlockId, CommandBlockTimelineError> {
         let id = CommandBlockId(
             self.next_id
                 .checked_add(1)
                 .ok_or(CommandBlockTimelineError::Exhausted)?,
         );
         self.next_id = id.raw();
+        Ok(id)
+    }
+
+    pub(crate) fn start(
+        &mut self,
+        id: CommandBlockId,
+        command: String,
+        start_line: u64,
+    ) -> Result<(), CommandBlockTimelineError> {
+        if command.is_empty() || command.len() > MAX_COMMAND_BYTES {
+            return Err(CommandBlockTimelineError::InvalidCommand);
+        }
+        if self.records.iter().any(|record| record.id == id) {
+            return Err(CommandBlockTimelineError::InvalidCommand);
+        }
+        self.make_room_for(command.len())?;
         self.records.push_back(CommandBlockRecord {
             id,
             command,
@@ -78,7 +84,8 @@ impl CommandBlockTimeline {
             end_line: None,
             lifecycle: CommandBlockLifecycle::Running,
         });
-        Ok(id)
+        debug_assert!(self.encoded_len() <= MAX_FRAME_PAYLOAD as usize);
+        Ok(())
     }
 
     pub(crate) fn complete(
@@ -103,6 +110,33 @@ impl CommandBlockTimeline {
     pub(crate) fn records(&self) -> impl ExactSizeIterator<Item = &CommandBlockRecord> {
         self.records.iter()
     }
+
+    pub(crate) fn encoded_len(&self) -> usize {
+        TIMELINE_HEADER_BYTES
+            + self
+                .records
+                .iter()
+                .map(|record| RECORD_HEADER_BYTES + record.command.len())
+                .sum::<usize>()
+    }
+
+    fn make_room_for(&mut self, command_len: usize) -> Result<(), CommandBlockTimelineError> {
+        let needed = RECORD_HEADER_BYTES + command_len;
+        if TIMELINE_HEADER_BYTES + needed > MAX_FRAME_PAYLOAD as usize {
+            return Err(CommandBlockTimelineError::Capacity);
+        }
+        while self.records.len() == MAX_BLOCKS_PER_EXECUTION
+            || self.encoded_len() + needed > MAX_FRAME_PAYLOAD as usize
+        {
+            let Some(index) = self.records.iter().position(|record| {
+                matches!(record.lifecycle, CommandBlockLifecycle::Completed { .. })
+            }) else {
+                return Err(CommandBlockTimelineError::Capacity);
+            };
+            self.records.remove(index);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -121,8 +155,10 @@ mod tests {
     #[test]
     fn creates_one_ordered_record_per_accepted_command() {
         let mut timeline = CommandBlockTimeline::default();
-        let first = timeline.start("printf one".into(), 41).unwrap();
-        let second = timeline.start("printf two".into(), 44).unwrap();
+        let first = timeline.allocate_id().unwrap();
+        timeline.start(first, "printf one".into(), 41).unwrap();
+        let second = timeline.allocate_id().unwrap();
+        timeline.start(second, "printf two".into(), 44).unwrap();
 
         assert_ne!(first, second);
         assert_eq!(
@@ -140,7 +176,8 @@ mod tests {
     #[test]
     fn only_runtime_completion_can_close_the_matching_running_record() {
         let mut timeline = CommandBlockTimeline::default();
-        let id = timeline.start("false".into(), 5).unwrap();
+        let id = timeline.allocate_id().unwrap();
+        timeline.start(id, "false".into(), 5).unwrap();
         assert_eq!(
             timeline.complete(id, 4, 1),
             Err(CommandBlockTimelineError::InvalidCompletion)
@@ -159,14 +196,53 @@ mod tests {
         let mut timeline = CommandBlockTimeline::default();
         let mut first = None;
         for index in 0..MAX_BLOCKS_PER_EXECUTION {
-            let id = timeline
-                .start(format!("printf {index}"), index as u64 + 1)
+            let id = timeline.allocate_id().unwrap();
+            timeline
+                .start(id, format!("printf {index}"), index as u64 + 1)
                 .unwrap();
             timeline.complete(id, index as u64 + 2, 0).unwrap();
             first.get_or_insert(id);
         }
-        let active = timeline.start("printf active".into(), 10_000).unwrap();
+        let active = timeline.allocate_id().unwrap();
+        timeline
+            .start(active, "printf active".into(), 10_000)
+            .unwrap();
         assert!(timeline.records().any(|record| record.id == active));
         assert!(!timeline.records().any(|record| Some(record.id) == first));
+    }
+
+    #[test]
+    fn cumulative_wire_budget_evicts_completed_before_exceeding_frame() {
+        let mut timeline = CommandBlockTimeline::default();
+        let large = "x".repeat(MAX_COMMAND_BYTES);
+        for index in 0..16 {
+            let id = timeline.allocate_id().unwrap();
+            timeline.start(id, large.clone(), index as u64 + 1).unwrap();
+            timeline.complete(id, index as u64 + 2, 0).unwrap();
+        }
+        assert!(timeline.encoded_len() <= MAX_FRAME_PAYLOAD as usize);
+        assert!(timeline.records().len() < 16);
+        let active = timeline.allocate_id().unwrap();
+        timeline
+            .start(active, large, 100)
+            .expect("running command fits after eviction");
+        assert!(timeline.encoded_len() <= MAX_FRAME_PAYLOAD as usize);
+    }
+
+    #[test]
+    fn near_limit_running_blocks_reject_additional_admission() {
+        let mut timeline = CommandBlockTimeline::default();
+        let large = "y".repeat(MAX_COMMAND_BYTES);
+        let first = timeline.allocate_id().unwrap();
+        timeline.start(first, large.clone(), 1).unwrap();
+        // Do not complete — only running records remain, so eviction cannot help.
+        loop {
+            let id = timeline.allocate_id().unwrap();
+            match timeline.start(id, large.clone(), 2) {
+                Ok(()) => continue,
+                Err(CommandBlockTimelineError::Capacity) => return,
+                Err(other) => panic!("unexpected error: {other:?}"),
+            }
+        }
     }
 }

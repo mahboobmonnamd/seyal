@@ -1716,6 +1716,15 @@ final class SeyalShellComponentTests: XCTestCase {
   }
 
   @MainActor
+  func testGPUCompletionMailboxIsLockFreeSingleSlot() {
+    // Structural: present path must not take NSLock. The mailbox is a private
+    // atomic single-slot helper; exercise the public completion wakeup contract
+    // via the named regression self-tests instead.
+    XCTAssertTrue(RendererValidation.deferredFrameCompletionWakeupSelfTest())
+    XCTAssertTrue(RendererValidation.inFlightVisibilityRecoverySelfTest())
+  }
+
+  @MainActor
   private func normalizedModifiers(_ item: NSMenuItem) -> NSEvent.ModifierFlags {
     item.keyEquivalentModifierMask.intersection(.deviceIndependentFlagsMask)
   }

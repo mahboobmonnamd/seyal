@@ -1074,6 +1074,7 @@ enum Pass6RegressionValidation {
       && persistentPreparationFailureIntegrationSelfTest()
       && transientDrawableRecoverySelfTest()
       && RendererValidation.inFlightVisibilityRecoverySelfTest()
+      && RendererValidation.deferredFrameCompletionWakeupSelfTest()
       && RendererValidation.failedReplacementInvalidationSelfTest()
       && RustDisplayBridge.teardownReconnectStateSelfTest()
   }

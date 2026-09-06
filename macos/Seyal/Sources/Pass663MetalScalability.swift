@@ -405,9 +405,9 @@ enum Pass663MetalScalability {
     }
     pumpRunLoop(0.05)
 
-    let dedicated = renderers.reduce(0) { $0 + $1.estimatedDedicatedGPUBytes }
-    let instance = renderers.reduce(0) { $0 + Int($1.stats.instanceBytes) }
-    let atlas = renderers.reduce(0) { $0 + $1.atlasResidentBytes }
+    let dedicated = renderers.map(\.estimatedDedicatedGPUBytes).reduce(0, +)
+    let instance = renderers.map { Int($0.stats.instanceBytes) }.reduce(0, +)
+    let atlas = renderers.map(\.atlasResidentBytes).reduce(0, +)
     let prep = percentileSummary(prepSamples)
     let atlasDuplicated = panes > 1 && atlas > GlyphAtlas.budgetBytes
 
@@ -551,9 +551,9 @@ enum Pass663MetalScalability {
     }
 
     // Measure while surfaces remain visible — hiding first zeroed GPU evidence.
-    let dedicated = renderers.reduce(0) { $0 + $1.estimatedDedicatedGPUBytes }
-    let instance = renderers.reduce(0) { $0 + Int($1.stats.instanceBytes) }
-    let atlas = renderers.reduce(0) { $0 + $1.atlasResidentBytes }
+    let dedicated = renderers.map(\.estimatedDedicatedGPUBytes).reduce(0, +)
+    let instance = renderers.map { Int($0.stats.instanceBytes) }.reduce(0, +)
+    let atlas = renderers.map(\.atlasResidentBytes).reduce(0, +)
     let prep = percentileSummary(prepSamples.values)
     let rss = physFootprintKib()
 
@@ -675,9 +675,9 @@ enum Pass663MetalScalability {
       driver.invalidate()
     }
 
-    let dedicated = renderers.reduce(0) { $0 + $1.estimatedDedicatedGPUBytes }
-    let instance = renderers.reduce(0) { $0 + Int($1.stats.instanceBytes) }
-    let atlas = renderers.reduce(0) { $0 + $1.atlasResidentBytes }
+    let dedicated = renderers.map(\.estimatedDedicatedGPUBytes).reduce(0, +)
+    let instance = renderers.map { Int($0.stats.instanceBytes) }.reduce(0, +)
+    let atlas = renderers.map(\.atlasResidentBytes).reduce(0, +)
     let present = percentileSummary(presentSamples)
     guard !presentSamples.isEmpty else {
       throw ScalabilityError.displayLinkUnavailable
@@ -770,9 +770,9 @@ enum Pass663MetalScalability {
       pumpRunLoop(0.001)
     }
 
-    let dedicated = renderers.reduce(0) { $0 + $1.estimatedDedicatedGPUBytes }
-    let instance = renderers.reduce(0) { $0 + Int($1.stats.instanceBytes) }
-    let atlas = renderers.reduce(0) { $0 + $1.atlasResidentBytes }
+    let dedicated = renderers.map(\.estimatedDedicatedGPUBytes).reduce(0, +)
+    let instance = renderers.map { Int($0.stats.instanceBytes) }.reduce(0, +)
+    let atlas = renderers.map(\.atlasResidentBytes).reduce(0, +)
     let prep = percentileSummary(prepSamples)
 
     return Row(
@@ -881,9 +881,9 @@ enum Pass663MetalScalability {
 
     let last = Array(rssSamples.suffix(max(3, rssSamples.count / 3)))
     let plateau = isPlateau(last)
-    let dedicated = renderers.reduce(0) { $0 + $1.estimatedDedicatedGPUBytes }
-    let instance = renderers.reduce(0) { $0 + Int($1.stats.instanceBytes) }
-    let atlas = renderers.reduce(0) { $0 + $1.atlasResidentBytes }
+    let dedicated = renderers.map(\.estimatedDedicatedGPUBytes).reduce(0, +)
+    let instance = renderers.map { Int($0.stats.instanceBytes) }.reduce(0, +)
+    let atlas = renderers.map(\.atlasResidentBytes).reduce(0, +)
 
     return Row(
       panes: panes,

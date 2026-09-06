@@ -760,19 +760,84 @@ enum RendererValidation {
             )
             let layer = hosted.layer
             let keepAlive = hosted.keepAlive
+            let completedBefore = renderer.stats.completedFrames
+            guard presentOnLayerForValidation(renderer: renderer, layer: layer),
+                  renderer.hasFrameInFlight
+            else {
+                return false
+            }
+            // Hide while in flight and do not issue another update/input —
+            // completion wakeup alone must release dedicated resources.
+            renderer.setVisible(false)
+            let released = waitForGPUCompletion(renderer, after: completedBefore)
+                && !renderer.hasFrameInFlight
+                && !renderer.hasDedicatedSurfaceResources
+            _ = keepAlive
+            return released
+        } catch {
+            return false
+        }
+    }
+
+    /// Deferred Candidate-D update while a frame is in flight must be woken by
+    /// GPU completion delivery alone — no further input/update.
+    static func deferredFrameCompletionWakeupSelfTest() -> Bool {
+        guard let device = MTLCreateSystemDefaultDevice() else { return false }
+        do {
+            let renderer = try MetalTerminalRenderer(device: device)
+            let cells = [preparedCell(scalar: UInt32(ascii: "A"))]
+            var damage = DamageMask()
+            damage.mark(row: 0)
+            guard try cells.withUnsafeBufferPointer({ buffer in
+                try renderer.update(
+                    frame: NativePreparedFrame(
+                        cells: buffer,
+                        generation: 1,
+                        rows: 1,
+                        columns: 1,
+                        damage: damage
+                    ),
+                    backingScale: 1,
+                    forceFullRebuild: true
+                ) == .updated
+            }) else { return false }
+
+            let cellSize = renderer.cellPixelSize(backingScale: 1)
+            let hosted = makePresentationLayer(
+                device: device,
+                width: cellSize.width,
+                height: cellSize.height
+            )
+            let layer = hosted.layer
+            let keepAlive = hosted.keepAlive
             var currentFrameRequests = 0
             renderer.onNeedsCurrentFrame = { currentFrameRequests += 1 }
             let completedBefore = renderer.stats.completedFrames
-            guard presentOnLayerForValidation(renderer: renderer, layer: layer), renderer.hasFrameInFlight else {
+            guard presentOnLayerForValidation(renderer: renderer, layer: layer),
+                  renderer.hasFrameInFlight
+            else {
                 return false
             }
-            renderer.setVisible(false)
-            renderer.setVisible(true)
-            let recovered = waitForGPUCompletion(renderer, after: completedBefore)
-                && currentFrameRequests == 1
-                && renderer.hasDedicatedSurfaceResources
+            let deferred = try cells.withUnsafeBufferPointer { buffer in
+                try renderer.update(
+                    frame: NativePreparedFrame(
+                        cells: buffer,
+                        generation: 2,
+                        rows: 1,
+                        columns: 1,
+                        fullRebuild: true,
+                        damage: damage
+                    ),
+                    backingScale: 2
+                )
+            }
+            guard deferred == .deferred else { return false }
+            // No further updates — only completion wakeup may request the frame.
+            let woken = waitForGPUCompletion(renderer, after: completedBefore)
+                && currentFrameRequests >= 1
+                && !renderer.hasFrameInFlight
             _ = keepAlive
-            return recovered
+            return woken
         } catch {
             return false
         }
@@ -984,33 +1049,34 @@ enum RendererValidation {
         _ renderer: MetalTerminalRenderer,
         after completedBefore: UInt64
     ) -> Bool {
-        // Validation in-flight frames are completed synchronously on MainActor.
-        // Production GPU completions publish into the mailbox and are drained
-        // here without RunLoop/`Task` hops that Trace/BPT under Xcode 16.4.
-        if renderer.hasFrameInFlight,
-           renderer.stats.completedFrames == completedBefore,
-           renderer.stats.submittedFrames > completedBefore
-        {
-            renderer.endValidationFrameInFlight()
-        }
+        // GPU threads publish into the lock-free mailbox; a coalesced
+        // `DispatchQueue.main.async` also drains for production wakeups. Poll
+        // both the mailbox and the main run loop so deferred-frame / hide
+        // recovery runs without fabricating completions.
         let deadline = Date().addingTimeInterval(2)
         while renderer.stats.completedFrames == completedBefore && Date() < deadline {
             renderer.drainGPUCompletionsIfNeeded()
             if renderer.stats.completedFrames > completedBefore {
                 break
             }
-            Thread.sleep(forTimeInterval: 0.001)
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.001))
         }
         renderer.drainGPUCompletionsIfNeeded()
         return renderer.stats.completedFrames > completedBefore
     }
 
+    /// Production-path submit: real drawable + command buffer + completion
+    /// mailbox. Uses `presentsToDisplay: false` so headless CI exercises the
+    /// GPU boundary without compositor Trace/BPT. Returns false when no
+    /// drawable is available (`ENVIRONMENT_UNSUPPORTED` for the caller).
     static func presentOnLayerForValidation(
         renderer: MetalTerminalRenderer,
         layer: CAMetalLayer
     ) -> Bool {
-        _ = layer
-        return renderer.beginValidationFrameInFlight()
+        guard let drawable = layer.nextDrawable() else {
+            return false
+        }
+        return renderer.present(drawable: drawable, presentsToDisplay: false)
     }
 
     private static func frameContains(_ frame: NativePreparedFrame, text: String) -> Bool {

@@ -20,25 +20,44 @@ func seyalRunAsMainActorFromMainQueue(_ operation: @MainActor () -> Void) {
     }
 }
 
-/// Thread-safe GPU completion notifications. Metal invokes handlers off the
-/// MainActor; MainActor code drains and applies them without requiring a
-/// GCD/`assumeIsolated` hop that Trace/BPTs under Xcode 16.4.
+/// Single-slot GPU completion mailbox (`maximumFramesInFlight == 1`).
+///
+/// Metal completion handlers run off the main queue; main-queue code drains.
+/// Uses a lock-free atomic slot instead of `NSLock` so present/update hot paths
+/// do not take a blocking Foundation lock.
 private final class GPUCompletionMailbox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var pendingFailedFlags: [Bool] = []
+    /// 0 = empty, 1 = success pending, 2 = failure pending
+    private let slot = UnsafeMutablePointer<Int32>.allocate(capacity: 1)
+
+    init() {
+        slot.initialize(to: 0)
+    }
+
+    deinit {
+        slot.deinitialize(count: 1)
+        slot.deallocate()
+    }
 
     func push(failed: Bool) {
-        lock.lock()
-        pendingFailedFlags.append(failed)
-        lock.unlock()
+        let value: Int32 = failed ? 2 : 1
+        while true {
+            let current = slot.pointee
+            if OSAtomicCompareAndSwap32Barrier(current, value, slot) {
+                return
+            }
+        }
     }
 
     func drain() -> [Bool] {
-        lock.lock()
-        defer { lock.unlock() }
-        let values = pendingFailedFlags
-        pendingFailedFlags.removeAll(keepingCapacity: true)
-        return values
+        while true {
+            let current = slot.pointee
+            if current == 0 {
+                return []
+            }
+            if OSAtomicCompareAndSwap32Barrier(current, 0, slot) {
+                return [current == 2]
+            }
+        }
     }
 }
 
@@ -321,6 +340,8 @@ final class MetalTerminalRenderer: @unchecked Sendable {
     private var needsCurrentFrameWhenIdle = false
     private var gpuCompletionRetryState = GPUCompletionRetryState()
     private let gpuCompletionMailbox = GPUCompletionMailbox()
+    /// Coalesces main-queue drain wakeups from GPU completion handlers.
+    private let gpuCompletionWakeScheduled = UnsafeMutablePointer<Int32>.allocate(capacity: 1)
 
     private(set) var stats = MetalRendererStats()
     private(set) var persistentDisplayFailure: MetalTerminalRendererError?
@@ -328,6 +349,7 @@ final class MetalTerminalRenderer: @unchecked Sendable {
     var onPersistentDisplayFailure: ((MetalTerminalRendererError) -> Void)?
 
     init(device: MTLDevice, terminalFont: SeyalResolvedFontSpec = .canonicalTerminal) throws {
+        gpuCompletionWakeScheduled.initialize(to: 0)
         self.device = device
         guard MemoryLayout<TerminalInstance>.stride == 48 else {
             throw MetalTerminalRendererError.invalidInstanceLayout
@@ -375,6 +397,11 @@ final class MetalTerminalRenderer: @unchecked Sendable {
         )
     }
 
+    deinit {
+        gpuCompletionWakeScheduled.deinitialize(count: 1)
+        gpuCompletionWakeScheduled.deallocate()
+    }
+
     var hasDedicatedSurfaceResources: Bool {
         instanceBuffer != nil || glyphAtlas.estimatedResidentBytes != 0
     }
@@ -405,6 +432,10 @@ final class MetalTerminalRenderer: @unchecked Sendable {
 
     var estimatedDedicatedGPUBytes: Int {
         Int(stats.instanceBytes) + glyphAtlas.estimatedResidentBytes
+    }
+
+    var atlasResidentBytes: Int {
+        glyphAtlas.estimatedResidentBytes
     }
 
     func cellPixelSize(backingScale: CGFloat) -> (width: Int, height: Int) {
@@ -788,16 +819,30 @@ final class MetalTerminalRenderer: @unchecked Sendable {
         if presentsToDisplay {
             commandBuffer.present(drawable)
         }
-        // Metal completion runs off the MainActor. Publish into the mailbox
-        // only — do not enqueue Task { @MainActor } from this handler (Xcode
-        // 16.4 Trace/BPTs that hop during production UI tests). MainActor
-        // update/display-link entry points drain the mailbox.
+        // Metal completion runs off the main queue. Publish into the mailbox
+        // and schedule a coalesced main-queue drain — do not use
+        // `Task { @MainActor }` (Xcode 16.4 Trace/BPT). Renderer is main-queue
+        // `@unchecked Sendable`, so `DispatchQueue.main.async` is safe.
         let mailbox = gpuCompletionMailbox
-        commandBuffer.addCompletedHandler { completed in
+        commandBuffer.addCompletedHandler { [weak self] completed in
             mailbox.push(failed: completed.status == .error)
+            self?.scheduleGPUCompletionDrainWakeup()
         }
         commandBuffer.commit()
         return true
+    }
+
+    /// Bounded event-driven wakeup: at most one main-queue drain is queued
+    /// while completions are outstanding.
+    private func scheduleGPUCompletionDrainWakeup() {
+        guard OSAtomicCompareAndSwap32Barrier(0, 1, gpuCompletionWakeScheduled) else {
+            return
+        }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            OSAtomicCompareAndSwap32Barrier(1, 0, self.gpuCompletionWakeScheduled)
+            self.drainGPUCompletionsIfNeeded()
+        }
     }
 
     /// Apply any GPU completions published off the main queue. Safe to call
@@ -809,11 +854,9 @@ final class MetalTerminalRenderer: @unchecked Sendable {
         }
     }
 
-    /// Deterministic validation substitute for production `present(drawable:)`.
-    /// Marks one frame in-flight on the MainActor without submitting Metal work.
-    /// Headless Xcode 16.4 Trace/BPTs when async command-buffer completion
-    /// handlers run during renderer self-tests, so in-flight coalescing is
-    /// proven here without a GPU completion hop.
+    /// Deterministic validation substitute used only when a real drawable
+    /// cannot be obtained. Prefer `present(drawable:presentsToDisplay:)` for
+    /// production-path regression coverage.
     @discardableResult
     func beginValidationFrameInFlight() -> Bool {
         drainGPUCompletionsIfNeeded()

@@ -104,6 +104,14 @@ enum SeyalMain {
             return
         }
 
+        if CommandLine.arguments.contains("--pass663-metal-scalability") {
+            guard Pass663MetalScalability.run() else {
+                print("Seyal Pass 663 Metal scalability harness failed.")
+                exit(1)
+            }
+            return
+        }
+
         let application = NSApplication.shared
         let delegate = AppDelegate()
         application.delegate = delegate

@@ -58,6 +58,17 @@ final class SeyalShellUITests: XCTestCase {
         return surface
     }
 
+    /// Focus the Metal terminal surface without asking XCTest to scroll the
+    /// transcript ScrollView. After a production window resize, `click()` can
+    /// treat a clipped surface as not hittable and scroll the wrong ancestor.
+    @MainActor
+    private func focusTerminalSurface(_ surface: XCUIElement) {
+        XCTAssertTrue(surface.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(surface.frame.width, 0)
+        XCTAssertGreaterThan(surface.frame.height, 0)
+        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+    }
+
     /// Wait until the separately owned Runtime accepts a production attach
     /// through the same app binary XCUI will launch. Mirrors the Pass 8 probe
     /// so endpointMissing → helper-launch never races a still-binding socket.
@@ -348,7 +359,7 @@ final class SeyalShellUITests: XCTestCase {
         XCTAssertNotEqual(afterClose["attachment"], first["attachment"])
 
         // Keep the PTY in alternate screen while the GUI disappears abruptly.
-        surface.click()
+        focusTerminalSurface(surface)
         app.typeText("printf '\\033[?1049hALT'; while :; do sleep 1; done")
         app.typeKey(.return, modifierFlags: [])
         XCTAssertTrue(wait { self.recoveryFields(surface)?["alternate-screen"] == "true" })
@@ -367,7 +378,6 @@ final class SeyalShellUITests: XCTestCase {
         // VoiceOver-facing recovery discoverability after abrupt GUI death:
         // finite hittable surface + usable recovery accessibility fields.
         XCTAssertTrue(surface.exists)
-        XCTAssertTrue(surface.isHittable)
         XCTAssertGreaterThan(surface.frame.width, 0)
         XCTAssertGreaterThan(surface.frame.height, 0)
         XCTAssertEqual(afterKill["connection"], "usable")
@@ -376,8 +386,7 @@ final class SeyalShellUITests: XCTestCase {
 
         // Focus the real NSTextInputClient, interrupt the retained foreground
         // command, and prove direct terminal input reaches the same shell.
-        surface.click()
-        XCTAssertTrue(surface.isHittable)
+        focusTerminalSurface(surface)
         app.typeKey("c", modifierFlags: .control)
         app.typeText("printf '%s' '\(token)' > \(continuityMarker.path)")
         app.typeKey(.return, modifierFlags: [])

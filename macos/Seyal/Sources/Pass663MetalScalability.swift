@@ -1070,11 +1070,13 @@ private final class Pass663SampleBox: @unchecked Sendable {
   var values = [UInt64]()
 }
 
-@MainActor
-private final class Pass663DisplayLinkDriver: NSObject, @preconcurrency CAMetalDisplayLinkDelegate {
+/// Main-queue display-link driver for Pass 663 evidence. Not MainActor-isolated:
+/// CAMetalDisplayLink fires without a Swift MainActor task on Xcode 16.4.
+private final class Pass663DisplayLinkDriver: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendable {
   private let renderer: MetalTerminalRenderer
   private let link: CAMetalDisplayLink
   private var startedAt: UInt64?
+  private var lastSample: UInt64?
 
   init(renderer: MetalTerminalRenderer, layer: CAMetalLayer) {
     self.renderer = renderer
@@ -1086,6 +1088,7 @@ private final class Pass663DisplayLinkDriver: NSObject, @preconcurrency CAMetalD
   }
 
   func submitOne(timeout: TimeInterval) -> UInt64? {
+    dispatchPrecondition(condition: .onQueue(.main))
     guard startedAt == nil else { return nil }
     renderer.requestPresent()
     startedAt = DispatchTime.now().uptimeNanoseconds
@@ -1094,10 +1097,6 @@ private final class Pass663DisplayLinkDriver: NSObject, @preconcurrency CAMetalD
     var sample: UInt64?
     while sample == nil, Date() < deadline {
       RunLoop.current.run(until: Date().addingTimeInterval(0.001))
-      if let startedAt, link.isPaused {
-        // Delegate stores via side channel below.
-        _ = startedAt
-      }
       if let captured = lastSample {
         sample = captured
         lastSample = nil
@@ -1110,24 +1109,27 @@ private final class Pass663DisplayLinkDriver: NSObject, @preconcurrency CAMetalD
     return sample
   }
 
-  private var lastSample: UInt64?
-
-  func metalDisplayLink(
+  nonisolated func metalDisplayLink(
     _ link: CAMetalDisplayLink,
     needsUpdate update: CAMetalDisplayLink.Update
   ) {
+    dispatchPrecondition(condition: .onQueue(.main))
     link.isPaused = true
-    guard let startedAt,
-      renderer.present(drawable: update.drawable)
+    let driver = self
+    let drawable = update.drawable
+    driver.renderer.drainGPUCompletionsIfNeeded()
+    guard let startedAt = driver.startedAt,
+          driver.renderer.present(drawable: drawable)
     else {
-      self.startedAt = nil
+      driver.startedAt = nil
       return
     }
-    lastSample = DispatchTime.now().uptimeNanoseconds &- startedAt
-    self.startedAt = nil
+    driver.lastSample = DispatchTime.now().uptimeNanoseconds &- startedAt
+    driver.startedAt = nil
   }
 
   func invalidate() {
+    dispatchPrecondition(condition: .onQueue(.main))
     link.delegate = nil
     link.invalidate()
   }

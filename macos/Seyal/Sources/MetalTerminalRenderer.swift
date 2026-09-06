@@ -281,8 +281,15 @@ struct MetalSubmissionTiming {
     let commitToCompletionNanoseconds: UInt64
 }
 
-@MainActor
-final class MetalTerminalRenderer {
+/// Main-queue-only Metal presenter.
+///
+/// Intentionally **not** `@MainActor`: CAMetalDisplayLink and other AppKit
+/// run-loop callbacks invoke `present` / `drainGPUCompletionsIfNeeded` on the
+/// GCD main queue without a Swift MainActor task. Xcode 16.4 Trace/BPTs on
+/// MainActor method entry (`_taskIsCurrentExecutor`) even though main-queue
+/// mutual exclusion still holds. Callers must only touch this type from the
+/// main queue (AppKit/`dispatchPrecondition`).
+final class MetalTerminalRenderer: @unchecked Sendable {
     static let maximumFramesInFlight = 1
 
     let device: MTLDevice
@@ -406,6 +413,7 @@ final class MetalTerminalRenderer {
     }
 
     func requestPresent() {
+        dispatchPrecondition(condition: .onQueue(.main))
         drainGPUCompletionsIfNeeded()
         guard visible, persistentDisplayFailure == nil, instanceBuffer != nil else { return }
         needsPresent = true
@@ -751,6 +759,7 @@ final class MetalTerminalRenderer {
     ///   completion mailbox.
     @discardableResult
     func present(drawable: any CAMetalDrawable, presentsToDisplay: Bool = true) -> Bool {
+        dispatchPrecondition(condition: .onQueue(.main))
         drainGPUCompletionsIfNeeded()
         guard visible,
               persistentDisplayFailure == nil,
@@ -791,9 +800,10 @@ final class MetalTerminalRenderer {
         return true
     }
 
-    /// Apply any GPU completions published off the MainActor. Safe to call
-    /// reentrantly from MainActor entry points and from `Task { @MainActor }`.
+    /// Apply any GPU completions published off the main queue. Safe to call
+    /// reentrantly from main-queue entry points (display link, update, timers).
     func drainGPUCompletionsIfNeeded() {
+        dispatchPrecondition(condition: .onQueue(.main))
         for failed in gpuCompletionMailbox.drain() {
             commandCompleted(failed: failed)
         }

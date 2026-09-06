@@ -48,22 +48,21 @@ private final class DisplayLinkBenchmarkDriver: NSObject, CAMetalDisplayLinkDele
         _ link: CAMetalDisplayLink,
         needsUpdate update: CAMetalDisplayLink.Update
     ) {
-        // Capture unchecked-Sendable self by identity; the hop body runs
-        // synchronously on the main queue where MainActor mutual exclusion holds.
+        // Renderer present/drain are main-queue / non-MainActor. Call them
+        // directly from the display-link run-loop callback — no MainActor hop.
+        dispatchPrecondition(condition: .onQueue(.main))
         let driver = self
         let drawable = update.drawable
-        seyalRunAsMainActorFromMainQueue {
-            link.isPaused = true
-            driver.renderer.drainGPUCompletionsIfNeeded()
-            guard let startedAt = driver.startedAt,
-                  driver.renderer.present(drawable: drawable)
-            else {
-                driver.startedAt = nil
-                return
-            }
-            driver.samples.append(DispatchTime.now().uptimeNanoseconds - startedAt)
+        link.isPaused = true
+        driver.renderer.drainGPUCompletionsIfNeeded()
+        guard let startedAt = driver.startedAt,
+              driver.renderer.present(drawable: drawable)
+        else {
             driver.startedAt = nil
+            return
         }
+        driver.samples.append(DispatchTime.now().uptimeNanoseconds - startedAt)
+        driver.startedAt = nil
     }
 
     @MainActor

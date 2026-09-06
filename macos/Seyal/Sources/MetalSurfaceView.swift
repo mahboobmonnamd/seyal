@@ -247,6 +247,9 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
   private var presentationRetryGeneration: UInt64 = 0
   private var renderable = false
   private var metalDisplayLinkLease: MetalDisplayLinkLease?
+  /// Identity for CAMetalDisplayLink hops without capturing `@MainActor self`
+  /// in a way that inserts `assumeIsolated` under Xcode 16.4.
+  nonisolated(unsafe) private var displayLinkHopTarget: Unmanaged<MetalSurfaceView>?
   private var preparationRetryTimer: Timer?
   private var preparationRetryGeneration: UInt64 = 0
   private var preparationRetryScheduled = false
@@ -285,6 +288,7 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
     metalDevice = device
     self.renderer = renderer
     super.init(frame: frameRect)
+    displayLinkHopTarget = Unmanaged.passUnretained(self)
     wantsLayer = true
 
     switch installation {
@@ -302,11 +306,16 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
       // No dedicated GPU surface resources are retained before the view is
       // actually visible. Candidate-D state may still advance independently.
       renderer.setVisible(false)
-      renderer.onNeedsCurrentFrame = { [weak self] in
-        self?.bridge?.publishCurrentFrame()
+      let hopTarget = displayLinkHopTarget!
+      renderer.onNeedsCurrentFrame = {
+        seyalRunAsMainActorFromMainQueue {
+          hopTarget.takeUnretainedValue().bridge?.publishCurrentFrame()
+        }
       }
-      renderer.onPersistentDisplayFailure = { [weak self] error in
-        self?.lastRenderError = error
+      renderer.onPersistentDisplayFailure = { error in
+        seyalRunAsMainActorFromMainQueue {
+          hopTarget.takeUnretainedValue().lastRenderError = error
+        }
       }
 
       let bridge = RustDisplayBridge(
@@ -826,16 +835,15 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
           hasPreparedState,
           !presentationState.exhausted
         {
-          // Publish Usable from Candidate-D readiness without synchronously
-          // restoring IME or arming CAMetalDisplayLink. On Xcode 16.4,
-          // production GUI + live Runtime Trace/BPTs when those AppKit/Metal
-          // callbacks run after lifecycle adopt (CI Foundation Quality).
-          // Self-test/benchmark keep MainActor-isolated display-link witnesses.
+          // SPEC-009 §10: first-responder / accessibility / IME must be restored
+          // before Usable when this surface owns the native interaction seam.
+          guard restoreNativeInteractionAfterRendererReady() else {
+            return
+          }
           if runtimeRecoveryState.stage != .usable {
             bridgeRecoveryCoordinator.transition(to: .usable)
             refreshRecoveryAccessibilityValue()
           }
-          return
         }
         if shouldRender,
           renderer.persistentDisplayFailure == nil,
@@ -940,18 +948,20 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
     needsUpdate update: CAMetalDisplayLink.Update
   ) {
     // CAMetalDisplayLink fires on the main run loop without a Swift MainActor
-    // task. A MainActor-isolated witness Trace/BPTs under Xcode 16.4 when the
-    // production GUI attaches a live Runtime and presents. Hop with the
-    // main-queue bitcast helper so present stays synchronous and drawable
-    // lifetime is preserved.
+    // task. Avoid capturing `@MainActor self` directly (assumeIsolated trap);
+    // hop via the init-time Unmanaged identity. `MetalTerminalRenderer.present`
+    // is main-queue / non-MainActor so present itself no longer Trace/BPTs.
+    guard let displayLinkHopTarget else { return }
+    let view = displayLinkHopTarget.takeUnretainedValue()
+    let drawable = update.drawable
     seyalRunAsMainActorFromMainQueue {
-      self.handleMetalDisplayLink(link, needsUpdate: update)
+      view.handleMetalDisplayLink(link, drawable: drawable)
     }
   }
 
   private func handleMetalDisplayLink(
     _ link: CAMetalDisplayLink,
-    needsUpdate update: CAMetalDisplayLink.Update
+    drawable: any CAMetalDrawable
   ) {
     // The callback may already be queued when the view is detached or the
     // display link is replaced. Never let an old link present into a new
@@ -969,7 +979,7 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
       return
     }
 
-    if renderer.present(drawable: update.drawable) {
+    if renderer.present(drawable: drawable) {
       presentationState.recordSubmissionSuccess()
       cancelPresentationRetryTimer()
     } else {

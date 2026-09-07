@@ -768,6 +768,24 @@ final class SeyalShellUITests: XCTestCase {
 
     @MainActor
 
+    func testProductionGraphemeDisplaySurfaceRemainsReachable() {
+        app.terminate()
+        let surface = launchProductionApp(requireUsableConnection: false)
+
+        // The grapheme projection is rendered by the existing pane-owned
+        // Metal surface. This test checks only its established XCUI contract;
+        // Unicode shaping details remain covered by native component tests.
+        XCTAssertEqual(surface.identifier, "terminal-surface.pane-local")
+        XCTAssertEqual(surface.label, "Seyal Terminal")
+        XCTAssertTrue(surface.isHittable)
+        XCTAssertGreaterThan(surface.frame.width, 0)
+        XCTAssertGreaterThan(surface.frame.height, 0)
+        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        XCTAssertTrue(surface.isHittable)
+    }
+
+    @MainActor
+
     func testLightAppearanceStillExposesTokenBackedShellChrome() {
         app.terminate()
         app = XCUIApplication()

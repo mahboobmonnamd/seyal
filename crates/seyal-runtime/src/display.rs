@@ -1002,4 +1002,50 @@ mod tests {
         assert_eq!(cache.cells.len(), 9);
         assert_eq!(cache.cells[0].text.len(), MAX_GRAPHEME_UTF8_BYTES);
     }
+
+    #[test]
+    fn v2_large_logical_snapshot_fragments_transport_and_commits_atomically() {
+        let payload = Arc::<[u8]>::from(vec![b'x'; MAX_GRAPHEME_UTF8_BYTES]);
+        let columns = 512u16;
+        let snapshot = TerminalProjectionSnapshot {
+            rows: 1,
+            columns,
+            cursor_row: 0,
+            cursor_col: 0,
+            cursor_visible: true,
+            alternate_screen: false,
+            source_damage_generation: 12,
+            damage: ProjectionDamage::full(1),
+            cells: (0..usize::from(columns))
+                .map(|_| ProjectionCell {
+                    role: CellRole::Lead,
+                    width: 1,
+                    text: payload.clone(),
+                    scalar: 'x',
+                    foreground: ProjectionColor::Default,
+                    background: ProjectionColor::Default,
+                    attributes: ProjectionAttributes::default(),
+                })
+                .collect(),
+        };
+
+        let logical = encode_snapshot_v2(&snapshot).unwrap();
+        assert!(logical.total_bytes > MAX_DISPLAY_BATCH_BYTES);
+        let fragments = logical.clone().into_transport_batches();
+        assert!(fragments.len() > 1);
+        assert!(fragments
+            .iter()
+            .all(|fragment| fragment.total_bytes <= MAX_DISPLAY_BATCH_BYTES));
+
+        let chunks = fragments
+            .iter()
+            .flat_map(|fragment| fragment.frames.iter())
+            .map(|frame| decode_chunk(frame))
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let mut cache = empty_cache();
+        cache.apply_chunks(&chunks).unwrap();
+        assert_eq!(cache.generation, snapshot.source_damage_generation);
+        assert_eq!(cache.cells[0].text.len(), MAX_GRAPHEME_UTF8_BYTES);
+    }
 }

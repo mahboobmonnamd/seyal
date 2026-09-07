@@ -214,6 +214,8 @@ pub struct DisplayCell {
     pub width: u8,
     /// Full grapheme UTF-8 for Lead; empty for Empty/Continuation.
     pub text: Arc<[u8]>,
+    /// Whether `text` came from the v2 variable-length sidecar.
+    pub sidecar: bool,
     pub foreground: DisplayColor,
     pub background: DisplayColor,
     pub attributes: DisplayAttributes,
@@ -226,6 +228,7 @@ impl DisplayCell {
             role: DisplayCellRole::Empty,
             width: 0,
             text: Arc::from([]),
+            sidecar: false,
             foreground: DisplayColor::Default,
             background: DisplayColor::Default,
             attributes: DisplayAttributes::default(),
@@ -246,6 +249,7 @@ impl DisplayCell {
             role: DisplayCellRole::Lead,
             width,
             text: Arc::from(encoded.as_bytes().to_vec()),
+            sidecar: false,
             foreground,
             background,
             attributes,
@@ -717,6 +721,7 @@ mod tests {
         let chunk = decode_chunk(&frame).unwrap();
         assert_eq!(chunk.cells[0].role, DisplayCellRole::Lead);
         assert_eq!(chunk.cells[0].text.as_ref(), heart);
+        assert!(chunk.cells[0].sidecar);
         assert_eq!(chunk.cells[1].role, DisplayCellRole::Continuation);
         assert!(chunk.cells[1].text.is_empty());
 

@@ -61,7 +61,6 @@ impl PendingDisplayBatch {
             {
                 return Err(ClientError::Protocol);
             }
-            self.chunks.reserve(expected_count);
         } else {
             let first = self.chunks.first().ok_or(ClientError::Protocol)?;
             let previous = self.chunks.last().ok_or(ClientError::Protocol)?;
@@ -143,6 +142,19 @@ impl PendingDisplayBatch {
         } else {
             DISPLAY_CHUNK_HEADER_LEN
         };
+        let sidecar_bytes = if chunk.schema == DISPLAY_SCHEMA_V2 {
+            chunk
+                .cells
+                .iter()
+                .filter(|cell| cell.sidecar)
+                .try_fold(0usize, |total, cell| {
+                    total
+                        .checked_add(cell.text.len())
+                        .ok_or(ClientError::Capacity)
+                })?
+        } else {
+            0
+        };
         let chunk_wire_bytes = HEADER_LEN
             .checked_add(header_len)
             .and_then(|value| {
@@ -151,6 +163,7 @@ impl PendingDisplayBatch {
                     .len()
                     .checked_mul(DISPLAY_CELL_LEN)
                     .and_then(|cell_bytes| value.checked_add(cell_bytes))
+                    .and_then(|value| value.checked_add(sidecar_bytes))
             })
             .ok_or(ClientError::Capacity)?;
         let next_wire_bytes = self
@@ -161,6 +174,9 @@ impl PendingDisplayBatch {
             return Err(ClientError::Capacity);
         }
 
+        if self.chunks.is_empty() {
+            self.chunks.reserve(expected_count);
+        }
         self.cells = next_cells;
         self.wire_bytes = next_wire_bytes;
         self.chunks.push(chunk);
@@ -359,6 +375,7 @@ fn runtime_attributes_to_render(attributes: DisplayAttributes) -> RenderAttribut
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     fn display_cell() -> DisplayCell {
         DisplayCell::lead_scalar(
@@ -449,5 +466,56 @@ mod tests {
         assert!(!batch.push(replacement).unwrap());
         assert_eq!(batch.chunks().len(), 1);
         assert_eq!(batch.chunks()[0].generation, 3);
+    }
+
+    #[test]
+    fn pending_display_batch_counts_v2_sidecar_bytes_against_logical_cap() {
+        let sidecar = Arc::<[u8]>::from(vec![b'x'; 8_192]);
+        let rows = 20u16;
+        let columns = 512u16;
+        let chunks_per_row = usize::from(columns) / 8;
+        let chunk_count = rows as usize * chunks_per_row;
+        let mut pending = PendingDisplayBatch::default();
+
+        for index in 0..chunk_count {
+            let row = index / chunks_per_row;
+            let col = (index % chunks_per_row) * 8;
+            let cells = (0..8)
+                .map(|_| DisplayCell {
+                    scalar: 'x',
+                    role: DisplayCellRole::Lead,
+                    width: 1,
+                    text: sidecar.clone(),
+                    sidecar: true,
+                    foreground: DisplayColor::Default,
+                    background: DisplayColor::Default,
+                    attributes: DisplayAttributes::default(),
+                })
+                .collect();
+            let chunk = DecodedDisplayChunk {
+                kind: DisplayKind::Snapshot,
+                schema: DISPLAY_SCHEMA_V2,
+                generation: 4,
+                base_generation: 0,
+                rows,
+                columns,
+                cursor_row: 0,
+                cursor_col: 0,
+                cursor_visible: true,
+                alternate_screen: false,
+                first_row: row as u16,
+                row_count: 1,
+                first_col: col as u16,
+                chunk_index: index as u16,
+                chunk_count: chunk_count as u16,
+                cells,
+            };
+            if let Err(error) = pending.push(chunk) {
+                assert_eq!(error, ClientError::Capacity);
+                assert!(index > 100, "sidecar bytes were not included in the cap");
+                return;
+            }
+        }
+        panic!("sidecar-heavy logical update exceeded the cap without rejection");
     }
 }

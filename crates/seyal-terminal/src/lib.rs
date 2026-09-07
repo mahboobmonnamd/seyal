@@ -12,6 +12,7 @@ mod cursor;
 mod damage;
 mod error;
 mod grapheme_store;
+mod history;
 mod line;
 mod modes;
 mod parser;
@@ -33,6 +34,10 @@ pub use cursor::CursorState;
 pub use damage::Damage;
 pub use error::TerminalError;
 pub use grapheme_store::{MAX_ACTIVE_GRAPHEME_BYTES, MAX_LIVE_VARIABLE_BYTES};
+pub use history::{
+    HistoryAnchor, HistoryBreakAfter, ReflowRow, HISTORY_PER_EXECUTION_BYTE_CAP,
+    HISTORY_SEGMENT_PAYLOAD_TARGET, HISTORY_TAIL_PAYLOAD_LIMIT,
+};
 pub use line::LineId;
 pub use modes::ModeState;
 pub use presentation::{

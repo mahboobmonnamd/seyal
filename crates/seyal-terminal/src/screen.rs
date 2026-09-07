@@ -1,23 +1,11 @@
 use crate::{
-    cursor::Cursor, damage::Mutation, grapheme_store::GraphemeStore, line::LineIdAllocator, Cell,
-    CellRole, Color, CursorState, LineId, Style, TerminalError,
+    cursor::Cursor,
+    damage::Mutation,
+    grapheme_store::GraphemeStore,
+    history::{HistoryBreakAfter, HistoryLine, HistoryStore},
+    line::LineIdAllocator,
+    Cell, CellRole, Color, CursorState, LineId, Style, TerminalError,
 };
-use std::collections::VecDeque;
-
-const MAX_HISTORY_LINES: usize = 8_192;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum HistoryBreakAfter {
-    HardBreak,
-    SoftWrap,
-}
-
-#[derive(Clone, Debug)]
-struct HistoryEntry {
-    line_id: LineId,
-    cells: Vec<Cell>,
-    break_after: HistoryBreakAfter,
-}
 
 #[derive(Clone, Copy, Debug)]
 struct SavedCursor {
@@ -30,10 +18,12 @@ pub(crate) struct Screen {
     rows: u16,
     cells: Vec<Cell>,
     line_ids: Vec<LineId>,
+    row_breaks: Vec<Option<HistoryBreakAfter>>,
     cursor: Cursor,
     pen: Style,
     saved_cursor: Option<SavedCursor>,
-    history: VecDeque<HistoryEntry>,
+    history: HistoryStore,
+    retain_history: bool,
     /// Inclusive 0-based DECSTBM top margin.
     scroll_top: u16,
     /// Inclusive 0-based DECSTBM bottom margin.
@@ -45,6 +35,7 @@ impl Screen {
         cols: u16,
         rows: u16,
         line_ids: &mut LineIdAllocator,
+        retain_history: bool,
     ) -> Result<Self, TerminalError> {
         if cols == 0 || rows == 0 {
             return Err(TerminalError::InvalidSize);
@@ -67,10 +58,12 @@ impl Screen {
             rows,
             cells: vec![Cell::default(); usize::from(cols) * usize::from(rows)],
             line_ids: row_ids,
+            row_breaks: vec![None; usize::from(rows)],
             cursor: Cursor::default(),
             pen: Style::default(),
             saved_cursor: None,
-            history: VecDeque::new(),
+            history: HistoryStore::default(),
+            retain_history,
             scroll_top: 0,
             scroll_bottom: rows.saturating_sub(1),
         })
@@ -133,11 +126,6 @@ impl Screen {
     pub(crate) fn release_all_payloads(&mut self, store: &mut GraphemeStore) {
         for cell in &self.cells {
             Self::release_cell(*cell, store);
-        }
-        for entry in &self.history {
-            for cell in &entry.cells {
-                Self::release_cell(*cell, store);
-            }
         }
     }
 
@@ -202,12 +190,12 @@ impl Screen {
     }
 
     /// Oldest-to-newest retained primary history entries (storage order).
-    pub(crate) fn history_entries(
-        &self,
-    ) -> impl Iterator<Item = (LineId, HistoryBreakAfter, &[Cell])> {
-        self.history
-            .iter()
-            .map(|entry| (entry.line_id, entry.break_after, entry.cells.as_slice()))
+    pub(crate) fn history_entries(&self) -> impl Iterator<Item = &HistoryLine> {
+        self.history.entries()
+    }
+
+    pub(crate) fn history(&self) -> &HistoryStore {
+        &self.history
     }
 
     pub(crate) fn cell_row(&self, row: u16) -> Option<&[Cell]> {
@@ -226,6 +214,7 @@ impl Screen {
         cols: u16,
         rows: u16,
         line_ids: &mut LineIdAllocator,
+        store: &GraphemeStore,
     ) -> Result<PreparedScreen, TerminalError> {
         if cols == 0 || rows == 0 {
             return Err(TerminalError::InvalidSize);
@@ -246,14 +235,59 @@ impl Screen {
         }
 
         let mut next = vec![Cell::default(); usize::from(cols) * usize::from(rows)];
-        let copy_cols = old_cols.min(cols);
-        let copy_rows = old_rows.min(rows);
-        for row in 0..copy_rows {
-            let old_start = usize::from(row) * usize::from(old_cols);
-            let new_start = usize::from(row) * usize::from(cols);
-            let count = usize::from(copy_cols);
-            next[new_start..new_start + count]
-                .copy_from_slice(&self.cells[old_start..old_start + count]);
+        let mut next_breaks = vec![None; usize::from(rows)];
+        if self.retain_history && cols != old_cols {
+            let mut source = HistoryStore::default();
+            let last_content_row = (0..old_rows)
+                .rev()
+                .find(|row| {
+                    let start = usize::from(*row) * usize::from(old_cols);
+                    self.cells[start..start + usize::from(old_cols)]
+                        .iter()
+                        .any(|cell| cell.role != CellRole::Empty)
+                })
+                .unwrap_or(0);
+            for row in 0..=last_content_row {
+                let row_start = usize::from(row) * usize::from(old_cols);
+                let break_after = self.row_breaks[usize::from(row)].unwrap_or_else(|| {
+                    if row + 1 == old_rows {
+                        HistoryBreakAfter::HardBreak
+                    } else {
+                        HistoryBreakAfter::SoftWrap
+                    }
+                });
+                let mut content_end = usize::from(old_cols);
+                if row == last_content_row {
+                    content_end = self.cells[row_start..row_start + usize::from(old_cols)]
+                        .iter()
+                        .rposition(|cell| cell.role != CellRole::Empty)
+                        .map_or(1, |index| index + 1);
+                }
+                source.append_row(
+                    self.line_ids[usize::from(row)],
+                    break_after,
+                    &self.cells[row_start..row_start + content_end],
+                    store,
+                );
+            }
+            let reflowed = source.reflow(cols, usize::MAX);
+            let first = reflowed.len().saturating_sub(usize::from(rows));
+            for (row, projection) in reflowed.iter().skip(first).enumerate() {
+                let start = row * usize::from(cols);
+                let count = projection.cells.len().min(usize::from(cols));
+                next[start..start + count].copy_from_slice(&projection.cells[..count]);
+            }
+        } else {
+            let copy_cols = old_cols.min(cols);
+            let copy_rows = old_rows.min(rows);
+            for row in 0..copy_rows {
+                let old_start = usize::from(row) * usize::from(old_cols);
+                let new_start = usize::from(row) * usize::from(cols);
+                let count = usize::from(copy_cols);
+                next[new_start..new_start + count]
+                    .copy_from_slice(&self.cells[old_start..old_start + count]);
+                next_breaks[usize::from(row)] = self.row_breaks[usize::from(row)];
+            }
         }
 
         let mut next_line_ids = Vec::with_capacity(usize::from(rows));
@@ -277,6 +311,7 @@ impl Screen {
             rows,
             cells: next,
             line_ids: next_line_ids,
+            row_breaks: next_breaks,
             cursor,
             saved_cursor,
             unchanged: false,
@@ -293,6 +328,7 @@ impl Screen {
         self.rows = prepared.rows;
         self.cells = prepared.cells;
         self.line_ids = prepared.line_ids;
+        self.row_breaks = prepared.row_breaks;
         self.cursor = prepared.cursor;
         self.saved_cursor = prepared.saved_cursor;
         self.clamp_scroll_region_to_geometry();
@@ -314,7 +350,8 @@ impl Screen {
 
         if self.cursor.pending_wrap {
             if wraparound {
-                let wrap_mutation = self.line_feed(line_ids, HistoryBreakAfter::SoftWrap)?;
+                let wrap_mutation =
+                    self.line_feed(line_ids, HistoryBreakAfter::SoftWrap, Some(&mut *store))?;
                 self.cursor.col = 0;
                 mutation = mutation.merge(wrap_mutation);
                 soft_wrapped = true;
@@ -328,7 +365,8 @@ impl Screen {
             && (self.cursor.col == self.cols - 1 || self.cursor.col + 1 > self.cols - 1)
         {
             if wraparound {
-                let wrap_mutation = self.line_feed(line_ids, HistoryBreakAfter::SoftWrap)?;
+                let wrap_mutation =
+                    self.line_feed(line_ids, HistoryBreakAfter::SoftWrap, Some(&mut *store))?;
                 self.cursor.col = 0;
                 mutation = mutation.merge(wrap_mutation);
                 soft_wrapped = true;
@@ -412,11 +450,14 @@ impl Screen {
         &mut self,
         byte: u8,
         line_ids: &mut LineIdAllocator,
+        store: &mut GraphemeStore,
     ) -> Result<Mutation, TerminalError> {
         Ok(match byte {
             0x08 => self.backspace(),
             0x09 => self.tab(),
-            0x0a..=0x0c => return self.line_feed(line_ids, HistoryBreakAfter::HardBreak),
+            0x0a..=0x0c => {
+                return self.line_feed(line_ids, HistoryBreakAfter::HardBreak, Some(store));
+            }
             0x0d => self.carriage_return(),
             _ => Mutation::none(),
         })
@@ -642,11 +683,13 @@ impl Screen {
         &mut self,
         line_ids: &mut LineIdAllocator,
         break_after: HistoryBreakAfter,
+        store: Option<&mut GraphemeStore>,
     ) -> Result<Mutation, TerminalError> {
         self.cursor.pending_wrap = false;
         let old = self.cursor.row;
+        self.row_breaks[usize::from(self.cursor.row)] = Some(break_after);
         if self.cursor.row == self.scroll_bottom {
-            return self.scroll_up(1, line_ids, None, break_after);
+            return self.scroll_up(1, line_ids, store, break_after);
         }
         if self.cursor.row < self.rows.saturating_sub(1) {
             self.cursor.row += 1;
@@ -659,19 +702,21 @@ impl Screen {
     pub(crate) fn index_down(
         &mut self,
         line_ids: &mut LineIdAllocator,
+        store: &mut GraphemeStore,
     ) -> Result<Mutation, TerminalError> {
-        self.line_feed(line_ids, HistoryBreakAfter::HardBreak)
+        self.line_feed(line_ids, HistoryBreakAfter::HardBreak, Some(store))
     }
 
     /// ESC M — Reverse Index.
     pub(crate) fn reverse_index(
         &mut self,
         line_ids: &mut LineIdAllocator,
+        store: &mut GraphemeStore,
     ) -> Result<Mutation, TerminalError> {
         self.cursor.pending_wrap = false;
         let old = self.cursor.row;
         if self.cursor.row == self.scroll_top {
-            return self.scroll_down(1, line_ids, None);
+            return self.scroll_down(1, line_ids, Some(store));
         }
         if self.cursor.row > 0 {
             self.cursor.row -= 1;
@@ -684,9 +729,10 @@ impl Screen {
     pub(crate) fn next_line(
         &mut self,
         line_ids: &mut LineIdAllocator,
+        store: &mut GraphemeStore,
     ) -> Result<Mutation, TerminalError> {
         let cr = self.carriage_return();
-        Ok(cr.merge(self.index_down(line_ids)?))
+        Ok(cr.merge(self.index_down(line_ids, store)?))
     }
 
     /// CSI S — Scroll Up (SU) inside the current region.
@@ -881,24 +927,24 @@ impl Screen {
         }
 
         // Evict scrolled-away rows: full-screen primary-compatible retention only.
-        if self.region_is_full_screen() && top == 0 {
+        if self.retain_history && self.region_is_full_screen() && top == 0 {
             for row in 0..n {
                 let row_start = (top_i + row) * cols;
                 let evicted_id = self.line_ids[top_i + row];
-                let evicted = self.cells[row_start..row_start + cols].to_vec();
-                if self.history.len() == MAX_HISTORY_LINES {
-                    if let Some(store) = store.as_mut() {
-                        for cell in &self.history.front().expect("history non-empty").cells {
-                            Self::release_cell(*cell, store);
-                        }
-                    }
-                    self.history.pop_front();
+                let source_break = self.row_breaks[top_i + row].unwrap_or(break_after);
+                if let Some(store) = store.as_deref() {
+                    self.history.append_row(
+                        evicted_id,
+                        source_break,
+                        &self.cells[row_start..row_start + cols],
+                        store,
+                    );
                 }
-                self.history.push_back(HistoryEntry {
-                    line_id: evicted_id,
-                    cells: evicted,
-                    break_after,
-                });
+                if let Some(store) = store.as_deref_mut() {
+                    for cell in &self.cells[row_start..row_start + cols] {
+                        Self::release_cell(*cell, store);
+                    }
+                }
             }
         } else if let Some(store) = store.as_mut() {
             for row in 0..n {
@@ -917,6 +963,8 @@ impl Screen {
             self.cells.copy_within(src..src + len, dst);
             self.line_ids
                 .copy_within(top_i + n..top_i + n + keep, top_i);
+            self.row_breaks
+                .copy_within(top_i + n..top_i + n + keep, top_i);
         }
 
         let blank = Cell::blank(self.pen.bg);
@@ -931,6 +979,7 @@ impl Screen {
             }
             self.cells[row_start..row_start + cols].fill(blank);
             self.line_ids[row_index] = line_ids.allocate()?;
+            self.row_breaks[row_index] = None;
         }
         Ok(Mutation::rows(top, bottom))
     }
@@ -970,6 +1019,7 @@ impl Screen {
             self.cells.copy_within(src..src + len, dst);
             for row in (0..keep).rev() {
                 self.line_ids[top_i + row + n] = self.line_ids[top_i + row];
+                self.row_breaks[top_i + row + n] = self.row_breaks[top_i + row];
             }
         }
 
@@ -981,6 +1031,7 @@ impl Screen {
             // live in the shifted rows, so blank without releasing.
             self.cells[row_start..row_start + cols].fill(blank);
             self.line_ids[row_index] = line_ids.allocate()?;
+            self.row_breaks[row_index] = None;
         }
         Ok(Mutation::rows(top, bottom))
     }
@@ -1024,6 +1075,7 @@ pub(crate) struct PreparedScreen {
     rows: u16,
     cells: Vec<Cell>,
     line_ids: Vec<LineId>,
+    row_breaks: Vec<Option<HistoryBreakAfter>>,
     cursor: Cursor,
     saved_cursor: Option<SavedCursor>,
     unchanged: bool,
@@ -1036,6 +1088,7 @@ impl PreparedScreen {
             rows: 0,
             cells: Vec::new(),
             line_ids: Vec::new(),
+            row_breaks: Vec::new(),
             cursor: Cursor::default(),
             saved_cursor: None,
             unchanged: true,

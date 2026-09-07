@@ -14,7 +14,7 @@ use crate::{
     },
     screen::{PreparedScreen, Screen},
     width::{grapheme_terminal_width, AmbiguousWidthPolicy},
-    Cell, CursorState, Damage, LineId, ModeState, TerminalError,
+    Cell, CursorState, Damage, HistoryAnchor, LineId, ModeState, ReflowRow, Style, TerminalError,
 };
 use std::collections::VecDeque;
 
@@ -247,14 +247,15 @@ impl TerminalState {
             return Vec::new();
         }
         let mut lines = Vec::new();
-        for (id, _, cells) in self.core.primary.history_entries() {
+        for entry in self.core.primary.history_entries() {
+            let id = entry.line_id;
             if id < start {
                 continue;
             }
             if id > end {
                 break;
             }
-            lines.push((id, cells.to_vec()));
+            lines.push((id, entry.cells()));
             if lines.len() >= max_lines {
                 return lines;
             }
@@ -278,6 +279,44 @@ impl TerminalState {
             }
         }
         lines
+    }
+
+    /// Derives width-specific rows from canonical retained history. The
+    /// projection is bounded by `max_rows` and does not rewrite source text.
+    pub fn primary_history_reflow(&self, cols: u16, max_rows: usize) -> Vec<ReflowRow> {
+        self.core.primary.history().reflow(cols, max_rows)
+    }
+
+    pub fn primary_history_resident_bytes(&self) -> usize {
+        self.core.primary.history().resident_bytes()
+    }
+
+    pub fn primary_history_eviction_generation(&self) -> u64 {
+        self.core.primary.history().eviction_generation()
+    }
+
+    /// Resolves a retained source anchor to its canonical text unit. An
+    /// absent result means the source was evicted or the offset is invalid.
+    pub fn primary_history_unit(&self, anchor: HistoryAnchor) -> Option<(String, u8, Style)> {
+        self.core
+            .primary
+            .history_entries()
+            .find(|line| {
+                line.line_id == anchor.line_id
+                    && anchor.unit_offset >= line.start_offset
+                    && usize::try_from(anchor.unit_offset - line.start_offset)
+                        .ok()
+                        .is_some_and(|offset| offset < line.units.len())
+            })
+            .and_then(|line| {
+                let relative = anchor.unit_offset.checked_sub(line.start_offset)? as usize;
+                line.units.get(relative)
+            })
+            .and_then(|unit| {
+                String::from_utf8(unit.utf8.clone())
+                    .ok()
+                    .map(|text| (text, unit.width, unit.style))
+            })
     }
 
     pub fn row_text(&self, row: u16) -> Option<String> {
@@ -344,7 +383,7 @@ struct TerminalCore {
 impl TerminalCore {
     fn new(cols: u16, rows: u16) -> Result<Self, TerminalError> {
         let mut line_ids = LineIdAllocator::new();
-        let primary = Screen::new(cols, rows, &mut line_ids)?;
+        let primary = Screen::new(cols, rows, &mut line_ids, true)?;
         let mut damage = DamageTracker::default();
         damage.mark(Mutation::full(rows));
         damage.commit();
@@ -414,11 +453,11 @@ impl TerminalCore {
             return Err(TerminalError::LineIdentityExhausted);
         }
 
-        let primary = self
-            .primary
-            .prepare_resize(cols, rows, &mut self.line_ids)?;
+        let primary =
+            self.primary
+                .prepare_resize(cols, rows, &mut self.line_ids, &self.grapheme_store)?;
         let alternate = if let Some(screen) = &self.alternate {
-            Some(screen.prepare_resize(cols, rows, &mut self.line_ids)?)
+            Some(screen.prepare_resize(cols, rows, &mut self.line_ids, &self.grapheme_store)?)
         } else {
             None
         };
@@ -574,7 +613,7 @@ impl TerminalCore {
             let cols = self.primary.cols();
             let rows = self.primary.rows();
             let pen = self.primary.pen();
-            let mut screen = Screen::new(cols, rows, &mut self.line_ids)?;
+            let mut screen = Screen::new(cols, rows, &mut self.line_ids, false)?;
             screen.inherit_pen_for_clean_buffer(pen, &mut self.grapheme_store);
             self.alternate = Some(screen);
             self.modes.alternate_screen = true;
@@ -823,9 +862,10 @@ impl TerminalCore {
         if self.modes.alternate_screen
             && let Some(screen) = &mut self.alternate
         {
-            return screen.execute(byte, &mut self.line_ids);
+            return screen.execute(byte, &mut self.line_ids, &mut self.grapheme_store);
         }
-        self.primary.execute(byte, &mut self.line_ids)
+        self.primary
+            .execute(byte, &mut self.line_ids, &mut self.grapheme_store)
     }
 
     fn record_fault(&mut self, error: TerminalError) {
@@ -1051,7 +1091,7 @@ impl Actions for TerminalCore {
                         count,
                         line_ids,
                         Some(store),
-                        crate::screen::HistoryBreakAfter::HardBreak,
+                        crate::HistoryBreakAfter::HardBreak,
                     )
                 })
             }
@@ -1090,15 +1130,17 @@ impl Actions for TerminalCore {
             b'8' => self.current_mut().restore_cursor(),
             b'D' => {
                 self.invalidate_active_grapheme();
-                self.editing_mutation(|screen, line_ids, _| screen.index_down(line_ids))
+                self.editing_mutation(|screen, line_ids, store| screen.index_down(line_ids, store))
             }
             b'M' => {
                 self.invalidate_active_grapheme();
-                self.editing_mutation(|screen, line_ids, _| screen.reverse_index(line_ids))
+                self.editing_mutation(|screen, line_ids, store| {
+                    screen.reverse_index(line_ids, store)
+                })
             }
             b'E' => {
                 self.invalidate_active_grapheme();
-                self.editing_mutation(|screen, line_ids, _| screen.next_line(line_ids))
+                self.editing_mutation(|screen, line_ids, store| screen.next_line(line_ids, store))
             }
             _ => {
                 self.record_unknown();
@@ -1316,27 +1358,51 @@ mod tests {
             .core
             .primary
             .history_entries()
-            .map(|(id, break_after, cells)| {
+            .map(|entry| {
                 (
-                    id,
-                    break_after,
-                    cells.iter().map(|cell| cell.character).collect::<String>(),
+                    entry.line_id,
+                    entry.break_after,
+                    entry
+                        .cells()
+                        .iter()
+                        .map(|cell| cell.character)
+                        .collect::<String>(),
                 )
             })
             .collect();
 
         assert!(
             history.iter().any(|(_, break_after, text)| {
-                matches!(break_after, crate::screen::HistoryBreakAfter::SoftWrap) && text == "ab"
+                matches!(break_after, crate::HistoryBreakAfter::SoftWrap) && text == "ab"
             }),
             "soft-wrapped overflow row should be retained with SoftWrap lineage"
         );
         assert!(
             history.iter().any(|(_, break_after, text)| {
-                matches!(break_after, crate::screen::HistoryBreakAfter::HardBreak) && text == "c "
+                matches!(break_after, crate::HistoryBreakAfter::HardBreak) && text == "c "
             }),
             "explicit line feed should be retained with HardBreak lineage"
         );
+    }
+
+    #[test]
+    fn primary_resize_reflows_active_soft_wrapped_source() {
+        let mut terminal = TerminalState::new(4, 2).unwrap();
+        terminal.feed(b"abcdef").unwrap();
+        terminal.resize(8, 2).unwrap();
+        assert_eq!(terminal.row_text(0).as_deref(), Some("abcdef  "));
+        terminal.resize(3, 2).unwrap();
+        let text = format!(
+            "{}{}",
+            terminal.row_text(0).unwrap(),
+            terminal.row_text(1).unwrap()
+        );
+        assert!(
+            text.starts_with("abc"),
+            "rows={:?} reflow text={text:?}",
+            (terminal.row_text(0), terminal.row_text(1))
+        );
+        assert!(text.contains("def"), "reflow text={text:?}");
     }
 
     #[test]

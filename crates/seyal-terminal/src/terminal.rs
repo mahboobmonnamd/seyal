@@ -295,6 +295,14 @@ impl TerminalState {
         self.core.primary.history().eviction_generation()
     }
 
+    pub fn primary_history_oldest_segment_age(&self) -> Option<u64> {
+        self.core.primary.history().oldest_segment_age()
+    }
+
+    pub fn evict_oldest_primary_history_segment(&mut self) -> usize {
+        self.core.primary.history_mut().evict_oldest_segment()
+    }
+
     /// Resolves a retained source anchor to its canonical text unit. An
     /// absent result means the source was evicted or the offset is invalid.
     pub fn primary_history_unit(&self, anchor: HistoryAnchor) -> Option<(String, u8, Style)> {

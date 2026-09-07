@@ -66,6 +66,18 @@ impl TerminalExecution {
         self.terminal.take_host_presentation_event()
     }
 
+    pub fn retained_history_bytes(&self) -> usize {
+        self.terminal.primary_history_resident_bytes()
+    }
+
+    pub fn oldest_history_segment_age(&self) -> Option<u64> {
+        self.terminal.primary_history_oldest_segment_age()
+    }
+
+    pub fn evict_oldest_history_segment(&mut self) -> usize {
+        self.terminal.evict_oldest_primary_history_segment()
+    }
+
     /// Transfers one complete terminal-generated protocol reply for PTY write.
     /// Prefer [`write_protocol_replies`] from Runtime write service. Returns
     /// `None` while a partially written reply remains at the front of the queue.

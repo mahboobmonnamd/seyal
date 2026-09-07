@@ -10,6 +10,7 @@ use std::{
 
 use seyal_exec::{
     ExecutionReactor, ReactorEvent, ReactorEventKind, RegistrationToken, TerminalExecution,
+    HISTORY_RUNTIME_AGGREGATE_BYTE_CAP,
 };
 
 use crate::{
@@ -172,10 +173,45 @@ impl Runtime {
             }
         }
         self.process_deadlines()?;
+        self.enforce_history_budget();
         self.reap_failed_creations()?;
         #[cfg(target_os = "macos")]
         self.publish_display_updates();
         Ok(processed)
+    }
+
+    /// Applies the Runtime-wide resident-history cap by evicting the oldest
+    /// sealed segment globally. Attachment state never changes eviction order.
+    fn enforce_history_budget(&mut self) {
+        let mut resident = self
+            .entries
+            .values()
+            .map(|entry| entry.execution.retained_history_bytes())
+            .sum::<usize>();
+        while resident > HISTORY_RUNTIME_AGGREGATE_BYTE_CAP {
+            let candidate = self
+                .entries
+                .iter()
+                .filter_map(|(id, entry)| {
+                    entry
+                        .execution
+                        .oldest_history_segment_age()
+                        .map(|age| (*id, age))
+                })
+                .min_by_key(|(_, age)| *age)
+                .map(|(id, _)| id);
+            let Some(id) = candidate else {
+                break;
+            };
+            let Some(entry) = self.entries.get_mut(&id) else {
+                break;
+            };
+            let removed = entry.execution.evict_oldest_history_segment();
+            if removed == 0 {
+                break;
+            }
+            resident = resident.saturating_sub(removed);
+        }
     }
 
     fn bound_wait_by_deadline(&self, requested: Option<Duration>) -> Option<Duration> {

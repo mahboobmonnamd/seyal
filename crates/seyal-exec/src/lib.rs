@@ -43,5 +43,6 @@ pub use readiness::Readiness;
 pub use seyal_terminal::{
     CellRole, Color, HostPresentationEvent, LineId, PresentationPayload, ProtocolReply,
     ShellIntegrationEvent, ShellIntegrationToken,
+    HISTORY_RUNTIME_AGGREGATE_BYTE_CAP,
 };
 pub use winsize::WindowSize;

@@ -198,6 +198,10 @@ impl Screen {
         &self.history
     }
 
+    pub(crate) fn history_mut(&mut self) -> &mut HistoryStore {
+        &mut self.history
+    }
+
     pub(crate) fn cell_row(&self, row: u16) -> Option<&[Cell]> {
         if row >= self.rows {
             return None;

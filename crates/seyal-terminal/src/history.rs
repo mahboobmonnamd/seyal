@@ -6,10 +6,16 @@
 
 use crate::{grapheme_store::GraphemeStore, Cell, CellRole, LineId, Style};
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub const HISTORY_SEGMENT_PAYLOAD_TARGET: usize = 16 * 1024;
 pub const HISTORY_TAIL_PAYLOAD_LIMIT: usize = 2 * HISTORY_SEGMENT_PAYLOAD_TARGET;
 pub const HISTORY_PER_EXECUTION_BYTE_CAP: usize = 32 * 1024 * 1024;
+pub const HISTORY_RUNTIME_AGGREGATE_BYTE_CAP: usize = 256 * 1024 * 1024;
+pub const HISTORY_PER_EXECUTION_DERIVED_INDEX_CAP: usize = 4 * 1024 * 1024;
+pub const HISTORY_RUNTIME_DERIVED_INDEX_CAP: usize = 32 * 1024 * 1024;
+
+static NEXT_SEGMENT_AGE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HistoryBreakAfter {
@@ -76,6 +82,7 @@ impl HistoryLine {
 struct Segment {
     lines: Vec<HistoryLine>,
     payload_bytes: usize,
+    age: u64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -208,6 +215,7 @@ impl HistoryStore {
         let segment = Segment {
             lines: std::mem::take(&mut self.tail),
             payload_bytes: self.tail_payload_bytes,
+            age: NEXT_SEGMENT_AGE.fetch_add(1, Ordering::Relaxed),
         };
         self.tail_payload_bytes = 0;
         self.segments.push_back(segment);
@@ -223,6 +231,19 @@ impl HistoryStore {
             self.resident_bytes = self.resident_bytes.saturating_sub(segment.payload_bytes);
             self.eviction_generation = self.eviction_generation.wrapping_add(1);
         }
+    }
+
+    pub(crate) fn oldest_segment_age(&self) -> Option<u64> {
+        self.segments.front().map(|segment| segment.age)
+    }
+
+    pub(crate) fn evict_oldest_segment(&mut self) -> usize {
+        let Some(segment) = self.segments.pop_front() else {
+            return 0;
+        };
+        self.resident_bytes = self.resident_bytes.saturating_sub(segment.payload_bytes);
+        self.eviction_generation = self.eviction_generation.wrapping_add(1);
+        segment.payload_bytes
     }
 
     pub(crate) fn reflow(&self, cols: u16, max_rows: usize) -> Vec<ReflowRow> {

@@ -196,3 +196,48 @@ fn never_allocated_line_id_is_invalid_after_history_eviction() {
         HistoryAnchorResolution::Invalid
     );
 }
+
+#[test]
+fn alternate_screen_line_id_gap_is_invalid_after_primary_history_eviction() {
+    let mut terminal = TerminalState::new(512, 1).expect("terminal");
+    let line = format!("{}\r\n", "a".repeat(512));
+    for _ in 0..128 {
+        terminal.feed(line.as_bytes()).expect("primary history");
+    }
+    let before_max = terminal
+        .primary_history_range(LineId(1), LineId(u64::MAX), 512)
+        .expect("history range")
+        .into_iter()
+        .map(|(id, _)| id)
+        .max()
+        .expect("primary ids");
+
+    terminal.feed(b"\x1b[?1049h").expect("enter alternate");
+    for _ in 0..128 {
+        terminal.feed(line.as_bytes()).expect("alternate output");
+    }
+    terminal.feed(b"\x1b[?1049l").expect("leave alternate");
+    for _ in 0..128 {
+        terminal
+            .feed(line.as_bytes())
+            .expect("more primary history");
+    }
+
+    let gap = LineId(before_max.0 + 1);
+    let primary_ids = terminal
+        .primary_history_range(LineId(1), LineId(u64::MAX), 512)
+        .expect("history range")
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect::<Vec<_>>();
+    assert!(!primary_ids.contains(&gap));
+    while terminal.evict_oldest_primary_history_segment() > 0 {}
+
+    assert_eq!(
+        terminal.primary_history_unit(HistoryAnchor {
+            line_id: gap,
+            unit_offset: 0,
+        }),
+        HistoryAnchorResolution::Invalid
+    );
+}

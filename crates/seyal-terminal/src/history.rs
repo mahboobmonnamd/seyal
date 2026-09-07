@@ -178,6 +178,12 @@ pub(crate) struct Segment {
     resident_bytes: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct EvictedIdRange {
+    first: LineId,
+    last: LineId,
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum HistoryLineRef<'a> {
     Sealed(&'a Segment, &'a SegmentLine),
@@ -316,7 +322,11 @@ pub(crate) struct HistoryStore {
     segments_resident_bytes: usize,
     resident_bytes: usize,
     eviction_generation: u64,
-    evicted_range: Option<(LineId, LineId)>,
+    // Exact disjoint runs of source identities whose canonical payload was
+    // evicted. Alternate-screen allocations create gaps and must not be
+    // absorbed into an unavailable range. The Vec allocation is included in
+    // resident_bytes, so this metadata participates in the same hard cap.
+    evicted_id_ranges: Vec<EvictedIdRange>,
 }
 
 impl HistoryStore {
@@ -496,7 +506,12 @@ impl HistoryStore {
     fn update_resident_bytes(&mut self) {
         self.resident_bytes = size_of::<Self>()
             .saturating_add(self.tail_resident_bytes)
-            .saturating_add(self.segments_resident_bytes);
+            .saturating_add(self.segments_resident_bytes)
+            .saturating_add(
+                self.evicted_id_ranges
+                    .capacity()
+                    .saturating_mul(size_of::<EvictedIdRange>()),
+            );
     }
 
     fn evict_to_cap(&mut self) {
@@ -521,6 +536,7 @@ impl HistoryStore {
     }
 
     pub(crate) fn evict_oldest_segment(&mut self) -> usize {
+        let before = self.resident_bytes;
         let Some(segment) = self.segments.pop_front() else {
             return 0;
         };
@@ -530,32 +546,48 @@ impl HistoryStore {
             .saturating_sub(segment.resident_bytes);
         self.update_resident_bytes();
         self.eviction_generation = self.eviction_generation.wrapping_add(1);
-        segment.resident_bytes
+        before.saturating_sub(self.resident_bytes)
     }
 
     fn record_evicted_segment(&mut self, segment: &Segment) {
-        let Some(first) = segment.lines.first().map(|line| line.line_id) else {
-            return;
-        };
-        let Some(last) = segment.lines.last().map(|line| line.line_id) else {
-            return;
-        };
-        self.evicted_range = Some(
-            self.evicted_range
-                .map_or((first, last), |(current_first, current_last)| {
-                    (current_first.min(first), current_last.max(last))
-                }),
-        );
+        for line_id in segment.lines.iter().map(|line| line.line_id) {
+            let Some(last) = self.evicted_id_ranges.last_mut() else {
+                self.evicted_id_ranges.push(EvictedIdRange {
+                    first: line_id,
+                    last: line_id,
+                });
+                continue;
+            };
+            if line_id <= last.last {
+                continue;
+            }
+            if last.last.0.checked_add(1) == Some(line_id.0) {
+                last.last = line_id;
+            } else {
+                self.evicted_id_ranges.push(EvictedIdRange {
+                    first: line_id,
+                    last: line_id,
+                });
+            }
+        }
     }
 
     pub(crate) fn range_intersects_evicted(&self, start: LineId, end: LineId) -> bool {
-        self.evicted_range
-            .is_some_and(|(first, last)| start <= last && end >= first)
+        let index = self
+            .evicted_id_ranges
+            .partition_point(|range| range.last < start);
+        self.evicted_id_ranges
+            .get(index)
+            .is_some_and(|range| range.first <= end)
     }
 
     fn line_was_evicted(&self, line_id: LineId) -> bool {
-        self.evicted_range
-            .is_some_and(|(first, last)| line_id >= first && line_id <= last)
+        let index = self
+            .evicted_id_ranges
+            .partition_point(|range| range.last < line_id);
+        self.evicted_id_ranges
+            .get(index)
+            .is_some_and(|range| line_id >= range.first)
     }
 
     pub(crate) fn resolve_anchor(&self, anchor: HistoryAnchor) -> HistoryAnchorResolution {

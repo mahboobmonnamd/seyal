@@ -99,3 +99,40 @@ fn retained_utf8_fixture_is_chunk_boundary_independent() {
     assert_eq!(one_shot.cursor(), bytewise.cursor());
     assert_eq!(one_shot.diagnostics(), bytewise.diagnostics());
 }
+
+#[test]
+fn retained_m002_scroll_region_il_fixture_matches_canonical_state() {
+    let input = include_bytes!("../../../tests/fixtures/vt/m002-scroll-region.input");
+    let expected = include_str!("../../../tests/fixtures/vt/m002-scroll-region.expected.txt");
+    let mut terminal = TerminalState::new(4, 4).expect("fixture dimensions are valid");
+    terminal.feed(input).expect("fixture feed succeeds");
+    assert_eq!(render(&terminal), expected);
+}
+
+#[test]
+fn retained_m002_su_fixture_matches_canonical_state() {
+    let input = include_bytes!("../../../tests/fixtures/vt/m002-su-sd.input");
+    let expected = include_str!("../../../tests/fixtures/vt/m002-su-sd.expected.txt");
+    let mut terminal = TerminalState::new(4, 4).expect("fixture dimensions are valid");
+    terminal.feed(input).expect("fixture feed succeeds");
+    assert_eq!(render(&terminal), expected);
+}
+
+#[test]
+fn retained_m002_ich_dch_ech_fixture_matches_canonical_state() {
+    let input = include_bytes!("../../../tests/fixtures/vt/m002-ich-dch-ech.input");
+    let expected = include_str!("../../../tests/fixtures/vt/m002-ich-dch-ech.expected.txt");
+    let mut terminal = TerminalState::new(8, 1).expect("fixture dimensions are valid");
+    terminal.feed(input).expect("fixture feed succeeds");
+    assert_eq!(render(&terminal), expected);
+}
+
+#[test]
+fn retained_m002_osc_presentation_fixture_preserves_grid() {
+    let input = include_bytes!("../../../tests/fixtures/vt/m002-osc-presentation.input");
+    let expected = include_str!("../../../tests/fixtures/vt/m002-osc-presentation.expected.txt");
+    let mut terminal = TerminalState::new(8, 2).expect("fixture dimensions are valid");
+    terminal.feed(input).expect("fixture feed succeeds");
+    assert_eq!(render(&terminal), expected);
+    assert_eq!(terminal.diagnostics().malformed_sequences, 0);
+}

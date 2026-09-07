@@ -21,6 +21,10 @@ pub(crate) struct Screen {
     pen: Style,
     saved_cursor: Option<SavedCursor>,
     history: VecDeque<(LineId, Vec<Cell>)>,
+    /// Inclusive 0-based DECSTBM top margin.
+    scroll_top: u16,
+    /// Inclusive 0-based DECSTBM bottom margin.
+    scroll_bottom: u16,
 }
 
 impl Screen {
@@ -54,7 +58,45 @@ impl Screen {
             pen: Style::default(),
             saved_cursor: None,
             history: VecDeque::new(),
+            scroll_top: 0,
+            scroll_bottom: rows.saturating_sub(1),
         })
+    }
+
+    /// DECSTBM. Parameters are 1-based inclusive margins; `0` means default.
+    /// Invalid ranges (top >= bottom after defaults) leave the region unchanged.
+    /// Successful set moves the cursor to the absolute origin (1,1).
+    pub(crate) fn set_scroll_region(&mut self, top: u16, bottom: u16) -> Mutation {
+        let top = if top == 0 { 1 } else { top };
+        let bottom = if bottom == 0 { self.rows } else { bottom };
+        if top < 1 || bottom > self.rows || top >= bottom {
+            return Mutation::none();
+        }
+        self.scroll_top = top - 1;
+        self.scroll_bottom = bottom - 1;
+        self.set_cursor(0, 0)
+    }
+
+    fn region_is_full_screen(&self) -> bool {
+        self.scroll_top == 0 && self.scroll_bottom + 1 == self.rows
+    }
+
+    fn clamp_scroll_region_to_geometry(&mut self) {
+        if self.rows == 0 {
+            self.scroll_top = 0;
+            self.scroll_bottom = 0;
+            return;
+        }
+        let max_row = self.rows - 1;
+        if self.scroll_top > max_row {
+            self.scroll_top = 0;
+        }
+        if self.scroll_bottom > max_row || self.scroll_bottom <= self.scroll_top {
+            self.scroll_bottom = max_row;
+            if self.scroll_top >= self.scroll_bottom {
+                self.scroll_top = 0;
+            }
+        }
     }
 
     pub(crate) fn cols(&self) -> u16 {
@@ -238,6 +280,7 @@ impl Screen {
         self.line_ids = prepared.line_ids;
         self.cursor = prepared.cursor;
         self.saved_cursor = prepared.saved_cursor;
+        self.clamp_scroll_region_to_geometry();
         Mutation::full(rows)
     }
 
@@ -579,31 +622,362 @@ impl Screen {
         Mutation::row(row)
     }
 
+    /// IND / LF within the scroll region: scroll at the bottom margin.
     fn line_feed(&mut self, line_ids: &mut LineIdAllocator) -> Result<Mutation, TerminalError> {
+        self.cursor.pending_wrap = false;
         let old = self.cursor.row;
-        if self.cursor.row < self.rows - 1 {
-            self.cursor.pending_wrap = false;
+        if self.cursor.row == self.scroll_bottom {
+            return self.scroll_up(1, line_ids, None);
+        }
+        if self.cursor.row < self.rows.saturating_sub(1) {
             self.cursor.row += 1;
             return Ok(Mutation::rows(old, self.cursor.row));
         }
+        Ok(Mutation::row(old))
+    }
 
-        let new_line_id = line_ids.allocate()?;
-        let evicted_id = self.line_ids[0];
-        let evicted = self.cells[..usize::from(self.cols)].to_vec();
-        if self.history.len() == MAX_HISTORY_LINES {
-            self.history.pop_front();
-        }
-        self.history.push_back((evicted_id, evicted));
+    /// ESC D — Index (same scroll rules as LF, without carriage return).
+    pub(crate) fn index_down(
+        &mut self,
+        line_ids: &mut LineIdAllocator,
+    ) -> Result<Mutation, TerminalError> {
+        self.line_feed(line_ids)
+    }
+
+    /// ESC M — Reverse Index.
+    pub(crate) fn reverse_index(
+        &mut self,
+        line_ids: &mut LineIdAllocator,
+    ) -> Result<Mutation, TerminalError> {
         self.cursor.pending_wrap = false;
-        let row_width = usize::from(self.cols);
-        self.cells.copy_within(row_width.., 0);
-        let last_row_start = self.cells.len() - row_width;
-        // Last row was shifted up; blank without releasing shifted cells.
-        self.cells[last_row_start..].fill(Cell::blank(self.pen.bg));
-        self.line_ids.copy_within(1.., 0);
-        let last = self.line_ids.len() - 1;
-        self.line_ids[last] = new_line_id;
-        Ok(Mutation::full(self.rows))
+        let old = self.cursor.row;
+        if self.cursor.row == self.scroll_top {
+            return self.scroll_down(1, line_ids, None);
+        }
+        if self.cursor.row > 0 {
+            self.cursor.row -= 1;
+            return Ok(Mutation::rows(old, self.cursor.row));
+        }
+        Ok(Mutation::row(old))
+    }
+
+    /// ESC E — Next Line (CR + Index).
+    pub(crate) fn next_line(
+        &mut self,
+        line_ids: &mut LineIdAllocator,
+    ) -> Result<Mutation, TerminalError> {
+        let cr = self.carriage_return();
+        Ok(cr.merge(self.index_down(line_ids)?))
+    }
+
+    /// CSI S — Scroll Up (SU) inside the current region.
+    pub(crate) fn scroll_up(
+        &mut self,
+        count: u16,
+        line_ids: &mut LineIdAllocator,
+        store: Option<&mut GraphemeStore>,
+    ) -> Result<Mutation, TerminalError> {
+        let count = count.max(1);
+        let region_height = self
+            .scroll_bottom
+            .saturating_sub(self.scroll_top)
+            .saturating_add(1);
+        let n = count.min(region_height);
+        if n == 0 {
+            return Ok(Mutation::none());
+        }
+        self.shift_region_rows_up(self.scroll_top, self.scroll_bottom, n, line_ids, store)
+    }
+
+    /// CSI T — Scroll Down (SD) inside the current region.
+    pub(crate) fn scroll_down(
+        &mut self,
+        count: u16,
+        line_ids: &mut LineIdAllocator,
+        store: Option<&mut GraphemeStore>,
+    ) -> Result<Mutation, TerminalError> {
+        let count = count.max(1);
+        let region_height = self
+            .scroll_bottom
+            .saturating_sub(self.scroll_top)
+            .saturating_add(1);
+        let n = count.min(region_height);
+        if n == 0 {
+            return Ok(Mutation::none());
+        }
+        self.shift_region_rows_down(self.scroll_top, self.scroll_bottom, n, line_ids, store)
+    }
+
+    /// CSI L — Insert Lines at the cursor row within the scroll region.
+    pub(crate) fn insert_lines(
+        &mut self,
+        count: u16,
+        line_ids: &mut LineIdAllocator,
+        store: &mut GraphemeStore,
+    ) -> Result<Mutation, TerminalError> {
+        if self.cursor.row < self.scroll_top || self.cursor.row > self.scroll_bottom {
+            return Ok(Mutation::none());
+        }
+        let count = count.max(1);
+        let available = self
+            .scroll_bottom
+            .saturating_sub(self.cursor.row)
+            .saturating_add(1);
+        let n = count.min(available);
+        self.cursor.pending_wrap = false;
+        self.shift_region_rows_down(
+            self.cursor.row,
+            self.scroll_bottom,
+            n,
+            line_ids,
+            Some(store),
+        )
+    }
+
+    /// CSI M — Delete Lines at the cursor row within the scroll region.
+    pub(crate) fn delete_lines(
+        &mut self,
+        count: u16,
+        line_ids: &mut LineIdAllocator,
+        store: &mut GraphemeStore,
+    ) -> Result<Mutation, TerminalError> {
+        if self.cursor.row < self.scroll_top || self.cursor.row > self.scroll_bottom {
+            return Ok(Mutation::none());
+        }
+        let count = count.max(1);
+        let available = self
+            .scroll_bottom
+            .saturating_sub(self.cursor.row)
+            .saturating_add(1);
+        let n = count.min(available);
+        self.cursor.pending_wrap = false;
+        self.shift_region_rows_up(
+            self.cursor.row,
+            self.scroll_bottom,
+            n,
+            line_ids,
+            Some(store),
+        )
+    }
+
+    /// CSI @ — Insert Characters at the cursor.
+    pub(crate) fn insert_characters(&mut self, count: u16, store: &mut GraphemeStore) -> Mutation {
+        let count = count.max(1);
+        let row = self.cursor.row;
+        let col = self.cursor.col;
+        if col >= self.cols {
+            return Mutation::none();
+        }
+        self.cursor.pending_wrap = false;
+        let cols = usize::from(self.cols);
+        let start = usize::from(row) * cols;
+        let insert_at = start + usize::from(col);
+        let n = usize::from(count).min(cols - usize::from(col));
+        if n == 0 {
+            return Mutation::none();
+        }
+        // Release cells that will fall off the right edge.
+        for cell in &self.cells[start + cols - n..start + cols] {
+            Self::release_cell(*cell, store);
+        }
+        self.cells
+            .copy_within(insert_at..start + cols - n, insert_at + n);
+        let blank = Cell::blank(self.pen.bg);
+        self.cells[insert_at..insert_at + n].fill(blank);
+        self.sanitize_row(row, store);
+        Mutation::row(row)
+    }
+
+    /// CSI P — Delete Characters at the cursor.
+    pub(crate) fn delete_characters(&mut self, count: u16, store: &mut GraphemeStore) -> Mutation {
+        let count = count.max(1);
+        let row = self.cursor.row;
+        let col = self.cursor.col;
+        if col >= self.cols {
+            return Mutation::none();
+        }
+        self.cursor.pending_wrap = false;
+        let cols = usize::from(self.cols);
+        let start = usize::from(row) * cols;
+        let delete_at = start + usize::from(col);
+        let n = usize::from(count).min(cols - usize::from(col));
+        if n == 0 {
+            return Mutation::none();
+        }
+        for cell in &self.cells[delete_at..delete_at + n] {
+            Self::release_cell(*cell, store);
+        }
+        self.cells
+            .copy_within(delete_at + n..start + cols, delete_at);
+        let blank = Cell::blank(self.pen.bg);
+        self.cells[start + cols - n..start + cols].fill(blank);
+        self.sanitize_row(row, store);
+        Mutation::row(row)
+    }
+
+    /// CSI X — Erase Characters at the cursor (no shift).
+    pub(crate) fn erase_characters(&mut self, count: u16, store: &mut GraphemeStore) -> Mutation {
+        let count = count.max(1);
+        let row = self.cursor.row;
+        let col = self.cursor.col;
+        if col >= self.cols {
+            return Mutation::none();
+        }
+        self.cursor.pending_wrap = false;
+        let end_col = col.saturating_add(count).min(self.cols);
+        let mut mutation = Mutation::none();
+        let mut c = col;
+        while c < end_col {
+            mutation = mutation.merge(self.clear_unit_at(c, row, store));
+            c = c.saturating_add(1);
+        }
+        mutation
+    }
+
+    fn shift_region_rows_up(
+        &mut self,
+        top: u16,
+        bottom: u16,
+        count: u16,
+        line_ids: &mut LineIdAllocator,
+        mut store: Option<&mut GraphemeStore>,
+    ) -> Result<Mutation, TerminalError> {
+        let cols = usize::from(self.cols);
+        let top_i = usize::from(top);
+        let bottom_i = usize::from(bottom);
+        let n = usize::from(count);
+        let region_rows = bottom_i - top_i + 1;
+        if n == 0 || n > region_rows {
+            return Ok(Mutation::none());
+        }
+
+        // Evict scrolled-away rows: full-screen primary-compatible retention only.
+        if self.region_is_full_screen() && top == 0 {
+            for row in 0..n {
+                let row_start = (top_i + row) * cols;
+                let evicted_id = self.line_ids[top_i + row];
+                let evicted = self.cells[row_start..row_start + cols].to_vec();
+                if self.history.len() == MAX_HISTORY_LINES {
+                    if let Some(store) = store.as_mut() {
+                        for cell in &self.history.front().expect("history non-empty").1 {
+                            Self::release_cell(*cell, store);
+                        }
+                    }
+                    self.history.pop_front();
+                }
+                self.history.push_back((evicted_id, evicted));
+            }
+        } else if let Some(store) = store.as_mut() {
+            for row in 0..n {
+                let row_start = (top_i + row) * cols;
+                for cell in &self.cells[row_start..row_start + cols] {
+                    Self::release_cell(*cell, store);
+                }
+            }
+        }
+
+        let keep = region_rows - n;
+        if keep > 0 {
+            let src = (top_i + n) * cols;
+            let dst = top_i * cols;
+            let len = keep * cols;
+            self.cells.copy_within(src..src + len, dst);
+            self.line_ids
+                .copy_within(top_i + n..top_i + n + keep, top_i);
+        }
+
+        let blank = Cell::blank(self.pen.bg);
+        for row in 0..n {
+            let row_index = bottom_i + 1 - n + row;
+            let row_start = row_index * cols;
+            // Bottom rows still hold original content after the upward move.
+            if let Some(store) = store.as_mut() {
+                for cell in &self.cells[row_start..row_start + cols] {
+                    Self::release_cell(*cell, store);
+                }
+            }
+            self.cells[row_start..row_start + cols].fill(blank);
+            self.line_ids[row_index] = line_ids.allocate()?;
+        }
+        Ok(Mutation::rows(top, bottom))
+    }
+
+    fn shift_region_rows_down(
+        &mut self,
+        top: u16,
+        bottom: u16,
+        count: u16,
+        line_ids: &mut LineIdAllocator,
+        mut store: Option<&mut GraphemeStore>,
+    ) -> Result<Mutation, TerminalError> {
+        let cols = usize::from(self.cols);
+        let top_i = usize::from(top);
+        let bottom_i = usize::from(bottom);
+        let n = usize::from(count);
+        let region_rows = bottom_i - top_i + 1;
+        if n == 0 || n > region_rows {
+            return Ok(Mutation::none());
+        }
+
+        if let Some(store) = store.as_mut() {
+            for row in 0..n {
+                let row_index = bottom_i + 1 - n + row;
+                let row_start = row_index * cols;
+                for cell in &self.cells[row_start..row_start + cols] {
+                    Self::release_cell(*cell, store);
+                }
+            }
+        }
+
+        let keep = region_rows - n;
+        if keep > 0 {
+            let src = top_i * cols;
+            let len = keep * cols;
+            let dst = (top_i + n) * cols;
+            self.cells.copy_within(src..src + len, dst);
+            for row in (0..keep).rev() {
+                self.line_ids[top_i + row + n] = self.line_ids[top_i + row];
+            }
+        }
+
+        let blank = Cell::blank(self.pen.bg);
+        for row in 0..n {
+            let row_index = top_i + row;
+            let row_start = row_index * cols;
+            // Top rows are leftovers of the memmove-down source; payloads now
+            // live in the shifted rows, so blank without releasing.
+            self.cells[row_start..row_start + cols].fill(blank);
+            self.line_ids[row_index] = line_ids.allocate()?;
+        }
+        Ok(Mutation::rows(top, bottom))
+    }
+
+    /// After in-row cell shifts, blank orphan lead/continuation halves.
+    fn sanitize_row(&mut self, row: u16, store: &mut GraphemeStore) {
+        let cols = usize::from(self.cols);
+        let start = usize::from(row) * cols;
+        let mut col = 0usize;
+        while col < cols {
+            let cell = self.cells[start + col];
+            match cell.role {
+                CellRole::Lead if cell.width >= 2 => {
+                    if col + 1 >= cols || self.cells[start + col + 1].role != CellRole::Continuation
+                    {
+                        Self::release_cell(cell, store);
+                        self.cells[start + col] = Cell::blank(self.pen.bg);
+                    } else {
+                        col += 1;
+                    }
+                }
+                CellRole::Continuation
+                    if col == 0 || self.cells[start + col - 1].role != CellRole::Lead =>
+                {
+                    self.cells[start + col] = Cell::blank(self.pen.bg);
+                }
+                _ => {}
+            }
+            col += 1;
+        }
     }
 
     fn index(&self, col: u16, row: u16) -> usize {

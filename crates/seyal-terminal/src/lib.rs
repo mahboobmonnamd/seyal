@@ -15,6 +15,7 @@ mod grapheme_store;
 mod line;
 mod modes;
 mod parser;
+mod presentation;
 mod protocol_reply;
 mod screen;
 mod style;
@@ -34,6 +35,10 @@ pub use error::TerminalError;
 pub use grapheme_store::{MAX_ACTIVE_GRAPHEME_BYTES, MAX_LIVE_VARIABLE_BYTES};
 pub use line::LineId;
 pub use modes::ModeState;
+pub use presentation::{
+    HostPresentationEvent, PresentationPayload, MAX_HOST_PRESENTATION_EVENTS,
+    MAX_PRESENTATION_PAYLOAD_BYTES,
+};
 pub use protocol_reply::{ProtocolReply, MAX_PROTOCOL_REPLIES, MAX_PROTOCOL_REPLY_BYTES};
 pub use style::Style;
 pub use terminal::{

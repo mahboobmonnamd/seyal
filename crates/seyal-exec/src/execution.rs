@@ -1,8 +1,8 @@
 use std::{collections::VecDeque, time::Duration};
 
 use seyal_terminal::{
-    LineId, PreparedResize, ProtocolReply, ShellIntegrationEvent, TerminalState,
-    MAX_PROTOCOL_REPLIES,
+    HostPresentationEvent, LineId, PreparedResize, ProtocolReply, ShellIntegrationEvent,
+    TerminalState, MAX_PROTOCOL_REPLIES,
 };
 
 use crate::{
@@ -59,6 +59,11 @@ impl TerminalExecution {
     /// canonical VT parser. No terminal cells or parser state leave here.
     pub fn take_shell_integration_event(&mut self) -> Option<ShellIntegrationEvent> {
         self.terminal.take_shell_integration_event()
+    }
+
+    /// Transfers one bounded, untrusted host-presentation event (OSC title/CWD/hyperlink).
+    pub fn take_host_presentation_event(&mut self) -> Option<HostPresentationEvent> {
+        self.terminal.take_host_presentation_event()
     }
 
     /// Transfers one complete terminal-generated protocol reply for PTY write.

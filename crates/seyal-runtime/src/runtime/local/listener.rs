@@ -93,6 +93,17 @@ impl Runtime {
         };
         self.handle_local_server_events(events);
         if self.local_connection_exists(connection_token) {
+            let close_after_flush = self.local_ipc.as_ref().is_some_and(|state| {
+                state
+                    .connections
+                    .get(&connection_token)
+                    .is_some_and(|meta| meta.close_after_flush)
+                    && !state.server.wants_write(connection_token)
+            });
+            if close_after_flush {
+                self.close_local_connection(connection_token);
+                return Ok(());
+            }
             self.sync_local_writable(connection_token);
         }
         Ok(())
@@ -149,6 +160,7 @@ impl Runtime {
                                         last_resize_request_id: 0,
                                         client_capabilities: 0,
                                         last_terminal_key_action_id: 0,
+                                        close_after_flush: false,
                                     },
                                 );
                                 state.reactor_connections.insert(reactor_token, token);
@@ -179,7 +191,17 @@ impl Runtime {
                     token,
                     message_type,
                     payload,
-                } => self.dispatch_local_ipc_frame(token, message_type, &payload),
+                } => {
+                    let closing = self.local_ipc.as_ref().is_some_and(|state| {
+                        state
+                            .connections
+                            .get(&token)
+                            .is_some_and(|meta| meta.close_after_flush)
+                    });
+                    if !closing {
+                        self.dispatch_local_ipc_frame(token, message_type, &payload);
+                    }
+                }
             }
         }
     }

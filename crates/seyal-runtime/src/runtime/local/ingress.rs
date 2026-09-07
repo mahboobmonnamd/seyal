@@ -247,6 +247,58 @@ fn encode_terminal_key_v2(key: TerminalKeyV2, modes: ModeState) -> Result<Vec<u8
         }
         return Ok(csi_u(code, modifiers, event));
     }
+    if flags & 2 != 0 && key.event != TerminalKeyV2Event::Press {
+        let encoded = match key.kind {
+            TerminalKeyV2Kind::ArrowUp => Some(csi_mod_event(1, b'A', modifiers, Some(key.event))),
+            TerminalKeyV2Kind::ArrowDown => {
+                Some(csi_mod_event(1, b'B', modifiers, Some(key.event)))
+            }
+            TerminalKeyV2Kind::ArrowRight => {
+                Some(csi_mod_event(1, b'C', modifiers, Some(key.event)))
+            }
+            TerminalKeyV2Kind::ArrowLeft => {
+                Some(csi_mod_event(1, b'D', modifiers, Some(key.event)))
+            }
+            TerminalKeyV2Kind::Home => Some(csi_mod_event(1, b'H', modifiers, Some(key.event))),
+            TerminalKeyV2Kind::End => Some(csi_mod_event(1, b'F', modifiers, Some(key.event))),
+            TerminalKeyV2Kind::Insert => Some(csi_mod_event(2, b'~', modifiers, Some(key.event))),
+            TerminalKeyV2Kind::Delete => Some(csi_mod_event(3, b'~', modifiers, Some(key.event))),
+            TerminalKeyV2Kind::PageUp => Some(csi_mod_event(5, b'~', modifiers, Some(key.event))),
+            TerminalKeyV2Kind::PageDown => Some(csi_mod_event(6, b'~', modifiers, Some(key.event))),
+            TerminalKeyV2Kind::Function => Some(if key.value <= 4 && key.value != 3 {
+                csi_mod_event(1, b'P' + key.value as u8 - 1, modifiers, Some(key.event))
+            } else if key.value == 3 {
+                csi_mod_event(13, b'~', modifiers, Some(key.event))
+            } else {
+                csi_mod_event(
+                    match key.value {
+                        5 => 15,
+                        6 => 17,
+                        7 => 18,
+                        8 => 19,
+                        9 => 20,
+                        10 => 21,
+                        11 => 23,
+                        _ => 24,
+                    },
+                    b'~',
+                    modifiers,
+                    Some(key.event),
+                )
+            }),
+            _ => None,
+        };
+        if let Some(encoded) = encoded {
+            return Ok(encoded);
+        }
+    }
+    if flags & 2 != 0
+        && modes.application_keypad
+        && key.kind == TerminalKeyV2Kind::Keypad
+        && key.event != TerminalKeyV2Event::Press
+    {
+        return Ok(csi_u(57399 + key.value, modifiers, Some(key.event)));
+    }
     if key.event == TerminalKeyV2Event::Release {
         return Ok(Vec::new());
     }
@@ -293,7 +345,11 @@ fn encode_terminal_key_v2(key: TerminalKeyV2, modes: ModeState) -> Result<Vec<u8
             if modifiers & 4 != 0 {
                 vec![control_byte(key.value).ok_or(())?]
             } else if modifiers & 2 != 0 {
-                vec![key.shifted_ascii.max(key.value) as u8]
+                vec![if modifiers & 1 != 0 {
+                    key.shifted_ascii as u8
+                } else {
+                    key.value as u8
+                }]
             } else {
                 return Err(());
             }
@@ -368,6 +424,20 @@ fn encode_terminal_key_v2(key: TerminalKeyV2, modes: ModeState) -> Result<Vec<u8
 }
 
 impl Runtime {
+    fn fatal_terminal_key_v2(&mut self, token: u64) {
+        self.send_error(
+            token,
+            ErrorCode::MalformedPayload,
+            MessageType::TerminalKeyV2 as u16,
+        );
+        if let Some(state) = self.local_ipc.as_mut()
+            && let Some(meta) = state.connections.get_mut(&token)
+        {
+            meta.close_after_flush = true;
+        }
+        let _ = self.sync_local_writable(token);
+    }
+
     pub(super) fn handle_input(&mut self, token: u64, payload: &[u8]) {
         let Ok(input) = framing::InputRef::decode(payload) else {
             self.send_error(
@@ -475,11 +545,7 @@ impl Runtime {
 
     pub(super) fn handle_terminal_key_v2(&mut self, token: u64, payload: &[u8]) {
         let Ok(key) = TerminalKeyV2::decode(payload) else {
-            self.send_error(
-                token,
-                ErrorCode::MalformedPayload,
-                MessageType::TerminalKeyV2 as u16,
-            );
+            self.fatal_terminal_key_v2(token);
             return;
         };
         let supports = self
@@ -488,12 +554,22 @@ impl Runtime {
             .and_then(|state| state.connections.get(&token))
             .is_some_and(|meta| meta.client_capabilities & CAP_EXTENDED_TERMINAL_KEY != 0);
         if !supports {
-            self.send_error(
-                token,
-                ErrorCode::PermissionDenied,
-                MessageType::TerminalKeyV2 as u16,
-            );
+            self.fatal_terminal_key_v2(token);
             return;
+        }
+        let monotonic = self
+            .local_ipc
+            .as_ref()
+            .and_then(|state| state.connections.get(&token))
+            .is_some_and(|meta| key.action_id > meta.last_terminal_key_action_id);
+        if !monotonic {
+            self.fatal_terminal_key_v2(token);
+            return;
+        }
+        if let Some(state) = self.local_ipc.as_mut()
+            && let Some(meta) = state.connections.get_mut(&token)
+        {
+            meta.last_terminal_key_action_id = key.action_id;
         }
         let execution_id = match self.local_ipc.as_ref().map(|state| {
             state
@@ -502,75 +578,63 @@ impl Runtime {
         }) {
             Some(Ok(id)) => id,
             Some(Err(AttachmentError::PermissionDenied)) => {
-                self.send_error(
+                self.send_error_detail(
                     token,
                     ErrorCode::PermissionDenied,
                     MessageType::TerminalKeyV2 as u16,
+                    key.action_id,
                 );
                 return;
             }
             _ => {
-                self.send_error(
+                self.send_error_detail(
                     token,
                     ErrorCode::StaleIdentity,
                     MessageType::TerminalKeyV2 as u16,
+                    key.action_id,
                 );
                 return;
             }
         };
-        let monotonic = self
-            .local_ipc
-            .as_ref()
-            .and_then(|state| state.connections.get(&token))
-            .is_some_and(|meta| key.action_id > meta.last_terminal_key_action_id);
-        if !monotonic {
-            self.send_error(
-                token,
-                ErrorCode::MalformedPayload,
-                MessageType::TerminalKeyV2 as u16,
-            );
-            return;
-        }
         let Some(modes) = self
             .entries
             .get(&execution_id)
             .map(|entry| entry.execution.terminal().modes())
         else {
-            self.send_error(
+            self.send_error_detail(
                 token,
                 ErrorCode::InvalidExecution,
                 MessageType::TerminalKeyV2 as u16,
+                key.action_id,
             );
             return;
         };
         let Ok(bytes) = encode_terminal_key_v2(key, modes) else {
-            self.send_error(
+            self.send_error_detail(
                 token,
                 ErrorCode::MalformedPayload,
                 MessageType::TerminalKeyV2 as u16,
+                key.action_id,
             );
             return;
         };
-        if let Some(state) = self.local_ipc.as_mut()
-            && let Some(meta) = state.connections.get_mut(&token)
-        {
-            meta.last_terminal_key_action_id = key.action_id;
-        }
         if !bytes.is_empty() {
             match self.input_ingress(execution_id) {
                 Ok(ingress) => {
                     if ingress.try_submit(bytes).is_err() {
-                        self.send_error(
+                        self.send_error_detail(
                             token,
                             ErrorCode::Backpressure,
                             MessageType::TerminalKeyV2 as u16,
+                            key.action_id,
                         );
                     }
                 }
-                Err(_) => self.send_error(
+                Err(_) => self.send_error_detail(
                     token,
                     ErrorCode::InvalidExecution,
                     MessageType::TerminalKeyV2 as u16,
+                    key.action_id,
                 ),
             }
         }
@@ -783,5 +847,98 @@ mod tests {
             ..key
         };
         assert!(encode_terminal_key_v2(unsupported, ModeState::default()).is_err());
+    }
+
+    #[test]
+    fn kitty_event_types_cover_application_keypad_with_flag_two_alone() {
+        let key = TerminalKeyV2 {
+            attachment_id: crate::AttachmentId::from_bytes([0; 16]),
+            kind: TerminalKeyV2Kind::Keypad,
+            modifiers: TerminalKeyV2Modifiers::NONE,
+            value: 1,
+            event: TerminalKeyV2Event::Repeat,
+            shifted_ascii: 0,
+            action_id: 1,
+        };
+        let modes = ModeState {
+            application_keypad: true,
+            keyboard_flags: 2,
+            ..ModeState::default()
+        };
+        assert_eq!(
+            encode_terminal_key_v2(key, modes).unwrap(),
+            b"\x1b[57400;1:2u"
+        );
+        assert_eq!(
+            encode_terminal_key_v2(
+                TerminalKeyV2 {
+                    event: TerminalKeyV2Event::Release,
+                    ..key
+                },
+                modes
+            )
+            .unwrap(),
+            b"\x1b[57400;1:3u"
+        );
+    }
+
+    #[test]
+    fn kitty_event_types_cover_navigation_and_function_with_flag_two_alone() {
+        let key = TerminalKeyV2 {
+            attachment_id: crate::AttachmentId::from_bytes([0; 16]),
+            kind: TerminalKeyV2Kind::ArrowUp,
+            modifiers: TerminalKeyV2Modifiers::NONE,
+            value: 0,
+            event: TerminalKeyV2Event::Repeat,
+            shifted_ascii: 0,
+            action_id: 1,
+        };
+        let modes = ModeState {
+            application_cursor: true,
+            keyboard_flags: 2,
+            ..ModeState::default()
+        };
+        assert_eq!(encode_terminal_key_v2(key, modes).unwrap(), b"\x1b[1;1:2A");
+        assert_eq!(
+            encode_terminal_key_v2(
+                TerminalKeyV2 {
+                    event: TerminalKeyV2Event::Release,
+                    ..key
+                },
+                modes
+            )
+            .unwrap(),
+            b"\x1b[1;1:3A"
+        );
+        let function = TerminalKeyV2 {
+            kind: TerminalKeyV2Kind::Function,
+            value: 5,
+            ..key
+        };
+        assert_eq!(
+            encode_terminal_key_v2(function, modes).unwrap(),
+            b"\x1b[15;1:2~"
+        );
+    }
+
+    #[test]
+    fn legacy_alt_shift_ascii_uses_the_layout_derived_shifted_scalar() {
+        let key = TerminalKeyV2 {
+            attachment_id: crate::AttachmentId::from_bytes([0; 16]),
+            kind: TerminalKeyV2Kind::Ascii,
+            modifiers: TerminalKeyV2Modifiers::SHIFT,
+            value: b'z' as u32,
+            event: TerminalKeyV2Event::Press,
+            shifted_ascii: b'@' as u32,
+            action_id: 1,
+        };
+        let key = TerminalKeyV2 {
+            modifiers: TerminalKeyV2Modifiers::ALT_SHIFT,
+            ..key
+        };
+        assert_eq!(
+            encode_terminal_key_v2(key, ModeState::default()).unwrap(),
+            b"\x1b@"
+        );
     }
 }

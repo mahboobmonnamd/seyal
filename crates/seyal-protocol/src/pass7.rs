@@ -1071,6 +1071,7 @@ impl TerminalKeyV2Modifiers {
     pub const SHIFT: Self = Self(1 << 0);
     pub const ALT: Self = Self(1 << 1);
     pub const CONTROL: Self = Self(1 << 2);
+    pub const ALT_SHIFT: Self = Self((1 << 0) | (1 << 1));
     pub const ALT_CONTROL: Self = Self((1 << 1) | (1 << 2));
 
     pub const fn bits(self) -> u16 {

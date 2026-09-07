@@ -13,10 +13,12 @@ use seyal_exec::{CommandSpec, WindowSize};
 use seyal_runtime::{
     display::{decode_chunk, empty_cache, DecodedDisplayChunk, DisplayCache},
     local_ipc::framing::{
-        encode_frame, Attach, Attached, ClientHello, FrameHeader, HistoryRangeRequest,
-        HistoryRangeSnapshot, HistoryRangeStatus, InputRef, MessageType, ResizeRequest,
-        ResizeResult, ResizeResultCode, Role, ServerHello, TerminalKey, TerminalKeyKind,
-        TerminalKeyModifiers, CAP_CORRELATED_RESIZE, CAP_SEMANTIC_TERMINAL_KEY, HEADER_LEN,
+        encode_frame, Attach, Attached, ClientHello, ErrorMessage, FrameHeader,
+        HistoryRangeRequest, HistoryRangeSnapshot, HistoryRangeStatus, InputRef, MessageType,
+        ResizeRequest, ResizeResult, ResizeResultCode, Role, ServerHello, TerminalKey,
+        TerminalKeyKind, TerminalKeyModifiers, TerminalKeyV2, TerminalKeyV2Event,
+        TerminalKeyV2Kind, TerminalKeyV2Modifiers, CAP_CORRELATED_RESIZE,
+        CAP_EXTENDED_TERMINAL_KEY, CAP_SEMANTIC_TERMINAL_KEY, HEADER_LEN,
     },
     AttachmentId, LocalIpcMode, Runtime, RuntimeConfig,
 };
@@ -154,10 +156,14 @@ impl Harness {
     }
 
     fn hello(&mut self) -> ServerHello {
+        self.hello_with_capabilities(0)
+    }
+
+    fn hello_with_capabilities(&mut self, client_capabilities: u32) -> ServerHello {
         self.send(
             MessageType::ClientHello,
             &ClientHello {
-                client_capabilities: 0,
+                client_capabilities,
             }
             .encode(),
         );
@@ -219,6 +225,24 @@ impl Harness {
         }
         cache.apply_chunks(&chunks).unwrap();
     }
+
+    fn wait_for_close(&mut self) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut buf = [0u8; 1024];
+        loop {
+            self.pump();
+            match self.stream.read(&mut buf) {
+                Ok(0) => return,
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(error) => panic!("read after fatal protocol error: {error}"),
+            }
+            assert!(
+                Instant::now() < deadline,
+                "fatal V2 connection remained open"
+            );
+        }
+    }
 }
 
 #[test]
@@ -227,6 +251,7 @@ fn server_advertises_both_pass7_capabilities() {
     let hello = harness.hello();
     assert_ne!(hello.server_capabilities & CAP_SEMANTIC_TERMINAL_KEY, 0);
     assert_ne!(hello.server_capabilities & CAP_CORRELATED_RESIZE, 0);
+    assert_ne!(hello.server_capabilities & CAP_EXTENDED_TERMINAL_KEY, 0);
 }
 
 #[test]
@@ -258,6 +283,61 @@ fn controller_terminal_key_is_encoded_by_runtime_and_reaches_pty() {
         assert!(Instant::now() < deadline, "semantic key bytes not observed");
         harness.next_display(&mut cache);
     }
+}
+
+#[test]
+fn malformed_v2_key_closes_connection_after_bounded_error() {
+    let (mut harness, execution_id) = Harness::new(CommandSpec::new("/bin/cat"));
+    harness.hello_with_capabilities(CAP_EXTENDED_TERMINAL_KEY);
+    let (attached, _cache) = harness.attach(execution_id, Role::Controller);
+    let mut malformed = vec![0u8; TerminalKeyV2::WIRE_LEN - 1];
+    malformed[..16].copy_from_slice(&attached.attachment_id.to_bytes());
+    harness.send(MessageType::TerminalKeyV2, &malformed);
+    harness.wait_for_close();
+}
+
+#[test]
+fn unnegotiated_v2_key_closes_connection_after_bounded_error() {
+    let (mut harness, execution_id) = Harness::new(CommandSpec::new("/bin/cat"));
+    harness.hello();
+    let (attached, _cache) = harness.attach(execution_id, Role::Controller);
+    let key = TerminalKeyV2 {
+        attachment_id: attached.attachment_id,
+        kind: TerminalKeyV2Kind::ArrowUp,
+        modifiers: TerminalKeyV2Modifiers::NONE,
+        value: 0,
+        event: TerminalKeyV2Event::Press,
+        shifted_ascii: 0,
+        action_id: 1,
+    };
+    harness.send(MessageType::TerminalKeyV2, &key.encode());
+    harness.wait_for_close();
+}
+
+#[test]
+fn v2_rejection_echoes_action_id_and_duplicate_id_is_fatal() {
+    let (mut harness, execution_id) = Harness::new(CommandSpec::new("/bin/cat"));
+    harness.hello_with_capabilities(CAP_EXTENDED_TERMINAL_KEY);
+    let (attached, _cache) = harness.attach(execution_id, Role::Controller);
+    let rejected = TerminalKeyV2 {
+        attachment_id: attached.attachment_id,
+        kind: TerminalKeyV2Kind::Keypad,
+        modifiers: TerminalKeyV2Modifiers::SHIFT,
+        value: 1,
+        event: TerminalKeyV2Event::Press,
+        shifted_ascii: 0,
+        action_id: 1,
+    };
+    harness.send(MessageType::TerminalKeyV2, &rejected.encode());
+    let (kind, payload) = harness.frame();
+    assert_eq!(kind, MessageType::Error as u16);
+    let error = ErrorMessage::decode(&payload).unwrap();
+    assert_eq!(error.detail_code, rejected.action_id);
+
+    // A reused action ID is a fatal protocol violation after the ordinary
+    // rejection above, proving both correlation and monotonic admission.
+    harness.send(MessageType::TerminalKeyV2, &rejected.encode());
+    harness.wait_for_close();
 }
 
 #[test]

@@ -30,8 +30,19 @@ pub struct RenderAttributes {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum RenderCellRole {
+    Empty = 0,
+    Lead = 1,
+    Continuation = 2,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RenderCell {
     pub scalar: char,
+    pub role: RenderCellRole,
+    pub width: u8,
+    pub text: std::sync::Arc<[u8]>,
     pub foreground: RenderColor,
     pub background: RenderColor,
     pub attributes: RenderAttributes,
@@ -41,12 +52,20 @@ impl Default for RenderCell {
     fn default() -> Self {
         Self {
             scalar: ' ',
+            role: RenderCellRole::Empty,
+            width: 0,
+            text: std::sync::Arc::from([]),
             foreground: RenderColor::Default,
             background: RenderColor::Default,
             attributes: RenderAttributes::default(),
         }
     }
 }
+
+pub const PREPARED_ROLE_EMPTY: u16 = 0;
+pub const PREPARED_ROLE_LEAD: u16 = 1;
+pub const PREPARED_ROLE_CONTINUATION: u16 = 2;
+pub const PREPARED_FLAG_HAS_GRAPHEME: u16 = 1 << 4;
 
 /// Read-only cell source used by the preparation engine.
 ///
@@ -69,7 +88,7 @@ impl CellSource for [RenderCell] {
     }
 
     fn cell(&self, index: usize) -> Option<RenderCell> {
-        self.get(index).copied()
+        self.get(index).cloned()
     }
 }
 
@@ -260,6 +279,7 @@ pub struct PreparedSurface {
     cursor: CursorState,
     alternate_screen: bool,
     prepared_cells: Vec<PreparedCell>,
+    grapheme_bytes: Vec<u8>,
 }
 
 impl PreparedSurface {
@@ -285,6 +305,10 @@ impl PreparedSurface {
 
     pub fn prepared_cells(&self) -> &[PreparedCell] {
         &self.prepared_cells
+    }
+
+    pub fn grapheme_bytes(&self) -> &[u8] {
+        &self.grapheme_bytes
     }
 
     pub fn prepared_row(&self, row: u16) -> Option<&[PreparedCell]> {
@@ -351,6 +375,26 @@ impl PreparedSurface {
                 .ok_or(PrepareError::Overflow)?;
         }
 
+        // Rebuild the full grapheme sidecar in physical-cell order so partial
+        // damage cannot leave stale/duplicated UTF-8 payloads.
+        self.grapheme_bytes.clear();
+        for index in 0..display.cells.len() {
+            let cell = display
+                .cells
+                .cell(index)
+                .ok_or(PrepareError::InvalidCellCount)?;
+            if cell.role == RenderCellRole::Lead
+                && !cell.text.is_empty()
+                && std::str::from_utf8(&cell.text)
+                    .ok()
+                    .is_some_and(|s| s.chars().count() > 1)
+            {
+                let len = u16::try_from(cell.text.len()).unwrap_or(u16::MAX);
+                self.grapheme_bytes.extend_from_slice(&len.to_le_bytes());
+                self.grapheme_bytes.extend_from_slice(&cell.text);
+            }
+        }
+
         self.generation = Some(display.generation);
         self.rows = display.rows;
         self.columns = display.columns;
@@ -397,12 +441,32 @@ impl PreparedSurface {
             if cell.attributes.underline {
                 flags |= PREPARED_FLAG_UNDERLINE;
             }
+            let role = match cell.role {
+                RenderCellRole::Empty => PREPARED_ROLE_EMPTY,
+                RenderCellRole::Lead => PREPARED_ROLE_LEAD,
+                RenderCellRole::Continuation => PREPARED_ROLE_CONTINUATION,
+            };
+            let width = cell.width.min(2) as u16;
+            let mut reserved = role | (width << 2);
+            let scalar = if cell.role == RenderCellRole::Continuation {
+                0
+            } else {
+                cell.scalar as u32
+            };
+            if cell.role == RenderCellRole::Lead
+                && !cell.text.is_empty()
+                && std::str::from_utf8(&cell.text)
+                    .ok()
+                    .is_some_and(|s| s.chars().count() > 1)
+            {
+                reserved |= PREPARED_FLAG_HAS_GRAPHEME;
+            }
             self.prepared_cells[first + offset] = PreparedCell {
-                scalar: cell.scalar as u32,
+                scalar,
                 foreground: pack_color(foreground),
                 background: pack_color(background),
                 flags,
-                reserved: 0,
+                reserved,
             };
         }
         Ok(columns)
@@ -426,6 +490,13 @@ mod tests {
     fn cell(scalar: char) -> RenderCell {
         RenderCell {
             scalar,
+            role: RenderCellRole::Lead,
+            width: 1,
+            text: {
+                let mut buf = [0u8; 4];
+                let encoded = scalar.encode_utf8(&mut buf);
+                std::sync::Arc::from(encoded.as_bytes().to_vec())
+            },
             ..RenderCell::default()
         }
     }
@@ -603,6 +674,9 @@ mod tests {
     fn inverse_is_resolved_without_baking_color_into_glyph_identity() {
         let cells = vec![RenderCell {
             scalar: 'Z',
+            role: RenderCellRole::Lead,
+            width: 1,
+            text: std::sync::Arc::from(b"Z".as_slice()),
             foreground: RenderColor::Indexed(1),
             background: RenderColor::Rgb { r: 2, g: 3, b: 4 },
             attributes: RenderAttributes {

@@ -27,6 +27,8 @@ pub const CAP_OBSERVER: u32 = 1 << 1;
 /// The peer can submit trusted composer commands and receive bounded command
 /// Block metadata. This capability never changes raw terminal input semantics.
 pub const CAP_COMMAND_BLOCKS: u32 = 1 << 4;
+/// Peer accepts Candidate-D grapheme display v2 (types 27/28, schema 2).
+pub const CAP_GRAPHEME_DISPLAY: u32 = 1 << 6;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u16)]
@@ -569,6 +571,8 @@ pub enum MessageType {
     ComposerStatus = 23,
     HistoryRangeRequest = 24,
     HistoryRangeSnapshot = 25,
+    DisplaySnapshotV2 = 27,
+    DisplayDeltaV2 = 28,
 }
 impl MessageType {
     pub fn from_u16(value: u16) -> Option<Self> {
@@ -598,6 +602,8 @@ impl MessageType {
             23 => Self::ComposerStatus,
             24 => Self::HistoryRangeRequest,
             25 => Self::HistoryRangeSnapshot,
+            27 => Self::DisplaySnapshotV2,
+            28 => Self::DisplayDeltaV2,
             _ => return None,
         })
     }
@@ -618,6 +624,8 @@ pub enum Message<'a> {
     Resync(Resync),
     DisplaySnapshot(&'a [u8]),
     DisplayDelta(&'a [u8]),
+    DisplaySnapshotV2(&'a [u8]),
+    DisplayDeltaV2(&'a [u8]),
     Lifecycle(LifecycleMessage),
     Error(ErrorMessage),
     Goodbye,
@@ -660,6 +668,8 @@ pub fn decode_message<'a>(
         MessageType::Resync => Message::Resync(Resync::decode(payload)?),
         MessageType::DisplaySnapshot => Message::DisplaySnapshot(payload),
         MessageType::DisplayDelta => Message::DisplayDelta(payload),
+        MessageType::DisplaySnapshotV2 => Message::DisplaySnapshotV2(payload),
+        MessageType::DisplayDeltaV2 => Message::DisplayDeltaV2(payload),
         MessageType::Lifecycle => Message::Lifecycle(LifecycleMessage::decode(payload)?),
         MessageType::Error => Message::Error(ErrorMessage::decode(payload)?),
         MessageType::Goodbye => {
@@ -757,6 +767,11 @@ mod tests {
             Some(MessageType::DisplaySnapshot)
         );
         assert_eq!(MessageType::from_u16(13), Some(MessageType::DisplayDelta));
+        assert_eq!(
+            MessageType::from_u16(27),
+            Some(MessageType::DisplaySnapshotV2)
+        );
+        assert_eq!(MessageType::from_u16(28), Some(MessageType::DisplayDeltaV2));
     }
 
     #[test]

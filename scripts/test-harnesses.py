@@ -163,6 +163,7 @@ def validate_fuzz_registry() -> None:
         "shared-projection-validation",
         "reconnect-resync-state-machine",
         "display-binary-decode",
+        "display-v2-decode",
         "display-state-machine",
         "pass7-protocol-decode",
         "block-state-decode",

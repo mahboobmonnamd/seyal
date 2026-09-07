@@ -22,6 +22,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "display_v2_decode"
+path = "fuzz_targets/display_v2_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "display_state_machine"
 path = "fuzz_targets/display_state_machine.rs"
 test = false

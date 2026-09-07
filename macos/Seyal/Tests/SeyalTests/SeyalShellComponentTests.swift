@@ -586,8 +586,8 @@ final class SeyalShellComponentTests: XCTestCase {
   }
 
   func testPreparedFrameAndHistoryRowCABIsMatchRust() {
-    XCTAssertEqual(MemoryLayout<SeyalPreparedFrame>.size, 72)
-    XCTAssertEqual(MemoryLayout<SeyalPreparedFrame>.stride, 72)
+    XCTAssertEqual(MemoryLayout<SeyalPreparedFrame>.size, 88)
+    XCTAssertEqual(MemoryLayout<SeyalPreparedFrame>.stride, 88)
     XCTAssertEqual(MemoryLayout<SeyalPreparedFrame>.alignment, 8)
     XCTAssertEqual(MemoryLayout.offset(of: \SeyalPreparedFrame.cells), 0)
     XCTAssertEqual(MemoryLayout.offset(of: \SeyalPreparedFrame.cell_count), 8)

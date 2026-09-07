@@ -768,20 +768,12 @@ mod tests {
     use super::*;
     use crate::display::{encode_delta, encode_snapshot};
     use seyal_exec::{
-        ProjectionAttributes, ProjectionCell, ProjectionColor, ProjectionDamage,
+        ProjectionAttributes, ProjectionCell, ProjectionDamage,
         TerminalProjectionSnapshot, TerminalProjectionUpdate,
     };
 
     fn sample_cells(count: usize) -> Vec<ProjectionCell> {
-        vec![
-            ProjectionCell {
-                scalar: 'x',
-                foreground: ProjectionColor::Default,
-                background: ProjectionColor::Default,
-                attributes: ProjectionAttributes::default(),
-            };
-            count
-        ]
+        vec![ProjectionCell::lead_scalar('x', ProjectionAttributes::default()); count]
     }
 
     fn snapshot(generation: u64) -> TerminalProjectionSnapshot {

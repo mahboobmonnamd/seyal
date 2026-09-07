@@ -47,6 +47,9 @@ typedef struct SeyalPreparedFrame {
     uint64_t damage_word1;
     uint64_t damage_word2;
     uint64_t damage_word3;
+    const uint8_t *grapheme_utf8;
+    uint32_t grapheme_utf8_len;
+    uint32_t reserved2;
 } SeyalPreparedFrame;
 
 typedef struct SeyalExecutionBlockMetadata {

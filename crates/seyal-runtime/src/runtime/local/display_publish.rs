@@ -3,7 +3,7 @@ use crate::{
     local_ipc::{
         connection::ConnectionState as LocalIpcConnState,
         connection::DeltaEnqueueResult,
-        framing::{self, ErrorCode, MessageType},
+        framing::{self, ErrorCode, MessageType, CAP_GRAPHEME_DISPLAY},
     },
     ExecutionId,
 };
@@ -113,41 +113,37 @@ impl Runtime {
     }
 
     /// Admit one authoritative final display snapshot for every attached client.
-    ///
-    /// Finalization cannot rely on asynchronous resync recovery: that queue is
-    /// deliberately budgeted per poll and is retired with the execution. This
-    /// bounded snapshot admission makes the established final-display ordering
-    /// explicit even when no new projection update exists in the final turn.
-    /// It never waits for a client read or acknowledgement; the existing
-    /// replaceable display slot and after-display queue preserve ordering.
     pub(in crate::runtime) fn publish_final_display_snapshot(&mut self, execution_id: ExecutionId) {
-        let viewers = self.local_ipc.as_ref().map_or_else(Vec::new, |state| {
-            state
-                .attachments
-                .attachments_with_connections_for_execution(execution_id)
-        });
+        let viewers = self.viewer_caps(execution_id);
         if viewers.is_empty() {
             return;
         }
 
-        let batch = self
+        let Some(snapshot) = self
             .entries
             .get(&execution_id)
             .map(|entry| entry.execution.projection_snapshot())
-            .and_then(|snapshot| display::encode_snapshot(&snapshot).ok());
-        match batch {
-            Some(batch) => {
-                for (_, token) in viewers {
-                    let _ = self.send_snapshot_batch(token, batch.clone());
-                }
+        else {
+            for (token, _) in viewers {
+                self.close_local_connection(token);
             }
-            None => {
-                // A client must never receive Finalized behind stale display.
-                // If final display cannot be produced, fail that connection
-                // closed while Runtime execution cleanup continues normally.
-                for (_, token) in viewers {
-                    self.close_local_connection(token);
+            return;
+        };
+
+        let v2 = display::encode_snapshot_v2(&snapshot).ok();
+        let v1 = if snapshot.is_scalar_lossless() {
+            display::encode_snapshot(&snapshot).ok()
+        } else {
+            None
+        };
+
+        for (token, grapheme) in viewers {
+            let batch = if grapheme { v2.clone() } else { v1.clone() };
+            match batch {
+                Some(batch) => {
+                    let _ = self.send_snapshot_batch(token, batch);
                 }
+                None => self.close_local_connection(token),
             }
         }
     }
@@ -178,74 +174,20 @@ impl Runtime {
             if previous.is_some_and(|value| update.source_damage_generation <= value.generation) {
                 continue;
             }
-            let viewers = self.local_ipc.as_ref().map_or_else(Vec::new, |state| {
-                state
-                    .attachments
-                    .attachments_with_connections_for_execution(execution_id)
-            });
+            let viewers = self.viewer_caps(execution_id);
             if viewers.is_empty() {
                 continue;
             }
 
-            // `published` tracks the last generation successfully encoded for
-            // fanout. Advancing it after DisplayUnavailable would make later
-            // deltas use a base no viewer received (multi-viewer split-brain).
             let use_snapshot = match previous {
                 None => true,
                 Some(value) => value.rows != update.rows || value.columns != update.columns,
             };
+
             let encode_ok = if use_snapshot {
-                match self.encode_projection_snapshot(execution_id) {
-                    Some(batch) => {
-                        for (_, token) in &viewers {
-                            let _ = self.send_snapshot_batch(*token, batch.clone());
-                        }
-                        true
-                    }
-                    None => {
-                        for (_, token) in viewers {
-                            self.send_error(
-                                token,
-                                ErrorCode::DisplayUnavailable,
-                                MessageType::DisplaySnapshot as u16,
-                            );
-                            self.schedule_snapshot_recovery(token);
-                        }
-                        false
-                    }
-                }
+                self.fanout_snapshot(execution_id, &viewers)
             } else if let Some(previous) = previous {
-                let base_generation = previous.generation;
-                match self.encode_projection_delta(&update, base_generation) {
-                    Ok(delta) => {
-                        for (_, token) in viewers {
-                            let result = self.local_ipc.as_mut().and_then(|state| {
-                                state.server.try_enqueue_delta(token, delta.clone()).ok()
-                            });
-                            match result {
-                                Some(DeltaEnqueueResult::Queued | DeltaEnqueueResult::Skipped) => {
-                                    self.sync_local_writable(token);
-                                }
-                                Some(DeltaEnqueueResult::NeedSnapshot) => {
-                                    self.schedule_snapshot_recovery(token);
-                                }
-                                None => self.close_local_connection(token),
-                            }
-                        }
-                        true
-                    }
-                    Err(_) => {
-                        for (_, token) in viewers {
-                            self.send_error(
-                                token,
-                                ErrorCode::DisplayUnavailable,
-                                MessageType::DisplayDelta as u16,
-                            );
-                            self.schedule_snapshot_recovery(token);
-                        }
-                        false
-                    }
-                }
+                self.fanout_delta(&update, previous.generation, &viewers)
             } else {
                 false
             };
@@ -261,12 +203,172 @@ impl Runtime {
                         },
                     );
                 } else {
-                    // Drop stale bookkeeping so the next successful fanout or
-                    // resync snapshot re-establishes an authoritative base.
                     state.published.remove(&execution_id);
                 }
             }
         }
+    }
+
+    fn viewer_caps(&self, execution_id: ExecutionId) -> Vec<(u64, bool)> {
+        self.local_ipc.as_ref().map_or_else(Vec::new, |state| {
+            state
+                .attachments
+                .attachments_with_connections_for_execution(execution_id)
+                .into_iter()
+                .map(|(_, token)| {
+                    let grapheme = state
+                        .connections
+                        .get(&token)
+                        .is_some_and(|meta| meta.client_capabilities & CAP_GRAPHEME_DISPLAY != 0);
+                    (token, grapheme)
+                })
+                .collect()
+        })
+    }
+
+    fn fanout_snapshot(&mut self, execution_id: ExecutionId, viewers: &[(u64, bool)]) -> bool {
+        #[cfg(feature = "test-fault-injection")]
+        if test_fault::take(FaultPoint::DisplayEncode) {
+            for &(token, _) in viewers {
+                self.send_error(
+                    token,
+                    ErrorCode::DisplayUnavailable,
+                    MessageType::DisplaySnapshot as u16,
+                );
+                self.schedule_snapshot_recovery(token);
+            }
+            return false;
+        }
+
+        let Some(snapshot) = self
+            .entries
+            .get(&execution_id)
+            .map(|entry| entry.execution.projection_snapshot())
+        else {
+            for &(token, _) in viewers {
+                self.send_error(
+                    token,
+                    ErrorCode::DisplayUnavailable,
+                    MessageType::DisplaySnapshot as u16,
+                );
+                self.schedule_snapshot_recovery(token);
+            }
+            return false;
+        };
+
+        let need_v2 = viewers.iter().any(|(_, g)| *g);
+        let need_v1 = viewers.iter().any(|(_, g)| !*g);
+        let v2 = if need_v2 {
+            display::encode_snapshot_v2(&snapshot).ok()
+        } else {
+            None
+        };
+        let v1 = if need_v1 {
+            if snapshot.is_scalar_lossless() {
+                display::encode_snapshot(&snapshot).ok()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let mut any_ok = false;
+        for &(token, grapheme) in viewers {
+            let batch = if grapheme { v2.clone() } else { v1.clone() };
+            match batch {
+                Some(batch) => {
+                    let _ = self.send_snapshot_batch(token, batch);
+                    any_ok = true;
+                }
+                None => {
+                    self.send_error(
+                        token,
+                        ErrorCode::DisplayUnavailable,
+                        if grapheme {
+                            MessageType::DisplaySnapshotV2 as u16
+                        } else {
+                            MessageType::DisplaySnapshot as u16
+                        },
+                    );
+                    self.schedule_snapshot_recovery(token);
+                }
+            }
+        }
+        any_ok
+    }
+
+    fn fanout_delta(
+        &mut self,
+        update: &seyal_exec::TerminalProjectionUpdate,
+        base_generation: u64,
+        viewers: &[(u64, bool)],
+    ) -> bool {
+        #[cfg(feature = "test-fault-injection")]
+        if test_fault::take(FaultPoint::DisplayEncode) {
+            for &(token, _) in viewers {
+                self.send_error(
+                    token,
+                    ErrorCode::DisplayUnavailable,
+                    MessageType::DisplayDelta as u16,
+                );
+                self.schedule_snapshot_recovery(token);
+            }
+            return false;
+        }
+
+        let need_v2 = viewers.iter().any(|(_, g)| *g);
+        let need_v1 = viewers.iter().any(|(_, g)| !*g);
+        let v2 = if need_v2 {
+            display::encode_delta_v2(update, base_generation).ok()
+        } else {
+            None
+        };
+        let v1 = if need_v1 {
+            if update.is_scalar_lossless() {
+                display::encode_delta(update, base_generation).ok()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let mut any_ok = false;
+        for &(token, grapheme) in viewers {
+            let batch = if grapheme { v2.clone() } else { v1.clone() };
+            match batch {
+                Some(delta) => {
+                    let result = self
+                        .local_ipc
+                        .as_mut()
+                        .and_then(|state| state.server.try_enqueue_delta(token, delta).ok());
+                    match result {
+                        Some(DeltaEnqueueResult::Queued | DeltaEnqueueResult::Skipped) => {
+                            self.sync_local_writable(token);
+                            any_ok = true;
+                        }
+                        Some(DeltaEnqueueResult::NeedSnapshot) => {
+                            self.schedule_snapshot_recovery(token);
+                        }
+                        None => self.close_local_connection(token),
+                    }
+                }
+                None => {
+                    self.send_error(
+                        token,
+                        ErrorCode::DisplayUnavailable,
+                        if grapheme {
+                            MessageType::DisplayDeltaV2 as u16
+                        } else {
+                            MessageType::DisplayDelta as u16
+                        },
+                    );
+                    self.schedule_snapshot_recovery(token);
+                }
+            }
+        }
+        any_ok
     }
 
     pub(super) fn encode_projection_snapshot(
@@ -280,9 +382,16 @@ impl Runtime {
         self.entries
             .get(&execution_id)
             .map(|entry| entry.execution.projection_snapshot())
-            .and_then(|snapshot| display::encode_snapshot(&snapshot).ok())
+            .and_then(|snapshot| {
+                // Prefer v2 when representable; callers that need legacy should
+                // encode explicitly. Resync paths use capability-aware fanout.
+                display::encode_snapshot_v2(&snapshot)
+                    .ok()
+                    .or_else(|| display::encode_snapshot(&snapshot).ok())
+            })
     }
 
+    #[allow(dead_code)]
     pub(super) fn encode_projection_delta(
         &self,
         update: &seyal_exec::TerminalProjectionUpdate,
@@ -292,6 +401,7 @@ impl Runtime {
         if test_fault::take(FaultPoint::DisplayEncode) {
             return Err(display::DisplayError::InvalidDamage);
         }
-        display::encode_delta(update, base_generation)
+        display::encode_delta_v2(update, base_generation)
+            .or_else(|_| display::encode_delta(update, base_generation))
     }
 }

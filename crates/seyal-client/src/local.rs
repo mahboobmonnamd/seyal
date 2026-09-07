@@ -282,7 +282,10 @@ impl LocalDisplayClient {
                     MessageType::from_u16(header.message_type).ok_or(ClientError::Protocol)?;
 
                 match message_type {
-                    MessageType::DisplaySnapshot | MessageType::DisplayDelta => {
+                    MessageType::DisplaySnapshot
+                    | MessageType::DisplayDelta
+                    | MessageType::DisplaySnapshotV2
+                    | MessageType::DisplayDeltaV2 => {
                         let chunk = decode_chunk(frame).map_err(|_| ClientError::Display)?;
                         if self.accept_display_chunk(chunk, &mut damage, &mut full_invalidation)? {
                             committed_any = true;

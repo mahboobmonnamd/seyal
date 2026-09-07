@@ -131,6 +131,8 @@ struct NativePreparedFrame {
     /// Owned cell copy. Bridge frames are copied at construction so Rust
     /// `PreparedCell` storage never escapes into long-lived Swift state.
     let cells: [SeyalPreparedCell]
+    /// Length-prefixed UTF-8 payloads for multi-scalar lead cells (SPEC-011 §12).
+    let graphemeUtf8: Data
     let generation: UInt64
     let rows: Int
     let columns: Int
@@ -156,6 +158,14 @@ struct NativePreparedFrame {
         }
         // Synchronous consume: copy before any later poll can invalidate Rust.
         cells = Array(UnsafeBufferPointer(start: pointer, count: count))
+        if bridgeFrame.grapheme_utf8_len > 0, let graphemePtr = bridgeFrame.grapheme_utf8 {
+            graphemeUtf8 = Data(
+                bytes: graphemePtr,
+                count: Int(bridgeFrame.grapheme_utf8_len)
+            )
+        } else {
+            graphemeUtf8 = Data()
+        }
         generation = bridgeFrame.generation
         self.rows = rows
         self.columns = columns
@@ -182,9 +192,11 @@ struct NativePreparedFrame {
         cursorVisible: Bool = false,
         alternateScreen: Bool = false,
         fullRebuild: Bool = true,
-        damage: DamageMask = DamageMask()
+        damage: DamageMask = DamageMask(),
+        graphemeUtf8: Data = Data()
     ) {
         self.cells = Array(cells)
+        self.graphemeUtf8 = graphemeUtf8
         self.generation = generation
         self.rows = rows
         self.columns = columns
@@ -206,9 +218,11 @@ struct NativePreparedFrame {
         cursorVisible: Bool = false,
         alternateScreen: Bool = false,
         fullRebuild: Bool = true,
-        damage: DamageMask = DamageMask()
+        damage: DamageMask = DamageMask(),
+        graphemeUtf8: Data = Data()
     ) {
         self.cells = cells
+        self.graphemeUtf8 = graphemeUtf8
         self.generation = generation
         self.rows = rows
         self.columns = columns
@@ -1040,28 +1054,92 @@ final class MetalTerminalRenderer: @unchecked Sendable {
             capacity: instanceCount
         )
         let cellSize = SIMD2<Float>(Float(metrics.cellWidth), Float(metrics.cellHeight))
+        let preparedRoleContinuation: UInt16 = 2
+        let preparedHasGrapheme: UInt16 = 1 << 4
+
+        // Grapheme sidecar is length-prefixed payloads in physical-cell order
+        // for every multi-scalar lead on the surface.
+        var graphemeCursor = 0
+        let graphemeBytes = frame.graphemeUtf8
+        for index in 0..<frame.cells.count {
+            let reserved = frame.cells[index].reserved
+            if reserved & preparedHasGrapheme != 0 {
+                guard graphemeCursor + 2 <= graphemeBytes.count else {
+                    throw MetalTerminalRendererError.invalidFrame
+                }
+                let len = Int(graphemeBytes[graphemeCursor])
+                    | (Int(graphemeBytes[graphemeCursor + 1]) << 8)
+                graphemeCursor += 2
+                guard graphemeCursor + len <= graphemeBytes.count else {
+                    throw MetalTerminalRendererError.invalidFrame
+                }
+                graphemeCursor += len
+            }
+        }
+        graphemeCursor = 0
 
         for row in 0..<frame.rows where damage.contains(row: row) {
             for column in 0..<frame.columns {
                 let index = row * frame.columns + column
                 let cell = frame.cells[index]
-                guard cell.reserved == 0 else {
-                    throw MetalTerminalRendererError.invalidFrame
-                }
+                let role = cell.reserved & 0b11
 
                 var flags: UInt32 = 0
                 var uvRect = SIMD4<Float>(repeating: 0)
                 var atlasSlice: UInt32 = 0
-                if cell.scalar != 0 && cell.scalar != 32 {
-                    let entry = try glyphAtlas.lookup(
-                        scalar: cell.scalar,
-                        bold: cell.flags & preparedBoldFlag != 0,
-                        backingScale: backingScale,
-                        cellMetrics: metrics
+
+                // Consume sidecar in cell order even for undamaged leading cells
+                // when scanning full rows; for damaged-only rows we still need
+                // the absolute sidecar offset. Rebuild offset from row start.
+                if column == 0 {
+                    graphemeCursor = 0
+                    let prefixCount = row * frame.columns
+                    for prior in 0..<prefixCount {
+                        let reserved = frame.cells[prior].reserved
+                        if reserved & preparedHasGrapheme != 0 {
+                            let len = Int(frame.graphemeUtf8[graphemeCursor])
+                                | (Int(frame.graphemeUtf8[graphemeCursor + 1]) << 8)
+                            graphemeCursor += 2 + len
+                        }
+                    }
+                }
+
+                var graphemePayload: Data?
+                if cell.reserved & preparedHasGrapheme != 0 {
+                    let len = Int(frame.graphemeUtf8[graphemeCursor])
+                        | (Int(frame.graphemeUtf8[graphemeCursor + 1]) << 8)
+                    graphemeCursor += 2
+                    graphemePayload = frame.graphemeUtf8.subdata(
+                        in: graphemeCursor..<(graphemeCursor + len)
                     )
-                    flags |= instanceGlyphFlag
-                    uvRect = entry.uvRect
-                    atlasSlice = entry.slice
+                    graphemeCursor += len
+                }
+
+                if role != preparedRoleContinuation {
+                    if let graphemePayload,
+                       let text = String(data: graphemePayload, encoding: .utf8),
+                       !text.isEmpty
+                    {
+                        let entry = try glyphAtlas.lookupGrapheme(
+                            text: text,
+                            bold: cell.flags & preparedBoldFlag != 0,
+                            backingScale: backingScale,
+                            cellMetrics: metrics
+                        )
+                        flags |= instanceGlyphFlag
+                        uvRect = entry.uvRect
+                        atlasSlice = entry.slice
+                    } else if cell.scalar != 0 && cell.scalar != 32 {
+                        let entry = try glyphAtlas.lookup(
+                            scalar: cell.scalar,
+                            bold: cell.flags & preparedBoldFlag != 0,
+                            backingScale: backingScale,
+                            cellMetrics: metrics
+                        )
+                        flags |= instanceGlyphFlag
+                        uvRect = entry.uvRect
+                        atlasSlice = entry.slice
+                    }
                 }
                 if cell.flags & preparedUnderlineFlag != 0 {
                     flags |= instanceUnderlineFlag

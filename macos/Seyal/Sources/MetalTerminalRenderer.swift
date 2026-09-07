@@ -1063,6 +1063,17 @@ final class MetalTerminalRenderer: @unchecked Sendable {
         let graphemeBytes = frame.graphemeUtf8
         for index in 0..<frame.cells.count {
             let reserved = frame.cells[index].reserved
+            let role = reserved & 0b11
+            let width = (reserved >> 2) & 0b11
+            let hasGrapheme = reserved & preparedHasGrapheme != 0
+            let knownBits = 0b11 | (0b11 << 2) | preparedHasGrapheme
+            guard reserved & ~knownBits == 0,
+                  role <= 2,
+                  (role == 1 ? (width == 1 || width == 2) : width == 0),
+                  !hasGrapheme || role == 1
+            else {
+                throw MetalTerminalRendererError.invalidFrame
+            }
             if reserved & preparedHasGrapheme != 0 {
                 guard graphemeCursor + 2 <= graphemeBytes.count else {
                     throw MetalTerminalRendererError.invalidFrame

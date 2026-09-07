@@ -374,21 +374,22 @@ impl Runtime {
     pub(super) fn encode_projection_snapshot(
         &self,
         execution_id: ExecutionId,
+        grapheme: bool,
     ) -> Option<EncodedDisplayBatch> {
         #[cfg(feature = "test-fault-injection")]
         if test_fault::take(FaultPoint::DisplayEncode) {
             return None;
         }
-        self.entries
-            .get(&execution_id)
-            .map(|entry| entry.execution.projection_snapshot())
-            .and_then(|snapshot| {
-                // Prefer v2 when representable; callers that need legacy should
-                // encode explicitly. Resync paths use capability-aware fanout.
-                display::encode_snapshot_v2(&snapshot)
-                    .ok()
-                    .or_else(|| display::encode_snapshot(&snapshot).ok())
-            })
+        self.entries.get(&execution_id).and_then(|entry| {
+            let snapshot = entry.execution.projection_snapshot();
+            if grapheme {
+                display::encode_snapshot_v2(&snapshot).ok()
+            } else if snapshot.is_scalar_lossless() {
+                display::encode_snapshot(&snapshot).ok()
+            } else {
+                None
+            }
+        })
     }
 
     #[allow(dead_code)]

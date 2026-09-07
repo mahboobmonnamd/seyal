@@ -237,7 +237,7 @@ impl Runtime {
             .map_or(0, |state| state.pending_resync.len());
         let mut inspected = 0usize;
         let mut materialized = 0usize;
-        let mut shared_batches: HashMap<ExecutionId, EncodedDisplayBatch> = HashMap::new();
+        let mut shared_batches: HashMap<(ExecutionId, bool), EncodedDisplayBatch> = HashMap::new();
 
         while inspected < scan_limit {
             let token = {
@@ -293,7 +293,18 @@ impl Runtime {
                 continue;
             };
 
-            let batch = if let Some(batch) = shared_batches.get(&execution_id) {
+            // Resync must preserve the same capability negotiation as the
+            // normal display fanout path. A legacy peer cannot decode v2
+            // message types, while a grapheme-capable peer must not receive a
+            // lossy scalar projection.
+            let grapheme = self.local_ipc.as_ref().is_some_and(|state| {
+                state.connections.get(&token).is_some_and(|meta| {
+                    meta.client_capabilities & framing::CAP_GRAPHEME_DISPLAY != 0
+                })
+            });
+            let cache_key = (execution_id, grapheme);
+
+            let batch = if let Some(batch) = shared_batches.get(&cache_key) {
                 Some(batch.clone())
             } else if materialized >= RESYNC_SNAPSHOT_BUDGET_PER_POLL {
                 if let Some(state) = self.local_ipc.as_mut() {
@@ -302,7 +313,7 @@ impl Runtime {
                 continue;
             } else {
                 materialized += 1;
-                let encoded = self.encode_projection_snapshot(execution_id);
+                let encoded = self.encode_projection_snapshot(execution_id, grapheme);
                 match encoded {
                     Some(batch) => {
                         if let Some(state) = self.local_ipc.as_mut() {
@@ -315,7 +326,7 @@ impl Runtime {
                                 },
                             );
                         }
-                        shared_batches.insert(execution_id, batch.clone());
+                        shared_batches.insert(cache_key, batch.clone());
                         Some(batch)
                     }
                     None => {

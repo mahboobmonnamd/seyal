@@ -352,11 +352,13 @@ fn encode_cells_v2(
         let (payload, _) = encode_v2_chunk_payload(
             meta,
             base_generation,
-            absolute_row,
-            span.row_count,
-            span.first_col,
-            chunk_index as u16,
-            chunk_count_u16,
+            V2ChunkSpan {
+                first_row: absolute_row,
+                row_count: span.row_count,
+                first_col: span.first_col,
+                chunk_index: chunk_index as u16,
+                chunk_count: chunk_count_u16,
+            },
             cell_slice,
         )?;
         let frame = framing::encode_frame(kind.message_type_v2(), &payload);
@@ -389,7 +391,7 @@ struct SpanPlan {
 
 fn plan_v2_spans(columns: u16, cells: &[ProjectionCell]) -> Result<Vec<SpanPlan>, DisplayError> {
     let columns_usize = columns as usize;
-    if cells.len() % columns_usize != 0 {
+    if !cells.len().is_multiple_of(columns_usize) {
         return Err(DisplayError::InvalidDamage);
     }
     let row_count = cells.len() / columns_usize;
@@ -524,14 +526,19 @@ fn needs_sidecar(cell: &ProjectionCell) -> Result<bool, DisplayError> {
     Ok(chars != 1)
 }
 
-fn encode_v2_chunk_payload(
-    meta: DisplayMeta,
-    base_generation: u64,
+#[derive(Clone, Copy)]
+struct V2ChunkSpan {
     first_row: u16,
     row_count: u16,
     first_col: u16,
     chunk_index: u16,
     chunk_count: u16,
+}
+
+fn encode_v2_chunk_payload(
+    meta: DisplayMeta,
+    base_generation: u64,
+    span: V2ChunkSpan,
     cells: &[ProjectionCell],
 ) -> Result<(Vec<u8>, usize), DisplayError> {
     let mut sidecar = Vec::new();
@@ -561,14 +568,14 @@ fn encode_v2_chunk_payload(
     payload.push(meta.alternate_screen as u8);
     payload.push(0);
     payload.push(0);
-    payload.extend_from_slice(&first_row.to_le_bytes());
-    payload.extend_from_slice(&row_count.to_le_bytes());
-    payload.extend_from_slice(&chunk_index.to_le_bytes());
-    payload.extend_from_slice(&chunk_count.to_le_bytes());
+    payload.extend_from_slice(&span.first_row.to_le_bytes());
+    payload.extend_from_slice(&span.row_count.to_le_bytes());
+    payload.extend_from_slice(&span.chunk_index.to_le_bytes());
+    payload.extend_from_slice(&span.chunk_count.to_le_bytes());
     payload.extend_from_slice(&(cells.len() as u32).to_le_bytes());
     payload.extend_from_slice(&(sidecar.len() as u32).to_le_bytes());
     payload.extend_from_slice(&DISPLAY_SCHEMA_V2.to_le_bytes());
-    payload.extend_from_slice(&first_col.to_le_bytes());
+    payload.extend_from_slice(&span.first_col.to_le_bytes());
     payload.extend_from_slice(&cell_bytes);
     payload.extend_from_slice(&sidecar);
     Ok((payload, sidecar.len()))

@@ -768,8 +768,8 @@ mod tests {
     use super::*;
     use crate::display::{encode_delta, encode_snapshot};
     use seyal_exec::{
-        ProjectionAttributes, ProjectionCell, ProjectionDamage,
-        TerminalProjectionSnapshot, TerminalProjectionUpdate,
+        ProjectionAttributes, ProjectionCell, ProjectionDamage, TerminalProjectionSnapshot,
+        TerminalProjectionUpdate,
     };
 
     fn sample_cells(count: usize) -> Vec<ProjectionCell> {

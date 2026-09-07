@@ -450,7 +450,8 @@ fn history_range_over_wire_budget_returns_truncated_not_capacity_error() {
             .execution(execution_id)
             .expect("execution")
             .terminal()
-            .primary_history_range(LineId(1), LineId(u64::MAX), 512);
+            .primary_history_range(LineId(1), LineId(u64::MAX), 512)
+            .expect("scalar history remains representable");
         if rows.len() >= 200 {
             break;
         }

@@ -41,9 +41,8 @@ pub use reactor::{
 };
 pub use readiness::Readiness;
 pub use seyal_terminal::{
-    CellRole, Color, HostPresentationEvent, LineId, PresentationPayload, ProtocolReply,
-    ShellIntegrationEvent, ShellIntegrationToken,
+    CellRole, Color, HistoryRangeError, HostPresentationEvent, LineId, PresentationPayload, ProtocolReply,
+    ShellIntegrationEvent, ShellIntegrationToken, HISTORY_PER_EXECUTION_DERIVED_INDEX_CAP,
     HISTORY_RUNTIME_AGGREGATE_BYTE_CAP, HISTORY_RUNTIME_DERIVED_INDEX_CAP,
-    HISTORY_PER_EXECUTION_DERIVED_INDEX_CAP,
 };
 pub use winsize::WindowSize;

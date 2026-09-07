@@ -24,10 +24,27 @@ pub enum HistoryBreakAfter {
     SoftWrap,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct HistoryAnchor {
     pub line_id: LineId,
     pub unit_offset: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HistoryRangeError {
+    Stale,
+    Unrepresentable,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HistoryAnchorResolution {
+    Resolved {
+        text: String,
+        width: u8,
+        style: Style,
+    },
+    Unavailable,
+    Invalid,
 }
 
 /// Canonical source unit projection for history consumers that need complete
@@ -49,42 +66,14 @@ pub(crate) struct HistoryUnit {
 }
 
 impl HistoryUnit {
-    fn color_encoded_len(color: crate::Color) -> usize {
-        1 + match color {
-            crate::Color::Default => 0,
-            crate::Color::Indexed(_) => 1,
-            crate::Color::Rgb { .. } => 3,
-        }
-    }
-
     fn encoded_len(&self) -> usize {
-        // Segment targeting uses this explicit compact canonical encoding:
-        // UTF-8 payload, width byte, tagged foreground/background colors and
-        // one packed style-flags byte. Resident accounting separately counts
-        // the actual Vec capacities and Rust metadata.
-        self.utf8
-            .len()
-            .saturating_add(1)
-            .saturating_add(Self::color_encoded_len(self.style.fg))
-            .saturating_add(Self::color_encoded_len(self.style.bg))
-            .saturating_add(1)
+        size_of::<SegmentUnit>().saturating_add(self.utf8.len())
     }
 
     fn allocated_bytes(&self) -> usize {
         // The containing units Vec allocation accounts for width/style and
         // the HistoryUnit Vec metadata; this is the UTF-8 allocation itself.
         self.utf8.capacity()
-    }
-
-    fn first_scalar(&self) -> char {
-        std::str::from_utf8(&self.utf8)
-            .ok()
-            .and_then(|text| text.chars().next())
-            .unwrap_or('\u{FFFD}')
-    }
-
-    fn as_cell(&self) -> Cell {
-        Cell::lead_inline(self.first_scalar(), self.width.max(1), self.style)
     }
 }
 
@@ -97,81 +86,12 @@ pub(crate) struct HistoryLine {
 }
 
 impl HistoryLine {
-    fn payload_len(&self) -> usize {
-        self.units.iter().map(HistoryUnit::encoded_len).sum()
-    }
-
-    fn allocated_bytes(&self) -> usize {
-        size_of::<Self>()
-            .saturating_add(
-                self.units
-                    .capacity()
-                    .saturating_mul(size_of::<HistoryUnit>()),
-            )
-            .saturating_add(
-                self.units
-                    .iter()
-                    .map(HistoryUnit::allocated_bytes)
-                    .sum::<usize>(),
-            )
-    }
-
-    pub(crate) fn cells(&self) -> Vec<Cell> {
-        let mut cells = Vec::new();
-        for unit in &self.units {
-            cells.push(unit.as_cell());
-            if unit.width >= 2 {
-                cells.push(Cell::continuation());
-            }
-        }
-        cells
-    }
-}
-
-#[derive(Clone, Debug)]
-struct Segment {
-    lines: Vec<HistoryLine>,
-    age: u64,
-    resident_bytes: usize,
-}
-
-#[derive(Clone, Debug, Default)]
-pub(crate) struct HistoryStore {
-    segments: VecDeque<Segment>,
-    tail: Vec<HistoryLine>,
-    tail_payload_bytes: usize,
-    tail_resident_bytes: usize,
-    segments_resident_bytes: usize,
-    resident_bytes: usize,
-    eviction_generation: u64,
-}
-
-impl HistoryStore {
-    pub(crate) fn entries(&self) -> impl Iterator<Item = &HistoryLine> {
-        self.segments
-            .iter()
-            .flat_map(|segment| segment.lines.iter())
-            .chain(self.tail.iter())
-    }
-
-    pub(crate) fn resident_bytes(&self) -> usize {
-        self.resident_bytes
-    }
-
-    pub(crate) fn eviction_generation(&self) -> u64 {
-        self.eviction_generation
-    }
-
-    pub(crate) fn append_row(
-        &mut self,
+    pub(crate) fn from_cells(
         line_id: LineId,
         break_after: HistoryBreakAfter,
         cells: &[Cell],
         store: &GraphemeStore,
-    ) {
-        // Empty trailing cells are viewport padding, not source text. Keep
-        // explicit spaces, which are Lead cells, and retain a zero-unit line
-        // when a hard/soft boundary occurred on an otherwise empty row.
+    ) -> Self {
         let content_end = cells
             .iter()
             .rposition(|cell| cell.role != CellRole::Empty)
@@ -201,22 +121,242 @@ impl HistoryStore {
                     })
                 }
             })
-            .collect::<Vec<_>>();
-        self.append_line(HistoryLine {
+            .collect();
+        Self {
             line_id,
             units,
             break_after,
             start_offset: 0,
-        });
+        }
     }
 
-    fn append_line(&mut self, line: HistoryLine) {
+    fn payload_len(&self) -> usize {
+        size_of::<SegmentLine>().saturating_add(
+            self.units
+                .iter()
+                .map(HistoryUnit::encoded_len)
+                .sum::<usize>(),
+        )
+    }
+
+    fn allocated_bytes(&self) -> usize {
+        self.units
+            .capacity()
+            .saturating_mul(size_of::<HistoryUnit>())
+            .saturating_add(
+                self.units
+                    .iter()
+                    .map(HistoryUnit::allocated_bytes)
+                    .sum::<usize>(),
+            )
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SegmentLine {
+    line_id: LineId,
+    unit_start: u32,
+    unit_len: u32,
+    start_offset: u32,
+    break_after: HistoryBreakAfter,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SegmentUnit {
+    payload_start: u32,
+    payload_len: u32,
+    width: u8,
+    style: Style,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct Segment {
+    lines: Box<[SegmentLine]>,
+    units: Box<[SegmentUnit]>,
+    payload: Box<[u8]>,
+    age: u64,
+    resident_bytes: usize,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum HistoryLineRef<'a> {
+    Sealed(&'a Segment, &'a SegmentLine),
+    Tail(&'a HistoryLine),
+}
+
+#[derive(Clone, Copy)]
+enum HistoryUnitRef<'a> {
+    Sealed(&'a Segment, &'a SegmentUnit),
+    Tail(&'a HistoryUnit),
+}
+
+enum HistoryUnits<'a> {
+    Sealed {
+        segment: &'a Segment,
+        units: std::slice::Iter<'a, SegmentUnit>,
+    },
+    Tail(std::slice::Iter<'a, HistoryUnit>),
+}
+
+impl<'a> Iterator for HistoryUnits<'a> {
+    type Item = HistoryUnitRef<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Sealed { segment, units } => units
+                .next()
+                .map(|unit| HistoryUnitRef::Sealed(segment, unit)),
+            Self::Tail(units) => units.next().map(HistoryUnitRef::Tail),
+        }
+    }
+}
+
+impl<'a> HistoryUnitRef<'a> {
+    fn utf8(self) -> &'a [u8] {
+        match self {
+            Self::Sealed(segment, unit) => {
+                let start = unit.payload_start as usize;
+                let end = start.saturating_add(unit.payload_len as usize);
+                segment.payload.get(start..end).unwrap_or(&[])
+            }
+            Self::Tail(unit) => &unit.utf8,
+        }
+    }
+
+    fn width(self) -> u8 {
+        match self {
+            Self::Sealed(_, unit) => unit.width,
+            Self::Tail(unit) => unit.width,
+        }
+    }
+
+    fn style(self) -> Style {
+        match self {
+            Self::Sealed(_, unit) => unit.style,
+            Self::Tail(unit) => unit.style,
+        }
+    }
+
+    fn first_scalar(self) -> char {
+        std::str::from_utf8(self.utf8())
+            .ok()
+            .and_then(|text| text.chars().next())
+            .unwrap_or('\u{FFFD}')
+    }
+
+    fn legacy_cell(self) -> Option<Cell> {
+        let text = std::str::from_utf8(self.utf8()).ok()?;
+        let mut scalars = text.chars();
+        let scalar = scalars.next()?;
+        if scalars.next().is_some() {
+            return None;
+        }
+        Some(Cell::lead_inline(scalar, self.width().max(1), self.style()))
+    }
+
+    fn reflow_cell(self) -> Cell {
+        Cell::lead_inline(self.first_scalar(), self.width().max(1), self.style())
+    }
+}
+
+impl<'a> HistoryLineRef<'a> {
+    pub(crate) fn line_id(self) -> LineId {
+        match self {
+            Self::Sealed(_, line) => line.line_id,
+            Self::Tail(line) => line.line_id,
+        }
+    }
+
+    pub(crate) fn start_offset(self) -> u32 {
+        match self {
+            Self::Sealed(_, line) => line.start_offset,
+            Self::Tail(line) => line.start_offset,
+        }
+    }
+
+    pub(crate) fn break_after(self) -> HistoryBreakAfter {
+        match self {
+            Self::Sealed(_, line) => line.break_after,
+            Self::Tail(line) => line.break_after,
+        }
+    }
+
+    fn units(self) -> HistoryUnits<'a> {
+        match self {
+            Self::Sealed(segment, line) => {
+                let start = line.unit_start as usize;
+                let end = start.saturating_add(line.unit_len as usize);
+                HistoryUnits::Sealed {
+                    segment,
+                    units: segment.units[start..end].iter(),
+                }
+            }
+            Self::Tail(line) => HistoryUnits::Tail(line.units.iter()),
+        }
+    }
+
+    pub(crate) fn legacy_cells(self) -> Option<Vec<Cell>> {
+        let mut cells = Vec::new();
+        for unit in self.units() {
+            cells.push(unit.legacy_cell()?);
+            if unit.width() >= 2 {
+                cells.push(Cell::continuation());
+            }
+        }
+        Some(cells)
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct HistoryStore {
+    segments: VecDeque<Segment>,
+    tail: Vec<HistoryLine>,
+    tail_payload_bytes: usize,
+    tail_resident_bytes: usize,
+    segments_resident_bytes: usize,
+    resident_bytes: usize,
+    eviction_generation: u64,
+    evicted_through: Option<LineId>,
+}
+
+impl HistoryStore {
+    pub(crate) fn entries(&self) -> impl Iterator<Item = HistoryLineRef<'_>> {
+        self.segments
+            .iter()
+            .flat_map(|segment| {
+                segment
+                    .lines
+                    .iter()
+                    .map(move |line| HistoryLineRef::Sealed(segment, line))
+            })
+            .chain(self.tail.iter().map(HistoryLineRef::Tail))
+    }
+
+    pub(crate) fn resident_bytes(&self) -> usize {
+        self.resident_bytes
+    }
+
+    pub(crate) fn eviction_generation(&self) -> u64 {
+        self.eviction_generation
+    }
+
+    pub(crate) fn append_row(
+        &mut self,
+        line_id: LineId,
+        break_after: HistoryBreakAfter,
+        cells: &[Cell],
+        store: &GraphemeStore,
+    ) {
+        self.append_line(HistoryLine::from_cells(line_id, break_after, cells, store));
+    }
+
+    pub(crate) fn append_line(&mut self, line: HistoryLine) {
         let bytes = line.payload_len();
         // A source line can be arbitrarily long. Fragmenting at unit boundaries
         // keeps the tail bounded while preserving its LineId and break lineage.
         if bytes > HISTORY_SEGMENT_PAYLOAD_TARGET {
             let mut fragment = Vec::new();
-            let mut fragment_bytes = 0;
+            let mut fragment_bytes = size_of::<SegmentLine>();
             let mut source_offset = line.start_offset;
             let line_id = line.line_id;
             let final_break = line.break_after;
@@ -232,7 +372,7 @@ impl HistoryStore {
                         break_after: HistoryBreakAfter::SoftWrap,
                         start_offset: fragment_start,
                     });
-                    fragment_bytes = 0;
+                    fragment_bytes = size_of::<SegmentLine>();
                 }
                 fragment_bytes += unit_bytes;
                 fragment.push(unit);
@@ -283,10 +423,55 @@ impl HistoryStore {
         if self.tail.is_empty() {
             return;
         }
+        let tail = std::mem::take(&mut self.tail);
+        let mut lines = Vec::with_capacity(tail.len());
+        let unit_count = tail.iter().map(|line| line.units.len()).sum();
+        let payload_len = tail
+            .iter()
+            .flat_map(|line| &line.units)
+            .map(|unit| unit.utf8.len())
+            .sum();
+        let mut units = Vec::with_capacity(unit_count);
+        let mut payload = Vec::with_capacity(payload_len);
+        for line in tail {
+            let unit_start = u32::try_from(units.len()).unwrap_or(u32::MAX);
+            for unit in line.units {
+                let payload_start = u32::try_from(payload.len()).unwrap_or(u32::MAX);
+                let payload_len = u32::try_from(unit.utf8.len()).unwrap_or(u32::MAX);
+                payload.extend_from_slice(&unit.utf8);
+                units.push(SegmentUnit {
+                    payload_start,
+                    payload_len,
+                    width: unit.width,
+                    style: unit.style,
+                });
+            }
+            lines.push(SegmentLine {
+                line_id: line.line_id,
+                unit_start,
+                unit_len: u32::try_from(units.len())
+                    .unwrap_or(u32::MAX)
+                    .saturating_sub(unit_start),
+                start_offset: line.start_offset,
+                break_after: line.break_after,
+            });
+        }
+        let lines = lines.into_boxed_slice();
+        let units = units.into_boxed_slice();
+        let payload = payload.into_boxed_slice();
+        // Segment values live in the VecDeque allocation accounted below.
+        // This is the exact heap storage owned through the three boxed slices.
+        let resident_bytes = lines
+            .len()
+            .saturating_mul(size_of::<SegmentLine>())
+            .saturating_add(units.len().saturating_mul(size_of::<SegmentUnit>()))
+            .saturating_add(payload.len());
         let segment = Segment {
-            lines: std::mem::take(&mut self.tail),
+            lines,
+            units,
+            payload,
             age: NEXT_SEGMENT_AGE.fetch_add(1, Ordering::Relaxed),
-            resident_bytes: self.tail_resident_bytes + size_of::<Segment>(),
+            resident_bytes,
         };
         self.tail_payload_bytes = 0;
         self.tail_resident_bytes = 0;
@@ -322,6 +507,7 @@ impl HistoryStore {
                 // be discarded piecemeal without an explicit fragment policy.
                 break;
             };
+            self.record_evicted_segment(&segment);
             self.segments_resident_bytes = self
                 .segments_resident_bytes
                 .saturating_sub(segment.resident_bytes);
@@ -338,12 +524,54 @@ impl HistoryStore {
         let Some(segment) = self.segments.pop_front() else {
             return 0;
         };
+        self.record_evicted_segment(&segment);
         self.segments_resident_bytes = self
             .segments_resident_bytes
             .saturating_sub(segment.resident_bytes);
         self.update_resident_bytes();
         self.eviction_generation = self.eviction_generation.wrapping_add(1);
         segment.resident_bytes
+    }
+
+    fn record_evicted_segment(&mut self, segment: &Segment) {
+        if let Some(line_id) = segment.lines.last().map(|line| line.line_id) {
+            self.evicted_through = Some(
+                self.evicted_through
+                    .map_or(line_id, |current| current.max(line_id)),
+            );
+        }
+    }
+
+    pub(crate) fn range_is_stale(&self, start: LineId) -> bool {
+        self.evicted_through.is_some_and(|line_id| start <= line_id)
+    }
+
+    pub(crate) fn resolve_anchor(&self, anchor: HistoryAnchor) -> HistoryAnchorResolution {
+        let line = self.entries().find(|line| line.line_id() == anchor.line_id);
+        let Some(line) = line else {
+            return if self.range_is_stale(anchor.line_id) {
+                HistoryAnchorResolution::Unavailable
+            } else {
+                HistoryAnchorResolution::Invalid
+            };
+        };
+        let Some(relative) = anchor.unit_offset.checked_sub(line.start_offset()) else {
+            return HistoryAnchorResolution::Invalid;
+        };
+        let Ok(relative) = usize::try_from(relative) else {
+            return HistoryAnchorResolution::Invalid;
+        };
+        let Some(unit) = line.units().nth(relative) else {
+            return HistoryAnchorResolution::Invalid;
+        };
+        let Ok(text) = String::from_utf8(unit.utf8().to_vec()) else {
+            return HistoryAnchorResolution::Unavailable;
+        };
+        HistoryAnchorResolution::Resolved {
+            text,
+            width: unit.width(),
+            style: unit.style(),
+        }
     }
 
     pub(crate) fn reflow(&self, cols: u16, max_rows: usize) -> Vec<ReflowRow> {
@@ -362,8 +590,8 @@ impl HistoryStore {
                     break;
                 }
             }
-            for (unit_index, unit) in line.units.iter().enumerate() {
-                let unit_width = usize::from(unit.width.max(1));
+            for (unit_index, unit) in line.units().enumerate() {
+                let unit_width = usize::from(unit.width().max(1));
                 if !current.cells.is_empty() && current.cells.len() + unit_width > width {
                     current.break_after = Some(HistoryBreakAfter::SoftWrap);
                     rows.push(std::mem::take(&mut current));
@@ -371,19 +599,51 @@ impl HistoryStore {
                         return rows;
                     }
                 }
-                current.anchors.push(HistoryAnchor {
-                    line_id: line.line_id,
-                    unit_offset: line.start_offset.saturating_add(unit_index as u32),
-                });
-                current.cells.push(unit.as_cell());
+                let anchor = HistoryAnchor {
+                    line_id: line.line_id(),
+                    unit_offset: line.start_offset().saturating_add(unit_index as u32),
+                };
+                if unit_width > width {
+                    if !current.cells.is_empty() || !current.anchors.is_empty() {
+                        current.break_after = Some(HistoryBreakAfter::SoftWrap);
+                        rows.push(std::mem::take(&mut current));
+                        if rows.len() >= max_rows {
+                            return rows;
+                        }
+                    }
+                    rows.push(ReflowRow {
+                        source_line_id: Some(line.line_id()),
+                        anchors: vec![anchor],
+                        cells: Vec::new(),
+                        break_after: Some(HistoryBreakAfter::SoftWrap),
+                        unavailable: true,
+                    });
+                    if rows.len() >= max_rows {
+                        return rows;
+                    }
+                    continue;
+                }
+                current.source_line_id.get_or_insert(line.line_id());
+                current.anchors.push(anchor);
+                current.cells.push(unit.reflow_cell());
                 if unit_width == 2 {
                     current.cells.push(Cell::continuation());
                 }
             }
-            previous_break = Some(line.break_after);
-            if line.break_after == HistoryBreakAfter::HardBreak {
-                current.break_after = Some(HistoryBreakAfter::HardBreak);
-                rows.push(std::mem::take(&mut current));
+            previous_break = Some(line.break_after());
+            if line.break_after() == HistoryBreakAfter::HardBreak {
+                if current.cells.is_empty() && current.anchors.is_empty() {
+                    if let Some(last) = rows.last_mut().filter(|row| row.unavailable) {
+                        last.break_after = Some(HistoryBreakAfter::HardBreak);
+                    } else {
+                        current.source_line_id = Some(line.line_id());
+                        current.break_after = Some(HistoryBreakAfter::HardBreak);
+                        rows.push(std::mem::take(&mut current));
+                    }
+                } else {
+                    current.break_after = Some(HistoryBreakAfter::HardBreak);
+                    rows.push(std::mem::take(&mut current));
+                }
                 if rows.len() >= max_rows {
                     break;
                 }
@@ -408,21 +668,21 @@ impl HistoryStore {
         }
         let mut units = Vec::new();
         for line in self.entries() {
-            if line.line_id < start {
+            if line.line_id() < start {
                 continue;
             }
-            if line.line_id > end {
+            if line.line_id() > end {
                 break;
             }
-            for (index, unit) in line.units.iter().enumerate() {
+            for (index, unit) in line.units().enumerate() {
                 units.push(HistoryUnitView {
                     anchor: HistoryAnchor {
-                        line_id: line.line_id,
-                        unit_offset: line.start_offset.saturating_add(index as u32),
+                        line_id: line.line_id(),
+                        unit_offset: line.start_offset().saturating_add(index as u32),
                     },
-                    text: String::from_utf8_lossy(&unit.utf8).into_owned(),
-                    width: unit.width,
-                    style: unit.style,
+                    text: String::from_utf8_lossy(unit.utf8()).into_owned(),
+                    width: unit.width(),
+                    style: unit.style(),
                 });
                 if units.len() >= max_units {
                     return units;
@@ -435,9 +695,11 @@ impl HistoryStore {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ReflowRow {
+    pub source_line_id: Option<LineId>,
     pub anchors: Vec<HistoryAnchor>,
     pub cells: Vec<Cell>,
     pub break_after: Option<HistoryBreakAfter>,
+    pub unavailable: bool,
 }
 
 #[cfg(test)]
@@ -488,7 +750,7 @@ mod tests {
         let mut store = HistoryStore::default();
         store.append_line(ascii_line(7, "abc", HistoryBreakAfter::HardBreak));
 
-        let payload_bytes: usize = store.entries().map(HistoryLine::payload_len).sum();
+        let payload_bytes = store.tail_payload_bytes;
         assert!(store.resident_bytes() > payload_bytes);
     }
 
@@ -500,8 +762,43 @@ mod tests {
         }
         let before = store.resident_bytes();
         let removed = store.evict_oldest_segment();
-        assert!(removed > HISTORY_SEGMENT_PAYLOAD_TARGET);
+        assert!(removed > 0);
+        assert!(removed <= HISTORY_SEGMENT_PAYLOAD_TARGET);
         assert_eq!(before - removed, store.resident_bytes());
+    }
+
+    #[test]
+    fn sealed_segments_use_exact_contiguous_payload_and_offset_metadata() {
+        let mut store = HistoryStore::default();
+        for id in 0..2_000 {
+            store.append_line(ascii_line(id, "abcdefghij", HistoryBreakAfter::HardBreak));
+        }
+
+        assert!(store.segments.len() >= 2);
+        for segment in &store.segments {
+            let exact_content_bytes = segment
+                .lines
+                .len()
+                .saturating_mul(size_of::<SegmentLine>())
+                .saturating_add(segment.units.len().saturating_mul(size_of::<SegmentUnit>()))
+                .saturating_add(segment.payload.len());
+            assert!(exact_content_bytes <= HISTORY_SEGMENT_PAYLOAD_TARGET);
+            assert_eq!(segment.resident_bytes, exact_content_bytes);
+
+            let mut next_unit = 0usize;
+            for line in &segment.lines {
+                assert_eq!(line.unit_start as usize, next_unit);
+                next_unit = next_unit.saturating_add(line.unit_len as usize);
+            }
+            assert_eq!(next_unit, segment.units.len());
+
+            let mut next_payload = 0usize;
+            for unit in &segment.units {
+                assert_eq!(unit.payload_start as usize, next_payload);
+                next_payload = next_payload.saturating_add(unit.payload_len as usize);
+            }
+            assert_eq!(next_payload, segment.payload.len());
+        }
     }
 
     #[test]

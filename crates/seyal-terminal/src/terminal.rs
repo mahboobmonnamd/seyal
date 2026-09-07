@@ -14,8 +14,8 @@ use crate::{
     },
     screen::{PreparedScreen, Screen},
     width::{grapheme_terminal_width, AmbiguousWidthPolicy},
-    Cell, CellRole, CursorState, Damage, HistoryAnchor, HistoryUnitView, LineId, ModeState,
-    ReflowRow, Style, TerminalError,
+    Cell, CellRole, CursorState, Damage, HistoryAnchor, HistoryAnchorResolution, HistoryRangeError,
+    HistoryUnitView, LineId, ModeState, ReflowRow, TerminalError,
 };
 use std::collections::VecDeque;
 
@@ -248,22 +248,34 @@ impl TerminalState {
         start: LineId,
         end: LineId,
         max_lines: usize,
-    ) -> Vec<(LineId, Vec<Cell>)> {
+    ) -> Result<Vec<(LineId, Vec<Cell>)>, HistoryRangeError> {
         if max_lines == 0 || end < start {
-            return Vec::new();
+            return Ok(Vec::new());
         }
-        let mut lines = Vec::new();
+        if self.core.primary.history().range_is_stale(start) {
+            return Err(HistoryRangeError::Stale);
+        }
+        let mut lines: Vec<(LineId, Vec<Cell>)> = Vec::new();
         for entry in self.core.primary.history_entries() {
-            let id = entry.line_id;
+            let id = entry.line_id();
             if id < start {
                 continue;
             }
             if id > end {
                 break;
             }
-            lines.push((id, entry.cells()));
-            if lines.len() >= max_lines {
-                return lines;
+            let cells = entry
+                .legacy_cells()
+                .ok_or(HistoryRangeError::Unrepresentable)?;
+            if let Some((last_id, last_cells)) = lines.last_mut()
+                && *last_id == id
+            {
+                last_cells.extend(cells);
+            } else {
+                lines.push((id, cells));
+                if lines.len() >= max_lines {
+                    return Ok(lines);
+                }
             }
         }
         for row in 0..self.core.primary.rows() {
@@ -279,12 +291,26 @@ impl TerminalState {
             let Some(cells) = self.core.primary.cell_row(row) else {
                 continue;
             };
+            for cell in cells {
+                if cell.role != CellRole::Lead || cell.overflow {
+                    continue;
+                }
+                if self
+                    .core
+                    .grapheme_store
+                    .get(cell.store_id)
+                    .and_then(|bytes| std::str::from_utf8(bytes).ok())
+                    .is_some_and(|text| text.chars().nth(1).is_some())
+                {
+                    return Err(HistoryRangeError::Unrepresentable);
+                }
+            }
             lines.push((id, cells.to_vec()));
             if lines.len() >= max_lines {
                 break;
             }
         }
-        lines
+        Ok(lines)
     }
 
     /// Returns complete canonical source units for a bounded primary-history
@@ -307,14 +333,12 @@ impl TerminalState {
         if units.len() >= max_units {
             return units;
         }
+        let mut visible_offsets = std::collections::HashMap::<LineId, u32>::new();
         for row in 0..self.core.primary.rows() {
             let Some(line_id) = self.core.primary.line_id(row) else {
                 continue;
             };
             if line_id < start || line_id > end {
-                continue;
-            }
-            if units.iter().any(|unit| unit.anchor.line_id == line_id) {
                 continue;
             }
             let Some(cells) = self.core.primary.cell_row(row) else {
@@ -324,8 +348,8 @@ impl TerminalState {
                 .iter()
                 .rposition(|cell| cell.role != CellRole::Empty)
                 .map_or(0, |index| index + 1);
-            let mut unit_offset = 0u32;
-            for cell in &cells[..content_end] {
+            let unit_offset = visible_offsets.entry(line_id).or_default();
+            for (col, cell) in cells[..content_end].iter().enumerate() {
                 let CellRole::Lead = cell.role else {
                     continue;
                 };
@@ -337,19 +361,26 @@ impl TerminalState {
                         |bytes| String::from_utf8_lossy(bytes).into_owned(),
                     )
                 };
-                units.push(HistoryUnitView {
-                    anchor: HistoryAnchor {
-                        line_id,
-                        unit_offset,
-                    },
-                    text,
-                    width: cell.width.max(1),
-                    style: cell.style,
-                });
-                unit_offset = unit_offset.saturating_add(1);
-                if units.len() >= max_units {
-                    return units;
+                let anchor =
+                    self.core
+                        .primary
+                        .cell_anchor(col as u16, row)
+                        .unwrap_or(HistoryAnchor {
+                            line_id,
+                            unit_offset: *unit_offset,
+                        });
+                if !units.iter().any(|unit| unit.anchor == anchor) {
+                    units.push(HistoryUnitView {
+                        anchor,
+                        text,
+                        width: cell.width.max(1),
+                        style: cell.style,
+                    });
+                    if units.len() >= max_units {
+                        return units;
+                    }
                 }
+                *unit_offset = (*unit_offset).saturating_add(1);
             }
         }
         units
@@ -377,28 +408,10 @@ impl TerminalState {
         self.core.primary.history_mut().evict_oldest_segment()
     }
 
-    /// Resolves a retained source anchor to its canonical text unit. An
-    /// absent result means the source was evicted or the offset is invalid.
-    pub fn primary_history_unit(&self, anchor: HistoryAnchor) -> Option<(String, u8, Style)> {
-        self.core
-            .primary
-            .history_entries()
-            .find(|line| {
-                line.line_id == anchor.line_id
-                    && anchor.unit_offset >= line.start_offset
-                    && usize::try_from(anchor.unit_offset - line.start_offset)
-                        .ok()
-                        .is_some_and(|offset| offset < line.units.len())
-            })
-            .and_then(|line| {
-                let relative = anchor.unit_offset.checked_sub(line.start_offset)? as usize;
-                line.units.get(relative)
-            })
-            .and_then(|unit| {
-                String::from_utf8(unit.utf8.clone())
-                    .ok()
-                    .map(|text| (text, unit.width, unit.style))
-            })
+    /// Resolves a retained source anchor without conflating an evicted source
+    /// with an invalid line or unit offset.
+    pub fn primary_history_unit(&self, anchor: HistoryAnchor) -> HistoryAnchorResolution {
+        self.core.primary.history().resolve_anchor(anchor)
     }
 
     pub fn row_text(&self, row: u16) -> Option<String> {
@@ -551,10 +564,13 @@ impl TerminalCore {
     }
 
     fn commit_resize(&mut self, prepared: PreparedResize) {
-        let primary = self.primary.commit_prepared(prepared.primary);
+        self.invalidate_active_grapheme();
+        let primary = self
+            .primary
+            .commit_prepared(prepared.primary, &mut self.grapheme_store);
         let alternate = if let Some(prepared_alt) = prepared.alternate {
             if let Some(screen) = &mut self.alternate {
-                screen.commit_prepared(prepared_alt)
+                screen.commit_prepared(prepared_alt, &mut self.grapheme_store)
             } else {
                 Mutation::none()
             }
@@ -1392,7 +1408,7 @@ mod tests {
         terminal.feed(b"one\r\ntwo\r\nthree").unwrap();
         let first = terminal.line_id(0).unwrap();
         let last = terminal.line_id(1).unwrap();
-        let rows = terminal.primary_history_range(LineId(1), last, 8);
+        let rows = terminal.primary_history_range(LineId(1), last, 8).unwrap();
         assert_eq!(rows.first().map(|(id, _)| *id), Some(LineId(1)));
         assert!(rows.iter().any(|(_, cells)| {
             cells
@@ -1401,7 +1417,10 @@ mod tests {
                 .collect::<String>()
                 .starts_with("one")
         }));
-        assert!(terminal.primary_history_range(first, last, 0).is_empty());
+        assert!(terminal
+            .primary_history_range(first, last, 0)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -1409,11 +1428,11 @@ mod tests {
         let mut terminal = TerminalState::new(4, 2).unwrap();
         terminal.feed(b"one\r\ntwo\r\nthree").unwrap();
         let last = terminal.line_id(1).unwrap();
-        let before = terminal.primary_history_range(LineId(1), last, 8);
+        let before = terminal.primary_history_range(LineId(1), last, 8).unwrap();
         assert!(!before.is_empty());
         terminal.feed(b"\x1b[?1049h").unwrap();
         assert!(terminal.modes().alternate_screen);
-        let during = terminal.primary_history_range(LineId(1), last, 8);
+        let during = terminal.primary_history_range(LineId(1), last, 8).unwrap();
         assert_eq!(
             during.len(),
             before.len(),
@@ -1442,10 +1461,11 @@ mod tests {
             .history_entries()
             .map(|entry| {
                 (
-                    entry.line_id,
-                    entry.break_after,
+                    entry.line_id(),
+                    entry.break_after(),
                     entry
-                        .cells()
+                        .legacy_cells()
+                        .unwrap()
                         .iter()
                         .map(|cell| cell.character)
                         .collect::<String>(),
@@ -1481,7 +1501,9 @@ mod tests {
             "a b"
         );
         assert_eq!(
-            terminal.primary_history_range(LineId(1), LineId(1), 8)[0]
+            terminal
+                .primary_history_range(LineId(1), LineId(1), 8)
+                .unwrap()[0]
                 .1
                 .len(),
             3
@@ -1529,19 +1551,22 @@ mod tests {
     fn retained_unit_preserves_canonical_multiscalar_payload_and_anchor() {
         let mut terminal = TerminalState::new(2, 1).unwrap();
         terminal.feed("界\u{301}\r\n".as_bytes()).unwrap();
-        let (line_id, _) = terminal
-            .primary_history_range(LineId(1), LineId(u64::MAX), 1)
+        let line_id = terminal
+            .primary_history_units_range(LineId(1), LineId(u64::MAX), 1)
             .into_iter()
             .next()
-            .expect("wide source row is retained");
-        let unit = terminal
-            .primary_history_unit(HistoryAnchor {
-                line_id,
-                unit_offset: 0,
-            })
-            .expect("canonical source unit is addressable");
-        assert_eq!(unit.0, "界\u{301}");
-        assert_eq!(unit.1, 2);
+            .expect("wide source row is retained")
+            .anchor
+            .line_id;
+        let unit = terminal.primary_history_unit(HistoryAnchor {
+            line_id,
+            unit_offset: 0,
+        });
+        assert!(matches!(
+            unit,
+            HistoryAnchorResolution::Resolved { ref text, width: 2, .. }
+                if text == "界\u{301}"
+        ));
 
         let projected = terminal.primary_history_units_range(line_id, line_id, 8);
         assert_eq!(projected.len(), 1);
@@ -1677,7 +1702,9 @@ mod tests {
         terminal.feed(b"five\r\nsix").unwrap();
 
         let started = Instant::now();
-        let rows = terminal.primary_history_range(LineId(1), LineId(u64::MAX), 512);
+        let rows = terminal
+            .primary_history_range(LineId(1), LineId(u64::MAX), 512)
+            .unwrap();
         assert!(
             started.elapsed() < Duration::from_millis(100),
             "history lookup must not scale with numeric LineId distance"
@@ -1685,7 +1712,9 @@ mod tests {
         assert!(rows.len() <= 512);
         assert!(!rows.is_empty());
 
-        let absent = terminal.primary_history_range(LineId(u64::MAX - 10), LineId(u64::MAX), 8);
+        let absent = terminal
+            .primary_history_range(LineId(u64::MAX - 10), LineId(u64::MAX), 8)
+            .unwrap();
         assert!(absent.is_empty());
     }
 

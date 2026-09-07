@@ -1,4 +1,7 @@
-use seyal_terminal::{CellRole, TerminalState};
+use seyal_terminal::{
+    CellRole, Color, HistoryAnchor, HistoryAnchorResolution, HistoryRangeError, LineId,
+    TerminalState,
+};
 
 #[test]
 fn reflow_at_one_column_never_emits_an_orphan_wide_unit() {
@@ -84,6 +87,95 @@ fn resize_oscillation_preserves_multiscalar_payload_and_source_anchor() {
             "ab界\u{301}cd",
             "canonical payload changed at {cols} columns"
         );
-        assert_eq!(units.first().map(|unit| unit.anchor.line_id), Some(source_id));
+        assert_eq!(
+            units.first().map(|unit| unit.anchor.line_id),
+            Some(source_id)
+        );
     }
+}
+
+#[test]
+fn output_and_scroll_after_resize_preserve_source_ids_offsets_lineage_and_style() {
+    let mut terminal = TerminalState::new(4, 2).expect("terminal");
+    terminal
+        .feed(b"\x1b[31mabcdef")
+        .expect("soft-wrapped styled input");
+    let first = terminal.line_id(0).expect("first source id");
+    let second = terminal.line_id(1).expect("second source id");
+
+    terminal.resize(8, 2).expect("widen");
+    terminal.feed(b"g\r\nh\r\n").expect("output after resize");
+
+    let first_units = terminal.primary_history_units_range(first, first, 16);
+    assert_eq!(
+        first_units
+            .iter()
+            .map(|unit| unit.text.as_str())
+            .collect::<String>(),
+        "abcd"
+    );
+    assert_eq!(
+        first_units
+            .iter()
+            .map(|unit| unit.anchor.unit_offset)
+            .collect::<Vec<_>>(),
+        [0, 1, 2, 3]
+    );
+    assert!(first_units
+        .iter()
+        .all(|unit| unit.style.fg == Color::Indexed(1)));
+
+    let second_units = terminal.primary_history_units_range(second, second, 16);
+    assert_eq!(
+        second_units
+            .iter()
+            .map(|unit| unit.text.as_str())
+            .collect::<String>(),
+        "efg"
+    );
+    assert_eq!(
+        second_units
+            .iter()
+            .map(|unit| unit.anchor.unit_offset)
+            .collect::<Vec<_>>(),
+        [0, 1, 2]
+    );
+    assert!(second_units
+        .iter()
+        .all(|unit| unit.style.fg == Color::Indexed(1)));
+}
+
+#[test]
+fn evicted_range_and_anchor_are_explicitly_unavailable() {
+    let mut terminal = TerminalState::new(512, 1).expect("terminal");
+    let line = format!("{}\r\n", "a".repeat(512));
+    for _ in 0..128 {
+        terminal.feed(line.as_bytes()).expect("history feed");
+    }
+    let anchor = HistoryAnchor {
+        line_id: LineId(1),
+        unit_offset: 0,
+    };
+    assert!(matches!(
+        terminal.primary_history_unit(anchor),
+        HistoryAnchorResolution::Resolved { .. }
+    ));
+
+    assert!(terminal.evict_oldest_primary_history_segment() > 0);
+
+    assert_eq!(
+        terminal.primary_history_unit(anchor),
+        HistoryAnchorResolution::Unavailable
+    );
+    assert_eq!(
+        terminal.primary_history_range(LineId(1), LineId(1), 8),
+        Err(HistoryRangeError::Stale)
+    );
+    assert_eq!(
+        terminal.primary_history_unit(HistoryAnchor {
+            line_id: LineId(u64::MAX),
+            unit_offset: 0,
+        }),
+        HistoryAnchorResolution::Invalid
+    );
 }

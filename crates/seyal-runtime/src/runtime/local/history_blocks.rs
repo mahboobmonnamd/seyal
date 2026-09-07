@@ -1,4 +1,4 @@
-use seyal_exec::{Color, LineId};
+use seyal_exec::{Color, HistoryRangeError, LineId};
 
 use crate::{
     local_ipc::{
@@ -67,11 +67,44 @@ impl Runtime {
             return;
         };
         let max_lines = usize::from(request.max_lines);
-        let rows = entry.execution.terminal().primary_history_range(
+        let revision = entry.execution.terminal().damage_generation();
+        let rows = match entry.execution.terminal().primary_history_range(
             LineId(request.start_line),
             LineId(request.end_line),
             max_lines,
-        );
+        ) {
+            Ok(rows) => rows,
+            Err(HistoryRangeError::Unrepresentable) => {
+                self.send_error(
+                    token,
+                    ErrorCode::DisplayUnavailable,
+                    MessageType::HistoryRangeRequest as u16,
+                );
+                return;
+            }
+            Err(HistoryRangeError::Stale) => {
+                let snapshot = framing::HistoryRangeSnapshot {
+                    request_id: request.request_id,
+                    block_id: request.block_id,
+                    revision,
+                    status: framing::HistoryRangeStatus::Stale,
+                    rows: Vec::new(),
+                };
+                let Ok(payload) = snapshot.try_encode() else {
+                    self.send_error(
+                        token,
+                        ErrorCode::CapacityExceeded,
+                        MessageType::HistoryRangeRequest as u16,
+                    );
+                    return;
+                };
+                let _ = self.send_mandatory_frame(
+                    token,
+                    framing::encode_frame(MessageType::HistoryRangeSnapshot, &payload),
+                );
+                return;
+            }
+        };
         // VT already caps at max_lines. A full window means more in-range
         // retained rows may remain — report Truncated so clients can continue.
         let hit_line_cap = max_lines > 0 && rows.len() == max_lines;
@@ -103,7 +136,7 @@ impl Runtime {
         let mut snapshot = framing::HistoryRangeSnapshot {
             request_id: request.request_id,
             block_id: request.block_id,
-            revision: entry.execution.terminal().damage_generation(),
+            revision,
             status: if truncated {
                 framing::HistoryRangeStatus::Truncated
             } else {

@@ -12,6 +12,7 @@ use seyal_runtime::{
         Attach, Attached, BlockTimeline, ErrorMessage, ExecutionList, FrameHeader, MessageType,
         Resync, Role, CAP_COMMAND_BLOCKS, HEADER_LEN,
     },
+    pass8::BLOCK_STATE_MESSAGE_TYPE,
     ExecutionId,
 };
 
@@ -24,7 +25,7 @@ use super::{
     },
     display_apply::PendingDisplayBatch,
     input_resize::GridGeometry,
-    server_error, ClientError, LocalDisplayClient, MAX_FRAMES_PER_POLL, READ_CHUNK_BYTES,
+    server_error, ClientError, LocalDisplayClient, MAX_BUFFERED_BYTES, MAX_FRAMES_PER_POLL,
 };
 
 const DISPLAY_CHUNK_INDEX_OFFSET: usize = 32;
@@ -59,50 +60,92 @@ fn display_chunk_remainder_hint(frame: &[u8]) -> Option<usize> {
     (chunk_count > chunk_index).then(|| usize::from(chunk_count - chunk_index - 1))
 }
 
-fn is_snapshot_chunk_zero(frame: &[u8]) -> Result<bool, ClientError> {
+enum ResyncScanFrame {
+    SnapshotStart,
+    DisplayRemainder,
+    DeferredControl,
+}
+
+fn classify_resync_scan_frame(frame: &[u8]) -> Result<ResyncScanFrame, ClientError> {
     let header = FrameHeader::decode(frame).map_err(|_| ClientError::Protocol)?;
+    if header.message_type == BLOCK_STATE_MESSAGE_TYPE {
+        return Ok(ResyncScanFrame::DeferredControl);
+    }
     let message_type = MessageType::from_u16(header.message_type).ok_or(ClientError::Protocol)?;
     if message_type == MessageType::Error {
         let error = ErrorMessage::decode(frame.get(HEADER_LEN..).ok_or(ClientError::Protocol)?)
             .map_err(|_| ClientError::Protocol)?;
         return Err(server_error(error.error_code));
     }
-    if !matches!(
-        message_type,
-        MessageType::DisplaySnapshot | MessageType::DisplaySnapshotV2
-    ) {
-        if matches!(
-            message_type,
-            MessageType::DisplayDelta | MessageType::DisplayDeltaV2
-        ) {
-            return Ok(false);
+    match message_type {
+        MessageType::DisplaySnapshot | MessageType::DisplaySnapshotV2 => {
+            let payload = frame.get(HEADER_LEN..).ok_or(ClientError::Protocol)?;
+            let Some(index_bytes) =
+                payload.get(DISPLAY_CHUNK_INDEX_OFFSET..DISPLAY_CHUNK_COUNT_OFFSET)
+            else {
+                return Ok(ResyncScanFrame::DisplayRemainder);
+            };
+            if u16::from_le_bytes(index_bytes.try_into().map_err(|_| ClientError::Protocol)?) == 0 {
+                Ok(ResyncScanFrame::SnapshotStart)
+            } else {
+                Ok(ResyncScanFrame::DisplayRemainder)
+            }
         }
-        return Err(ClientError::Protocol);
+        MessageType::DisplayDelta | MessageType::DisplayDeltaV2 => {
+            Ok(ResyncScanFrame::DisplayRemainder)
+        }
+        MessageType::BlockTimeline | MessageType::Lifecycle => Ok(ResyncScanFrame::DeferredControl),
+        _ => Err(ClientError::Protocol),
     }
-    let payload = frame.get(HEADER_LEN..).ok_or(ClientError::Protocol)?;
-    let Some(index_bytes) = payload.get(DISPLAY_CHUNK_INDEX_OFFSET..DISPLAY_CHUNK_COUNT_OFFSET)
-    else {
-        return Ok(false);
-    };
-    Ok(u16::from_le_bytes(index_bytes.try_into().map_err(|_| ClientError::Protocol)?) == 0)
 }
 
 fn read_resync_snapshot_start_until(
     stream: &mut UnixStream,
     deadline: Instant,
     stale_remainder_hint: Option<usize>,
+    deferred_control: &mut Vec<u8>,
 ) -> Result<Vec<u8>, ClientError> {
     // A decoded header bounds the exact old logical remainder plus the next
     // authoritative boundary. If corruption prevents that hint, use the same
     // finite frame-work bound as a normal poll. Every read also shares the
     // caller's original absolute startup deadline.
     let scan_limit = stale_remainder_hint
-        .map(|remaining| remaining.saturating_add(1))
+        .map(|remaining| {
+            remaining
+                .saturating_add(MAX_FRAMES_PER_POLL)
+                .saturating_add(1)
+        })
         .unwrap_or(MAX_FRAMES_PER_POLL);
+    let mut display_remainder = stale_remainder_hint;
+    let mut deferred_frames = 0usize;
     for _ in 0..scan_limit {
         let frame = read_blocking_raw_frame_until(stream, deadline)?;
-        if is_snapshot_chunk_zero(&frame)? {
-            return Ok(frame);
+        match classify_resync_scan_frame(&frame)? {
+            ResyncScanFrame::SnapshotStart => return Ok(frame),
+            ResyncScanFrame::DisplayRemainder => {
+                if let Some(remaining) = display_remainder.as_mut() {
+                    if *remaining == 0 {
+                        return Err(ClientError::Protocol);
+                    }
+                    *remaining -= 1;
+                }
+            }
+            ResyncScanFrame::DeferredControl => {
+                deferred_frames = deferred_frames
+                    .checked_add(1)
+                    .ok_or(ClientError::Capacity)?;
+                if deferred_frames > MAX_FRAMES_PER_POLL {
+                    return Err(ClientError::Capacity);
+                }
+                let retained_len = deferred_control
+                    .len()
+                    .checked_add(frame.len())
+                    .ok_or(ClientError::Capacity)?;
+                if retained_len > MAX_BUFFERED_BYTES {
+                    return Err(ClientError::Capacity);
+                }
+                deferred_control.extend_from_slice(&frame);
+            }
         }
     }
     Err(ClientError::Protocol)
@@ -310,13 +353,17 @@ impl LocalDisplayClient {
         // attempt; a second malformed logical update terminates immediately.
         let mut resync_available = true;
         let mut quarantined_remainder = None;
+        let mut deferred_control = Vec::new();
         let (cache, mut batch) = loop {
             let mut stale_remainder_hint = None;
             let attempt = (|| {
                 let first_frame = match quarantined_remainder.take() {
-                    Some(remainder) => {
-                        read_resync_snapshot_start_until(&mut stream, deadline, remainder)?
-                    }
+                    Some(remainder) => read_resync_snapshot_start_until(
+                        &mut stream,
+                        deadline,
+                        remainder,
+                        &mut deferred_control,
+                    )?,
                     None => read_blocking_raw_frame_until(&mut stream, deadline)?,
                 };
                 stale_remainder_hint = display_chunk_remainder_hint(&first_frame);
@@ -392,7 +439,11 @@ impl LocalDisplayClient {
         batch.clear();
         Ok(Self {
             stream,
-            buffered: Vec::with_capacity(READ_CHUNK_BYTES),
+            // Replay valid control traffic that arrived between the stale
+            // display remainder and its replacement through the normal poll
+            // consumer. This preserves ordering among retained controls and
+            // keeps their validation out of the display quarantine path.
+            buffered: deferred_control,
             read_offset: 0,
             pending_batch: batch,
             outbound: VecDeque::new(),
@@ -644,6 +695,17 @@ mod tests {
         frame
     }
 
+    fn block_timeline(revision: u64) -> Vec<u8> {
+        encode_frame(
+            MessageType::BlockTimeline,
+            &BlockTimeline {
+                revision,
+                records: Vec::new(),
+            }
+            .encode(),
+        )
+    }
+
     #[test]
     fn malformed_initial_snapshot_requests_resync_then_converges_transactionally() {
         let (client, mut server) = UnixStream::pair().expect("unix stream pair");
@@ -754,7 +816,10 @@ mod tests {
             );
             let valid = snapshot(4, 'V');
             assert_eq!(display_chunk_remainder_hint(&valid), Some(0));
-            assert!(is_snapshot_chunk_zero(&valid).unwrap());
+            assert!(matches!(
+                classify_resync_scan_frame(&valid).unwrap(),
+                ResyncScanFrame::SnapshotStart
+            ));
             assert!(decode_chunk(&valid).is_ok());
             server.write_all(&valid).expect("valid resync snapshot");
             hold_server.recv().expect("client release");
@@ -774,5 +839,75 @@ mod tests {
         assert_eq!(attached.cache().cells[0].scalar, 'V');
         release_server.send(()).expect("release server");
         server_thread.join().expect("server thread");
+    }
+
+    fn assert_attach_resync_preserves_block_timeline(timeline_before_snapshot: bool) {
+        let (client, mut server) = UnixStream::pair().expect("unix stream pair");
+        let execution_id = ExecutionId::from_bytes([11; 16]);
+        let attachment_id = AttachmentId::from_bytes([12; 16]);
+        let (release_server, hold_server) = std::sync::mpsc::sync_channel(0);
+        let server_thread = std::thread::spawn(move || {
+            let (kind, _) = read_blocking_frame(&mut server).expect("attach request");
+            assert_eq!(kind, MessageType::Attach);
+            server
+                .write_all(&attached(execution_id, attachment_id, 5))
+                .expect("attached response");
+
+            let mut malformed_first = snapshot_chunk(5, 2, 0, 0, 2, 'X');
+            let meta_offset = HEADER_LEN + 48 + 12;
+            malformed_first[meta_offset..meta_offset + 4].copy_from_slice(&(104u32).to_le_bytes());
+            server
+                .write_all(&malformed_first)
+                .expect("malformed first chunk");
+            server
+                .write_all(&snapshot_chunk(5, 2, 1, 1, 2, 'Y'))
+                .expect("stale remainder");
+
+            let (kind, _) = read_blocking_frame(&mut server).expect("resync request");
+            assert_eq!(kind, MessageType::Resync);
+            if timeline_before_snapshot {
+                server
+                    .write_all(&block_timeline(7))
+                    .expect("queued block timeline");
+            }
+            server
+                .write_all(&snapshot(5, 'V'))
+                .expect("valid resync snapshot");
+            if !timeline_before_snapshot {
+                server
+                    .write_all(&block_timeline(7))
+                    .expect("queued block timeline");
+            }
+            hold_server.recv().expect("client release");
+        });
+
+        let mut attached = LocalDisplayClient::finish_attach_with_deadline(
+            client,
+            execution_id,
+            Role::Controller,
+            true,
+            9,
+            false,
+            std::time::Instant::now() + Duration::from_millis(250),
+        )
+        .expect("valid control frame must not poison bounded resync");
+        assert_eq!(attached.cache().generation, 5);
+        assert_eq!(attached.cache().cells[0].scalar, 'V');
+        attached
+            .poll_prepare()
+            .expect("retained timeline should reach normal consumer");
+        assert_eq!(attached.block_timeline().revision, 7);
+        release_server.send(()).expect("release server");
+        server_thread.join().expect("server thread");
+    }
+
+    #[test]
+    fn attach_resync_retains_block_timeline_before_replacement_snapshot() {
+        assert_attach_resync_preserves_block_timeline(true);
+    }
+
+    #[test]
+    fn attach_resync_processes_block_timeline_after_replacement_snapshot() {
+        assert_attach_resync_preserves_block_timeline(false);
     }
 }

@@ -252,7 +252,12 @@ impl TerminalState {
         if max_lines == 0 || end < start {
             return Ok(Vec::new());
         }
-        if self.core.primary.history().range_is_stale(start) {
+        if self
+            .core
+            .primary
+            .history()
+            .range_intersects_evicted(start, end)
+        {
             return Err(HistoryRangeError::Stale);
         }
         let mut lines: Vec<(LineId, Vec<Cell>)> = Vec::new();

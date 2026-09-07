@@ -316,7 +316,7 @@ pub(crate) struct HistoryStore {
     segments_resident_bytes: usize,
     resident_bytes: usize,
     eviction_generation: u64,
-    evicted_through: Option<LineId>,
+    evicted_range: Option<(LineId, LineId)>,
 }
 
 impl HistoryStore {
@@ -534,22 +534,34 @@ impl HistoryStore {
     }
 
     fn record_evicted_segment(&mut self, segment: &Segment) {
-        if let Some(line_id) = segment.lines.last().map(|line| line.line_id) {
-            self.evicted_through = Some(
-                self.evicted_through
-                    .map_or(line_id, |current| current.max(line_id)),
-            );
-        }
+        let Some(first) = segment.lines.first().map(|line| line.line_id) else {
+            return;
+        };
+        let Some(last) = segment.lines.last().map(|line| line.line_id) else {
+            return;
+        };
+        self.evicted_range = Some(
+            self.evicted_range
+                .map_or((first, last), |(current_first, current_last)| {
+                    (current_first.min(first), current_last.max(last))
+                }),
+        );
     }
 
-    pub(crate) fn range_is_stale(&self, start: LineId) -> bool {
-        self.evicted_through.is_some_and(|line_id| start <= line_id)
+    pub(crate) fn range_intersects_evicted(&self, start: LineId, end: LineId) -> bool {
+        self.evicted_range
+            .is_some_and(|(first, last)| start <= last && end >= first)
+    }
+
+    fn line_was_evicted(&self, line_id: LineId) -> bool {
+        self.evicted_range
+            .is_some_and(|(first, last)| line_id >= first && line_id <= last)
     }
 
     pub(crate) fn resolve_anchor(&self, anchor: HistoryAnchor) -> HistoryAnchorResolution {
         let line = self.entries().find(|line| line.line_id() == anchor.line_id);
         let Some(line) = line else {
-            return if self.range_is_stale(anchor.line_id) {
+            return if self.line_was_evicted(anchor.line_id) {
                 HistoryAnchorResolution::Unavailable
             } else {
                 HistoryAnchorResolution::Invalid

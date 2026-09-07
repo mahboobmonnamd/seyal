@@ -179,3 +179,20 @@ fn evicted_range_and_anchor_are_explicitly_unavailable() {
         HistoryAnchorResolution::Invalid
     );
 }
+
+#[test]
+fn never_allocated_line_id_is_invalid_after_history_eviction() {
+    let mut terminal = TerminalState::new(512, 1).expect("terminal");
+    let line = format!("{}\r\n", "a".repeat(512));
+    for _ in 0..128 {
+        terminal.feed(line.as_bytes()).expect("history feed");
+    }
+    assert!(terminal.evict_oldest_primary_history_segment() > 0);
+    assert_eq!(
+        terminal.primary_history_unit(HistoryAnchor {
+            line_id: LineId(0),
+            unit_offset: 0,
+        }),
+        HistoryAnchorResolution::Invalid
+    );
+}

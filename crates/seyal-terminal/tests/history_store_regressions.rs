@@ -1,6 +1,6 @@
 use seyal_terminal::{
     CellRole, Color, HistoryAnchor, HistoryAnchorResolution, HistoryRangeError, LineId,
-    TerminalState,
+    TerminalState, HISTORY_PER_EXECUTION_BYTE_CAP,
 };
 
 #[test]
@@ -240,4 +240,90 @@ fn alternate_screen_line_id_gap_is_invalid_after_primary_history_eviction() {
         }),
         HistoryAnchorResolution::Invalid
     );
+}
+
+#[test]
+fn hostile_unicode_resize_and_eviction_sequence_preserves_canonical_units() {
+    let mut one_shot = TerminalState::new(13, 3).expect("one-shot terminal");
+    let mut chunked = TerminalState::new(13, 3).expect("chunked terminal");
+    let mut input = String::new();
+    for index in 0..96 {
+        input.push_str(if index % 2 == 0 {
+            "\x1b[31me\u{301}界👩\u{200d}💻🙂"
+        } else {
+            "\x1b[34m🏳️\u{200d}🌈Z\u{308}語"
+        });
+        input.push_str("\x1b[0m\r\n");
+    }
+    one_shot.feed(input.as_bytes()).expect("one-shot feed");
+    for chunk in input.as_bytes().chunks(3) {
+        chunked.feed(chunk).expect("chunked feed");
+    }
+
+    for (step, cols) in [1, 2, 5, 17, 3, 13, 40, 1, 13].into_iter().enumerate() {
+        let rows = 1 + (step % 5) as u16;
+        one_shot.resize(cols, rows).expect("one-shot resize");
+        chunked.resize(cols, rows).expect("chunked resize");
+        let suffix = format!("\x1b[3{}mstep-{step}-界\u{301}\r\n", step % 8);
+        one_shot.feed(suffix.as_bytes()).expect("one-shot suffix");
+        for chunk in suffix.as_bytes().chunks(2) {
+            chunked.feed(chunk).expect("chunked suffix");
+        }
+
+        assert_eq!(
+            one_shot.primary_history_units_range(LineId(1), LineId(u64::MAX), 32_768),
+            chunked.primary_history_units_range(LineId(1), LineId(u64::MAX), 32_768),
+            "canonical history diverged after resize step {step}"
+        );
+        for terminal in [&one_shot, &chunked] {
+            for row in 0..terminal.rows() {
+                for col in 0..terminal.cols() {
+                    let Some(cell) = terminal.cell(col, row) else {
+                        continue;
+                    };
+                    if cell.role == CellRole::Lead && cell.width == 2 {
+                        assert!(
+                            col + 1 < terminal.cols(),
+                            "orphan lead at resize step {step}, row {row}, col {col}, cols {cols}"
+                        );
+                        assert!(terminal
+                            .cell(col + 1, row)
+                            .is_some_and(|next| next.role == CellRole::Continuation));
+                    }
+                }
+            }
+        }
+    }
+
+    for _ in 0..8 {
+        let one_removed = one_shot.evict_oldest_primary_history_segment();
+        let chunked_removed = chunked.evict_oldest_primary_history_segment();
+        assert_eq!(one_removed, chunked_removed);
+        assert_eq!(
+            one_shot.primary_history_units_range(LineId(1), LineId(u64::MAX), 32_768),
+            chunked.primary_history_units_range(LineId(1), LineId(u64::MAX), 32_768)
+        );
+        if one_removed == 0 {
+            break;
+        }
+    }
+    assert!(one_shot.primary_history_resident_bytes() <= HISTORY_PER_EXECUTION_BYTE_CAP);
+    assert!(chunked.primary_history_resident_bytes() <= HISTORY_PER_EXECUTION_BYTE_CAP);
+}
+
+#[test]
+fn narrowing_alternate_screen_discards_a_wide_unit_atomically() {
+    let mut terminal = TerminalState::new(21, 2).expect("terminal");
+    terminal.feed(b"\x1b[?1049h\x1b[20G").expect("position");
+    terminal.feed("界".as_bytes()).expect("wide unit");
+    assert_eq!(terminal.cell(19, 0).map(|cell| cell.width), Some(2));
+    assert!(terminal
+        .cell(20, 0)
+        .is_some_and(|cell| cell.role == CellRole::Continuation));
+
+    terminal.resize(20, 2).expect("narrow");
+
+    assert!(terminal
+        .cell(19, 0)
+        .is_some_and(|cell| cell.role != CellRole::Lead));
 }

@@ -464,6 +464,14 @@ impl Screen {
                     .copy_from_slice(&self.cell_anchors[old_start..old_start + count]);
                 next_breaks[usize::from(row)] = self.row_breaks[usize::from(row)];
                 next_line_ids[usize::from(row)] = Some(self.line_ids[usize::from(row)]);
+                if cols < old_cols {
+                    let final_col = usize::from(cols - 1);
+                    let final_index = new_start + final_col;
+                    if next[final_index].role == CellRole::Lead && next[final_index].width >= 2 {
+                        next[final_index] = Cell::blank(self.pen.bg);
+                        next_anchors[final_index] = None;
+                    }
+                }
             }
         }
 

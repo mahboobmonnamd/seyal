@@ -10,7 +10,6 @@ use std::{
 
 use seyal_exec::{
     ExecutionReactor, ReactorEvent, ReactorEventKind, RegistrationToken, TerminalExecution,
-    HISTORY_RUNTIME_AGGREGATE_BYTE_CAP,
 };
 
 use crate::{
@@ -188,7 +187,7 @@ impl Runtime {
             .values()
             .map(|entry| entry.execution.retained_history_bytes())
             .sum::<usize>();
-        while resident > HISTORY_RUNTIME_AGGREGATE_BYTE_CAP {
+        while resident > self.config.history_aggregate_bytes {
             let candidate = self
                 .entries
                 .iter()

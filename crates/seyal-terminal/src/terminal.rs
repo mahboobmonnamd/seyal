@@ -167,8 +167,10 @@ impl TerminalState {
     }
 
     /// Returns a bounded primary-screen history range. The returned rows are
-    /// an explicit read-only projection; alternate-screen content is never
-    /// treated as command output history.
+    /// an explicit read-only projection of **primary** retained history plus
+    /// primary visible rows. Alternate-screen cells are never included; the
+    /// portable API still returns primary history while alternate screen is
+    /// active so embedders (not VT) own Blocks/TUI presentation policy.
     ///
     /// Work is bounded by retained history plus visible rows, never by the
     /// numeric distance between `start` and `end` (LineIds may be sparse).
@@ -178,7 +180,7 @@ impl TerminalState {
         end: LineId,
         max_lines: usize,
     ) -> Vec<(LineId, Vec<Cell>)> {
-        if self.core.modes.alternate_screen || max_lines == 0 || end < start {
+        if max_lines == 0 || end < start {
             return Vec::new();
         }
         let mut lines = Vec::new();
@@ -760,6 +762,33 @@ mod tests {
                 .starts_with("one")
         }));
         assert!(terminal.primary_history_range(first, last, 0).is_empty());
+    }
+
+    #[test]
+    fn primary_history_range_remains_available_during_alternate_screen() {
+        let mut terminal = TerminalState::new(4, 2).unwrap();
+        terminal.feed(b"one\r\ntwo\r\nthree").unwrap();
+        let last = terminal.line_id(1).unwrap();
+        let before = terminal.primary_history_range(LineId(1), last, 8);
+        assert!(!before.is_empty());
+        terminal.feed(b"\x1b[?1049h").unwrap();
+        assert!(terminal.modes().alternate_screen);
+        let during = terminal.primary_history_range(LineId(1), last, 8);
+        assert_eq!(
+            during.len(),
+            before.len(),
+            "primary history must remain readable while alternate screen is active"
+        );
+        assert_eq!(
+            during
+                .iter()
+                .map(|(id, cells)| (*id, cells.iter().map(|c| c.character).collect::<String>()))
+                .collect::<Vec<_>>(),
+            before
+                .iter()
+                .map(|(id, cells)| (*id, cells.iter().map(|c| c.character).collect::<String>()))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

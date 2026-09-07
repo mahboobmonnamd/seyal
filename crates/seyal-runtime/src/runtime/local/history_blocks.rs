@@ -66,11 +66,15 @@ impl Runtime {
             );
             return;
         };
+        let max_lines = usize::from(request.max_lines);
         let rows = entry.execution.terminal().primary_history_range(
             LineId(request.start_line),
             LineId(request.end_line),
-            usize::from(request.max_lines),
+            max_lines,
         );
+        // VT already caps at max_lines. A full window means more in-range
+        // retained rows may remain — report Truncated so clients can continue.
+        let hit_line_cap = max_lines > 0 && rows.len() == max_lines;
         let mapped = rows
             .into_iter()
             .map(|(line_id, cells)| framing::HistoryRow {
@@ -88,15 +92,14 @@ impl Runtime {
                     })
                     .collect(),
             });
-        let (encoded_rows, mut truncated) = framing::HistoryRangeSnapshot::admit_rows(
+        let (encoded_rows, budget_truncated) = framing::HistoryRangeSnapshot::admit_rows(
             mapped,
-            usize::from(request.max_lines),
+            max_lines,
             usize::try_from(request.max_cells).unwrap_or(0),
         );
-        if encoded_rows.len() < usize::from(request.max_lines) {
-            truncated = truncated
-                || request.end_line.saturating_sub(request.start_line) >= encoded_rows.len() as u64;
-        }
+        // Truncation is budget-driven only. Never infer Truncated from sparse
+        // LineId numeric distance (alt-screen identity burn makes spans large).
+        let truncated = budget_truncated || hit_line_cap;
         let mut snapshot = framing::HistoryRangeSnapshot {
             request_id: request.request_id,
             block_id: request.block_id,

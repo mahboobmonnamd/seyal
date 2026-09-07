@@ -56,18 +56,35 @@ impl Runtime {
         while consumed < self.config.read_dispatch_bytes {
             let remaining = self.config.read_dispatch_bytes - consumed;
             let read_len = remaining.min(self.read_buffer.len());
-            let (outcome, _generation_before, _generation_after) = {
+            let (outcome, _generation_before, _generation_after, pending_replies) = {
                 let entry = self
                     .entries
                     .get_mut(&id)
                     .ok_or(RuntimeError::UnknownExecution)?;
                 let generation_before = entry.execution.terminal().damage_generation();
-                let outcome = entry
+                let read_result = entry
                     .execution
-                    .read_output(&mut self.read_buffer[..read_len])?;
+                    .read_output(&mut self.read_buffer[..read_len]);
+                // Feed may fault after capturing protocol replies in the same
+                // chunk; arm writable before propagating so replies still drain.
+                let pending_replies = entry.execution.has_pending_protocol_replies();
                 let generation_after = entry.execution.terminal().damage_generation();
-                (outcome, generation_before, generation_after)
+                (
+                    read_result,
+                    generation_before,
+                    generation_after,
+                    pending_replies,
+                )
             };
+            if pending_replies {
+                let token = self
+                    .entries
+                    .get(&id)
+                    .ok_or(RuntimeError::UnknownExecution)?
+                    .token;
+                self.reactor.set_writable(token, true)?;
+            }
+            let outcome = outcome?;
             match outcome {
                 ReadOutcome::Eof => {
                     // PTY EOF proves only that terminal I/O is gone. A child

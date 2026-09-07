@@ -247,7 +247,7 @@ impl TerminalState {
             return Vec::new();
         }
         let mut lines = Vec::new();
-        for (id, cells) in self.core.primary.history_entries() {
+        for (id, _, cells) in self.core.primary.history_entries() {
             if id < start {
                 continue;
             }
@@ -1047,7 +1047,12 @@ impl Actions for TerminalCore {
                 self.invalidate_active_grapheme();
                 let count = param_one(params, 0);
                 self.editing_mutation(|screen, line_ids, store| {
-                    screen.scroll_up(count, line_ids, Some(store))
+                    screen.scroll_up(
+                        count,
+                        line_ids,
+                        Some(store),
+                        crate::screen::HistoryBreakAfter::HardBreak,
+                    )
                 })
             }
             b'T' => {
@@ -1299,6 +1304,38 @@ mod tests {
                 .iter()
                 .map(|(id, cells)| (*id, cells.iter().map(|c| c.character).collect::<String>()))
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn retained_history_records_softwrap_and_hardbreak_lineage() {
+        let mut terminal = TerminalState::new(2, 1).unwrap();
+        terminal.feed(b"ab").unwrap();
+        terminal.feed(b"c\n").unwrap();
+        let history: Vec<_> = terminal
+            .core
+            .primary
+            .history_entries()
+            .map(|(id, break_after, cells)| {
+                (
+                    id,
+                    break_after,
+                    cells.iter().map(|cell| cell.character).collect::<String>(),
+                )
+            })
+            .collect();
+
+        assert!(
+            history.iter().any(|(_, break_after, text)| {
+                matches!(break_after, crate::screen::HistoryBreakAfter::SoftWrap) && text == "ab"
+            }),
+            "soft-wrapped overflow row should be retained with SoftWrap lineage"
+        );
+        assert!(
+            history.iter().any(|(_, break_after, text)| {
+                matches!(break_after, crate::screen::HistoryBreakAfter::HardBreak) && text == "c "
+            }),
+            "explicit line feed should be retained with HardBreak lineage"
         );
     }
 

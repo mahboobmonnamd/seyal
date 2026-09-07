@@ -6,6 +6,19 @@ use std::collections::VecDeque;
 
 const MAX_HISTORY_LINES: usize = 8_192;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HistoryBreakAfter {
+    HardBreak,
+    SoftWrap,
+}
+
+#[derive(Clone, Debug)]
+struct HistoryEntry {
+    line_id: LineId,
+    cells: Vec<Cell>,
+    break_after: HistoryBreakAfter,
+}
+
 #[derive(Clone, Copy, Debug)]
 struct SavedCursor {
     cursor: Cursor,
@@ -20,7 +33,7 @@ pub(crate) struct Screen {
     cursor: Cursor,
     pen: Style,
     saved_cursor: Option<SavedCursor>,
-    history: VecDeque<(LineId, Vec<Cell>)>,
+    history: VecDeque<HistoryEntry>,
     /// Inclusive 0-based DECSTBM top margin.
     scroll_top: u16,
     /// Inclusive 0-based DECSTBM bottom margin.
@@ -121,8 +134,8 @@ impl Screen {
         for cell in &self.cells {
             Self::release_cell(*cell, store);
         }
-        for (_, row) in &self.history {
-            for cell in row {
+        for entry in &self.history {
+            for cell in &entry.cells {
                 Self::release_cell(*cell, store);
             }
         }
@@ -189,10 +202,12 @@ impl Screen {
     }
 
     /// Oldest-to-newest retained primary history entries (storage order).
-    pub(crate) fn history_entries(&self) -> impl Iterator<Item = (LineId, &[Cell])> {
+    pub(crate) fn history_entries(
+        &self,
+    ) -> impl Iterator<Item = (LineId, HistoryBreakAfter, &[Cell])> {
         self.history
             .iter()
-            .map(|(id, cells)| (*id, cells.as_slice()))
+            .map(|entry| (entry.line_id, entry.break_after, entry.cells.as_slice()))
     }
 
     pub(crate) fn cell_row(&self, row: u16) -> Option<&[Cell]> {
@@ -299,7 +314,7 @@ impl Screen {
 
         if self.cursor.pending_wrap {
             if wraparound {
-                let wrap_mutation = self.line_feed(line_ids)?;
+                let wrap_mutation = self.line_feed(line_ids, HistoryBreakAfter::SoftWrap)?;
                 self.cursor.col = 0;
                 mutation = mutation.merge(wrap_mutation);
                 soft_wrapped = true;
@@ -313,7 +328,7 @@ impl Screen {
             && (self.cursor.col == self.cols - 1 || self.cursor.col + 1 > self.cols - 1)
         {
             if wraparound {
-                let wrap_mutation = self.line_feed(line_ids)?;
+                let wrap_mutation = self.line_feed(line_ids, HistoryBreakAfter::SoftWrap)?;
                 self.cursor.col = 0;
                 mutation = mutation.merge(wrap_mutation);
                 soft_wrapped = true;
@@ -401,7 +416,7 @@ impl Screen {
         Ok(match byte {
             0x08 => self.backspace(),
             0x09 => self.tab(),
-            0x0a..=0x0c => return self.line_feed(line_ids),
+            0x0a..=0x0c => return self.line_feed(line_ids, HistoryBreakAfter::HardBreak),
             0x0d => self.carriage_return(),
             _ => Mutation::none(),
         })
@@ -623,11 +638,15 @@ impl Screen {
     }
 
     /// IND / LF within the scroll region: scroll at the bottom margin.
-    fn line_feed(&mut self, line_ids: &mut LineIdAllocator) -> Result<Mutation, TerminalError> {
+    fn line_feed(
+        &mut self,
+        line_ids: &mut LineIdAllocator,
+        break_after: HistoryBreakAfter,
+    ) -> Result<Mutation, TerminalError> {
         self.cursor.pending_wrap = false;
         let old = self.cursor.row;
         if self.cursor.row == self.scroll_bottom {
-            return self.scroll_up(1, line_ids, None);
+            return self.scroll_up(1, line_ids, None, break_after);
         }
         if self.cursor.row < self.rows.saturating_sub(1) {
             self.cursor.row += 1;
@@ -641,7 +660,7 @@ impl Screen {
         &mut self,
         line_ids: &mut LineIdAllocator,
     ) -> Result<Mutation, TerminalError> {
-        self.line_feed(line_ids)
+        self.line_feed(line_ids, HistoryBreakAfter::HardBreak)
     }
 
     /// ESC M — Reverse Index.
@@ -676,6 +695,7 @@ impl Screen {
         count: u16,
         line_ids: &mut LineIdAllocator,
         store: Option<&mut GraphemeStore>,
+        break_after: HistoryBreakAfter,
     ) -> Result<Mutation, TerminalError> {
         let count = count.max(1);
         let region_height = self
@@ -686,7 +706,14 @@ impl Screen {
         if n == 0 {
             return Ok(Mutation::none());
         }
-        self.shift_region_rows_up(self.scroll_top, self.scroll_bottom, n, line_ids, store)
+        self.shift_region_rows_up(
+            self.scroll_top,
+            self.scroll_bottom,
+            n,
+            line_ids,
+            store,
+            break_after,
+        )
     }
 
     /// CSI T — Scroll Down (SD) inside the current region.
@@ -757,6 +784,7 @@ impl Screen {
             n,
             line_ids,
             Some(store),
+            HistoryBreakAfter::HardBreak,
         )
     }
 
@@ -841,6 +869,7 @@ impl Screen {
         count: u16,
         line_ids: &mut LineIdAllocator,
         mut store: Option<&mut GraphemeStore>,
+        break_after: HistoryBreakAfter,
     ) -> Result<Mutation, TerminalError> {
         let cols = usize::from(self.cols);
         let top_i = usize::from(top);
@@ -859,13 +888,17 @@ impl Screen {
                 let evicted = self.cells[row_start..row_start + cols].to_vec();
                 if self.history.len() == MAX_HISTORY_LINES {
                     if let Some(store) = store.as_mut() {
-                        for cell in &self.history.front().expect("history non-empty").1 {
+                        for cell in &self.history.front().expect("history non-empty").cells {
                             Self::release_cell(*cell, store);
                         }
                     }
                     self.history.pop_front();
                 }
-                self.history.push_back((evicted_id, evicted));
+                self.history.push_back(HistoryEntry {
+                    line_id: evicted_id,
+                    cells: evicted,
+                    break_after,
+                });
             }
         } else if let Some(store) = store.as_mut() {
             for row in 0..n {

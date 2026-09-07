@@ -1,0 +1,155 @@
+{
+  "environment": {
+    "platform": "Darwin 25.5.0",
+    "python": "3.14.6",
+    "sqlite": "3.53.4"
+  },
+  "experiment": "issue-687-durable-persistence-comparison",
+  "hot_path_overlap": [
+    {
+      "background_commits": 1,
+      "hot_path_p95_with_writer_ms": 8.3e-05,
+      "hot_path_p95_without_writer_ms": 8.3e-05,
+      "interpretation": "synthetic scheduler/I-O overlap only; not PTY/VT product latency",
+      "model": "sqlite"
+    },
+    {
+      "background_commits": 1,
+      "hot_path_p95_with_writer_ms": 8.3e-05,
+      "hot_path_p95_without_writer_ms": 8.3e-05,
+      "interpretation": "synthetic scheduler/I-O overlap only; not PTY/VT product latency",
+      "model": "journal"
+    },
+    {
+      "background_commits": 1,
+      "hot_path_p95_with_writer_ms": 4.2e-05,
+      "hot_path_p95_without_writer_ms": 8.3e-05,
+      "interpretation": "synthetic scheduler/I-O overlap only; not PTY/VT product latency",
+      "model": "snapshot"
+    },
+    {
+      "background_commits": 1,
+      "hot_path_p95_with_writer_ms": 4.2e-05,
+      "hot_path_p95_without_writer_ms": 8.3e-05,
+      "interpretation": "synthetic scheduler/I-O overlap only; not PTY/VT product latency",
+      "model": "hybrid"
+    }
+  ],
+  "models": [
+    {
+      "all_independent_observers_safe": true,
+      "all_migrations_refused_downgrade": true,
+      "all_recoveries_logically_redacted": true,
+      "all_recoveries_non_resurrecting": true,
+      "commit_ms_p50": 0.490084,
+      "commit_ms_p95": 0.545083,
+      "commit_sample_count": 60,
+      "commits_per_repetition": 3,
+      "disk_bytes_p50": 506168,
+      "fault_injection": null,
+      "migration_ms_p50": 0.8685,
+      "migration_ms_p95": 0.949,
+      "model": "sqlite",
+      "percentile_method": "nearest-rank",
+      "raw_secret_artifacts_max": 0,
+      "recovery_ms_p50": 1.028875,
+      "recovery_ms_p95": 1.108,
+      "repetitions": 20,
+      "scale_workspaces": 100,
+      "total_independent_observations": 632
+    },
+    {
+      "all_independent_observers_safe": true,
+      "all_migrations_refused_downgrade": true,
+      "all_recoveries_logically_redacted": true,
+      "all_recoveries_non_resurrecting": true,
+      "commit_ms_p50": 2.178708,
+      "commit_ms_p95": 2.333167,
+      "commit_sample_count": 60,
+      "commits_per_repetition": 3,
+      "disk_bytes_p50": 1155932,
+      "fault_injection": null,
+      "migration_ms_p50": 13.414833,
+      "migration_ms_p95": 13.581958,
+      "model": "journal",
+      "percentile_method": "nearest-rank",
+      "raw_secret_artifacts_max": 2,
+      "recovery_ms_p50": 10.975916,
+      "recovery_ms_p95": 11.190166,
+      "repetitions": 20,
+      "scale_workspaces": 100,
+      "total_independent_observations": 22
+    },
+    {
+      "all_independent_observers_safe": true,
+      "all_migrations_refused_downgrade": true,
+      "all_recoveries_logically_redacted": true,
+      "all_recoveries_non_resurrecting": true,
+      "commit_ms_p50": 0.378334,
+      "commit_ms_p95": 0.4485,
+      "commit_sample_count": 60,
+      "commits_per_repetition": 3,
+      "disk_bytes_p50": 51537,
+      "fault_injection": null,
+      "migration_ms_p50": 0.517458,
+      "migration_ms_p95": 0.56725,
+      "model": "snapshot",
+      "percentile_method": "nearest-rank",
+      "raw_secret_artifacts_max": 0,
+      "recovery_ms_p50": 0.585416,
+      "recovery_ms_p95": 0.666708,
+      "repetitions": 20,
+      "scale_workspaces": 100,
+      "total_independent_observations": 356
+    },
+    {
+      "all_independent_observers_safe": true,
+      "all_migrations_refused_downgrade": true,
+      "all_recoveries_logically_redacted": true,
+      "all_recoveries_non_resurrecting": true,
+      "commit_ms_p50": 9.446833,
+      "commit_ms_p95": 10.883125,
+      "commit_sample_count": 60,
+      "commits_per_repetition": 3,
+      "disk_bytes_p50": 945438,
+      "fault_injection": {
+        "corrupt_segment_explicit_unavailable_count": 1,
+        "fault_phases": {
+          "after_manifest": {
+            "manifest_visible": true,
+            "old_manifest_preserved": false,
+            "orphan_object_count": 0,
+            "raised": true
+          },
+          "after_object_before_manifest": {
+            "manifest_visible": false,
+            "old_manifest_preserved": true,
+            "orphan_object_count": 35,
+            "raised": true
+          },
+          "before_object": {
+            "manifest_visible": false,
+            "old_manifest_preserved": true,
+            "orphan_object_count": 0,
+            "raised": true
+          }
+        },
+        "immutable_existing_objects_not_overwritten": true,
+        "missing_or_corrupt_never_silently_disappear": true,
+        "missing_segment_explicit_unavailable_count": 1,
+        "retained_old_object_count": 86
+      },
+      "migration_ms_p50": 8.317792,
+      "migration_ms_p95": 8.866875,
+      "model": "hybrid",
+      "percentile_method": "nearest-rank",
+      "raw_secret_artifacts_max": 0,
+      "recovery_ms_p50": 8.426416,
+      "recovery_ms_p95": 8.827458,
+      "repetitions": 20,
+      "scale_workspaces": 100,
+      "total_independent_observations": 107
+    }
+  ],
+  "research_only": true
+}

@@ -1,6 +1,6 @@
 use crate::{
-    cursor::Cursor, damage::Mutation, line::LineIdAllocator, Cell, Color, CursorState, LineId,
-    Style, TerminalError,
+    cursor::Cursor, damage::Mutation, grapheme_store::GraphemeStore, line::LineIdAllocator, Cell,
+    CellRole, Color, CursorState, LineId, Style, TerminalError,
 };
 use std::collections::VecDeque;
 
@@ -69,9 +69,62 @@ impl Screen {
         self.pen
     }
 
-    pub(crate) fn inherit_pen_for_clean_buffer(&mut self, pen: Style) {
+    pub(crate) fn inherit_pen_for_clean_buffer(&mut self, pen: Style, store: &mut GraphemeStore) {
         self.pen = pen;
+        self.release_all_payloads(store);
         self.cells.fill(Cell::blank(pen.bg));
+    }
+
+    pub(crate) fn release_all_payloads(&mut self, store: &mut GraphemeStore) {
+        for cell in &self.cells {
+            Self::release_cell(*cell, store);
+        }
+        for (_, row) in &self.history {
+            for cell in row {
+                Self::release_cell(*cell, store);
+            }
+        }
+    }
+
+    fn release_cell(cell: Cell, store: &mut GraphemeStore) {
+        if cell.role == CellRole::Lead {
+            store.release(cell.store_id);
+        }
+    }
+
+    /// Clears a lead or continuation so no orphan half remains (SPEC-011 §7.3).
+    pub(crate) fn clear_unit_at(
+        &mut self,
+        col: u16,
+        row: u16,
+        store: &mut GraphemeStore,
+    ) -> Mutation {
+        if col >= self.cols || row >= self.rows {
+            return Mutation::none();
+        }
+        let index = self.index(col, row);
+        let cell = self.cells[index];
+        let (lead_col, lead_row) = match cell.role {
+            CellRole::Continuation if col > 0 => (col - 1, row),
+            CellRole::Lead | CellRole::Empty => (col, row),
+            CellRole::Continuation => (col, row),
+        };
+        let lead_index = self.index(lead_col, lead_row);
+        let lead = self.cells[lead_index];
+        if lead.role == CellRole::Lead {
+            Self::release_cell(lead, store);
+            let width = lead.width.max(1);
+            self.cells[lead_index] = Cell::blank(self.pen.bg);
+            if width >= 2 && lead_col + 1 < self.cols {
+                let cont = self.index(lead_col + 1, lead_row);
+                if self.cells[cont].role == CellRole::Continuation {
+                    self.cells[cont] = Cell::blank(self.pen.bg);
+                }
+            }
+        } else {
+            self.cells[index] = Cell::blank(self.pen.bg);
+        }
+        Mutation::row(row)
     }
 
     pub(crate) fn cursor(&self, visible: bool) -> CursorState {
@@ -188,32 +241,113 @@ impl Screen {
         Mutation::full(rows)
     }
 
-    pub(crate) fn print(
+    /// Places a completed canonical unit at the cursor (after wrap handling).
+    /// Returns `(mutation, soft_wrapped, lead_col, lead_row)`.
+    pub(crate) fn place_new_unit(
         &mut self,
-        character: char,
+        lead: Cell,
+        wraparound: bool,
         line_ids: &mut LineIdAllocator,
-    ) -> Result<Mutation, TerminalError> {
+        store: &mut GraphemeStore,
+    ) -> Result<(Mutation, bool, u16, u16), TerminalError> {
+        let width = lead.width.max(1);
         let mut mutation = Mutation::none();
+        let mut soft_wrapped = false;
+
         if self.cursor.pending_wrap {
-            let wrap_mutation = self.line_feed(line_ids)?;
-            self.cursor.col = 0;
-            mutation = mutation.merge(wrap_mutation);
+            if wraparound {
+                let wrap_mutation = self.line_feed(line_ids)?;
+                self.cursor.col = 0;
+                mutation = mutation.merge(wrap_mutation);
+                soft_wrapped = true;
+            } else {
+                self.cursor.pending_wrap = false;
+            }
         }
 
+        if width >= 2
+            && self.cursor.col + 1 >= self.cols
+            && (self.cursor.col == self.cols - 1 || self.cursor.col + 1 > self.cols - 1)
+        {
+            if wraparound {
+                let wrap_mutation = self.line_feed(line_ids)?;
+                self.cursor.col = 0;
+                mutation = mutation.merge(wrap_mutation);
+                soft_wrapped = true;
+            } else {
+                return Ok((mutation, soft_wrapped, self.cursor.col, self.cursor.row));
+            }
+        }
+
+        let col = self.cursor.col;
         let row = self.cursor.row;
-        let index = self.index(self.cursor.col, row);
-        self.cells[index] = Cell {
-            character,
-            style: self.pen,
-        };
+        mutation = mutation.merge(self.clear_unit_at(col, row, store));
+        if width >= 2 && col + 1 < self.cols {
+            mutation = mutation.merge(self.clear_unit_at(col + 1, row, store));
+        }
+
+        let index = self.index(col, row);
+        self.cells[index] = lead;
+        if width >= 2 {
+            if col + 1 >= self.cols {
+                Self::release_cell(lead, store);
+                self.cells[index] = Cell::blank(self.pen.bg);
+                return Ok((mutation, soft_wrapped, col, row));
+            }
+            let cont_index = self.index(col + 1, row);
+            self.cells[cont_index] = Cell::continuation();
+        }
         mutation = mutation.merge(Mutation::row(row));
 
-        if self.cursor.col == self.cols - 1 {
-            self.cursor.pending_wrap = true;
+        let advance = u16::from(width);
+        let next_col = col.saturating_add(advance);
+        if next_col >= self.cols {
+            self.cursor.col = self.cols - 1;
+            self.cursor.pending_wrap = wraparound;
         } else {
-            self.cursor.col += 1;
+            self.cursor.col = next_col;
+            self.cursor.pending_wrap = false;
         }
-        Ok(mutation)
+        Ok((mutation, soft_wrapped, col, row))
+    }
+
+    /// Overwrites an existing active lead in place (append / late width change).
+    pub(crate) fn replace_active_lead(
+        &mut self,
+        col: u16,
+        row: u16,
+        lead: Cell,
+        previous_width: u8,
+        store: &mut GraphemeStore,
+    ) -> Mutation {
+        let mut mutation = Mutation::none();
+        if previous_width >= 2 && col + 1 < self.cols {
+            let cont = self.index(col + 1, row);
+            if self.cells[cont].role == CellRole::Continuation {
+                self.cells[cont] = Cell::blank(self.pen.bg);
+            }
+        }
+        // Release previous store via clear of current lead only if different id.
+        let index = self.index(col, row);
+        let old = self.cells[index];
+        if old.role == CellRole::Lead && old.store_id != lead.store_id {
+            Self::release_cell(old, store);
+        }
+        self.cells[index] = lead;
+        if lead.width >= 2 && col + 1 < self.cols {
+            mutation = mutation.merge(self.clear_unit_at(col + 1, row, store));
+            let cont_index = self.index(col + 1, row);
+            self.cells[cont_index] = Cell::continuation();
+        }
+        mutation.merge(Mutation::row(row))
+    }
+
+    pub(crate) fn pending_wrap(&self) -> bool {
+        self.cursor.pending_wrap
+    }
+
+    pub(crate) fn set_pending_wrap(&mut self, pending: bool) {
+        self.cursor.pending_wrap = pending;
     }
 
     pub(crate) fn execute(
@@ -288,19 +422,28 @@ impl Screen {
         Mutation::rows(old, self.cursor.row)
     }
 
-    pub(crate) fn erase_display(&mut self, mode: u16) -> Mutation {
+    pub(crate) fn erase_display(&mut self, mode: u16, store: &mut GraphemeStore) -> Mutation {
         let blank = Cell::blank(self.pen.bg);
         let cursor_index = self.index(self.cursor.col, self.cursor.row);
         match mode {
             0 => {
+                for cell in &self.cells[cursor_index..] {
+                    Self::release_cell(*cell, store);
+                }
                 self.cells[cursor_index..].fill(blank);
                 Mutation::rows(self.cursor.row, self.rows - 1)
             }
             1 => {
+                for cell in &self.cells[..=cursor_index] {
+                    Self::release_cell(*cell, store);
+                }
                 self.cells[..=cursor_index].fill(blank);
                 Mutation::rows(0, self.cursor.row)
             }
             2 => {
+                for cell in &self.cells {
+                    Self::release_cell(*cell, store);
+                }
                 self.cells.fill(blank);
                 Mutation::full(self.rows)
             }
@@ -308,16 +451,31 @@ impl Screen {
         }
     }
 
-    pub(crate) fn erase_line(&mut self, mode: u16) -> Mutation {
+    pub(crate) fn erase_line(&mut self, mode: u16, store: &mut GraphemeStore) -> Mutation {
         let blank = Cell::blank(self.pen.bg);
         let row = self.cursor.row;
         let start = usize::from(row) * usize::from(self.cols);
         let end = start + usize::from(self.cols);
         let col = usize::from(self.cursor.col);
         match mode {
-            0 => self.cells[start + col..end].fill(blank),
-            1 => self.cells[start..=start + col].fill(blank),
-            2 => self.cells[start..end].fill(blank),
+            0 => {
+                for cell in &self.cells[start + col..end] {
+                    Self::release_cell(*cell, store);
+                }
+                self.cells[start + col..end].fill(blank);
+            }
+            1 => {
+                for cell in &self.cells[start..=start + col] {
+                    Self::release_cell(*cell, store);
+                }
+                self.cells[start..=start + col].fill(blank);
+            }
+            2 => {
+                for cell in &self.cells[start..end] {
+                    Self::release_cell(*cell, store);
+                }
+                self.cells[start..end].fill(blank);
+            }
             _ => return Mutation::none(),
         }
         Mutation::row(row)
@@ -440,6 +598,7 @@ impl Screen {
         let row_width = usize::from(self.cols);
         self.cells.copy_within(row_width.., 0);
         let last_row_start = self.cells.len() - row_width;
+        // Last row was shifted up; blank without releasing shifted cells.
         self.cells[last_row_start..].fill(Cell::blank(self.pen.bg));
         self.line_ids.copy_within(1.., 0);
         let last = self.line_ids.len() - 1;

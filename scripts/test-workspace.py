@@ -72,7 +72,9 @@ for name, member in EXPECTED_CRATES.items():
 
 expected_portable_dependencies = {
     "seyal-core": set(),
-    "seyal-terminal": set(),
+    # SPEC-011/#815 allow reviewed Unicode semantic tables as implementation
+    # inputs; they are not architecture authority and must stay version-pinned.
+    "seyal-terminal": {"unicode-segmentation", "unicode-width"},
     "seyal-exec": {"seyal-terminal"},
     "seyal-protocol": {"seyal-core"},
     "seyal-runtime": {"seyal-core", "seyal-exec", "seyal-protocol"},
@@ -87,10 +89,26 @@ for name, expected in expected_portable_dependencies.items():
             f"{', '.join(sorted(expected)) if expected else 'none'}"
         )
     for dependency in expected:
+        if not dependency.startswith("seyal-"):
+            continue
         expected_path = f"../{dependency}"
         if dependencies[dependency].get("path") != expected_path:
             fail(f"{name} must consume {dependency} through {expected_path}")
 
+# Pin the reviewed Unicode semantic crates used by seyal-terminal.
+terminal_deps = manifests["seyal-terminal"].get("dependencies", {})
+seg = terminal_deps.get("unicode-segmentation")
+if not isinstance(seg, str) or not seg.startswith("1.13."):
+    fail("seyal-terminal must pin unicode-segmentation 1.13.x for Unicode 17.0.0")
+width = terminal_deps.get("unicode-width")
+if isinstance(width, str):
+    width_version = width
+elif isinstance(width, dict):
+    width_version = str(width.get("version", ""))
+else:
+    width_version = ""
+if not width_version.startswith("0.2."):
+    fail("seyal-terminal must pin unicode-width 0.2.x")
 client_dev_dependencies = manifests["seyal-client"].get("dev-dependencies", {})
 if set(client_dev_dependencies) != {"seyal-exec", "seyal-runtime"}:
     fail("seyal-client integration tests may depend exactly on seyal-exec and seyal-runtime")

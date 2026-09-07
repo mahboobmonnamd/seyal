@@ -20,3 +20,7 @@ harness = false
 
 [lints]
 workspace = true
+
+[dependencies]
+unicode-segmentation = "1.13.3"
+unicode-width = { version = "0.2.2", default-features = false, features = ["cjk"] }

@@ -34,7 +34,8 @@ vertex TerminalVertexOut seyal_terminal_vertex(
     uint vertex_id [[vertex_id]],
     uint instance_id [[instance_id]],
     const device TerminalInstance *instances [[buffer(0)]],
-    constant float2 &viewport [[buffer(1)]])
+    constant float2 &viewport [[buffer(1)]],
+    constant uint &render_mode [[buffer(2)]])
 {
     constexpr float2 corners[6] = {
         float2(0.0, 0.0),
@@ -47,7 +48,12 @@ vertex TerminalVertexOut seyal_terminal_vertex(
 
     const TerminalInstance instance = instances[instance_id];
     const float2 local = corners[vertex_id];
-    const float2 pixel = instance.origin + local * instance.size;
+    float2 size = instance.size;
+    constexpr uint wide_glyph_flag = 1u << 3;
+    if (render_mode == 1u && (instance.flags & wide_glyph_flag) != 0u) {
+        size.x *= 2.0;
+    }
+    const float2 pixel = instance.origin + local * size;
     const float2 ndc = float2(
         pixel.x / max(viewport.x, 1.0) * 2.0 - 1.0,
         1.0 - pixel.y / max(viewport.y, 1.0) * 2.0
@@ -67,11 +73,18 @@ vertex TerminalVertexOut seyal_terminal_vertex(
 fragment float4 seyal_terminal_fragment(
     TerminalVertexOut in [[stage_in]],
     texture2d_array<float> glyph_atlas [[texture(0)]],
-    sampler glyph_sampler [[sampler(0)]])
+    sampler glyph_sampler [[sampler(0)]],
+    constant uint &render_mode [[buffer(2)]])
 {
     constexpr uint glyph_flag = 1u << 0;
     constexpr uint underline_flag = 1u << 1;
     constexpr uint cursor_flag = 1u << 2;
+    constexpr uint glyph_pass = 1u;
+
+    if (render_mode == glyph_pass
+        && (in.flags & (glyph_flag | underline_flag)) == 0u) {
+        discard_fragment();
+    }
 
     float4 foreground = unpack_rgba8(in.foreground);
     float4 background = unpack_rgba8(in.background);
@@ -84,9 +97,15 @@ fragment float4 seyal_terminal_fragment(
     float4 color = background;
     if ((in.flags & glyph_flag) != 0u) {
         const float coverage = glyph_atlas.sample(glyph_sampler, in.uv, in.atlas_slice).r;
+        if (render_mode == glyph_pass) {
+            return float4(foreground.rgb, coverage);
+        }
         color = mix(color, foreground, coverage);
     }
     if ((in.flags & underline_flag) != 0u && in.local.y >= 0.88) {
+        if (render_mode == glyph_pass) {
+            return float4(foreground.rgb, 1.0);
+        }
         color = foreground;
     }
     return color;

@@ -333,6 +333,64 @@ enum RendererValidation {
         }
     }
 
+    /// #817 — a width-two lead grapheme must draw into its continuation cell.
+    /// The assertion samples the real offscreen Metal output, rather than only
+    /// checking that the production surface exists.
+    static func wideGraphemeOffscreenSelfTest() -> Bool {
+        guard let device = MTLCreateSystemDefaultDevice() else { return false }
+        do {
+            let renderer = try MetalTerminalRenderer(device: device)
+            let leadReserved: UInt16 = 1 | (2 << 2) | (1 << 4)
+            let continuationReserved: UInt16 = 2
+            var lead = preparedCell(
+                foreground: terminalRGB(red: 255, green: 255, blue: 255)
+            )
+            lead.reserved = leadReserved
+            var continuation = preparedCell()
+            continuation.reserved = continuationReserved
+            let cells = [lead, continuation]
+            let payload = Data("👩‍💻".utf8)
+            var sidecar = Data([
+                UInt8(payload.count & 0xff),
+                UInt8((payload.count >> 8) & 0xff),
+            ])
+            sidecar.append(payload)
+            var damage = DamageMask()
+            damage.mark(row: 0)
+            return try cells.withUnsafeBufferPointer { buffer in
+                let frame = NativePreparedFrame(
+                    cells: buffer,
+                    generation: 1,
+                    rows: 1,
+                    columns: 2,
+                    damage: damage,
+                    graphemeUtf8: sidecar
+                )
+                guard try renderer.update(
+                    frame: frame,
+                    backingScale: 1,
+                    forceFullRebuild: true
+                ) == .updated else {
+                    return false
+                }
+                let cellSize = renderer.cellPixelSize(backingScale: 1)
+                guard let texture = renderer.renderOffscreenAndWait(
+                    width: cellSize.width * 2,
+                    height: cellSize.height
+                ) else {
+                    return false
+                }
+                return textureRegionContainsBrightGlyph(
+                    texture,
+                    xStart: cellSize.width,
+                    xEnd: cellSize.width * 2
+                )
+            }
+        } catch {
+            return false
+        }
+    }
+
     static func liveSelfTest(expectAlternateScreen: Bool) -> Bool {
         guard let device = MTLCreateSystemDefaultDevice() else { return false }
         let connect = seyal_bridge_connect_first()
@@ -1114,6 +1172,36 @@ enum RendererValidation {
                 return true
             }
             offset += 4
+        }
+        return false
+    }
+
+    private static func textureRegionContainsBrightGlyph(
+        _ texture: MTLTexture,
+        xStart: Int,
+        xEnd: Int
+    ) -> Bool {
+        let bytesPerRow = texture.width * 4
+        var bytes = [UInt8](repeating: 0, count: bytesPerRow * texture.height)
+        texture.getBytes(
+            &bytes,
+            bytesPerRow: bytesPerRow,
+            from: MTLRegionMake2D(0, 0, texture.width, texture.height),
+            mipmapLevel: 0
+        )
+        let clampedStart = max(0, xStart)
+        let clampedEnd = min(texture.width, xEnd)
+        guard clampedStart < clampedEnd else { return false }
+        for y in 0..<texture.height {
+            for x in clampedStart..<clampedEnd {
+                let offset = y * bytesPerRow + x * 4
+                let blue = bytes[offset]
+                let green = bytes[offset + 1]
+                let red = bytes[offset + 2]
+                if max(red, max(green, blue)) > 128 {
+                    return true
+                }
+            }
         }
         return false
     }

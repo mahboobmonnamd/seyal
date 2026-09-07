@@ -66,6 +66,7 @@ private let preparedUnderlineFlag: UInt16 = 1 << 1
 private let instanceGlyphFlag: UInt32 = 1 << 0
 private let instanceUnderlineFlag: UInt32 = 1 << 1
 private let instanceCursorFlag: UInt32 = 1 << 2
+private let instanceWideGlyphFlag: UInt32 = 1 << 3
 
 private struct TerminalInstance {
     var origin: SIMD2<Float>
@@ -390,6 +391,11 @@ final class MetalTerminalRenderer: @unchecked Sendable {
         pipelineDescriptor.vertexFunction = vertex
         pipelineDescriptor.fragmentFunction = fragment
         pipelineDescriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
+        pipelineDescriptor.colorAttachments[0].isBlendingEnabled = true
+        pipelineDescriptor.colorAttachments[0].sourceRGBBlendFactor = .sourceAlpha
+        pipelineDescriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
+        pipelineDescriptor.colorAttachments[0].sourceAlphaBlendFactor = .sourceAlpha
+        pipelineDescriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
         do {
             pipeline = try device.makeRenderPipelineState(descriptor: pipelineDescriptor)
         } catch {
@@ -1061,7 +1067,11 @@ final class MetalTerminalRenderer: @unchecked Sendable {
         // for every multi-scalar lead on the surface.
         var graphemeCursor = 0
         let graphemeBytes = frame.graphemeUtf8
+        var rowGraphemeOffsets = [Int](repeating: 0, count: frame.rows + 1)
         for index in 0..<frame.cells.count {
+            if index.isMultiple(of: frame.columns) {
+                rowGraphemeOffsets[index / frame.columns] = graphemeCursor
+            }
             let reserved = frame.cells[index].reserved
             let role = reserved & 0b11
             let width = (reserved >> 2) & 0b11
@@ -1087,6 +1097,7 @@ final class MetalTerminalRenderer: @unchecked Sendable {
                 graphemeCursor += len
             }
         }
+        rowGraphemeOffsets[frame.rows] = graphemeCursor
         graphemeCursor = 0
 
         for row in 0..<frame.rows where damage.contains(row: row) {
@@ -1094,25 +1105,17 @@ final class MetalTerminalRenderer: @unchecked Sendable {
                 let index = row * frame.columns + column
                 let cell = frame.cells[index]
                 let role = cell.reserved & 0b11
+                let width = (cell.reserved >> 2) & 0b11
 
                 var flags: UInt32 = 0
                 var uvRect = SIMD4<Float>(repeating: 0)
                 var atlasSlice: UInt32 = 0
 
-                // Consume sidecar in cell order even for undamaged leading cells
-                // when scanning full rows; for damaged-only rows we still need
-                // the absolute sidecar offset. Rebuild offset from row start.
+                // Start from the validated row offset. This keeps sparse damage
+                // preparation linear in the damaged rows instead of rescanning
+                // every preceding cell for each row.
                 if column == 0 {
-                    graphemeCursor = 0
-                    let prefixCount = row * frame.columns
-                    for prior in 0..<prefixCount {
-                        let reserved = frame.cells[prior].reserved
-                        if reserved & preparedHasGrapheme != 0 {
-                            let len = Int(frame.graphemeUtf8[graphemeCursor])
-                                | (Int(frame.graphemeUtf8[graphemeCursor + 1]) << 8)
-                            graphemeCursor += 2 + len
-                        }
-                    }
+                    graphemeCursor = rowGraphemeOffsets[row]
                 }
 
                 var graphemePayload: Data?
@@ -1138,6 +1141,9 @@ final class MetalTerminalRenderer: @unchecked Sendable {
                             cellMetrics: metrics
                         )
                         flags |= instanceGlyphFlag
+                        if width == 2 {
+                            flags |= instanceWideGlyphFlag
+                        }
                         uvRect = entry.uvRect
                         atlasSlice = entry.slice
                     } else if cell.scalar != 0 && cell.scalar != 32 {
@@ -1148,6 +1154,9 @@ final class MetalTerminalRenderer: @unchecked Sendable {
                             cellMetrics: metrics
                         )
                         flags |= instanceGlyphFlag
+                        if width == 2 {
+                            flags |= instanceWideGlyphFlag
+                        }
                         uvRect = entry.uvRect
                         atlasSlice = entry.slice
                     }
@@ -1216,6 +1225,39 @@ final class MetalTerminalRenderer: @unchecked Sendable {
         )
         encoder.setFragmentTexture(atlasTexture, index: 0)
         encoder.setFragmentSamplerState(sampler, index: 0)
+        var renderMode: UInt32 = 0
+        encoder.setVertexBytes(
+            &renderMode,
+            length: MemoryLayout<UInt32>.stride,
+            index: 2
+        )
+        encoder.setFragmentBytes(
+            &renderMode,
+            length: MemoryLayout<UInt32>.stride,
+            index: 2
+        )
+        encoder.drawPrimitives(
+            type: .triangle,
+            vertexStart: 0,
+            vertexCount: 6,
+            instanceCount: instanceCount
+        )
+        // Wide grapheme glyphs span the lead and continuation cells. Draw
+        // every cell background first, then draw glyphs in a second pass so a
+        // continuation cell's background cannot cover the glyph's second
+        // half. The glyph pass discards non-glyph instances in the fragment
+        // stage and keeps the existing fixed-size instance buffer layout.
+        renderMode = 1
+        encoder.setVertexBytes(
+            &renderMode,
+            length: MemoryLayout<UInt32>.stride,
+            index: 2
+        )
+        encoder.setFragmentBytes(
+            &renderMode,
+            length: MemoryLayout<UInt32>.stride,
+            index: 2
+        )
         encoder.drawPrimitives(
             type: .triangle,
             vertexStart: 0,
@@ -1224,6 +1266,17 @@ final class MetalTerminalRenderer: @unchecked Sendable {
         )
         for region in historyRegions where region.instanceCount > 0 {
             encoder.setVertexBuffer(region.buffer, offset: 0, index: 0)
+            renderMode = 0
+            encoder.setVertexBytes(
+                &renderMode,
+                length: MemoryLayout<UInt32>.stride,
+                index: 2
+            )
+            encoder.setFragmentBytes(
+                &renderMode,
+                length: MemoryLayout<UInt32>.stride,
+                index: 2
+            )
             let x = max(0, Int(region.clip.minX.rounded(.down)))
             let y = max(0, Int(region.clip.minY.rounded(.down)))
             let maxX = min(target.width, Int(region.clip.maxX.rounded(.up)))

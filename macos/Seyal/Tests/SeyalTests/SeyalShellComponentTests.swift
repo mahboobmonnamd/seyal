@@ -1168,6 +1168,88 @@ final class SeyalShellComponentTests: XCTestCase {
     )
   }
 
+  /// #817 — exercise the production multi-scalar CTLine path and its cache
+  /// identity. This is component evidence for shaping and bounded eviction;
+  /// real Unicode matrix and AppKit IME acceptance remain manual gates.
+  @MainActor
+  func testGraphemeAtlasShapesAndBoundsMultiScalarEntries() throws {
+    guard let device = MTLCreateSystemDefaultDevice() else {
+      throw XCTSkip("Metal device unavailable in this environment")
+    }
+
+    let resolver = TerminalFontResolver()
+    let atlas = GlyphAtlas(device: device, fontResolver: resolver)
+    let regularMetrics = resolver.metrics(backingScale: 1)
+    let grapheme = "👩‍💻"
+
+    _ = try atlas.lookupGrapheme(
+      text: grapheme,
+      bold: false,
+      backingScale: 1,
+      cellMetrics: regularMetrics
+    )
+    XCTAssertEqual(atlas.stats.misses, 1)
+    XCTAssertEqual(atlas.stats.uploads, 1)
+    XCTAssertGreaterThan(atlas.stats.uploadedBytes, 0)
+
+    _ = try atlas.lookupGrapheme(
+      text: grapheme,
+      bold: false,
+      backingScale: 1,
+      cellMetrics: regularMetrics
+    )
+    XCTAssertEqual(atlas.stats.hits, 1)
+    XCTAssertEqual(atlas.stats.misses, 1)
+
+    _ = try atlas.lookupGrapheme(
+      text: grapheme,
+      bold: true,
+      backingScale: 1,
+      cellMetrics: regularMetrics
+    )
+    _ = try atlas.lookupGrapheme(
+      text: grapheme,
+      bold: false,
+      backingScale: 2,
+      cellMetrics: resolver.metrics(backingScale: 2)
+    )
+    XCTAssertEqual(atlas.stats.misses, 3)
+
+    atlas.resetWhenGPUIdle()
+    _ = try atlas.lookupGrapheme(
+      text: grapheme,
+      bold: false,
+      backingScale: 1,
+      cellMetrics: regularMetrics
+    )
+    XCTAssertEqual(atlas.stats.resets, 1)
+    XCTAssertEqual(atlas.stats.misses, 4)
+
+    // The first entry is retained while the bounded cache fills, then must be
+    // invalidated when the 2048-entry limit is reached.
+    for index in 0..<2048 {
+      _ = try atlas.lookupGrapheme(
+        text: "e\u{301}-\(index)",
+        bold: false,
+        backingScale: 1,
+        cellMetrics: regularMetrics
+      )
+    }
+    let missesBeforeEvictedEntryLookup = atlas.stats.misses
+    _ = try atlas.lookupGrapheme(
+      text: grapheme,
+      bold: false,
+      backingScale: 1,
+      cellMetrics: regularMetrics
+    )
+    XCTAssertEqual(atlas.stats.misses, missesBeforeEvictedEntryLookup + 1)
+  }
+
+  @MainActor
+  func testWideGraphemeRendersAcrossContinuationCellOffscreen() {
+    XCTAssertTrue(RendererValidation.wideGraphemeOffscreenSelfTest())
+  }
+
   @MainActor
   func testPass9InputAccessibilityQualificationThroughProductionNSTextInputClient() {
     let checks = Pass9InputAccessibilityQualification.executeChecks()

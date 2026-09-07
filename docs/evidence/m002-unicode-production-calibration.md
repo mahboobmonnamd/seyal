@@ -67,7 +67,7 @@ The cap is measured over **live canonical variable payload bytes**, not allocato
 
 If admitting/replacing a canonical grapheme would exceed the live cap after allowed reclamation, that grapheme uses the same overflow sentinel/fallback family without blocking PTY progress. The terminal must not evict unrelated live visible canonical text merely to make the new grapheme fit.
 
-This cap covers active/grid variable text only. ADR-010/#818 separately owns retained scrollback/history resident-memory budgets.
+This cap covers active/grid variable text only. ADR-010/#818 separately owns retained scrollback/history resident-memory budgets; see [`m002-scrollback-production-calibration.md`](m002-scrollback-production-calibration.md).
 
 ## DECAWM-reset wide-at-final-column fixture
 

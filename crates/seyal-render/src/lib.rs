@@ -280,6 +280,7 @@ pub struct PreparedSurface {
     alternate_screen: bool,
     prepared_cells: Vec<PreparedCell>,
     grapheme_bytes: Vec<u8>,
+    grapheme_row_ranges: Vec<std::ops::Range<usize>>,
 }
 
 impl PreparedSurface {
@@ -361,6 +362,10 @@ impl PreparedSurface {
             self.prepared_cells.clear();
             self.prepared_cells
                 .resize(cell_count, PreparedCell::default());
+            self.grapheme_bytes.clear();
+            self.grapheme_row_ranges.clear();
+            self.grapheme_row_ranges
+                .resize(usize::from(display.rows), 0..0);
         }
 
         let rebuilt_row_count = damage.count();
@@ -373,26 +378,6 @@ impl PreparedSurface {
             rebuilt_cell_count = rebuilt_cell_count
                 .checked_add(self.rebuild_row(&display, row)?)
                 .ok_or(PrepareError::Overflow)?;
-        }
-
-        // Rebuild the full grapheme sidecar in physical-cell order so partial
-        // damage cannot leave stale/duplicated UTF-8 payloads.
-        self.grapheme_bytes.clear();
-        for index in 0..display.cells.len() {
-            let cell = display
-                .cells
-                .cell(index)
-                .ok_or(PrepareError::InvalidCellCount)?;
-            if cell.role == RenderCellRole::Lead
-                && !cell.text.is_empty()
-                && std::str::from_utf8(&cell.text)
-                    .ok()
-                    .is_some_and(|s| s.chars().count() > 1)
-            {
-                let len = u16::try_from(cell.text.len()).unwrap_or(u16::MAX);
-                self.grapheme_bytes.extend_from_slice(&len.to_le_bytes());
-                self.grapheme_bytes.extend_from_slice(&cell.text);
-            }
         }
 
         self.generation = Some(display.generation);
@@ -424,6 +409,7 @@ impl PreparedSurface {
             return Err(PrepareError::InvalidCellCount);
         }
 
+        let mut row_graphemes = Vec::new();
         for offset in 0..columns {
             let cell = display
                 .cells
@@ -453,13 +439,19 @@ impl PreparedSurface {
             } else {
                 cell.scalar as u32
             };
-            if cell.role == RenderCellRole::Lead
+            let has_grapheme = cell.role == RenderCellRole::Lead
                 && !cell.text.is_empty()
                 && std::str::from_utf8(&cell.text)
                     .ok()
-                    .is_some_and(|s| s.chars().count() > 1)
-            {
+                    .is_some_and(|s| s.chars().count() > 1);
+            if has_grapheme {
                 reserved |= PREPARED_FLAG_HAS_GRAPHEME;
+                let len = u16::try_from(cell.text.len()).map_err(|_| PrepareError::Overflow)?;
+                row_graphemes
+                    .try_reserve(usize::from(len).saturating_add(2))
+                    .map_err(|_| PrepareError::Overflow)?;
+                row_graphemes.extend_from_slice(&len.to_le_bytes());
+                row_graphemes.extend_from_slice(&cell.text);
             }
             self.prepared_cells[first + offset] = PreparedCell {
                 scalar,
@@ -469,7 +461,54 @@ impl PreparedSurface {
                 reserved,
             };
         }
+        self.replace_row_graphemes(row, &row_graphemes)?;
         Ok(columns)
+    }
+
+    fn replace_row_graphemes(&mut self, row: u16, replacement: &[u8]) -> Result<(), PrepareError> {
+        let row = usize::from(row);
+        let old = self
+            .grapheme_row_ranges
+            .get(row)
+            .cloned()
+            .ok_or(PrepareError::InvalidGeometry)?;
+        if old.end > self.grapheme_bytes.len() || old.start > old.end {
+            return Err(PrepareError::InvalidCellCount);
+        }
+        let old_len = old.end - old.start;
+        if replacement.len() > old_len {
+            self.grapheme_bytes
+                .try_reserve(replacement.len() - old_len)
+                .map_err(|_| PrepareError::Overflow)?;
+        }
+        self.grapheme_bytes
+            .splice(old.clone(), replacement.iter().copied());
+        let new_end = old
+            .start
+            .checked_add(replacement.len())
+            .ok_or(PrepareError::Overflow)?;
+        self.grapheme_row_ranges[row] = old.start..new_end;
+
+        if replacement.len() >= old_len {
+            let shift = replacement.len() - old_len;
+            for range in &mut self.grapheme_row_ranges[row + 1..] {
+                range.start = range
+                    .start
+                    .checked_add(shift)
+                    .ok_or(PrepareError::Overflow)?;
+                range.end = range.end.checked_add(shift).ok_or(PrepareError::Overflow)?;
+            }
+        } else {
+            let shift = old_len - replacement.len();
+            for range in &mut self.grapheme_row_ranges[row + 1..] {
+                range.start = range
+                    .start
+                    .checked_sub(shift)
+                    .ok_or(PrepareError::Overflow)?;
+                range.end = range.end.checked_sub(shift).ok_or(PrepareError::Overflow)?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -486,6 +525,40 @@ pub const fn pack_color(color: RenderColor) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
+
+    struct CountingSource {
+        cells: Vec<RenderCell>,
+        reads: Cell<usize>,
+    }
+
+    impl CountingSource {
+        fn new(cells: Vec<RenderCell>) -> Self {
+            Self {
+                cells,
+                reads: Cell::new(0),
+            }
+        }
+
+        fn reset_reads(&self) {
+            self.reads.set(0);
+        }
+
+        fn reads(&self) -> usize {
+            self.reads.get()
+        }
+    }
+
+    impl CellSource for CountingSource {
+        fn len(&self) -> usize {
+            self.cells.len()
+        }
+
+        fn cell(&self, index: usize) -> Option<RenderCell> {
+            self.reads.set(self.reads.get() + 1);
+            self.cells.get(index).cloned()
+        }
+    }
 
     fn cell(scalar: char) -> RenderCell {
         RenderCell {
@@ -574,6 +647,68 @@ mod tests {
     }
 
     #[test]
+    fn preparation_reads_and_copies_only_rebuilt_rows() {
+        let mut grapheme = cell('\u{1f469}');
+        grapheme.text = std::sync::Arc::from("\u{1f469}\u{200d}\u{1f4bb}".as_bytes());
+        let source = CountingSource::new(vec![
+            grapheme,
+            cell('b'),
+            cell('c'),
+            cell('d'),
+            cell('e'),
+            cell('f'),
+        ]);
+        let mut surface = PreparedSurface::default();
+        let initial_cursor = CursorState::new(0, 0, true);
+        let initial = CommittedDisplay {
+            generation: 7,
+            rows: 3,
+            columns: 2,
+            cursor: initial_cursor,
+            alternate_screen: false,
+            cells: &source,
+        };
+        let result = surface.prepare(initial, RowDamage::none(), false).unwrap();
+        assert_eq!(result.rebuilt_cell_count, 6);
+        assert_eq!(source.reads(), result.rebuilt_cell_count);
+
+        source.reset_reads();
+        let sidecar_before = surface.grapheme_bytes().to_vec();
+        let sidecar_ptr_before = surface.grapheme_bytes().as_ptr();
+        let unchanged = CommittedDisplay {
+            generation: 7,
+            rows: 3,
+            columns: 2,
+            cursor: initial_cursor,
+            alternate_screen: false,
+            cells: &source,
+        };
+        let result = surface
+            .prepare(unchanged, RowDamage::none(), false)
+            .unwrap();
+        assert_eq!(result.rebuilt_cell_count, 0);
+        assert_eq!(source.reads(), 0, "no-damage prepare read source cells");
+        assert_eq!(surface.grapheme_bytes(), sidecar_before);
+        assert_eq!(surface.grapheme_bytes().as_ptr(), sidecar_ptr_before);
+
+        source.reset_reads();
+        let cursor_only = CommittedDisplay {
+            generation: 8,
+            rows: 3,
+            columns: 2,
+            cursor: CursorState::new(1, 0, true),
+            alternate_screen: false,
+            cells: &source,
+        };
+        let result = surface
+            .prepare(cursor_only, RowDamage::none(), false)
+            .unwrap();
+        assert_eq!(result.rebuilt_row_count, 2);
+        assert_eq!(result.rebuilt_cell_count, 4);
+        assert_eq!(source.reads(), result.rebuilt_cell_count);
+    }
+
+    #[test]
     fn partial_damage_rebuilds_only_the_marked_row() {
         let initial = vec![cell('a'), cell('b'), cell('c'), cell('d')];
         let changed = vec![cell('x'), cell('y'), cell('C'), cell('D')];
@@ -600,6 +735,73 @@ mod tests {
         assert!(!result.rebuilt_rows.contains(0));
         assert_eq!(surface.prepared_row(0).unwrap()[0].scalar, 'a' as u32);
         assert_eq!(surface.prepared_row(1).unwrap()[0].scalar, 'C' as u32);
+    }
+
+    #[test]
+    fn partial_row_grapheme_replacement_preserves_physical_sidecar_order() {
+        fn grapheme(text: &str) -> RenderCell {
+            RenderCell {
+                scalar: text.chars().next().unwrap(),
+                role: RenderCellRole::Lead,
+                width: 1,
+                text: std::sync::Arc::from(text.as_bytes()),
+                ..RenderCell::default()
+            }
+        }
+
+        fn encoded(texts: &[&str]) -> Vec<u8> {
+            let mut bytes = Vec::new();
+            for text in texts {
+                bytes.extend_from_slice(&(text.len() as u16).to_le_bytes());
+                bytes.extend_from_slice(text.as_bytes());
+            }
+            bytes
+        }
+
+        let initial = vec![
+            grapheme("a\u{301}"),
+            cell('b'),
+            grapheme("c\u{327}"),
+            grapheme("d\u{308}"),
+        ];
+        let changed = vec![
+            grapheme("\u{1f469}\u{200d}\u{1f4bb}"),
+            cell('B'),
+            initial[2].clone(),
+            initial[3].clone(),
+        ];
+        let mut surface = PreparedSurface::default();
+        surface
+            .prepare(
+                display(1, 2, 2, CursorState::default(), &initial),
+                RowDamage::none(),
+                false,
+            )
+            .unwrap();
+        assert_eq!(
+            surface.grapheme_bytes(),
+            encoded(&["a\u{301}", "c\u{327}", "d\u{308}"])
+        );
+
+        surface
+            .prepare(
+                display(2, 2, 2, CursorState::default(), &changed),
+                RowDamage::from_range(0, 1).unwrap(),
+                false,
+            )
+            .unwrap();
+        assert_eq!(
+            surface.grapheme_bytes(),
+            encoded(&["\u{1f469}\u{200d}\u{1f4bb}", "c\u{327}", "d\u{308}"])
+        );
+        assert_ne!(
+            surface.prepared_cells()[0].reserved & PREPARED_FLAG_HAS_GRAPHEME,
+            0
+        );
+        assert_ne!(
+            surface.prepared_cells()[2].reserved & PREPARED_FLAG_HAS_GRAPHEME,
+            0
+        );
     }
 
     #[test]

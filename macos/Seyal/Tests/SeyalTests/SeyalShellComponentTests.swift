@@ -1191,6 +1191,9 @@ final class SeyalShellComponentTests: XCTestCase {
     XCTAssertEqual(atlas.stats.misses, 1)
     XCTAssertEqual(atlas.stats.uploads, 1)
     XCTAssertGreaterThan(atlas.stats.uploadedBytes, 0)
+    XCTAssertEqual(atlas.stats.graphemeMisses, 1)
+    XCTAssertGreaterThan(atlas.stats.graphemeShapingNanoseconds, 0)
+    XCTAssertGreaterThan(atlas.stats.graphemeFallbackRuns, 0)
 
     _ = try atlas.lookupGrapheme(
       text: grapheme,
@@ -1200,6 +1203,8 @@ final class SeyalShellComponentTests: XCTestCase {
     )
     XCTAssertEqual(atlas.stats.hits, 1)
     XCTAssertEqual(atlas.stats.misses, 1)
+    XCTAssertEqual(atlas.stats.graphemeHits, 1)
+    XCTAssertEqual(atlas.stats.graphemeMisses, 1)
 
     _ = try atlas.lookupGrapheme(
       text: grapheme,

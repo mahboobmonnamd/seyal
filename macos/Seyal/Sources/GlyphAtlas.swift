@@ -21,6 +21,10 @@ struct GlyphAtlasStats: Equatable {
     var uploads: UInt64 = 0
     var uploadedBytes: UInt64 = 0
     var resets: UInt64 = 0
+    var graphemeHits: UInt64 = 0
+    var graphemeMisses: UInt64 = 0
+    var graphemeShapingNanoseconds: UInt64 = 0
+    var graphemeFallbackRuns: UInt64 = 0
 }
 
 enum GlyphAtlasError: Error {
@@ -396,6 +400,7 @@ final class GlyphAtlas {
         )
         if let entry = graphemeEntries[key] {
             stats.hits &+= 1
+            stats.graphemeHits &+= 1
             return entry
         }
         if graphemeEntries.count >= maxGraphemeEntries {
@@ -404,12 +409,24 @@ final class GlyphAtlas {
         }
 
         stats.misses &+= 1
+        stats.graphemeMisses &+= 1
+        let shapingStarted = DispatchTime.now().uptimeNanoseconds
         let attributed = NSAttributedString(
             string: text,
             attributes: [NSAttributedString.Key(kCTFontAttributeName as String): pixelFont]
         )
         let line = CTLineCreateWithAttributedString(attributed as CFAttributedString)
         let bounds = CTLineGetImageBounds(line, nil)
+        for run in CTLineGetGlyphRuns(line) as! [CTRun] {
+            let attributes = CTRunGetAttributes(run) as NSDictionary
+            guard let value = attributes[kCTFontAttributeName] else { continue }
+            let runFont = value as! CTFont
+            if CTFontCopyPostScriptName(runFont) as String != fontName {
+                stats.graphemeFallbackRuns &+= 1
+            }
+        }
+        stats.graphemeShapingNanoseconds &+= DispatchTime.now().uptimeNanoseconds
+            - shapingStarted
         let width = max(cellMetrics.cellWidth, Int(ceil(bounds.width)) + 2)
         let height = max(cellMetrics.cellHeight, Int(ceil(bounds.height)) + 2)
         var bytes = [UInt8](repeating: 0, count: width * height)

@@ -17,7 +17,7 @@ A new or renamed terminal hot-path function must be registered in `scripts/check
 
 ## Deterministic CI guardrails
 
-Every PR and master push must reject:
+Every PR (Foundation Quality) must reject:
 
 - blocking locks in registered terminal hot paths;
 - thread/process hops and blocking sleeps in those paths;

@@ -138,7 +138,7 @@ runtime   → exec + terminal + protocol producer (+ workspace composition)
 
 Avoid circular dependencies. If `seyal-core` becomes a dumping ground, split or remove it; it may contain stable identity/value types only.
 
-The current Cargo workspace is acyclic by construction under `scripts/check-layering.py`. Forbidden production edges include `seyal-client → seyal-runtime` and `seyal-protocol → seyal-runtime`. The public `Foundation Quality` `repository-policy` job runs this check on every PR/push and `scripts/test-ci-validators.py` proves controlled forbidden dependencies are rejected. Dev-dependencies are intentionally excluded so integration tests can compose the real Runtime without contaminating production architecture.
+The current Cargo workspace is acyclic by construction under `scripts/check-layering.py`. Forbidden production edges include `seyal-client → seyal-runtime` and `seyal-protocol → seyal-runtime`. The public `Foundation Quality` `repository-policy` job runs this check on every PR and `scripts/test-ci-validators.py` proves controlled forbidden dependencies are rejected. Dev-dependencies are intentionally excluded so integration tests can compose the real Runtime without contaminating production architecture.
 
 ## Commercial repository boundary
 

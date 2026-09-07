@@ -83,6 +83,10 @@ status checks `repository-policy`, `rust-and-harness-quality`, and
 requests remain mandatory. Independent review stays a process gate while the
 repository is solo-owned (`required_approving_review_count: 0`); requiring a
 numeric review count without a second trusted reviewer identity is weak.
+Foundation Quality therefore runs on `pull_request` only; a post-merge
+`push` re-run would duplicate those required jobs without adding merge
+protection. Renaming any required job must update this document and the
+ruleset together.
 
 **AUD-P2-003** (scroll path keep-as-is after measurement) remains closed: no
 scroll algorithm rewrite; see `crates/seyal-terminal/benches/vt_scroll_state.rs`.
@@ -91,9 +95,9 @@ scroll algorithm rewrite; see `crates/seyal-terminal/benches/vt_scroll_state.rs`
 
 The canonical public Seyal repository owns the authoritative GitHub Actions quality gates. The `Foundation Quality` workflow uses minimal `contents: read` permissions, pins external actions by reviewed full commit SHA, cancels superseded runs on the same ref, and keeps fast PR responsibilities explicit.
 
-### Required Foundation Quality jobs (every PR / master push)
+### Required Foundation Quality jobs (every PR)
 
-When branch protection/rulesets are configured, these stable job names are the Pass-1 required checks. A renamed/replaced job must update this document and the protection configuration together; a missing check must never be interpreted as a pass.
+These stable job names are the Pass-1 required checks on `master`. Foundation Quality runs on `pull_request` only; post-merge `push` to `master` is intentionally omitted so merge does not re-spend the full suite after the same jobs already gated the PR. A renamed/replaced job must update this document and the ruleset together; a missing check must never be interpreted as a pass.
 
 - **`repository-policy`** (ubuntu) — shell syntax, governance structure, local documentation links, architecture layering, hot-path/benchmark/UI-test contracts, harness contracts, fuzz-registry smoke, and controlled negative fixtures proving repository validators reject invalid inputs.
 - **`rust-and-harness-quality`** (ubuntu) — pinned Rust bootstrap, production Rust workspace build, `make check` (format, Clippy with warnings denied, unit tests, layering and harness checks), and `make bench` as a **portable harness smoke** (macOS-only native benches are skipped; no performance claim).

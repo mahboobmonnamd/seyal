@@ -1,7 +1,7 @@
 //! Terminfo honesty: advertise only implemented/tested capabilities.
-use std::{fs, path::PathBuf};
 #[cfg(target_os = "macos")]
 use std::process::Command;
+use std::{fs, path::PathBuf};
 
 fn terminfo_source() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../resources/terminfo/seyal-m001.src")

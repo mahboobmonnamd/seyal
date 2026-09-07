@@ -1,0 +1,9 @@
+rows=1
+cols=3
+canonical_text="ab "
+cursor_row=0
+cursor_col=2
+pending_wrap=false
+unicode_mode_2027=true
+decawm=false
+expected_event="width-2 unit ignored atomically"

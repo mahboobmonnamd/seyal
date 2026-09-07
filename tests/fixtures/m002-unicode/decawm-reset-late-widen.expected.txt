@@ -1,0 +1,10 @@
+rows=1
+cols=3
+canonical_text="ab❤"
+canonical_last_cell_utf8="e2 9d a4"
+cursor_row=0
+cursor_col=2
+pending_wrap=false
+unicode_mode_2027=true
+decawm=false
+expected_event="VS16 width-changing extension rejected; committed width-1 prefix retained"

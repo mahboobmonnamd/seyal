@@ -231,3 +231,77 @@ impl TerminalExecution {
         }
     }
 }
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pending_protocol_reply_overflow_is_bounded_and_observable() {
+        let query = "\\033[6n";
+        let first_batch = query.repeat(MAX_PROTOCOL_REPLIES);
+        let second_batch = query.repeat(2);
+        let script = format!("printf '{first_batch}'; sleep 1; printf '{second_batch}'; sleep 1");
+        let command = CommandSpec::new("/bin/sh").args(["-c", script.as_str()]);
+        let mut execution = TerminalExecution::spawn(
+            &command,
+            WindowSize::cells(80, 24).expect("valid terminal size"),
+        )
+        .expect("spawn PTY");
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        let mut buffer = [0_u8; 8192];
+
+        while execution.pending_protocol_replies.len() < MAX_PROTOCOL_REPLIES {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "first protocol-reply batch did not fill the execution queue"
+            );
+            match execution.read_output(&mut buffer).expect("read output") {
+                ReadOutcome::Bytes(_) => {}
+                ReadOutcome::WouldBlock => {
+                    let _ = execution
+                        .wait_readable(Duration::from_millis(50))
+                        .expect("wait readable");
+                }
+                ReadOutcome::Eof => panic!("child exited before filling reply queue"),
+            }
+        }
+        assert_eq!(execution.dropped_protocol_replies(), 0);
+
+        // Leave one slot occupied so the next two replies admit one and drop
+        // one at the execution boundary.
+        assert!(execution.take_protocol_reply().is_some());
+        assert_eq!(
+            execution.pending_protocol_replies.len(),
+            MAX_PROTOCOL_REPLIES - 1
+        );
+
+        while execution.dropped_protocol_replies() == 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "surplus protocol reply was not observed"
+            );
+            match execution.read_output(&mut buffer).expect("read output") {
+                ReadOutcome::Bytes(_) => {}
+                ReadOutcome::WouldBlock => {
+                    let _ = execution
+                        .wait_readable(Duration::from_millis(50))
+                        .expect("wait readable");
+                }
+                ReadOutcome::Eof => panic!("child exited before surplus reply was observed"),
+            }
+        }
+
+        assert_eq!(execution.dropped_protocol_replies(), 1);
+        assert_eq!(
+            execution.pending_protocol_replies.len(),
+            MAX_PROTOCOL_REPLIES
+        );
+        let mut drained = 0;
+        while execution.take_protocol_reply().is_some() {
+            drained += 1;
+        }
+        assert_eq!(drained, MAX_PROTOCOL_REPLIES);
+        assert_eq!(execution.dropped_protocol_replies(), 1);
+    }
+}

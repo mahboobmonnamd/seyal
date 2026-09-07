@@ -1251,6 +1251,16 @@ final class SeyalShellComponentTests: XCTestCase {
   }
 
   @MainActor
+  func testNormalGlyphMatchesSinglePassOffscreen() {
+    XCTAssertTrue(RendererValidation.normalGlyphMatchesSinglePassOffscreenSelfTest())
+  }
+
+  @MainActor
+  func testUndamagedGraphemeProjectionReusesPreparedRows() {
+    XCTAssertTrue(RendererValidation.noDamageGraphemeReuseSelfTest())
+  }
+
+  @MainActor
   func testPass9InputAccessibilityQualificationThroughProductionNSTextInputClient() {
     let checks = Pass9InputAccessibilityQualification.executeChecks()
     for (name, passed) in checks.sorted(by: { $0.key < $1.key }) {

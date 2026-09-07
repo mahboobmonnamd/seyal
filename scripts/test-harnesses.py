@@ -104,6 +104,12 @@ def validate_fixture_harness() -> None:
         "line-identity",
         "damage",
         "deferred-and-malformed-recovery",
+        # M002 compatibility additions remain mandatory while the subset
+        # check below permits future behavior rows to be added.
+        "scroll-region-decstbm-il-dl-su-sd",
+        "ich-dch-ech",
+        "osc-title-cwd-hyperlink",
+        "primary-da-and-decrqm-1049",
     }
     missing_behaviors = required_behaviors - set(behavior_ids)
     require(
@@ -127,7 +133,7 @@ def validate_fixture_harness() -> None:
         reference = behavior.get("reference")
         require(isinstance(reference, str) and reference, f"VT coverage {behavior_id} has no reference")
         for item in evidence:
-            if item.startswith("m001-"):
+            if item.startswith(("m001-", "m002-")):
                 require(item in fixture_ids, f"VT coverage {behavior_id} references unknown fixture {item}")
     alternate = next(item for item in behaviors if item["id"] == "alternate-screen-1049")
     require(

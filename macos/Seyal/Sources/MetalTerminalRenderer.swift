@@ -394,7 +394,10 @@ final class MetalTerminalRenderer: @unchecked Sendable {
         pipelineDescriptor.colorAttachments[0].isBlendingEnabled = true
         pipelineDescriptor.colorAttachments[0].sourceRGBBlendFactor = .sourceAlpha
         pipelineDescriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
-        pipelineDescriptor.colorAttachments[0].sourceAlphaBlendFactor = .sourceAlpha
+        // Keep the render target opaque while glyph coverage controls only
+        // RGB blending. Using sourceAlpha for the alpha channel would apply
+        // coverage twice and leave normal glyph pixels partially transparent.
+        pipelineDescriptor.colorAttachments[0].sourceAlphaBlendFactor = .one
         pipelineDescriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
         do {
             pipeline = try device.makeRenderPipelineState(descriptor: pipelineDescriptor)
@@ -586,6 +589,23 @@ final class MetalTerminalRenderer: @unchecked Sendable {
             try allocateInstanceBuffer(rows: frame.rows, columns: frame.columns)
             fullRebuild = true
             damage.markAll(rows: frame.rows)
+        }
+
+        if damage.isEmpty {
+            // The committed Candidate-D frame can advance without changing
+            // any rows. Reuse the prepared instance/sidecar state and avoid
+            // rescanning or copying the full grapheme payload.
+            currentRows = frame.rows
+            currentColumns = frame.columns
+            currentMetrics = metrics
+            currentScale = scale
+            currentAlternateScreen = frame.alternateScreen
+            deferredDamage = DamageMask()
+            deferredNeedsFullRebuild = false
+            needsCurrentFrameWhenIdle = false
+            needsPresent = true
+            preparationSucceeded = true
+            return .updated
         }
 
         do {
@@ -1266,7 +1286,7 @@ final class MetalTerminalRenderer: @unchecked Sendable {
         )
         for region in historyRegions where region.instanceCount > 0 {
             encoder.setVertexBuffer(region.buffer, offset: 0, index: 0)
-            renderMode = 0
+            renderMode = 2
             encoder.setVertexBytes(
                 &renderMode,
                 length: MemoryLayout<UInt32>.stride,

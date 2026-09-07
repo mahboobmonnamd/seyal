@@ -95,7 +95,8 @@ fragment float4 seyal_terminal_fragment(
     }
 
     float4 color = background;
-    if ((in.flags & glyph_flag) != 0u) {
+    if ((render_mode == 1u || render_mode == 2u)
+        && (in.flags & glyph_flag) != 0u) {
         const float coverage = glyph_atlas.sample(glyph_sampler, in.uv, in.atlas_slice).r;
         if (render_mode == glyph_pass) {
             return float4(foreground.rgb, coverage);

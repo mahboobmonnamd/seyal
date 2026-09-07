@@ -1,6 +1,6 @@
 use std::{env, fs, path::PathBuf};
 
-use seyal_terminal::TerminalState;
+use seyal_terminal::{CellRole, LineId, TerminalState};
 
 fn input() -> Vec<u8> {
     let path =
@@ -23,7 +23,22 @@ fn assert_same_state(left: &TerminalState, right: &TerminalState) {
     for row in 0..left.rows() {
         assert_eq!(left.row_text(row), right.row_text(row));
         assert_eq!(left.line_id(row), right.line_id(row));
+        for col in 0..left.cols() {
+            if let Some(cell) = left.cell(col, row)
+                && cell.role == CellRole::Lead
+                && cell.width == 2
+            {
+                assert!(col + 1 < left.cols());
+                assert!(left
+                    .cell(col + 1, row)
+                    .is_some_and(|next| next.role == CellRole::Continuation));
+            }
+        }
     }
+    assert_eq!(
+        left.primary_history_units_range(LineId(1), LineId(u64::MAX), 4_096),
+        right.primary_history_units_range(LineId(1), LineId(u64::MAX), 4_096)
+    );
 }
 
 #[test]
@@ -65,7 +80,18 @@ fn parser_state_mutation_seed() {
 
     assert_same_state(&one_shot, &bytewise);
 
-    one_shot.resize(100, 30).expect("one-shot grow resize");
-    bytewise.resize(100, 30).expect("bytewise grow resize");
-    assert_same_state(&one_shot, &bytewise);
+    for (index, byte) in bytes.iter().take(8).enumerate() {
+        let cols = u16::from(byte % 32) + 1;
+        let rows = u16::from(bytes.get(index + 1).copied().unwrap_or(*byte) % 8) + 1;
+        assert_eq!(one_shot.resize(cols, rows), bytewise.resize(cols, rows));
+        assert_same_state(&one_shot, &bytewise);
+    }
+
+    for _ in 0..bytes.first().copied().unwrap_or(0).min(8) {
+        assert_eq!(
+            one_shot.evict_oldest_primary_history_segment(),
+            bytewise.evict_oldest_primary_history_segment()
+        );
+        assert_same_state(&one_shot, &bytewise);
+    }
 }

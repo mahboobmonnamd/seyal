@@ -19,13 +19,14 @@ fn assert_same_state(left: &TerminalState, right: &TerminalState) {
         assert_eq!(left.row_text(row), right.row_text(row));
         assert_eq!(left.line_id(row), right.line_id(row));
         for col in 0..left.cols() {
-            if let Some(cell) = left.cell(col, row) {
-                if cell.role == CellRole::Lead && cell.width == 2 {
-                    assert!(col + 1 < left.cols());
-                    assert!(left
-                        .cell(col + 1, row)
-                        .is_some_and(|next| next.role == CellRole::Continuation));
-                }
+            if let Some(cell) = left.cell(col, row)
+                && cell.role == CellRole::Lead
+                && cell.width == 2
+            {
+                assert!(col + 1 < left.cols());
+                assert!(left
+                    .cell(col + 1, row)
+                    .is_some_and(|next| next.role == CellRole::Continuation));
             }
         }
     }

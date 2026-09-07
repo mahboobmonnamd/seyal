@@ -365,6 +365,7 @@ impl HistoryStore {
             for (unit_index, unit) in line.units.iter().enumerate() {
                 let unit_width = usize::from(unit.width.max(1));
                 if !current.cells.is_empty() && current.cells.len() + unit_width > width {
+                    current.break_after = Some(HistoryBreakAfter::SoftWrap);
                     rows.push(std::mem::take(&mut current));
                     if rows.len() >= max_rows {
                         return rows;
@@ -381,6 +382,7 @@ impl HistoryStore {
             }
             previous_break = Some(line.break_after);
             if line.break_after == HistoryBreakAfter::HardBreak {
+                current.break_after = Some(HistoryBreakAfter::HardBreak);
                 rows.push(std::mem::take(&mut current));
                 if rows.len() >= max_rows {
                     break;
@@ -389,6 +391,7 @@ impl HistoryStore {
             }
         }
         if !current.cells.is_empty() && rows.len() < max_rows {
+            current.break_after = previous_break;
             rows.push(current);
         }
         rows
@@ -434,6 +437,7 @@ impl HistoryStore {
 pub struct ReflowRow {
     pub anchors: Vec<HistoryAnchor>,
     pub cells: Vec<Cell>,
+    pub break_after: Option<HistoryBreakAfter>,
 }
 
 #[cfg(test)]

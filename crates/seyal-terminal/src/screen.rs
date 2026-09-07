@@ -189,6 +189,11 @@ impl Screen {
         self.line_ids.get(usize::from(row)).copied()
     }
 
+    #[cfg(test)]
+    pub(crate) fn row_break_after(&self, row: u16) -> Option<HistoryBreakAfter> {
+        self.row_breaks.get(usize::from(row)).copied().flatten()
+    }
+
     /// Oldest-to-newest retained primary history entries (storage order).
     pub(crate) fn history_entries(&self) -> impl Iterator<Item = &HistoryLine> {
         self.history.entries()
@@ -280,6 +285,7 @@ impl Screen {
                 let start = row * usize::from(cols);
                 let count = projection.cells.len().min(usize::from(cols));
                 next[start..start + count].copy_from_slice(&projection.cells[..count]);
+                next_breaks[row] = projection.break_after;
             }
         } else {
             let copy_cols = old_cols.min(cols);

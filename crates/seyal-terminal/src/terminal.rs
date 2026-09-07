@@ -230,6 +230,11 @@ impl TerminalState {
         self.core.current().line_id(row)
     }
 
+    #[cfg(test)]
+    fn primary_row_break_after(&self, row: u16) -> Option<crate::HistoryBreakAfter> {
+        self.core.primary.row_break_after(row)
+    }
+
     /// Returns a bounded primary-screen history range. The returned rows are
     /// an explicit read-only projection of **primary** retained history plus
     /// primary visible rows. Alternate-screen cells are never included; the
@@ -1489,6 +1494,11 @@ mod tests {
         terminal.feed(b"abcdef").unwrap();
         terminal.resize(8, 2).unwrap();
         assert_eq!(terminal.row_text(0).as_deref(), Some("abcdef  "));
+        assert_eq!(
+            terminal.primary_row_break_after(0),
+            Some(crate::HistoryBreakAfter::HardBreak),
+            "resize must carry the source boundary onto the materialized row"
+        );
         terminal.resize(3, 2).unwrap();
         let text = format!(
             "{}{}",

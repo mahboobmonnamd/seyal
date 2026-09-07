@@ -842,6 +842,26 @@ mod command_block_tests {
     }
 
     #[test]
+    fn history_admit_marks_truncated_when_line_window_fills() {
+        fn row(line_id: u64) -> HistoryRow {
+            HistoryRow {
+                line_id,
+                cells: vec![HistoryCell {
+                    scalar: b'x' as u32,
+                    foreground: 0,
+                    background: 0,
+                    flags: 0,
+                    reserved: 0,
+                }],
+            }
+        }
+        let rows: Vec<_> = (1..=5).map(row).collect();
+        let (admitted, truncated) = HistoryRangeSnapshot::admit_rows(rows, 3, 4096);
+        assert!(truncated);
+        assert_eq!(admitted.len(), 3);
+    }
+
+    #[test]
     fn history_snapshot_rejects_nonzero_cell_reserved() {
         let snapshot = HistoryRangeSnapshot {
             request_id: 1,

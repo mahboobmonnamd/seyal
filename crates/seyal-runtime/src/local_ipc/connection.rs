@@ -284,7 +284,17 @@ pub struct LocalIpcServer {
 
 impl LocalIpcServer {
     pub fn bind(path: &Path, max_connections: usize) -> io::Result<Self> {
-        let listener = UnixListener::bind(path)?;
+        // Tighten umask around bind so the socket inode is never created with
+        // group/other bits before the explicit 0600 chmod (AUD-P2/P3 residual).
+        // SAFETY: umask is process-global; Runtime bind runs on the reactor
+        // startup path before multi-connection accept work begins, and the
+        // previous mask is restored on every return path from this block.
+        let previous_umask = unsafe { libc::umask(0o077) };
+        let bind_result = UnixListener::bind(path);
+        unsafe {
+            libc::umask(previous_umask);
+        }
+        let listener = bind_result?;
         set_close_on_exec(listener.as_raw_fd())?;
         listener.set_nonblocking(true)?;
         use std::os::unix::fs::PermissionsExt;

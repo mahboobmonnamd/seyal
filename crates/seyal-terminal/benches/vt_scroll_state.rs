@@ -2,7 +2,8 @@ use std::{env, hint::black_box, process::Command, time::Instant};
 
 use seyal_terminal::TerminalState;
 
-// AUD-P2-003 (foundation audit @ 1f3c0ed): measure only; do not rewrite scroll.
+// AUD-P2-003 (foundation audit @ 1f3c0ed; closed #811): measured keep-as-is;
+// do not rewrite scroll. Baseline retained in bench output comments.
 // Local release baseline (Apple M5 Pro, 10k iters): 80x24 scroll/overwrite
 // ratio ≈ 1.89×; 120x40 ≈ 3.18×. Keep the current row-copy scroll path until a
 // Ready Issue owns a measured rewrite with acceptance thresholds.

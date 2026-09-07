@@ -1,0 +1,58 @@
+issue=687-real-runtime-evidence
+head=857ab21a992e9a0bede47e0beb8b69db5ca4e627
+platform=Darwin Mahboob-MBP.local 25.5.0 Darwin Kernel Version 25.5.0: Tue Jun  9 22:28:34 PDT 2026; root:xnu-12377.121.10~1/RELEASE_ARM64_T6050 arm64
+rustc 1.98.0 (88d9e12ae 2026-08-18)
+binary: rustc
+commit-hash: 88d9e12ae178fab0fb5cc050a94da85685d449ea
+commit-date: 2026-08-18
+host: aarch64-apple-darwin
+release: 1.98.0
+LLVM version: 22.1.8
+--- macos_runtime detach/reattach ---
+   Compiling seyal-runtime v0.0.0 (/private/tmp/seyal-spike-687/crates/seyal-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.51s
+     Running tests/macos_runtime.rs (target/debug/deps/macos_runtime-131cc361ae2aecd5)
+
+running 1 test
+test headless_detach_preserves_execution_identity_and_terminal_state ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.01s
+
+--- pass8 UDS resync/reattach ---
+   Compiling seyal-runtime v0.0.0 (/private/tmp/seyal-spike-687/crates/seyal-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/pass8_resync_reattach.rs (target/debug/deps/pass8_resync_reattach-cf00978d7d15a238)
+
+running 1 test
+test resync_and_detach_reattach_preserve_execution_block_identity_and_anchor ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+--- pass5 same-execution fanout ---
+   Compiling seyal-runtime v0.0.0 (/private/tmp/seyal-spike-687/crates/seyal-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running tests/pass5_candidate_d_matrix.rs (target/debug/deps/pass5_candidate_d_matrix-e8cf8ca985aa28b2)
+
+running 1 test
+test same_execution_fanout_is_consistent_at_4_8_and_16_viewers ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.04s
+
+--- pass5 stalled-viewer recovery ---
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s
+     Running tests/pass5_candidate_d_matrix.rs (target/debug/deps/pass5_candidate_d_matrix-e8cf8ca985aa28b2)
+
+running 1 test
+test stalled_viewer_is_superseded_and_recovers_from_current_snapshot ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.29s
+
+--- pass10 disconnect cleanup ---
+   Compiling seyal-runtime v0.0.0 (/private/tmp/seyal-spike-687/crates/seyal-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
+     Running tests/pass10_disconnect_during.rs (target/debug/deps/pass10_disconnect_during-4c7e0f4cc3197656)
+
+running 1 test
+test disconnect_during_snapshot_chunking_cleans_up_and_allows_full_reattach ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.03s

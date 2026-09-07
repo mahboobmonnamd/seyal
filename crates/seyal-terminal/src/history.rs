@@ -131,25 +131,8 @@ impl HistoryLine {
 #[derive(Clone, Debug)]
 struct Segment {
     lines: Vec<HistoryLine>,
-    payload_bytes: usize,
     age: u64,
-}
-
-impl Segment {
-    fn allocated_bytes(&self) -> usize {
-        size_of::<Self>()
-            .saturating_add(
-                self.lines
-                    .capacity()
-                    .saturating_mul(size_of::<HistoryLine>()),
-            )
-            .saturating_add(
-                self.lines
-                    .iter()
-                    .map(HistoryLine::allocated_bytes)
-                    .sum::<usize>(),
-            )
-    }
+    resident_bytes: usize,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -157,6 +140,8 @@ pub(crate) struct HistoryStore {
     segments: VecDeque<Segment>,
     tail: Vec<HistoryLine>,
     tail_payload_bytes: usize,
+    tail_resident_bytes: usize,
+    segments_resident_bytes: usize,
     resident_bytes: usize,
     eviction_generation: u64,
 }
@@ -265,7 +250,7 @@ impl HistoryStore {
         } else {
             self.push_fragment(line);
         }
-        self.refresh_resident_bytes();
+        self.update_resident_bytes();
         self.evict_to_cap();
     }
 
@@ -276,7 +261,19 @@ impl HistoryStore {
             self.seal_tail();
         }
         self.tail_payload_bytes += bytes;
+        let line_resident_bytes = line.allocated_bytes();
+        let old_capacity = self.tail.capacity();
         self.tail.push(line);
+        self.tail_resident_bytes = self
+            .tail_resident_bytes
+            .saturating_add(line_resident_bytes)
+            .saturating_add(
+                self.tail
+                    .capacity()
+                    .saturating_sub(old_capacity)
+                    .saturating_mul(size_of::<HistoryLine>()),
+            );
+        self.update_resident_bytes();
         if self.tail_payload_bytes >= HISTORY_SEGMENT_PAYLOAD_TARGET {
             self.seal_tail();
         }
@@ -288,48 +285,47 @@ impl HistoryStore {
         }
         let segment = Segment {
             lines: std::mem::take(&mut self.tail),
-            payload_bytes: self.tail_payload_bytes,
             age: NEXT_SEGMENT_AGE.fetch_add(1, Ordering::Relaxed),
+            resident_bytes: self.tail_resident_bytes + size_of::<Segment>(),
         };
         self.tail_payload_bytes = 0;
+        self.tail_resident_bytes = 0;
+        let old_capacity = self.segments.capacity();
         self.segments.push_back(segment);
+        self.segments_resident_bytes = self
+            .segments_resident_bytes
+            .saturating_add(
+                self.segments
+                    .back()
+                    .map_or(0, |segment| segment.resident_bytes),
+            )
+            .saturating_add(
+                self.segments
+                    .capacity()
+                    .saturating_sub(old_capacity)
+                    .saturating_mul(size_of::<Segment>()),
+            );
+        self.update_resident_bytes();
     }
 
-    fn refresh_resident_bytes(&mut self) {
+    fn update_resident_bytes(&mut self) {
         self.resident_bytes = size_of::<Self>()
-            .saturating_add(
-                self.segments
-                    .capacity()
-                    .saturating_mul(size_of::<Segment>()),
-            )
-            .saturating_add(
-                self.segments
-                    .iter()
-                    .map(Segment::allocated_bytes)
-                    .sum::<usize>(),
-            )
-            .saturating_add(
-                self.tail
-                    .capacity()
-                    .saturating_mul(size_of::<HistoryLine>()),
-            )
-            .saturating_add(
-                self.tail
-                    .iter()
-                    .map(HistoryLine::allocated_bytes)
-                    .sum::<usize>(),
-            );
+            .saturating_add(self.tail_resident_bytes)
+            .saturating_add(self.segments_resident_bytes);
     }
 
     fn evict_to_cap(&mut self) {
-        self.refresh_resident_bytes();
+        self.update_resident_bytes();
         while self.resident_bytes > HISTORY_PER_EXECUTION_BYTE_CAP {
-            let Some(_segment) = self.segments.pop_front() else {
+            let Some(segment) = self.segments.pop_front() else {
                 // The tail is capped by source-unit fragmentation and cannot
                 // be discarded piecemeal without an explicit fragment policy.
                 break;
             };
-            self.refresh_resident_bytes();
+            self.segments_resident_bytes = self
+                .segments_resident_bytes
+                .saturating_sub(segment.resident_bytes);
+            self.update_resident_bytes();
             self.eviction_generation = self.eviction_generation.wrapping_add(1);
         }
     }
@@ -342,9 +338,12 @@ impl HistoryStore {
         let Some(segment) = self.segments.pop_front() else {
             return 0;
         };
-        self.refresh_resident_bytes();
+        self.segments_resident_bytes = self
+            .segments_resident_bytes
+            .saturating_sub(segment.resident_bytes);
+        self.update_resident_bytes();
         self.eviction_generation = self.eviction_generation.wrapping_add(1);
-        segment.payload_bytes
+        segment.resident_bytes
     }
 
     pub(crate) fn reflow(&self, cols: u16, max_rows: usize) -> Vec<ReflowRow> {

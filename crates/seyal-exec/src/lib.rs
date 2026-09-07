@@ -41,7 +41,7 @@ pub use reactor::{
 };
 pub use readiness::Readiness;
 pub use seyal_terminal::{
-    Color, HostPresentationEvent, LineId, PresentationPayload, ProtocolReply,
+    Color, HostPresentationEvent, LineId, ModeState, PresentationPayload, ProtocolReply,
     ShellIntegrationEvent, ShellIntegrationToken,
 };
 pub use winsize::WindowSize;

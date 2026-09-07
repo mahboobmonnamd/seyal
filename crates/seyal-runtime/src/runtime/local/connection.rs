@@ -10,6 +10,7 @@ pub(in crate::runtime) struct ConnectionMeta {
     pub(super) reactor_token: RegistrationToken,
     pub(super) last_resize_request_id: u64,
     pub(super) client_capabilities: u32,
+    pub(super) last_terminal_key_action_id: u32,
 }
 
 impl Runtime {

@@ -148,6 +148,7 @@ impl Runtime {
                                         reactor_token,
                                         last_resize_request_id: 0,
                                         client_capabilities: 0,
+                                        last_terminal_key_action_id: 0,
                                     },
                                 );
                                 state.reactor_connections.insert(reactor_token, token);

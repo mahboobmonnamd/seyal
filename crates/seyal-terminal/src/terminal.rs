@@ -9,8 +9,8 @@ use crate::{
     parser::{Actions, Parser},
     presentation::{parse_osc_presentation, HostPresentationEvent, MAX_HOST_PRESENTATION_EVENTS},
     protocol_reply::{
-        encode_decrqm_private, encode_dsr_cpr, encode_primary_da, ProtocolReply,
-        MAX_PROTOCOL_REPLIES,
+        encode_decrqm_private, encode_dsr_cpr, encode_kitty_flags, encode_primary_da,
+        ProtocolReply, MAX_PROTOCOL_REPLIES,
     },
     screen::{PreparedScreen, Screen},
     width::{grapheme_terminal_width, AmbiguousWidthPolicy},
@@ -22,6 +22,8 @@ use std::collections::VecDeque;
 /// rejected cheaply so embedders cannot force multi-gigabyte grid allocations.
 pub const MAX_TERMINAL_COLUMNS: u16 = 512;
 pub const MAX_TERMINAL_ROWS: u16 = 256;
+const KEYBOARD_STACK_CAPACITY: usize = 16;
+const KEYBOARD_FLAGS_MASK: u8 = 0b11;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Diagnostics {
@@ -311,6 +313,12 @@ struct TerminalCore {
     shell_events: VecDeque<ShellIntegrationEvent>,
     presentation_events: VecDeque<HostPresentationEvent>,
     protocol_replies: VecDeque<ProtocolReply>,
+    primary_keyboard_flags: u8,
+    alternate_keyboard_flags: u8,
+    primary_keyboard_stack: [u8; KEYBOARD_STACK_CAPACITY],
+    primary_keyboard_stack_len: usize,
+    alternate_keyboard_stack: [u8; KEYBOARD_STACK_CAPACITY],
+    alternate_keyboard_stack_len: usize,
     grapheme_store: GraphemeStore,
     active_grapheme: Option<ActiveGrapheme>,
     ambiguous_width: AmbiguousWidthPolicy,
@@ -334,6 +342,12 @@ impl TerminalCore {
             shell_events: VecDeque::with_capacity(16),
             presentation_events: VecDeque::with_capacity(MAX_HOST_PRESENTATION_EVENTS),
             protocol_replies: VecDeque::with_capacity(MAX_PROTOCOL_REPLIES),
+            primary_keyboard_flags: 0,
+            alternate_keyboard_flags: 0,
+            primary_keyboard_stack: [0; KEYBOARD_STACK_CAPACITY],
+            primary_keyboard_stack_len: 0,
+            alternate_keyboard_stack: [0; KEYBOARD_STACK_CAPACITY],
+            alternate_keyboard_stack_len: 0,
             grapheme_store: GraphemeStore::default(),
             active_grapheme: None,
             ambiguous_width: AmbiguousWidthPolicy::default(),
@@ -431,6 +445,84 @@ impl TerminalCore {
         self.protocol_replies.push_back(reply);
     }
 
+    fn current_keyboard_state_mut(
+        &mut self,
+    ) -> (&mut u8, &mut [u8; KEYBOARD_STACK_CAPACITY], &mut usize) {
+        if self.modes.alternate_screen {
+            (
+                &mut self.alternate_keyboard_flags,
+                &mut self.alternate_keyboard_stack,
+                &mut self.alternate_keyboard_stack_len,
+            )
+        } else {
+            (
+                &mut self.primary_keyboard_flags,
+                &mut self.primary_keyboard_stack,
+                &mut self.primary_keyboard_stack_len,
+            )
+        }
+    }
+
+    fn sync_keyboard_flags(&mut self) {
+        let flags = self.modes.keyboard_flags & KEYBOARD_FLAGS_MASK;
+        if self.modes.alternate_screen {
+            self.alternate_keyboard_flags = flags;
+        } else {
+            self.primary_keyboard_flags = flags;
+        }
+    }
+
+    fn set_keyboard_flags(&mut self, flags: u8, mode: u16) -> bool {
+        let flags = flags & KEYBOARD_FLAGS_MASK;
+        let next = match mode {
+            1 => flags,
+            2 => self.modes.keyboard_flags | flags,
+            3 => self.modes.keyboard_flags & !flags,
+            _ => return false,
+        } & KEYBOARD_FLAGS_MASK;
+        self.modes.keyboard_flags = next;
+        self.sync_keyboard_flags();
+        true
+    }
+
+    fn push_keyboard_flags(&mut self, flags: u8) {
+        let flags = flags & KEYBOARD_FLAGS_MASK;
+        {
+            let (_current, stack, len) = self.current_keyboard_state_mut();
+            if *len == KEYBOARD_STACK_CAPACITY {
+                stack.copy_within(1.., 0);
+                *len -= 1;
+            }
+            stack[*len] = flags;
+            *len += 1;
+        }
+        self.modes.keyboard_flags = flags;
+        self.sync_keyboard_flags();
+    }
+
+    fn pop_keyboard_flags(&mut self, count: u16) {
+        let current = {
+            let (_current, stack, len) = self.current_keyboard_state_mut();
+            let remove = usize::from(count).min(*len);
+            *len -= remove;
+            if *len == 0 {
+                0
+            } else {
+                stack[*len - 1]
+            }
+        };
+        self.modes.keyboard_flags = current;
+        self.sync_keyboard_flags();
+    }
+
+    fn reply_kitty_flags(&mut self) {
+        if let Some(reply) = encode_kitty_flags(self.modes.keyboard_flags) {
+            self.enqueue_protocol_reply(reply);
+        } else {
+            self.record_deferred();
+        }
+    }
+
     fn reply_dsr_cpr(&mut self) {
         let cursor = self.current().cursor(self.modes.cursor_visible);
         if let Some(reply) = encode_dsr_cpr(cursor.row, cursor.col) {
@@ -454,6 +546,22 @@ impl TerminalCore {
                 25 => {
                     let status = if self.modes.cursor_visible { 1 } else { 2 };
                     if let Some(reply) = encode_decrqm_private(25, status) {
+                        self.enqueue_protocol_reply(reply);
+                    } else {
+                        self.record_deferred();
+                    }
+                }
+                1 => {
+                    let status = if self.modes.application_cursor { 1 } else { 2 };
+                    if let Some(reply) = encode_decrqm_private(1, status) {
+                        self.enqueue_protocol_reply(reply);
+                    } else {
+                        self.record_deferred();
+                    }
+                }
+                66 => {
+                    let status = if self.modes.application_keypad { 1 } else { 2 };
+                    if let Some(reply) = encode_decrqm_private(66, status) {
                         self.enqueue_protocol_reply(reply);
                     } else {
                         self.record_deferred();
@@ -545,6 +653,7 @@ impl TerminalCore {
         }
         self.invalidate_active_grapheme();
 
+        self.sync_keyboard_flags();
         if enabled {
             let cols = self.primary.cols();
             let rows = self.primary.rows();
@@ -553,12 +662,14 @@ impl TerminalCore {
             screen.inherit_pen_for_clean_buffer(pen, &mut self.grapheme_store);
             self.alternate = Some(screen);
             self.modes.alternate_screen = true;
+            self.modes.keyboard_flags = self.alternate_keyboard_flags;
             self.apply(Mutation::full(rows));
         } else {
             if let Some(mut screen) = self.alternate.take() {
                 screen.release_all_payloads(&mut self.grapheme_store);
             }
             self.modes.alternate_screen = false;
+            self.modes.keyboard_flags = self.primary_keyboard_flags;
             self.apply(Mutation::full(self.primary.rows()));
         }
         Ok(())
@@ -860,11 +971,38 @@ impl Actions for TerminalCore {
             return;
         }
 
+        if private == Some(b'?') && final_byte == b'u' {
+            if params.is_empty() {
+                self.reply_kitty_flags();
+            } else {
+                self.record_deferred();
+            }
+            return;
+        }
+        if matches!(private, Some(b'=') | Some(b'>') | Some(b'<')) && final_byte == b'u' {
+            if private == Some(b'=') && params.len() <= 2 {
+                let flags = params.first().copied().unwrap_or(0) as u8;
+                let mode = params.get(1).copied().unwrap_or(1);
+                if self.set_keyboard_flags(flags, mode) {
+                    return;
+                }
+            } else if private == Some(b'>') && params.len() <= 1 {
+                self.push_keyboard_flags(params.first().copied().unwrap_or(0) as u8);
+                return;
+            } else if private == Some(b'<') && params.len() <= 1 {
+                self.pop_keyboard_flags(params.first().copied().unwrap_or(1));
+                return;
+            }
+            self.record_deferred();
+            return;
+        }
+
         if private.is_some() {
             if private == Some(b'?') && matches!(final_byte, b'h' | b'l') {
                 let enabled = final_byte == b'h';
                 for mode in params {
                     match *mode {
+                        1 => self.modes.application_cursor = enabled,
                         7 => {
                             if self.modes.wraparound != enabled {
                                 self.modes.wraparound = enabled;
@@ -872,6 +1010,7 @@ impl Actions for TerminalCore {
                             }
                         }
                         25 => self.set_cursor_visible(enabled),
+                        66 => self.modes.application_keypad = enabled,
                         2027 => {
                             if self.modes.unicode_core != enabled {
                                 self.modes.unicode_core = enabled;
@@ -1053,6 +1192,14 @@ impl Actions for TerminalCore {
             return;
         }
         let mutation = match final_byte {
+            b'=' => {
+                self.modes.application_keypad = true;
+                Mutation::none()
+            }
+            b'>' => {
+                self.modes.application_keypad = false;
+                Mutation::none()
+            }
             b'7' => {
                 self.current_mut().save_cursor();
                 Mutation::none()

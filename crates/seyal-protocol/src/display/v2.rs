@@ -20,6 +20,14 @@ pub enum DisplayCellRole {
     Continuation = 2,
 }
 
+#[derive(Clone, Copy)]
+struct PendingContinuation {
+    row: u16,
+    foreground: DisplayColor,
+    background: DisplayColor,
+    attributes: DisplayAttributes,
+}
+
 impl DisplayCellRole {
     fn from_bits(bits: u32) -> Result<Self, DisplayError> {
         match bits {
@@ -167,7 +175,7 @@ pub fn decode_payload_v2(
 
     let mut cells = Vec::with_capacity(cell_count);
     let mut expected_sidecar_off = 0usize;
-    let mut pending_continuation_row = None;
+    let mut pending_continuation = None;
 
     for index in 0..cell_count {
         let offset = cells_start + index * DISPLAY_CELL_LEN;
@@ -191,14 +199,14 @@ pub fn decode_payload_v2(
             &payload[offset..offset + DISPLAY_CELL_LEN],
             sidecar,
             &mut expected_sidecar_off,
-            &mut pending_continuation_row,
+            &mut pending_continuation,
             cell_row,
             cell_col,
             columns,
         )?;
         cells.push(cell);
     }
-    if pending_continuation_row.is_some() || expected_sidecar_off != sidecar_len {
+    if pending_continuation.is_some() || expected_sidecar_off != sidecar_len {
         return Err(DisplayError::InvalidSidecar);
     }
 
@@ -226,7 +234,7 @@ fn decode_cell_v2(
     bytes: &[u8],
     sidecar: &[u8],
     expected_sidecar_off: &mut usize,
-    pending_continuation_row: &mut Option<u16>,
+    pending_continuation: &mut Option<PendingContinuation>,
     cell_row: u16,
     cell_col: u16,
     columns: u16,
@@ -256,8 +264,12 @@ fn decode_cell_v2(
         return Err(DisplayError::InvalidAttributes);
     }
 
-    if pending_continuation_row.is_some() {
-        if pending_continuation_row != &Some(cell_row) {
+    if let Some(expected) = pending_continuation {
+        if expected.row != cell_row
+            || expected.foreground != foreground
+            || expected.background != background
+            || expected.attributes != attributes
+        {
             return Err(DisplayError::InvalidCell);
         }
         if role != DisplayCellRole::Continuation
@@ -268,7 +280,7 @@ fn decode_cell_v2(
         {
             return Err(DisplayError::InvalidCell);
         }
-        *pending_continuation_row = None;
+        *pending_continuation = None;
         return Ok(DisplayCell {
             scalar: ' ',
             role: DisplayCellRole::Continuation,
@@ -340,7 +352,12 @@ fn decode_cell_v2(
                 (scalar, Arc::from(encoded.as_bytes().to_vec()))
             };
             if width == 2 {
-                *pending_continuation_row = Some(cell_row);
+                *pending_continuation = Some(PendingContinuation {
+                    row: cell_row,
+                    foreground,
+                    background,
+                    attributes,
+                });
             }
             Ok(DisplayCell {
                 scalar: text.0,

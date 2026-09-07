@@ -304,4 +304,150 @@ mod tests {
         assert_eq!(drained, MAX_PROTOCOL_REPLIES);
         assert_eq!(execution.dropped_protocol_replies(), 1);
     }
+
+    #[test]
+    fn protocol_reply_queues_are_bounded_and_later_queries_recover() {
+        let mut terminal = TerminalState::new(80, 24).expect("valid terminal");
+        let query = b"\x1b[6n";
+        let mut terminal_flood = Vec::with_capacity(query.len() * (MAX_PROTOCOL_REPLIES + 1));
+        for _ in 0..=MAX_PROTOCOL_REPLIES {
+            terminal_flood.extend_from_slice(query);
+        }
+        let deferred_before = terminal.diagnostics().deferred_sequences;
+        terminal
+            .feed(&terminal_flood)
+            .expect("feed terminal queries");
+        let mut terminal_replies = 0;
+        while terminal.take_protocol_reply().is_some() {
+            terminal_replies += 1;
+        }
+        assert_eq!(terminal_replies, MAX_PROTOCOL_REPLIES);
+        assert!(terminal.diagnostics().deferred_sequences > deferred_before);
+        terminal.feed(query).expect("feed recovery query");
+        assert!(terminal.take_protocol_reply().is_some());
+        assert!(terminal.take_protocol_reply().is_none());
+
+        let query_for_shell = "\\033[6n";
+        let first_batch = query_for_shell.repeat(MAX_PROTOCOL_REPLIES);
+        let second_batch = query_for_shell.repeat(2);
+        let script = format!(
+            "printf '{first_batch}'; sleep 1; printf '{second_batch}'; \
+             IFS= read -r -n1 marker; printf '\\033[6n'; \
+             reply=; while IFS= read -r -n1 -t 2 ch; do \
+               reply=\"$reply$ch\"; case \"$ch\" in R) break;; esac; \
+             done; printf 'LATE_OK'"
+        );
+        let size = WindowSize::cells(80, 24).expect("valid terminal size");
+        let mut flood = TerminalExecution::spawn(
+            &CommandSpec::new("/bin/sh").args(["-c", script.as_str()]),
+            size,
+        )
+        .expect("spawn flood PTY");
+        let mut unrelated = TerminalExecution::spawn(
+            &CommandSpec::new("/bin/sh").args(["-c", "printf READY; sleep 1"]),
+            size,
+        )
+        .expect("spawn unrelated PTY");
+        let deadline = std::time::Instant::now() + Duration::from_secs(4);
+        let mut buffer = [0_u8; 8192];
+
+        while flood.pending_protocol_replies.len() < MAX_PROTOCOL_REPLIES {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "execution queue did not fill"
+            );
+            match flood.read_output(&mut buffer).expect("read flood PTY") {
+                ReadOutcome::Bytes(_) => {}
+                ReadOutcome::WouldBlock => {
+                    let _ = flood
+                        .wait_readable(Duration::from_millis(50))
+                        .expect("wait flood PTY");
+                }
+                ReadOutcome::Eof => panic!("flood PTY exited before queue filled"),
+            }
+        }
+        assert_eq!(flood.dropped_protocol_replies(), 0);
+
+        let mut unrelated_output = Vec::new();
+        while !unrelated_output
+            .windows(b"READY".len())
+            .any(|window| window == b"READY")
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "unrelated PTY did not make progress while reply queue was full"
+            );
+            match unrelated
+                .read_output(&mut buffer)
+                .expect("read unrelated PTY")
+            {
+                ReadOutcome::Bytes(count) => unrelated_output.extend_from_slice(&buffer[..count]),
+                ReadOutcome::WouldBlock => {
+                    let _ = unrelated
+                        .wait_readable(Duration::from_millis(50))
+                        .expect("wait unrelated PTY");
+                }
+                ReadOutcome::Eof => panic!("unrelated PTY exited before READY"),
+            }
+        }
+        assert!(unrelated_output.windows(5).any(|window| window == b"READY"));
+
+        assert!(flood.take_protocol_reply().is_some());
+        while flood.dropped_protocol_replies() == 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "execution surplus reply was not observed"
+            );
+            match flood.read_output(&mut buffer).expect("read flood PTY") {
+                ReadOutcome::Bytes(_) => {}
+                ReadOutcome::WouldBlock => {
+                    let _ = flood
+                        .wait_readable(Duration::from_millis(50))
+                        .expect("wait flood PTY");
+                }
+                ReadOutcome::Eof => panic!("flood PTY exited before overflow was observed"),
+            }
+        }
+        assert_eq!(flood.dropped_protocol_replies(), 1);
+        assert_eq!(flood.pending_protocol_replies.len(), MAX_PROTOCOL_REPLIES);
+        let mut retained = 0;
+        while flood.take_protocol_reply().is_some() {
+            retained += 1;
+        }
+        assert_eq!(retained, MAX_PROTOCOL_REPLIES);
+
+        flood
+            .write_input_bounded(b"x\n", Duration::from_secs(2))
+            .expect("release later-query phase");
+        let mut late_output = Vec::new();
+        while !late_output
+            .windows(b"LATE_OK".len())
+            .any(|window| window == b"LATE_OK")
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "later query did not receive a response"
+            );
+            match flood.read_output(&mut buffer).expect("read late query") {
+                ReadOutcome::Bytes(count) => late_output.extend_from_slice(&buffer[..count]),
+                ReadOutcome::WouldBlock => {
+                    let _ = flood
+                        .write_protocol_replies(4096)
+                        .expect("write late query reply");
+                    let _ = flood
+                        .wait_readable(Duration::from_millis(50))
+                        .expect("wait late query");
+                }
+                ReadOutcome::Eof => panic!("flood PTY exited before later query response"),
+            }
+            let _ = flood
+                .write_protocol_replies(4096)
+                .expect("write protocol replies");
+        }
+        assert!(late_output.windows(7).any(|window| window == b"LATE_OK"));
+
+        let policy = TerminationPolicy::new(Duration::from_millis(100), Duration::from_secs(1));
+        let _ = flood.terminate(policy);
+        let _ = unrelated.terminate(policy);
+    }
 }

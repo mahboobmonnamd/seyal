@@ -1,0 +1,30 @@
+version = 1
+activation_issue = "#816"
+
+[[fixtures]]
+id = "m002-decawm-reset-wide-final-column"
+cols = 3
+rows = 1
+input_hex = "tests/fixtures/m002-unicode/decawm-reset-wide-final.input.hex"
+expected = "tests/fixtures/m002-unicode/decawm-reset-wide-final.expected.txt"
+evidence_kind = "independent-reference"
+source = "Termux UnicodeInputTest + Windows Terminal AdaptDispatch"
+source_reference = "Termux commit 3b66f879 testWideCharacterWithoutWrapping; Windows Terminal commit 093e49e _WriteToBuffer DECAWM-disabled wide glyph last-column handling"
+license_or_terms = "Public source/tests consulted as behavioral references; no implementation copied"
+recorded_at = "2026-09-07"
+owner_issue = "#815"
+notes = "DECAWM reset; newly completed width-2 canonical unit at the final column is ignored atomically. #816 must activate this exact input/state expectation in the production TerminalState fixture harness."
+
+[[fixtures]]
+id = "m002-decawm-reset-late-widen-final-column"
+cols = 3
+rows = 1
+input_hex = "tests/fixtures/m002-unicode/decawm-reset-late-widen.input.hex"
+expected = "tests/fixtures/m002-unicode/decawm-reset-late-widen.expected.txt"
+evidence_kind = "project-compatibility-decision"
+source = "SPEC-011 §8.4 refinement informed by Termux/Windows Terminal no-wrap wide-glyph behavior"
+source_reference = "docs/specs/SPEC-011-M002-UNICODE-GRAPHEME-WIDTH-IME.md section 8.4; docs/evidence/m002-unicode-production-calibration.md"
+license_or_terms = "Apache-2.0; fixture expectation authored for Seyal from reviewed compatibility evidence"
+recorded_at = "2026-09-07"
+owner_issue = "#815"
+notes = "DECAWM reset; heart U+2764 commits width-1 in final column, then VS16 would widen. Seyal rejects only the width-changing extension and keeps the committed U+2764 prefix. #816 must activate this exact input/state expectation."

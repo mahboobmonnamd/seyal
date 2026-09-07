@@ -18,6 +18,10 @@ harness = false
 name = "vt_scroll_state"
 harness = false
 
+[[bench]]
+name = "history_reflow"
+harness = false
+
 [lints]
 workspace = true
 

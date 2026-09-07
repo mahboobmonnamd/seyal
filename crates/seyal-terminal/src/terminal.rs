@@ -1414,6 +1414,52 @@ mod tests {
     }
 
     #[test]
+    fn alternate_screen_never_adds_primary_history() {
+        let mut terminal = TerminalState::new(4, 1).unwrap();
+        terminal.feed(b"primary\r\n").unwrap();
+        let before = terminal.primary_history_resident_bytes();
+        terminal
+            .feed(b"\x1b[?1049halternate\r\nalternate\r\n\x1b[?1049l")
+            .unwrap();
+        assert_eq!(terminal.primary_history_resident_bytes(), before);
+        assert!(terminal.primary_history_eviction_generation() == 0);
+    }
+
+    #[test]
+    fn retained_unit_preserves_canonical_multiscalar_payload_and_anchor() {
+        let mut terminal = TerminalState::new(2, 1).unwrap();
+        terminal.feed("界\u{301}\r\n".as_bytes()).unwrap();
+        let (line_id, _) = terminal
+            .primary_history_range(LineId(1), LineId(u64::MAX), 1)
+            .into_iter()
+            .next()
+            .expect("wide source row is retained");
+        let unit = terminal
+            .primary_history_unit(HistoryAnchor {
+                line_id,
+                unit_offset: 0,
+            })
+            .expect("canonical source unit is addressable");
+        assert_eq!(unit.0, "界\u{301}");
+        assert_eq!(unit.1, 2);
+    }
+
+    #[test]
+    fn history_reflow_is_invariant_under_input_chunking() {
+        let input = "alpha界\u{301}xyz\r\nsecond-line\r\nthird";
+        let mut one_shot = TerminalState::new(6, 1).unwrap();
+        one_shot.feed(input.as_bytes()).unwrap();
+        let mut bytewise = TerminalState::new(6, 1).unwrap();
+        for byte in input.as_bytes() {
+            bytewise.feed(std::slice::from_ref(byte)).unwrap();
+        }
+        assert_eq!(
+            one_shot.primary_history_reflow(5, 64),
+            bytewise.primary_history_reflow(5, 64)
+        );
+    }
+
+    #[test]
     fn prepare_resize_leaves_geometry_and_damage_unchanged_until_commit() {
         let mut terminal = TerminalState::new(4, 2).unwrap();
         let _ = terminal.take_damage();

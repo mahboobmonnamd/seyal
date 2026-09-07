@@ -167,19 +167,38 @@ pub fn decode_payload_v2(
 
     let mut cells = Vec::with_capacity(cell_count);
     let mut expected_sidecar_off = 0usize;
-    let mut pending_continuations = 0u8;
+    let mut pending_continuation_row = None;
 
     for index in 0..cell_count {
         let offset = cells_start + index * DISPLAY_CELL_LEN;
+        let columns_usize = columns as usize;
+        let (cell_row, cell_col) = if row_count == 1 {
+            (
+                first_row,
+                first_col
+                    .checked_add(index as u16)
+                    .ok_or(DisplayError::Overflow)?,
+            )
+        } else {
+            (
+                first_row
+                    .checked_add((index / columns_usize) as u16)
+                    .ok_or(DisplayError::Overflow)?,
+                (index % columns_usize) as u16,
+            )
+        };
         let cell = decode_cell_v2(
             &payload[offset..offset + DISPLAY_CELL_LEN],
             sidecar,
             &mut expected_sidecar_off,
-            &mut pending_continuations,
+            &mut pending_continuation_row,
+            cell_row,
+            cell_col,
+            columns,
         )?;
         cells.push(cell);
     }
-    if pending_continuations != 0 || expected_sidecar_off != sidecar_len {
+    if pending_continuation_row.is_some() || expected_sidecar_off != sidecar_len {
         return Err(DisplayError::InvalidSidecar);
     }
 
@@ -207,7 +226,10 @@ fn decode_cell_v2(
     bytes: &[u8],
     sidecar: &[u8],
     expected_sidecar_off: &mut usize,
-    pending_continuations: &mut u8,
+    pending_continuation_row: &mut Option<u16>,
+    cell_row: u16,
+    cell_col: u16,
+    columns: u16,
 ) -> Result<DisplayCell, DisplayError> {
     if bytes.len() != DISPLAY_CELL_LEN {
         return Err(DisplayError::InvalidCell);
@@ -234,7 +256,10 @@ fn decode_cell_v2(
         return Err(DisplayError::InvalidAttributes);
     }
 
-    if *pending_continuations > 0 {
+    if pending_continuation_row.is_some() {
+        if pending_continuation_row != &Some(cell_row) {
+            return Err(DisplayError::InvalidCell);
+        }
         if role != DisplayCellRole::Continuation
             || width != 0
             || sidecar_flag
@@ -243,7 +268,7 @@ fn decode_cell_v2(
         {
             return Err(DisplayError::InvalidCell);
         }
-        *pending_continuations -= 1;
+        *pending_continuation_row = None;
         return Ok(DisplayCell {
             scalar: ' ',
             role: DisplayCellRole::Continuation,
@@ -274,6 +299,9 @@ fn decode_cell_v2(
         DisplayCellRole::Lead => {
             if width != 1 && width != 2 {
                 return Err(DisplayError::InvalidWidth);
+            }
+            if width == 2 && cell_col + 1 >= columns {
+                return Err(DisplayError::InvalidCell);
             }
             let text = if sidecar_flag {
                 let len = (len_minus_1 as usize)
@@ -310,7 +338,7 @@ fn decode_cell_v2(
                 (scalar, Arc::from(encoded.as_bytes().to_vec()))
             };
             if width == 2 {
-                *pending_continuations = 1;
+                *pending_continuation_row = Some(cell_row);
             }
             Ok(DisplayCell {
                 scalar: text.0,

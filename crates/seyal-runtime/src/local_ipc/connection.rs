@@ -153,34 +153,54 @@ impl OutboundItem {
 }
 
 struct DisplayItem {
-    batch: EncodedDisplayBatch,
+    #[cfg(feature = "benchmark-instrumentation")]
+    kind: DisplayKind,
+    batches: VecDeque<EncodedDisplayBatch>,
     frame_index: usize,
     sent: usize,
 }
 
 impl DisplayItem {
-    fn new(batch: EncodedDisplayBatch) -> Self {
+    fn new(batches: VecDeque<EncodedDisplayBatch>) -> Self {
+        #[cfg(feature = "benchmark-instrumentation")]
+        let kind = batches
+            .front()
+            .map_or(DisplayKind::Snapshot, |batch| batch.kind);
         Self {
-            batch,
+            #[cfg(feature = "benchmark-instrumentation")]
+            kind,
+            batches,
             frame_index: 0,
             sent: 0,
         }
     }
 
+    fn current_batch(&self) -> Option<&EncodedDisplayBatch> {
+        self.batches.front()
+    }
+
     #[cfg(feature = "benchmark-instrumentation")]
     fn remaining_len(&self) -> usize {
-        let current = self
-            .batch
+        let Some(batch) = self.current_batch() else {
+            return 0;
+        };
+        let current = batch
             .frames
             .get(self.frame_index)
             .map_or(0, |frame| frame.len().saturating_sub(self.sent));
-        let tail = self
-            .batch
+        let current_tail = batch
             .frames
             .iter()
             .skip(self.frame_index.saturating_add(1))
             .fold(0usize, |sum, frame| sum.saturating_add(frame.len()));
-        current.saturating_add(tail)
+        let later_batches = self
+            .batches
+            .iter()
+            .skip(1)
+            .fold(0usize, |sum, batch| sum.saturating_add(batch.total_bytes));
+        current
+            .saturating_add(current_tail)
+            .saturating_add(later_batches)
     }
 }
 
@@ -192,7 +212,7 @@ struct Connection {
     after_display: VecDeque<OutboundItem>,
     queued_control_bytes: usize,
     display_inflight: Option<DisplayItem>,
-    pending_display: Option<EncodedDisplayBatch>,
+    pending_display: Option<VecDeque<EncodedDisplayBatch>>,
     display_generation: u64,
 }
 
@@ -206,7 +226,7 @@ impl Connection {
                 BENCH_PENDING_SUPERSESSIONS.fetch_add(1, Ordering::Relaxed);
             }
         }
-        self.pending_display = Some(snapshot);
+        self.pending_display = Some(snapshot.into_transport_batches().into());
         #[cfg(feature = "benchmark-instrumentation")]
         update_display_queue_high_water(self.display_queue_bytes());
     }
@@ -217,13 +237,16 @@ impl Connection {
             BENCH_DELTA_SKIPPED.fetch_add(1, Ordering::Relaxed);
             return DeltaEnqueueResult::Skipped;
         }
-        if self.display_generation != delta.base_generation || self.pending_display.is_some() {
+        if self.display_generation != delta.base_generation
+            || self.display_inflight.is_some()
+            || self.pending_display.is_some()
+        {
             #[cfg(feature = "benchmark-instrumentation")]
             BENCH_NEED_SNAPSHOT.fetch_add(1, Ordering::Relaxed);
             return DeltaEnqueueResult::NeedSnapshot;
         }
         self.display_generation = delta.generation;
-        self.pending_display = Some(delta);
+        self.pending_display = Some(delta.into_transport_batches().into());
         #[cfg(feature = "benchmark-instrumentation")]
         {
             BENCH_DELTA_QUEUED.fetch_add(1, Ordering::Relaxed);
@@ -235,10 +258,12 @@ impl Connection {
     fn has_snapshot_delivery(&self) -> bool {
         self.display_inflight
             .as_ref()
-            .is_some_and(|item| item.batch.kind == DisplayKind::Snapshot)
+            .and_then(DisplayItem::current_batch)
+            .is_some_and(|batch| batch.kind == DisplayKind::Snapshot)
             || self
                 .pending_display
                 .as_ref()
+                .and_then(|batches| batches.front())
                 .is_some_and(|batch| batch.kind == DisplayKind::Snapshot)
     }
 
@@ -248,10 +273,11 @@ impl Connection {
             .display_inflight
             .as_ref()
             .map_or(0, DisplayItem::remaining_len);
-        let pending = self
-            .pending_display
-            .as_ref()
-            .map_or(0, |batch| batch.total_bytes);
+        let pending = self.pending_display.as_ref().map_or(0, |batches| {
+            batches
+                .iter()
+                .fold(0usize, |sum, batch| sum.saturating_add(batch.total_bytes))
+        });
         inflight.saturating_add(pending)
     }
 }
@@ -661,17 +687,20 @@ fn flush_outbound(connection: &mut Connection) -> io::Result<()> {
 
     loop {
         if connection.display_inflight.is_none() {
-            let Some(batch) = connection.pending_display.take() else {
+            let Some(batches) = connection.pending_display.take() else {
                 break;
             };
-            connection.display_inflight = Some(DisplayItem::new(batch));
+            if batches.is_empty() {
+                continue;
+            }
+            connection.display_inflight = Some(DisplayItem::new(batches));
         }
         let Some(item) = connection.display_inflight.as_mut() else {
             break;
         };
-        if item.frame_index >= item.batch.frames.len() {
+        let Some(current_len) = item.current_batch().map(|batch| batch.frames.len()) else {
             #[cfg(feature = "benchmark-instrumentation")]
-            match item.batch.kind {
+            match item.kind {
                 DisplayKind::Snapshot => {
                     BENCH_SNAPSHOT_COMPLETED.fetch_add(1, Ordering::Relaxed);
                 }
@@ -681,27 +710,47 @@ fn flush_outbound(connection: &mut Connection) -> io::Result<()> {
             }
             connection.display_inflight = None;
             continue;
+        };
+        if item.frame_index >= current_len {
+            item.batches.pop_front();
+            item.frame_index = 0;
+            item.sent = 0;
+            continue;
         }
-        let frame = Arc::clone(&item.batch.frames[item.frame_index]);
+        let frame = Arc::clone(
+            &item
+                .current_batch()
+                .expect("current display batch remains queued")
+                .frames[item.frame_index],
+        );
+        let frame_len = frame.len();
         match flush_bytes(connection.stream.as_raw_fd(), &frame, &mut item.sent)? {
             FlushProgress::WouldBlock => return Ok(()),
             FlushProgress::Progress => {
-                if item.sent == frame.len() {
+                if item.sent == frame_len {
                     item.frame_index += 1;
                     item.sent = 0;
-                    if item.frame_index >= item.batch.frames.len() {
+                    if item.frame_index >= current_len {
+                        item.batches.pop_front();
+                        item.frame_index = 0;
                         #[cfg(feature = "benchmark-instrumentation")]
-                        match item.batch.kind {
-                            DisplayKind::Snapshot => {
-                                BENCH_SNAPSHOT_COMPLETED.fetch_add(1, Ordering::Relaxed);
-                            }
-                            DisplayKind::Delta => {
-                                BENCH_DELTA_COMPLETED.fetch_add(1, Ordering::Relaxed);
+                        if item.batches.is_empty() {
+                            match item.kind {
+                                DisplayKind::Snapshot => {
+                                    BENCH_SNAPSHOT_COMPLETED.fetch_add(1, Ordering::Relaxed);
+                                }
+                                DisplayKind::Delta => {
+                                    BENCH_DELTA_COMPLETED.fetch_add(1, Ordering::Relaxed);
+                                }
                             }
                         }
-                        connection.display_inflight = None;
-                        continue;
+                        if item.batches.is_empty() {
+                            connection.display_inflight = None;
+                        }
                     }
+                }
+                if connection.display_inflight.is_none() {
+                    continue;
                 }
                 return Ok(());
             }
@@ -766,6 +815,7 @@ fn set_close_on_exec(fd: RawFd) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::display::MAX_DISPLAY_BATCH_BYTES;
     use crate::display::{encode_delta, encode_snapshot};
     use seyal_exec::{
         ProjectionAttributes, ProjectionCell, ProjectionDamage, TerminalProjectionSnapshot,
@@ -833,7 +883,15 @@ mod tests {
             connection.try_queue_delta(encode_delta(&update(3), 2).unwrap()),
             DeltaEnqueueResult::NeedSnapshot
         );
-        assert_eq!(connection.pending_display.as_ref().unwrap().generation, 2);
+        assert_eq!(
+            connection
+                .pending_display
+                .as_ref()
+                .and_then(|batches| batches.front())
+                .unwrap()
+                .generation,
+            2
+        );
     }
 
     #[test]
@@ -843,5 +901,30 @@ mod tests {
         connection.queue_snapshot(encode_snapshot(&snapshot(9)).unwrap());
         assert_eq!(connection.display_generation, 9);
         assert!(connection.has_snapshot_delivery());
+    }
+
+    #[test]
+    fn oversized_logical_snapshot_is_queued_as_bounded_transport_fragments() {
+        let first = Arc::<[u8]>::from(vec![0u8; MAX_DISPLAY_BATCH_BYTES - 64]);
+        let second = Arc::<[u8]>::from(vec![1u8; 128]);
+        let third = Arc::<[u8]>::from(vec![2u8; MAX_DISPLAY_BATCH_BYTES - 128]);
+        let batch = EncodedDisplayBatch {
+            kind: DisplayKind::Snapshot,
+            schema: 2,
+            generation: 9,
+            base_generation: 0,
+            rows: 1,
+            columns: 1,
+            frames: vec![first, second, third],
+            total_bytes: MAX_DISPLAY_BATCH_BYTES * 2,
+        };
+
+        let mut connection = connection();
+        connection.queue_snapshot(batch);
+        let fragments = connection.pending_display.as_ref().unwrap();
+        assert_eq!(fragments.len(), 2);
+        assert!(fragments
+            .iter()
+            .all(|fragment| fragment.total_bytes <= MAX_DISPLAY_BATCH_BYTES));
     }
 }

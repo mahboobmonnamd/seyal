@@ -23,6 +23,23 @@ pub(crate) struct PendingDisplayBatch {
 
 impl PendingDisplayBatch {
     pub(crate) fn push(&mut self, chunk: DecodedDisplayChunk) -> Result<bool, ClientError> {
+        // A newer logical update can arrive after an earlier update has
+        // started crossing transport-batch boundaries. Drop the incomplete
+        // disposable assembly before accepting its chunk zero; otherwise the
+        // old generation would poison the new snapshot/delta transaction.
+        let superseded = self.chunks.first().is_some_and(|first| {
+            chunk.chunk_index == 0
+                && (chunk.kind != first.kind
+                    || chunk.schema != first.schema
+                    || chunk.generation != first.generation
+                    || chunk.base_generation != first.base_generation
+                    || chunk.rows != first.rows
+                    || chunk.columns != first.columns)
+        });
+        if superseded {
+            self.clear();
+        }
+
         let expected_count = usize::from(chunk.chunk_count);
         if expected_count == 0 {
             return Err(ClientError::Capacity);
@@ -418,5 +435,19 @@ mod tests {
         let replayed = decoded_chunk(1, 2, 0, 1);
         assert_eq!(batch.push(replayed), Err(ClientError::Protocol));
         assert_eq!(batch.chunks().len(), 1);
+    }
+
+    #[test]
+    fn pending_display_batch_discards_incomplete_logical_update_on_supersession() {
+        let mut batch = PendingDisplayBatch::default();
+        assert!(!batch.push(decoded_chunk(0, 2, 0, 1)).unwrap());
+
+        let mut replacement = decoded_chunk(0, 2, 0, 1);
+        replacement.generation = 3;
+        replacement.base_generation = 0;
+        replacement.kind = DisplayKind::Snapshot;
+        assert!(!batch.push(replacement).unwrap());
+        assert_eq!(batch.chunks().len(), 1);
+        assert_eq!(batch.chunks()[0].generation, 3);
     }
 }

@@ -75,6 +75,100 @@ pub struct EncodedDisplayBatch {
     pub total_bytes: usize,
 }
 
+impl EncodedDisplayBatch {
+    /// Split one logical update into contiguous replaceable transport batches.
+    ///
+    /// The wire chunk headers retain the logical `chunk_count` and indices, so
+    /// a client can keep assembling the update across these transport units.
+    /// Every encoded frame is already bounded by `MAX_FRAME_PAYLOAD`; the
+    /// additional batch boundary is the SPEC-011 4 MiB queue/backpressure
+    /// boundary.
+    pub fn into_transport_batches(self) -> Vec<Self> {
+        if self.total_bytes <= MAX_DISPLAY_BATCH_BYTES {
+            return vec![self];
+        }
+
+        let EncodedDisplayBatch {
+            kind,
+            schema,
+            generation,
+            base_generation,
+            rows,
+            columns,
+            frames,
+            total_bytes: _,
+        } = self;
+        let mut fragments = Vec::new();
+        let mut current_frames = Vec::new();
+        let mut current_bytes = 0usize;
+
+        for frame in frames {
+            let frame_len = frame.len();
+            debug_assert!(frame_len <= MAX_DISPLAY_BATCH_BYTES);
+            if !current_frames.is_empty()
+                && current_bytes.saturating_add(frame_len) > MAX_DISPLAY_BATCH_BYTES
+            {
+                fragments.push(Self {
+                    kind,
+                    schema,
+                    generation,
+                    base_generation,
+                    rows,
+                    columns,
+                    frames: std::mem::take(&mut current_frames),
+                    total_bytes: current_bytes,
+                });
+                current_bytes = 0;
+            }
+            current_bytes = current_bytes.saturating_add(frame_len);
+            current_frames.push(frame);
+        }
+        if !current_frames.is_empty() {
+            fragments.push(Self {
+                kind,
+                schema,
+                generation,
+                base_generation,
+                rows,
+                columns,
+                frames: current_frames,
+                total_bytes: current_bytes,
+            });
+        }
+        fragments
+    }
+}
+
+#[cfg(test)]
+mod transport_tests {
+    use super::*;
+
+    #[test]
+    fn logical_batch_fragments_into_bounded_contiguous_transport_batches() {
+        let first = Arc::<[u8]>::from(vec![0u8; MAX_DISPLAY_BATCH_BYTES - 64]);
+        let second = Arc::<[u8]>::from(vec![1u8; 128]);
+        let third = Arc::<[u8]>::from(vec![2u8; MAX_DISPLAY_BATCH_BYTES - 128]);
+        let batch = EncodedDisplayBatch {
+            kind: DisplayKind::Snapshot,
+            schema: DISPLAY_SCHEMA_V2,
+            generation: 7,
+            base_generation: 0,
+            rows: 1,
+            columns: 1,
+            frames: vec![first.clone(), second.clone(), third.clone()],
+            total_bytes: first.len() + second.len() + third.len(),
+        };
+
+        let fragments = batch.into_transport_batches();
+        assert_eq!(fragments.len(), 2);
+        assert!(fragments
+            .iter()
+            .all(|fragment| fragment.total_bytes <= MAX_DISPLAY_BATCH_BYTES));
+        assert_eq!(fragments[0].frames, vec![first]);
+        assert_eq!(fragments[1].frames, vec![second, third]);
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DisplayError {
     InvalidGeometry,
@@ -631,5 +725,54 @@ mod tests {
         bad[40..44].copy_from_slice(&65_537u32.to_le_bytes());
         let bad_frame = framing::encode_frame(MessageType::DisplaySnapshotV2, &bad);
         assert!(decode_chunk(&bad_frame).is_err());
+    }
+
+    #[test]
+    fn v2_wide_lead_cannot_continue_across_row_boundary() {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&1u64.to_le_bytes());
+        payload.extend_from_slice(&0u64.to_le_bytes());
+        payload.extend_from_slice(&2u16.to_le_bytes()); // rows
+        payload.extend_from_slice(&1u16.to_le_bytes()); // columns
+        payload.extend_from_slice(&0u16.to_le_bytes());
+        payload.extend_from_slice(&0u16.to_le_bytes());
+        payload.extend_from_slice(&[1, 0, 0, 0]);
+        payload.extend_from_slice(&0u16.to_le_bytes()); // first row
+        payload.extend_from_slice(&2u16.to_le_bytes()); // row count
+        payload.extend_from_slice(&0u16.to_le_bytes()); // chunk index
+        payload.extend_from_slice(&1u16.to_le_bytes()); // chunk count
+        payload.extend_from_slice(&2u32.to_le_bytes()); // cell count
+        payload.extend_from_slice(&0u32.to_le_bytes()); // sidecar len
+        payload.extend_from_slice(&DISPLAY_SCHEMA_V2.to_le_bytes());
+        payload.extend_from_slice(&0u16.to_le_bytes()); // first col
+
+        let mut lead = [0u8; DISPLAY_CELL_LEN];
+        lead[0..4].copy_from_slice(&('A' as u32).to_le_bytes());
+        let lead_meta = encode_v2_cell_meta(
+            DisplayCellRole::Lead,
+            2,
+            false,
+            0,
+            DisplayAttributes::default(),
+        );
+        lead[12..16].copy_from_slice(&lead_meta.to_le_bytes());
+        payload.extend_from_slice(&lead);
+
+        let mut continuation = [0u8; DISPLAY_CELL_LEN];
+        let continuation_meta = encode_v2_cell_meta(
+            DisplayCellRole::Continuation,
+            0,
+            false,
+            0,
+            DisplayAttributes::default(),
+        );
+        continuation[12..16].copy_from_slice(&continuation_meta.to_le_bytes());
+        payload.extend_from_slice(&continuation);
+
+        let frame = framing::encode_frame(MessageType::DisplaySnapshotV2, &payload);
+        assert!(matches!(
+            decode_chunk(&frame),
+            Err(DisplayError::InvalidCell)
+        ));
     }
 }

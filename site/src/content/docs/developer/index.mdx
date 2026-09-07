@@ -12,7 +12,7 @@ The Developer Guide explains **how to navigate and contribute to Seyal**. It doe
     Understand ownership boundaries, hot-path invariants, runtime state, PTY/VT/rendering responsibilities, persistence, Blocks, and the OSS/commercial boundary.
   </Card>
   <Card title="Contributing" icon="github">
-    Follow the Issue → isolated branch/worktree → tests → PR → independent validation workflow.
+    Follow the Ready Issue → exclusive assignee claim → deterministic branch/worktree → tests → PR → independent validation workflow.
   </Card>
   <Card title="Quality" icon="approve-check-circle">
     Terminal correctness, performance, fuzzing, security, deterministic builds, and reproducible verification are completion gates.
@@ -26,5 +26,24 @@ The Developer Guide explains **how to navigate and contribute to Seyal**. It doe
 3. Read the applicable ADR/spec/milestone.
 4. Read `docs/engineering/DEVELOPMENT.md` and `docs/engineering/ISSUE-PROTOCOL.md`.
 5. Work only from a GitHub Issue that has passed the Ready gate.
+6. For implementation/fix/code work on an Issue, use `.agents/skills/implement-issue/SKILL.md` before production edits.
+
+## Claim an implementation Issue
+
+Seyal uses exclusive implementation ownership so parallel contributors do not unknowingly implement the same ticket.
+
+```text
+Ready Issue
+→ authenticated GitHub developer
+→ sole Issue assignee
+→ confirmed plan
+→ issue/<number> branch
+→ isolated worktree
+→ implementation
+```
+
+If the Issue is already assigned to another developer, has multiple assignees, the current GitHub identity cannot be resolved, or the deterministic `issue/<number>` branch already exists for work you were not explicitly asked to resume, stop and report the collision. Do not create another branch or overwrite the existing assignee.
+
+Ownership transfer is explicit: stop current edits, record the existing branch/PR/check state, reassign the Issue, and have the new developer re-run the implementation preflight before resuming the same branch.
 
 When this guide conflicts with an accepted source-of-truth document, the source-of-truth document wins and this guide must be corrected.

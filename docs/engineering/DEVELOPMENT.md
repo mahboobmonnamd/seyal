@@ -25,28 +25,36 @@ Default distributed-development unit:
 
 ```text
 one Ready Issue
-→ one human/agent
+→ one authenticated GitHub assignee/implementer
+→ one confirmed implementation plan
+→ one deterministic issue/<number> branch
 → one isolated worktree
-→ issue/<number>-<short-name>
 → one scoped PR
 ```
 
 One Issue should produce one coherent outcome that can normally be tested, reviewed and merged independently. Large or cross-authority work is refined before implementation. Two active Issues must not mutate the same authoritative subsystem unless independence is explicit and reviewable.
+
+The Issue assignee is the human-visible active-work claim. The exact `issue/<number>` branch is the collision backstop. New implementation branches do not add a short-name suffix; deterministic naming is deliberate so concurrent agents cannot evade a collision by choosing different slugs. Legacy `issue/<number>-<short-name>` branches that already existed before this rule may finish normally.
 
 ## Mandatory flow
 
 1. When project context beyond the Issue links is needed, use `project-context` to retrieve the smallest relevant node/relationship set, validate the derived index, and read the returned authoritative sources. A stale/no-match index routes to targeted source search; it never authorizes guessing.
 2. Refine the Issue using `.agents/skills/issue-refinement/SKILL.md`.
 3. Set Project status to **Ready** only after the readiness checklist in `ISSUE-PROTOCOL.md` passes.
-4. Assign one owner and create an isolated worktree/branch.
-5. Use tests/fixtures first for core behavior.
-6. Implement only the Issue scope.
-7. Assess **Documentation impact** before final validation. Run the `docs-authoring` skill and update the User Guide and/or Developer Guide in the same Issue/PR when applicable. If no documentation is needed, record a concrete `N/A` rationale in the PR.
-8. Run `make check` plus issue-specific tests/benchmarks/security checks. When documentation changed, also run `make docs-check` and `make docs-build`.
-9. Open a PR using the repository template, including documentation evidence or the `N/A` rationale.
-10. Require CI evidence; high-risk/core work gets independent review.
-11. Move to Validation where milestone/demo/performance evidence is required.
-12. Merge only after required gates pass. Do not start a dependent milestone early.
+4. Any request to implement/fix/finish/code a specific GitHub Issue must enter `.agents/skills/implement-issue/SKILL.md`. Resolve the authenticated GitHub login, fresh-read assignees, and acquire/verify sole assignment before planning or production work. Assigned-to-other, multiple-assignee, or identity-unavailable cases stop as `BLOCKED`.
+5. Confirm the implementation plan in chat. Claim/Ready state is not permission to skip plan-first review.
+6. After plan confirmation, create the exact remote branch `issue/<number>` from current accepted `master`. If that branch already exists, stop unless the user explicitly requested resume/continue of that existing work. Re-read the Issue after branch creation and require the current implementer to remain the sole assignee before creating the worktree or editing production files.
+7. Create one isolated worktree from the deterministic Issue branch.
+8. Use tests/fixtures first for core behavior.
+9. Implement only the Issue scope.
+10. Assess **Documentation impact** before final validation. Run the `docs-authoring` skill and update the User Guide and/or Developer Guide in the same Issue/PR when applicable. If no documentation is needed, record a concrete `N/A` rationale in the PR.
+11. Run `make check` plus issue-specific tests/benchmarks/security checks. When documentation changed, also run `make docs-check` and `make docs-build`.
+12. Open a PR using the repository template, including documentation evidence or the `N/A` rationale.
+13. Require CI evidence; high-risk/core work gets independent review.
+14. Move to Validation where milestone/demo/performance evidence is required.
+15. Merge only after required gates pass. Do not start a dependent milestone early.
+
+Ownership handoff is explicit. The current owner stops editing, records branch/PR/check state, and GitHub assignment is explicitly transferred. The new implementer re-runs the full claim/readiness preflight and resumes the existing Issue branch. An agent must never self-clear or steal a claim because it appears stale.
 
 ## Documentation lifecycle
 

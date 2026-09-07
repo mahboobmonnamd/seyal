@@ -61,6 +61,23 @@ grep -q '.sdlc/framework/skills/verification/SKILL.md' .agents/skills/milestone-
 grep -q '.sdlc/framework/skills/development-readiness/SKILL.md' .agents/skills/development-readiness/SKILL.md || fail "development-readiness adapter must delegate to AI-SDLC"
 grep -q '.sdlc/framework/skills/verification/SKILL.md' .agents/skills/verification/SKILL.md || fail "verification adapter must delegate to AI-SDLC"
 
+# Parallel-development safety: implementation pickup must be an exclusive,
+# verified GitHub claim before any production branch/worktree/edit path.
+claim_skill=.agents/skills/implement-issue/SKILL.md
+grep -Fq 'mandatory entrypoint for production implementation of a Seyal GitHub Issue' "$claim_skill" || fail "implement-issue must be the mandatory production entrypoint"
+grep -Fq 'authenticated GitHub login' "$claim_skill" || fail "implement-issue must resolve authenticated GitHub identity"
+grep -Fq 'Issue #N is already taken by @login' "$claim_skill" || fail "implement-issue must report the existing assignee and stop"
+grep -Fq 'Multiple assignees' "$claim_skill" || fail "implement-issue must fail closed on multiple assignees"
+grep -Fq 'exact remote branch name `issue/<number>`' "$claim_skill" || fail "implement-issue must use the deterministic issue branch collision backstop"
+grep -Fq 'never overwrite another valid claim to win a race' "$claim_skill" || fail "implement-issue must not steal a concurrent claim"
+grep -Fq 'Any request to **implement, fix, finish, code, or complete a specific GitHub Issue** must enter through' AGENTS.md || fail "AGENTS.md must route implementation requests through implement-issue"
+grep -Fq 'one deterministic issue/<number> branch' docs/engineering/DEVELOPMENT.md || fail "development workflow must use the deterministic issue branch"
+if grep -Fq '→ issue/<number>-<short-name>' docs/engineering/DEVELOPMENT.md; then
+  fail "new development workflow must not retain the legacy non-deterministic branch convention"
+fi
+grep -Fq 'GitHub assignee state is the human-visible claim' docs/engineering/ISSUE-PROTOCOL.md || fail "Issue protocol must define assignee ownership authority"
+grep -Fq 'Project status (`Ready`, `In Progress`, and so on) is lifecycle metadata, not an ownership lock' docs/engineering/ISSUE-PROTOCOL.md || fail "Issue protocol must not use Project status as the ownership lock"
+
 [[ -f .sdlc/context/_meta.yaml ]] || fail "Seyal SDLC context metadata is missing"
 [[ -f .sdlc/graph/context-index.json ]] || fail "Seyal derived context index is missing"
 python3 -m json.tool .sdlc/graph/context-index.json >/dev/null || fail "Seyal context index is not valid JSON"

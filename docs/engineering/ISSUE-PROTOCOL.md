@@ -26,6 +26,48 @@ Backlog → Refinement → Ready → In Progress → In Review → Validation �
 
 Only **Ready** items may be picked up by implementation agents.
 
+## Active implementation claim
+
+Seyal implementation work is exclusively owned while active. GitHub assignee state is the human-visible claim; the deterministic implementation branch is the collision backstop.
+
+The pickup contract is:
+
+```text
+fresh open Ready Issue
+→ resolve authenticated GitHub login
+→ exactly one assignee = current implementer
+→ plan confirmed
+→ create exact branch issue/<number>
+→ re-read Issue and verify same sole assignee
+→ create isolated worktree
+→ implementation may begin
+```
+
+Rules:
+
+- Production implementation of a GitHub Issue must enter through `.agents/skills/implement-issue/SKILL.md`.
+- Resolve the authenticated GitHub login from project-approved GitHub tooling. Never infer identity from git author configuration, local username, chat name, or repository ownership.
+- Fetch assignee state fresh immediately before pickup. Cached context is not ownership authority.
+- An unassigned Ready Issue may be assigned to the current authenticated implementer. Re-fetch after assignment; continue only if that implementer is now the sole assignee.
+- If exactly one different assignee exists, the Issue is already taken. Report the assignee and stop before planning, worktree/branch creation, or production edits.
+- Multiple assignees are an ownership collision for an implementation Issue. Stop and require explicit resolution.
+- If implementer identity, assignment write, or fresh verification is unavailable/ambiguous, fail closed. Do not code first and repair metadata later.
+- Project status (`Ready`, `In Progress`, and so on) is lifecycle metadata, not an ownership lock. Status never overrides the assignee rule.
+- For new production pickups the exact branch name is `issue/<number>`. Do not create alternative short-name branches to escape a collision.
+- Branch creation happens only after the implementation plan is confirmed. If `issue/<number>` already exists, stop by default. Resume it only when the user explicitly asks to continue/resume that existing work and the current implementer is still the sole assignee.
+- If concurrent assignment/branch operations produce disagreement, stop before production edits and require explicit ownership resolution. Never steal or overwrite another valid claim to win a race.
+- Legacy `issue/<number>-<short-name>` branches that were already active before this protocol may finish; new pickups use only `issue/<number>`.
+
+### Ownership handoff
+
+A handoff is explicit, never inferred from inactivity.
+
+- The current owner stops editing and records the exact branch/PR/check state.
+- GitHub assignee is explicitly changed to the new implementer.
+- The new implementer re-runs the full Ready/ownership preflight and resumes the existing Issue branch; no second implementation branch is created.
+- If work was abandoned before implementation, remove an unused claim branch before clearing/reassigning ownership.
+- An agent that merely suspects a stale claim must report it and stop; it must not self-unassign another contributor.
+
 ## Production implementation vs POC
 
 A small MVP is valid production work. A POC/spike/prototype is not.

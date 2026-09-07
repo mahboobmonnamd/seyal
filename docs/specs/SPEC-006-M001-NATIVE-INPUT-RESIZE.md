@@ -1016,3 +1016,118 @@ Pass 7 implementation is complete only when:
 - OSS remains independent of commercial code;
 - no Pass 8+ scope creep;
 - independent final architecture/performance/security review has no unresolved blocker.
+
+## 21. M002 keyboard extension contract (#834 → #823)
+
+**Status: accepted specification (2026-09-07, #834); not implemented or advertised.** Sections 1–20 remain the historical accepted M001 contract. This section graduates only the keyboard behaviors listed here for M002; it does not change resize, terminal ownership, mouse, clipboard, or the M003 keybinding product scope. Acceptance of the specification is separate from #823 production acceptance.
+
+### 21.1 Ownership and admission
+
+`TerminalState` owns cursor/keypad modes and negotiated keyboard flags. Runtime reads that state after authenticating the current Controller and validating its typed key. Encoding occurs once at Runtime input admission; accepted encoded bytes retain FIFO order and are not re-encoded if a later PTY mode change occurs before the write drains. This extends section 8 rather than introducing another PTY queue or write-time mode authority. A rejected action contributes no bytes and receives the existing bounded error response. Partial OS writes drain the accepted transaction through the existing queue.
+
+Swift normalizes physical/native intent and ephemeral composition only. It does not read projected modes to produce escape sequences. No key adds a thread, process, task, synchronous renderer acknowledgement, filesystem/config read, or additional IPC round trip. Input content remains excluded from diagnostics. Detach/reconnect clears native held-key/composition state; it never resets healthy canonical terminal modes.
+
+### 21.2 Cursor and keypad modes
+
+DECCKM (`CSI ? 1 h/l`) and DECNKM (`CSI ? 66 h/l`) start reset. `ESC =` sets keypad application mode; `ESC >` resets it. DECRQM for 1 and 66 reports the actual canonical set/reset value. Creation of a new TerminalState resets both modes and both keyboard stacks. This extension does not graduate RIS (`ESC c`) or DECSTR (`CSI ! p`) into the supported VT set; retain negative tests for those deferred controls. Keyboard recovery without replacing the execution uses `CSI ? 1;66 l` plus `CSI < 65535 u` and `CSI = 0;1 u` on each affected screen. These clear only the keyboard state they name, never grid/history/cursor state. A plain primary/alternate-screen switch does not itself change DEC cursor/keypad modes; screen-local keyboard enhancement flags follow section 21.4.
+
+For unmodified press/repeat, the selected standard matrix is:
+
+| Key | Normal bytes | Application bytes |
+| --- | --- | --- |
+| Up / Down / Right / Left | `CSI A/B/C/D` | `SS3 A/B/C/D` under DECCKM |
+| Home / End | `CSI H/F` | `SS3 H/F` under DECCKM |
+| Insert / Delete / PageUp / PageDown | `CSI 2~/3~/5~/6~` | same |
+| F1–F4 | `SS3 P/Q/R/S` | same |
+| F5–F12 | `CSI 15~/17~/18~/19~/20~/21~/23~/24~` | same |
+| Keypad 0–9 | corresponding ASCII digit | `SS3 p/q/r/s/t/u/v/w/x/y` under DECNKM |
+| Keypad decimal / divide / multiply / subtract / add / equal | `.` / `/` / `*` / `-` / `+` / `=` | `SS3 n/o/j/m/k/X` under DECNKM |
+| Keypad Enter | CR | `SS3 M` under DECNKM |
+
+`CSI` denotes ESC followed by `[`; `SS3` denotes ESC followed by `O`. The keypad profile is the VT220-style numeric/application profile, not PC keypad cursor emulation. Hardware NumLock remapping and unsupported keypad keys are not inferred. A native event must have reliable keypad identity before it becomes a keypad key; keypad origin is never guessed from a digit alone.
+
+For standard navigation/function keys, modifiers use `m = 1 + Shift + 2*Alt + 4*Control`: arrows/Home/End/F1–F4 use `CSI 1;m<final>`; tilde keys use `CSI number;m~`. Modified application cursor keys use this CSI form. Shift-Tab emits `CSI Z`; Alt prefixes the legacy Tab/Enter/Backspace result with ESC; Control-Backspace emits BS; other Control/Shift combinations of Enter preserve CR, and Control-Tab preserves HT unless Shift selects the Shift-Tab form. Alt+Shift-Tab emits `ESC CSI Z`. Escape in legacy mode is ESC, or ESC ESC with Alt. Legacy keypad modifiers preserve keypad identity in the modern protocol; combinations without a defined legacy representation are explicitly unsupported rather than silently stripped.
+
+Unmodified printable/dead-key/IME text continues as committed UTF-8 `Input`. Legacy Control ASCII preserves section 6.2. For the new ASCII-key kind in legacy mode, normalize letter case for Control mapping; Alt prefixes the mapped byte, or the shifted/layout-produced ASCII byte when Control is absent. An ASCII combination outside section 6.2's Control mapping is unsupported in legacy mode. CapsLock affects native text normalization but does not become a legacy escape modifier.
+
+### 21.3 Native Option and host routing
+
+Command combinations remain exclusively host actions, including when a terminal requests enhanced keyboard reporting. There is no macOS Meta/Hyper alias and no synthetic Command-to-Super terminal delivery.
+
+Add one cold input-policy value, `input.option_as_alt`, to the existing configuration load/validation boundary. It is a boolean, defaults to false, and is captured outside event handling. The authoritative new typed value is `SeyalInputPolicy { optionAsAlt: Bool }`, owned by the native application composition root and passed immutably into each terminal input adapter. It is not RuntimeConfig, visual/theme state, or a projected terminal mode. Extend the current cold TOML loader to produce this separate typed result from `[input] option_as_alt = true|false`, using the same file selected by `SEYAL_CONFIG` or otherwise `~/.config/seyal/config.toml`. Precedence is the built-in false default then that one file; there is no input-policy environment or Lua overlay. Missing/unreadable/invalid input table/value retains false and reports only the existing non-secret category/key diagnostic; unknown input keys are diagnosed and ignored. Parse and validate once at app startup; all windows share the immutable result until app restart. Theme reload cannot mutate it, and no live policy reload is introduced. The native adapter consumes the value locally; it is never sent as terminal-mode authority. This specification authorizes the typed input extension; the existing visual settings structure is not itself input authority. This is not a keybinding editor or a second configuration engine. When false, Option text goes through AppKit's layout/dead-key/IME path. Option on reliably identified non-text semantic keys may normalize to Alt. When true, unambiguous printable ASCII Option combinations outside composition normalize to Alt plus the layout base/shift result; dead-key, non-ASCII, or ambiguous events remain with AppKit. No layout is reconstructed from a US physical-key map.
+
+While composition exists, AppKit's text-input context has first opportunity to consume press/repeat/release. A consumed event creates no terminal key. A committed text callback creates exactly one Input transaction. Navigation, Escape and Enter consumed by candidate UI do not leak. Native key-up may be sent as typed intent for a previously routed semantic press; Runtime alone decides whether the canonical protocol requires bytes. Focus loss/detach discards held-key tracking without synthesizing committed text or keys into a new attachment. Held-key tracking is bounded to native key identifiers (maximum 256); overflow rejects the new tracked press visibly under the existing input failure contract. Release of an untracked key produces no terminal input.
+
+### 21.4 Bounded modern protocol
+
+M002 supports Kitty progressive flags **1 and 2 only** (mask 3), selected for the documented Neovim TUI request `CSI > 3 u`. This is a partial implementation, never advertised as complete Kitty keyboard support. The [Kitty protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/) is the reference for flag-1/2 encoding, including the Enter/Tab/Backspace exceptions; [Neovim's TUI contract](https://neovim.io/doc/user/tui/#tui-input) identifies the target subset.
+
+The canonical state accepts query, replace/set/clear, push and pop forms. `CSI ? u` replies with `CSI ? flags u`. `CSI = flags;mode u` uses mode 1 (replace/default), 2 (set), or 3 (clear). Push `CSI > flags u` defaults flags to zero. Pop `CSI < count u` defaults count to one; explicit zero is a no-op. Each primary/alternate screen owns a stack of at most 16 active flag values; push evicts the oldest at capacity, pop saturates to an empty stack/flags zero, and set/clear modifies the current value (creating a base value when empty). Unsupported flag bits are masked off in stored/reported state. Empty query returns zero. The two screen stacks survive normal screen switching independently; creating a new TerminalState starts both empty.
+
+Query takes no parameters. Replace/set/clear defaults omitted flags to zero and omitted mode to one; explicit mode zero is invalid. Only unsigned parameters fitting `u16` are accepted, with no extra parameters/subparameters; unsupported modes, overflow, malformed syntax or excess fields cause no mutation or reply. Parsing remains within the existing bounded parser, and subsequent text recovers. A huge valid pop count empties the fixed stack in bounded work. Query replies use the existing `ProtocolReply` queue and fixed queue limit. If full, the reply is not admitted and the existing non-content deferred diagnostic increments at TerminalState admission; no retry queue, blocking wait, or flag mutation is introduced. At the execution pending-reply boundary, retain the same drop-on-capacity policy and add a bounded non-content dropped-reply counter for surplus replies (the current silent surplus drain is not sufficient evidence). Tests fill both queues, prove bounded rejection and continued unrelated PTY service, then drain and prove a later query succeeds. A rejected query is not counted as a delivered response.
+
+Flag 1 disambiguates the declared ASCII/semantic key subset; flag 2 distinguishes press/repeat/release where the reference permits event types. Unmodified text remains UTF-8 because flag 8 is unavailable. Enter/Tab/Backspace retain their documented legacy byte exceptions and do not acquire release events without flag 8. With flag 2 absent, repeat is encoded as press and release produces no bytes. Flags 4/8/16 never become active or reported; associated text, alternate-key reports, modifier-only keys, media keys and unsupported functional keys are not fabricated. Terminfo may advertise only the implemented standard matrix, with positive fixtures and negative tests for deferred capabilities.
+
+### 21.5 Additive wire contract
+
+Reserve message type **29**, `TerminalKeyV2`, and capability **1 << 7**, `CAP_EXTENDED_TERMINAL_KEY`. These do not collide with display-v2 types 27/28 or capability 1 << 6 frozen for #817. Type 17 retains its exact 24-byte M001 schema and validation. V2 is client→Runtime only and exactly 40 bytes, little-endian:
+
+| Offset / bytes | Field | Validation |
+| --- | --- | --- |
+| 0 / 16 | AttachmentId | existing opaque identity and Controller authorization |
+| 16 / 2 | kind | values below only |
+| 18 / 2 | modifiers | Shift=1, Alt=2, Control=4; reject other bits, including lock/Command/Meta/Hyper bits |
+| 20 / 4 | value | kind-specific value below |
+| 24 / 1 | event | press=1, repeat=2, release=3 |
+| 25 / 1 | reserved | zero |
+| 26 / 2 | version | 2 |
+| 28 / 4 | shifted_ascii | zero except declared ASCII layout case |
+| 32 / 4 | action_id | nonzero, strictly increasing per connection, no reuse/wrap |
+| 36 / 4 | reserved | zero |
+
+Kinds 1–8 retain Enter/Tab/Backspace/Escape/Up/Down/Right/Left identities. V2 kinds 9–14 are Home/End/Insert/Delete/PageUp/PageDown. Kind 15 is Function (value 1–12). Kind 16 is Keypad (value 0–9 digits, 10 decimal, 11 divide, 12 multiply, 13 subtract, 14 add, 15 equal, 16 Enter). Kind 17 is ASCII key (value U+0020–U+007E, letters normalized to lowercase layout base). Other kinds require value zero. `shifted_ascii` is zero for non-ASCII kinds; for ASCII it is zero or one printable ASCII scalar, present only with Shift and derived from the active layout. An ASCII event with no Alt/Control belongs to committed text and is rejected as V2 input. CapsLock/NumLock are not exposed by this bounded adapter/wire subset; native text normalization may consume lock state, but no lock modifier bit is advertised or fabricated. Functional lock keys remain unsupported. For kind 17, uppercase A–Z values are rejected (base letters are a–z). With Shift, `shifted_ascii` is mandatory and printable; without Shift it must be zero. Runtime uses it only for legacy non-Control ASCII output, never as the modern key code. An unrepresentable layout event remains committed AppKit text/Unsupported rather than being forced into this ASCII-only intent.
+
+Both peers must negotiate the capability before V2 delivery. Unsupported V2 is rejected before PTY admission; it is not downgraded to raw escape bytes in Swift. A new client connected to an old server may use existing M001 intent/text only, with richer actions explicitly unsupported. Old M001 semantic keys on a new server remain valid; Runtime maps their intent using canonical modes at admission. Missing key-up from an old client cannot be claimed as full modern-protocol native support. Structural validation precedes authorization; authorization precedes canonical mode lookup/encoding and queue mutation. Malformed, observer, stale, detached and capacity cases reuse existing bounded error semantics. No wire field grants terminal modes or host authority.
+
+Encoding uses a bounded result of at most 64 bytes per semantic key; unsupported events produce an explicit result before queue mutation. No per-key lookup may scan history, display state, configuration or an unbounded collection. Queue byte/action limits and FIFO/error behavior remain sections 8–10; the new message does not raise them.
+
+There is no positive per-key acknowledgement or synchronous wait. For a structurally readable V2 action, Runtime sends the existing type-15 Error only on rejection, with `offending_message_type=29` and `detail_code=action_id`; this capability-specific meaning does not reinterpret errors for other message types. No error means neither a delivery receipt nor scanout proof. The client may report a rejected action by its numeric ID/category without retaining its payload or claiming that another action failed. It maintains connection-local sent/highest-error ID bounds, not an unbounded pending-action map. Errors outside the sent range or non-monotonic duplicate errors are protocol failures. A malformed/zero/reused/non-monotonic action ID, wrong-direction V2, unnegotiated V2, or unreadable frame is connection-fatal after at most one bounded generic error (detail zero); framing policy still applies. Ordinary authorization, unsupported encoding and queue-capacity rejection echo the validated action ID and leave other authorized actions independent. Action IDs span attachments on the same connection; an error never changes a different attachment's authority. Before ID exhaustion, explicitly stop admission and establish a fresh connection/attachment under the existing recovery contract; never wrap/replay old keys. If the bounded error-output queue cannot accept the rejection, close the connection and expose uncertain delivery for sent actions rather than silently claiming success.
+
+### 21.6 Normative modern output decision table
+
+The validated wire modifiers above map directly to the three supported Kitty modifier bits; let `m = 1 + modifiers`. Let `e` be press=1, repeat=2, release=3. Apply the following ordered decisions to canonical flags `f` at Runtime admission:
+
+1. If flag 2 is absent: release is a successful no-byte event; repeat is treated as press. If flag 2 is present: release is still a no-byte event for Enter/Tab/Backspace and any key whose selected output is literal text/control bytes (flag 8 is unsupported). Other repeat/release events use the colon event field below.
+2. Enter/Tab/Backspace press and repeat always use the legacy table in section 21.2 for every accepted modifier combination and flags 0/1/2/3, including Shift-Tab and Alt prefixes. They never acquire CSI-u encoding or an event field in this subset. Their release is always a successful no-byte event because flag 8 is unavailable. For example at flags=3, Control-Enter is CR, Alt-Enter is ESC then CR, Control-Backspace is BS, and Control+Shift-Tab is CSI Z. This preserves the Kitty legacy exceptions needed for shell recovery.
+3. Escape with flag 1 emits `CSI 27;m u`; otherwise its legacy byte form applies. ASCII kind 17 with flag 1 emits `CSI value;m u`, using the unshifted validated value. Without flag 1 it uses the explicit legacy algorithm in section 21.2; unsupported Control mappings reject the action before admission.
+4. Navigation and function keys use their CSI form whenever flag 1 is set, a nonzero modifier exists, or a repeat/release must carry an event field. Otherwise use section 21.2, including DECCKM/SS3. Arrows/Home/End use `CSI 1;m<final>`, Insert/Delete/Page keys use `CSI n;m~`, F1/F2/F4 use `CSI 1;mP/Q/S`, and F3 uses `CSI 13;m~` in the modern/event-bearing form (CSI R would collide with a cursor-position reply). F5–F12 retain their tilde numbers.
+5. Keypad with flag 1 emits `CSI code;m u`: digits 0–9 map to 57399–57408; decimal=57409, divide=57410, multiply=57411, subtract=57412, add=57413, Enter=57414, equal=57415. Without flag 1, keypad selects the legacy numeric/application table; modified keypad with no accepted legacy bytes rejects explicitly. If flag 2 alone is active, literal numeric keypad output has no repeat distinction/release; application SS3 keypad repeat/release is encoded with its dedicated CSI-u code and event field.
+6. For a CSI output carrying event types, replace its `m` field by `m:e` for repeat/release. Press omits `:1`. Always emitting the explicit modifier value `1` is permitted and chosen here, including unmodified CSI output, so retained fixtures have one exact byte form. ASCII UTF-8 Input does not enter this encoder and never generates a release sequence.
+
+Every selected field is decimal ASCII without whitespace. Examples at flags=3: Escape press `ESC [ 27 ; 1 u`; Control-I press `ESC [ 105 ; 5 u`; Up repeat `ESC [ 1 ; 1 : 2 A`; Up release `ESC [ 1 ; 1 : 3 A`; Control-keypad-Enter press `ESC [ 57414 ; 5 u`; F3 press `ESC [ 13 ; 1 ~`; Tab press HT and Tab release no bytes. Spaces in these explanatory byte spellings are omitted on the wire. A Shift+Control ASCII `a` uses key code 97 and modifier 6 regardless of shifted `A`; an Alt+Shift ASCII `a` in legacy mode emits ESC then its validated shifted byte.
+
+This finite subset deliberately rejects modifier-only/media/unknown keys and unsupported lock bits, and never sets enhancement bits 4/8/16. Unit fixtures must enumerate all V2 kinds × flags 0/1/2/3 × press/repeat/release × accepted Shift/Alt/Control combinations, classifying each as exact bytes, successful no-byte, or explicit unsupported. Kind 17 additionally covers each printable ASCII base and valid/invalid shifted field. AppKit text/IME, rather than guessed Unicode scalar key codes, owns layouts outside that bounded matrix.
+
+Terminfo remains the existing packaged `seyal-m001` profile until a separate profile change is accepted. #823 may add only `kcuu1/kcud1/kcuf1/kcub1/khome/kend/kich1/kdch1/kpp/knp/kf1`–`kf12/kent`, plus `smkx` = `CSI ? 1 h ESC =` and `rmkx` = `CSI ? 1 l ESC >`, with advertised key bytes matching application mode. Do not claim cursor-reporting, mouse, graphics, or clipboard capabilities. Retain `kbs` consistent with DEL. The profile name is compatibility identity, not a claim that the supported surface cannot grow.
+
+### 21.7 Evidence required before #823 completion
+
+Derive failing regressions before implementation for every row below. Use real Runtime/PTY and native boundaries where named; source-only fixtures cannot replace native evidence.
+
+| Gate | Required cases |
+| --- | --- |
+| Modes | initial/reset, set/reset/query of 1/66, `ESC =/>`, primary/alternate stack isolation, new-state initialization and deferred RIS/DECSTR negatives |
+| Key bytes | every standard table row in both modes; modifier combinations; keypad identity; M001 compatibility; unsupported negatives |
+| Negotiation | query flags 0/1/2/3, mask 31 to 3, set/clear/replace, omitted parameters, push 17 times, pop 0/1/16/65535, malformed/overflow recovery |
+| Modern events | real Neovim flags-3 handshake; Control-I vs Tab, Escape, repeated arrows, release, and Enter/Tab/Backspace exceptions; no flag-8 text conversion |
+| Wire/security | lengths 0–39 and 41+, unknown kind/event/version/bits, bad scalar/value, stale/observer/detach, missing capability, old/new peers |
+| Admission/recovery | output mode change between admission/write, FIFO and partial writes, queue saturation/rejection, persistent pressure, unrelated PTY fairness, focus/detach/reconnect |
+| Native | keyboard layouts, Option policy both values, dead keys/IME mark/commit/cancel, candidate navigation, Command non-leak, keypad, repeat/release; no duplicate input |
+| Fuzz/property | arbitrary byte chunking and hostile negotiation; bounded stacks/replies, parser recovery, enum/field fuzz, input ordering and authorization invariants |
+| Performance | exact baseline/candidate, Release ARM64 host metadata, run counts and nearest-rank p50/p95/p99/max for native-key→Runtime admission and key→PTY; CPU/RSS/queue high-water under ordinary and high output |
+
+Before measuring, record a representative 120x40 shell and Neovim workload, three independent runs with at least 1,000 accepted semantic actions each, and separate rejected/deferred counts. Compare against the merged pre-#823 baseline on the same host. Section 15 and #673 own applicable budgets and regression adjudication; no scanout claim follows from a PTY or GPU-completion timestamp. Real input-to-display/native rows must identify their actual endpoints. Controlled runs cannot overlap competing benchmark/build workloads; shared CI results are diagnostic.
+
+Require exact-head focused tests, real PTY integration, native/XCUI tests, fuzz, `make build`, `make test`, `make check`, applicable benchmark evidence, and independent code/security/native review. Manual IME, physical keyboard/layout and display evidence that automation cannot establish remains explicitly blocked until actually observed. Specification acceptance neither waives these gates nor closes #823.
+
+Primary reference for standard modes/keypad: [xterm control sequences](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html). Native routing remains the accepted composition contract in section 13 and [Apple NSTextInputClient](https://developer.apple.com/documentation/appkit/nstextinputclient). These references constrain compatibility, not terminal ownership.

@@ -489,6 +489,18 @@ mod tests {
     }
 
     #[test]
+    fn oldest_eviction_reports_actual_resident_delta() {
+        let mut store = HistoryStore::default();
+        for id in 0..2_000 {
+            store.append_line(ascii_line(id, "abcdefghij", HistoryBreakAfter::HardBreak));
+        }
+        let before = store.resident_bytes();
+        let removed = store.evict_oldest_segment();
+        assert!(removed > HISTORY_SEGMENT_PAYLOAD_TARGET);
+        assert_eq!(before - removed, store.resident_bytes());
+    }
+
+    #[test]
     fn hard_break_stops_reflow_chain_and_wide_units_stay_atomic() {
         let mut store = HistoryStore::default();
         store.append_line(ascii_line(1, "abc", HistoryBreakAfter::HardBreak));

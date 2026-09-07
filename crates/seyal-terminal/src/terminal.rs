@@ -14,7 +14,8 @@ use crate::{
     },
     screen::{PreparedScreen, Screen},
     width::{grapheme_terminal_width, AmbiguousWidthPolicy},
-    Cell, CursorState, Damage, HistoryAnchor, LineId, ModeState, ReflowRow, Style, TerminalError,
+    Cell, CellRole, CursorState, Damage, HistoryAnchor, HistoryUnitView, LineId, ModeState,
+    ReflowRow, Style, TerminalError,
 };
 use std::collections::VecDeque;
 
@@ -279,6 +280,74 @@ impl TerminalState {
             }
         }
         lines
+    }
+
+    /// Returns complete canonical source units for a bounded primary-history
+    /// range. This projection preserves multi-scalar grapheme payloads and
+    /// source anchors; callers that only need legacy scalar cells can use
+    /// [`Self::primary_history_range`].
+    pub fn primary_history_units_range(
+        &self,
+        start: LineId,
+        end: LineId,
+        max_units: usize,
+    ) -> Vec<HistoryUnitView> {
+        let mut units = self
+            .core
+            .primary
+            .history()
+            .source_units(start, end, max_units)
+            .into_iter()
+            .collect::<Vec<_>>();
+        if units.len() >= max_units {
+            return units;
+        }
+        for row in 0..self.core.primary.rows() {
+            let Some(line_id) = self.core.primary.line_id(row) else {
+                continue;
+            };
+            if line_id < start || line_id > end {
+                continue;
+            }
+            if units.iter().any(|unit| unit.anchor.line_id == line_id) {
+                continue;
+            }
+            let Some(cells) = self.core.primary.cell_row(row) else {
+                continue;
+            };
+            let content_end = cells
+                .iter()
+                .rposition(|cell| cell.role != CellRole::Empty)
+                .map_or(0, |index| index + 1);
+            let mut unit_offset = 0u32;
+            for cell in &cells[..content_end] {
+                let CellRole::Lead = cell.role else {
+                    continue;
+                };
+                let text = if cell.overflow {
+                    "\u{FFFD}".to_owned()
+                } else {
+                    self.core.grapheme_store.get(cell.store_id).map_or_else(
+                        || cell.character.to_string(),
+                        |bytes| String::from_utf8_lossy(bytes).into_owned(),
+                    )
+                };
+                units.push(HistoryUnitView {
+                    anchor: HistoryAnchor {
+                        line_id,
+                        unit_offset,
+                    },
+                    text,
+                    width: cell.width.max(1),
+                    style: cell.style,
+                });
+                unit_offset = unit_offset.saturating_add(1);
+                if units.len() >= max_units {
+                    return units;
+                }
+            }
+        }
+        units
     }
 
     /// Derives width-specific rows from canonical retained history. The
@@ -1387,9 +1456,30 @@ mod tests {
         );
         assert!(
             history.iter().any(|(_, break_after, text)| {
-                matches!(break_after, crate::HistoryBreakAfter::HardBreak) && text == "c "
+                matches!(break_after, crate::HistoryBreakAfter::HardBreak) && text == "c"
             }),
-            "explicit line feed should be retained with HardBreak lineage"
+            "explicit line feed should be retained with HardBreak lineage and no viewport padding"
+        );
+    }
+
+    #[test]
+    fn history_projection_omits_viewport_padding_but_keeps_explicit_spaces() {
+        let mut terminal = TerminalState::new(4, 1).unwrap();
+        terminal.feed(b"a b\r\n").unwrap();
+
+        let units = terminal.primary_history_units_range(LineId(1), LineId(1), 8);
+        assert_eq!(
+            units
+                .iter()
+                .map(|unit| unit.text.as_str())
+                .collect::<String>(),
+            "a b"
+        );
+        assert_eq!(
+            terminal.primary_history_range(LineId(1), LineId(1), 8)[0]
+                .1
+                .len(),
+            3
         );
     }
 
@@ -1442,6 +1532,12 @@ mod tests {
             .expect("canonical source unit is addressable");
         assert_eq!(unit.0, "界\u{301}");
         assert_eq!(unit.1, 2);
+
+        let projected = terminal.primary_history_units_range(line_id, line_id, 8);
+        assert_eq!(projected.len(), 1);
+        assert_eq!(projected[0].anchor.unit_offset, 0);
+        assert_eq!(projected[0].text, "界\u{301}");
+        assert_eq!(projected[0].width, 2);
     }
 
     #[test]

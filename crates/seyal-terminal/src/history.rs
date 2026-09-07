@@ -6,6 +6,7 @@
 
 use crate::{grapheme_store::GraphemeStore, Cell, CellRole, LineId, Style};
 use std::collections::VecDeque;
+use std::mem::size_of;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub const HISTORY_SEGMENT_PAYLOAD_TARGET: usize = 16 * 1024;
@@ -29,6 +30,17 @@ pub struct HistoryAnchor {
     pub unit_offset: u32,
 }
 
+/// Canonical source unit projection for history consumers that need complete
+/// grapheme payloads. The scalar `Cell` projection remains available for
+/// legacy display framing, but it cannot carry a multi-scalar payload.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HistoryUnitView {
+    pub anchor: HistoryAnchor,
+    pub text: String,
+    pub width: u8,
+    pub style: Style,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct HistoryUnit {
     pub utf8: Vec<u8>,
@@ -37,8 +49,31 @@ pub(crate) struct HistoryUnit {
 }
 
 impl HistoryUnit {
+    fn color_encoded_len(color: crate::Color) -> usize {
+        1 + match color {
+            crate::Color::Default => 0,
+            crate::Color::Indexed(_) => 1,
+            crate::Color::Rgb { .. } => 3,
+        }
+    }
+
     fn encoded_len(&self) -> usize {
-        self.utf8.len() + 3
+        // Segment targeting uses this explicit compact canonical encoding:
+        // UTF-8 payload, width byte, tagged foreground/background colors and
+        // one packed style-flags byte. Resident accounting separately counts
+        // the actual Vec capacities and Rust metadata.
+        self.utf8
+            .len()
+            .saturating_add(1)
+            .saturating_add(Self::color_encoded_len(self.style.fg))
+            .saturating_add(Self::color_encoded_len(self.style.bg))
+            .saturating_add(1)
+    }
+
+    fn allocated_bytes(&self) -> usize {
+        // The containing units Vec allocation accounts for width/style and
+        // the HistoryUnit Vec metadata; this is the UTF-8 allocation itself.
+        self.utf8.capacity()
     }
 
     fn first_scalar(&self) -> char {
@@ -66,6 +101,21 @@ impl HistoryLine {
         self.units.iter().map(HistoryUnit::encoded_len).sum()
     }
 
+    fn allocated_bytes(&self) -> usize {
+        size_of::<Self>()
+            .saturating_add(
+                self.units
+                    .capacity()
+                    .saturating_mul(size_of::<HistoryUnit>()),
+            )
+            .saturating_add(
+                self.units
+                    .iter()
+                    .map(HistoryUnit::allocated_bytes)
+                    .sum::<usize>(),
+            )
+    }
+
     pub(crate) fn cells(&self) -> Vec<Cell> {
         let mut cells = Vec::new();
         for unit in &self.units {
@@ -83,6 +133,23 @@ struct Segment {
     lines: Vec<HistoryLine>,
     payload_bytes: usize,
     age: u64,
+}
+
+impl Segment {
+    fn allocated_bytes(&self) -> usize {
+        size_of::<Self>()
+            .saturating_add(
+                self.lines
+                    .capacity()
+                    .saturating_mul(size_of::<HistoryLine>()),
+            )
+            .saturating_add(
+                self.lines
+                    .iter()
+                    .map(HistoryLine::allocated_bytes)
+                    .sum::<usize>(),
+            )
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -117,7 +184,14 @@ impl HistoryStore {
         cells: &[Cell],
         store: &GraphemeStore,
     ) {
-        let units = cells
+        // Empty trailing cells are viewport padding, not source text. Keep
+        // explicit spaces, which are Lead cells, and retain a zero-unit line
+        // when a hard/soft boundary occurred on an otherwise empty row.
+        let content_end = cells
+            .iter()
+            .rposition(|cell| cell.role != CellRole::Empty)
+            .map_or(0, |index| index + 1);
+        let units = cells[..content_end]
             .iter()
             .filter_map(|cell| match cell.role {
                 CellRole::Continuation => None,
@@ -191,6 +265,7 @@ impl HistoryStore {
         } else {
             self.push_fragment(line);
         }
+        self.refresh_resident_bytes();
         self.evict_to_cap();
     }
 
@@ -201,7 +276,6 @@ impl HistoryStore {
             self.seal_tail();
         }
         self.tail_payload_bytes += bytes;
-        self.resident_bytes = self.resident_bytes.saturating_add(bytes);
         self.tail.push(line);
         if self.tail_payload_bytes >= HISTORY_SEGMENT_PAYLOAD_TARGET {
             self.seal_tail();
@@ -221,14 +295,41 @@ impl HistoryStore {
         self.segments.push_back(segment);
     }
 
+    fn refresh_resident_bytes(&mut self) {
+        self.resident_bytes = size_of::<Self>()
+            .saturating_add(
+                self.segments
+                    .capacity()
+                    .saturating_mul(size_of::<Segment>()),
+            )
+            .saturating_add(
+                self.segments
+                    .iter()
+                    .map(Segment::allocated_bytes)
+                    .sum::<usize>(),
+            )
+            .saturating_add(
+                self.tail
+                    .capacity()
+                    .saturating_mul(size_of::<HistoryLine>()),
+            )
+            .saturating_add(
+                self.tail
+                    .iter()
+                    .map(HistoryLine::allocated_bytes)
+                    .sum::<usize>(),
+            );
+    }
+
     fn evict_to_cap(&mut self) {
+        self.refresh_resident_bytes();
         while self.resident_bytes > HISTORY_PER_EXECUTION_BYTE_CAP {
-            let Some(segment) = self.segments.pop_front() else {
+            let Some(_segment) = self.segments.pop_front() else {
                 // The tail is capped by source-unit fragmentation and cannot
                 // be discarded piecemeal without an explicit fragment policy.
                 break;
             };
-            self.resident_bytes = self.resident_bytes.saturating_sub(segment.payload_bytes);
+            self.refresh_resident_bytes();
             self.eviction_generation = self.eviction_generation.wrapping_add(1);
         }
     }
@@ -241,7 +342,7 @@ impl HistoryStore {
         let Some(segment) = self.segments.pop_front() else {
             return 0;
         };
-        self.resident_bytes = self.resident_bytes.saturating_sub(segment.payload_bytes);
+        self.refresh_resident_bytes();
         self.eviction_generation = self.eviction_generation.wrapping_add(1);
         segment.payload_bytes
     }
@@ -293,6 +394,41 @@ impl HistoryStore {
         }
         rows
     }
+
+    pub(crate) fn source_units(
+        &self,
+        start: LineId,
+        end: LineId,
+        max_units: usize,
+    ) -> Vec<HistoryUnitView> {
+        if max_units == 0 || end < start {
+            return Vec::new();
+        }
+        let mut units = Vec::new();
+        for line in self.entries() {
+            if line.line_id < start {
+                continue;
+            }
+            if line.line_id > end {
+                break;
+            }
+            for (index, unit) in line.units.iter().enumerate() {
+                units.push(HistoryUnitView {
+                    anchor: HistoryAnchor {
+                        line_id: line.line_id,
+                        unit_offset: line.start_offset.saturating_add(index as u32),
+                    },
+                    text: String::from_utf8_lossy(&unit.utf8).into_owned(),
+                    width: unit.width,
+                    style: unit.style,
+                });
+                if units.len() >= max_units {
+                    return units;
+                }
+            }
+        }
+        units
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -342,6 +478,15 @@ mod tests {
             }
         );
         assert_eq!(rows[1].anchors[0].unit_offset, 6);
+    }
+
+    #[test]
+    fn resident_bytes_include_allocation_and_metadata_overhead() {
+        let mut store = HistoryStore::default();
+        store.append_line(ascii_line(7, "abc", HistoryBreakAfter::HardBreak));
+
+        let payload_bytes: usize = store.entries().map(HistoryLine::payload_len).sum();
+        assert!(store.resident_bytes() > payload_bytes);
     }
 
     #[test]

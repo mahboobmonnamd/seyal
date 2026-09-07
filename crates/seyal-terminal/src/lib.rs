@@ -35,7 +35,7 @@ pub use damage::Damage;
 pub use error::TerminalError;
 pub use grapheme_store::{MAX_ACTIVE_GRAPHEME_BYTES, MAX_LIVE_VARIABLE_BYTES};
 pub use history::{
-    HistoryAnchor, HistoryBreakAfter, ReflowRow, HISTORY_PER_EXECUTION_BYTE_CAP,
+    HistoryAnchor, HistoryBreakAfter, HistoryUnitView, ReflowRow, HISTORY_PER_EXECUTION_BYTE_CAP,
     HISTORY_PER_EXECUTION_DERIVED_INDEX_CAP, HISTORY_RUNTIME_AGGREGATE_BYTE_CAP,
     HISTORY_RUNTIME_DERIVED_INDEX_CAP, HISTORY_SEGMENT_PAYLOAD_TARGET, HISTORY_TAIL_PAYLOAD_LIMIT,
 };

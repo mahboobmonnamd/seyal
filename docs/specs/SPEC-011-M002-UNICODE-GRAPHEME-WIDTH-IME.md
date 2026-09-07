@@ -1,16 +1,17 @@
 # SPEC-011 — M002 Unicode, Grapheme, Width, Projection, and IME Contract
 
-- **Status:** Active
-- **Issue:** #684
+- **Status:** Active; M002 production profile frozen by #815
+- **Issue:** #684 architecture R&D; #815 production-profile refinement
 - **Parent milestone:** #664
 - **Architecture:** ADR-011
 - **Coordinates with:** accepted ADR-010 / #685 retained-history/reflow contract
+- **Production calibration:** [`../evidence/m002-unicode-production-calibration.md`](../evidence/m002-unicode-production-calibration.md)
 
 ## Purpose
 
 Define the observable M002 contract for Unicode decoding, grapheme clustering, terminal-cell width, wide-cell occupation, projection transport, renderer shaping ownership and macOS IME behavior.
 
-This specification does not implement the contract. It is the behavioral authority beneath ADR-011 and above M002 implementation work.
+This specification does not implement the contract. It is the behavioral authority beneath ADR-011 and above M002 implementation work. #815 freezes the production values that #684 deliberately left for calibration; those values are normative here and the linked evidence records their rationale/provenance.
 
 ## Scope
 
@@ -31,13 +32,29 @@ In scope:
 
 Out of scope:
 
-- exact production slab allocator implementation;
-- exact numeric memory limits before production calibration;
-- exact binary field packing/capability number for Candidate-D vNext;
+- exact production slab/arena allocator implementation beyond the bounds and observable behavior fixed here;
 - graphics/image protocols;
 - BiDi terminal semantics;
 - persistence backend design;
 - agent/workspace semantic processing.
+
+## Frozen M002 production profile
+
+The following values are normative for #816/#817 and MUST NOT be changed opportunistically inside an implementation PR:
+
+| Parameter | M002 value |
+| --- | --- |
+| Unicode semantic data | Unicode **17.0.0** |
+| Maximum active canonical-grapheme payload | **8,192 UTF-8 bytes** |
+| Maximum live variable grapheme payload per `TerminalState` active/grid storage | **2 MiB (2,097,152 bytes)** |
+| Grapheme display capability | `CAP_GRAPHEME_DISPLAY = 1 << 6` |
+| Grapheme display message types | snapshot `27`, delta `28` |
+| Grapheme display schema | `2` |
+| Fixed projected physical-cell record | **16 bytes** |
+| Per-chunk grapheme sidecar | **65,536 bytes** maximum |
+| Display batch maximum | existing **4 MiB** |
+
+Changing one of these values requires a focused specification review with compatibility/resource evidence. #673 remains the authority for release-level performance ceilings.
 
 ## Terms
 
@@ -107,17 +124,19 @@ C0/C1/escape/parser controls MUST remain distinct terminal events. The UTF-8 dec
 
 ### 2.1 Pinned semantic data
 
-A production build MUST record one explicit Unicode semantic data version used for:
+M002 production MUST use **Unicode 17.0.0** semantic data for:
 
 - extended grapheme breaking;
 - East Asian width;
 - emoji/variation-selector-sensitive width behavior used by the terminal core.
 
-The build MUST NOT derive semantic width/grapheme behavior from CoreText, AppKit, locale or installed fonts.
+The build MUST expose/test the pinned semantic version. It MUST NOT derive semantic width/grapheme behavior from CoreText, AppKit, locale or installed fonts.
+
+A library such as `unicode-segmentation` may provide reviewed implementation data/algorithms only when its exposed Unicode version is exactly compatible with this profile. A dependency does not become architecture authority.
 
 ### 2.2 Upgrade discipline
 
-Changing the Unicode semantic data version MUST regenerate retained Unicode fixtures and produce a reviewable compatibility diff for changed grapheme boundaries/widths before release.
+Changing the Unicode semantic data version MUST regenerate retained Unicode fixtures and produce a reviewable compatibility diff for changed grapheme boundaries/widths before release. A Unicode-version bump is a specification-affecting change, not an incidental dependency update.
 
 ## 3. Mode 2027 contract
 
@@ -177,6 +196,8 @@ The implementation MAY encode a single scalar inline.
 
 Multi-scalar text MUST be owned by bounded, reclaimable `TerminalState` storage. References MUST be generation/bounds safe.
 
+Live variable payload for active/grid canonical text MUST NOT exceed **2,097,152 bytes per `TerminalState`**. The limit applies to live payload, not allocator capacity and not inline scalar cells. Dead payload MUST be reclaimable and the implementation MUST NOT eagerly preallocate the full cap per execution.
+
 ### 5.3 Continuation representation
 
 A continuation cell MUST:
@@ -188,6 +209,10 @@ A continuation cell MUST:
 ### 5.4 Reclamation
 
 Erasing/overwriting/replacing canonical text MUST make dead variable payload reclaimable. Append-only dead-payload retention is non-conforming.
+
+### 5.5 Aggregate live-store fallback
+
+If admitting/replacing a grapheme would exceed the 2 MiB live-store cap after bounded reclamation, the affected grapheme MUST use the same unavailable-payload sentinel/fallback family defined in §9. The terminal MUST NOT evict unrelated live visible canonical text merely to make the new grapheme fit, and PTY progress MUST remain nonblocking.
 
 ## 6. Active grapheme contract
 
@@ -259,29 +284,39 @@ When an active width-1 grapheme widens to width 2 and cannot fit on the current 
 
 A still-active width-2 grapheme MAY narrow and release its continuation. Narrowing MUST NOT pull later committed content backward.
 
-### 8.4 DECAWM reset edge
+### 8.4 DECAWM reset edge — frozen by #815
 
-The exact wide-at-final-column rule with DECAWM reset remains a required #672 compatibility fixture. M002 production mode-2027 work MUST NOT be considered complete until that fixture is accepted. Regardless of the selected behavior, a width-2 canonical unit MUST never be split or represented by independent text halves.
+The M002 compatibility rule is now exact:
+
+1. **New width-2 unit at final column:** when DECAWM is reset and a newly completed width-2 canonical unit begins at the final column, that complete unit is ignored atomically. Grid, cursor, pending-wrap state, hard/soft lineage and active-grapheme anchor remain unchanged. No lead/continuation half is created.
+2. **Late widening at final column:** when an already committed active width-1 grapheme occupies the final column and a later scalar would widen it to width 2 while DECAWM is reset, the width-changing extension is rejected. The already committed prefix/payload, width-1 occupation, cursor and lineage remain unchanged; the rejected extension MUST NOT enter canonical payload.
+
+This policy follows retained cross-implementation evidence recorded in the #815 calibration and preserves the stronger invariant that impossible wide occupation can neither split a unit nor retroactively delete already committed text.
 
 ## 9. Pathological grapheme/resource contract
 
-### 9.1 Required bounds
+### 9.1 Frozen bounds and counters
 
-Before production implementation is Ready, the implementation issue MUST define:
+M002 production limits are:
 
-- maximum retained bytes for one active canonical grapheme;
-- maximum resident variable text bytes per `TerminalState` active/grid storage;
-- observable counters for overflow/resource fallback.
+- maximum retained payload for one active canonical grapheme: **8,192 UTF-8 bytes**;
+- maximum live variable text bytes per `TerminalState` active/grid storage: **2,097,152 bytes**;
+- `grapheme_payload_overflow_count`: saturating `u64`, aggregate/non-content;
+- `grapheme_store_capacity_fallback_count`: saturating `u64`, aggregate/non-content.
+
+The retained `base + 4096 combining marks` probe is 8,193 UTF-8 bytes, so it crosses the single-grapheme bound deterministically.
 
 ### 9.2 Overflow behavior
 
-If one active grapheme exceeds its hard payload limit:
+If one active grapheme exceeds 8,192 bytes:
 
 - already committed terminal width/occupation MUST remain stable;
 - additional payload for that grapheme MUST stop growing resident memory;
 - copy/search/selection MUST return U+FFFD for the unavailable exceptional payload;
-- exactly bounded diagnostic state MAY record the overflow, but terminal contents MUST NOT be logged;
+- exactly bounded aggregate diagnostic state MAY record the overflow, but terminal contents MUST NOT be logged;
 - input MUST recover normally at the next grapheme boundary.
+
+The same unavailable-payload sentinel family applies to a live-store capacity fallback under §5.5. The two counters distinguish per-grapheme overflow from aggregate live-store pressure without recording text.
 
 ### 9.3 No quadratic full rebuild
 
@@ -311,41 +346,95 @@ Search/selection/history anchors operate on canonical text-unit offsets/ranges, 
 
 ## 11. Projection transport contract
 
-### 11.1 Version transition
+### 11.1 Version/capability transition
 
-A grapheme-capable projection MUST use an explicit protocol version/capability transition from the M001 scalar-only projection. A client MUST NOT silently reinterpret an old record layout as a new grapheme schema.
+M002 grapheme display MUST use:
 
-### 11.2 Logical record
+```text
+CAP_GRAPHEME_DISPLAY = 1 << 6
+DisplaySnapshotV2    = message type 27 (R→C)
+DisplayDeltaV2       = message type 28 (R→C)
+display schema       = 2
+```
 
-Each projected physical cell MUST encode enough derived information to distinguish:
+Capability bit 5 and message type 26 remain owned by Pass 8 Block metadata. Existing M001 display types 12/13 retain their scalar-only meanings. The SPEC-004 envelope remains protocol major/minor 1.0 because the v2 display is explicitly capability-gated with distinct message IDs; no old record layout is reinterpreted.
 
-- `Empty`;
-- `Lead` with width/style/text reference;
-- `Continuation` with no text authority.
+A production M002 graphical client MUST advertise `CAP_GRAPHEME_DISPLAY`. Runtime MUST NOT send types 27/28 to a peer lacking the capability.
 
-### 11.3 Inline scalar
+A peer without bit 6 MAY receive legacy types 12/13 only when the complete projected batch is losslessly representable by the M001 scalar schema. If not, Runtime MUST use the existing bounded `DisplayUnavailable` error family rather than silently dropping/modifying grapheme state.
 
-A single-scalar lead SHOULD be encoded inline when the wire schema permits.
+### 11.2 V2 chunk layout
 
-### 11.4 Sidecar
+A v2 display payload consists of:
 
-A multi-scalar lead MAY reference bounded batch-local UTF-8 bytes in a sidecar.
+```text
+48-byte chunk header
+N × 16-byte physical-cell records
+sidecar_len bytes batch-local UTF-8 sidecar
+```
 
-Sidecar references MUST be validated for:
+Header bytes 0..40 retain the existing Candidate-D chunk fields/order. Bytes 40..48 are:
 
-- bounds/overflow;
-- UTF-8 validity;
-- role consistency;
-- width consistency;
-- maximum batch payload.
+```text
+40..44  sidecar_len : u32 little-endian
+44..46  schema      : u16 little-endian = 2
+46..48  reserved    : u16 = 0
+```
 
-### 11.5 Atomic commit/resync
+Decoder validation MUST perform checked arithmetic before allocation/use and require:
 
-Malformed projection data MUST fail the batch or force resync. A client MUST NOT partially commit malformed grapheme sidecar state and continue as if authoritative.
+```text
+48 + cell_count * 16 + sidecar_len == payload_len
+sidecar_len <= 65,536
+payload_len <= MAX_FRAME_PAYLOAD (262,144)
+```
 
-### 11.6 Reconstructability
+The existing `MAX_DISPLAY_BATCH_BYTES = 4 MiB` remains unchanged.
 
-Dropping all client display state and rebuilding from the authoritative source MUST recover the same canonical text roles/width/style.
+### 11.3 V2 16-byte physical-cell record
+
+```text
+0..4    text_ref   : u32 little-endian
+4..8    foreground : existing DisplayColor encoding
+8..12   background : existing DisplayColor encoding
+12..16  meta       : u32 little-endian
+```
+
+`meta` is:
+
+```text
+bits  0..2   bold / underline / inverse (existing meanings)
+bits  3..4   role: 0 Empty, 1 Lead, 2 Continuation, 3 invalid
+bits  5..6   terminal width: 0, 1 or 2; 3 invalid
+bit      7   sidecar-reference flag
+bits  8..20  sidecar_len_minus_1 (13 bits; 1..8192 when sidecar=1)
+bits 21..31  reserved = 0
+```
+
+Role requirements:
+
+- `Empty`: `text_ref=0`, width=0, sidecar=0, length bits=0. Color/attribute metadata MAY paint an empty cell.
+- `Lead`, inline scalar: width=1 or 2, sidecar=0, length bits=0 and `text_ref` MUST be one valid Unicode scalar.
+- `Lead`, variable/multi-scalar payload: width=1 or 2, sidecar=1, `text_ref` is a byte offset from this chunk's sidecar start, and payload length is `sidecar_len_minus_1 + 1` in 1..8192.
+- `Continuation`: `text_ref=0`, width=0, sidecar=0, length bits=0. It carries no independent text authority. Any projected colors/attributes are presentation metadata derived from its lead, never terminal semantic authority.
+
+The producer MUST serialize sidecar payloads in physical-cell order with no gaps/overlap. The decoder MUST validate that canonical order, UTF-8, bounds, role/width consistency and lead/continuation adjacency before exposing a chunk to the disposable client cache.
+
+### 11.4 Inline scalar
+
+A single-scalar lead SHOULD use the inline record when representable. It MUST NOT allocate sidecar bytes merely for convenience.
+
+### 11.5 Sidecar bounds
+
+Each v2 chunk sidecar is limited to **65,536 bytes** and each referenced grapheme to **8,192 bytes**. All offset+length calculations MUST be overflow checked. A sidecar reference MUST be wholly contained in the current chunk's sidecar and MUST NOT point into another frame/chunk/batch.
+
+### 11.6 Atomic commit/resync
+
+Malformed v2 projection data invalidates the complete display batch. A client MUST NOT partially commit malformed role/width/sidecar state and continue. It MUST use the existing bounded resync path.
+
+### 11.7 Reconstructability
+
+Dropping all client display state and rebuilding from the authoritative source MUST recover the same canonical text roles/width/style. No v2 client cache becomes canonical text authority.
 
 ## 12. Renderer contract
 
@@ -405,7 +494,7 @@ Detach, reconnect or input-surface destruction MUST discard stale marked text. I
 
 - malformed UTF-8 and projection sidecars are untrusted input;
 - integer/range arithmetic MUST be checked;
-- hostile combining storms MUST be bounded;
+- hostile combining storms MUST be bounded by the 8,192-byte grapheme and 2 MiB live-store limits;
 - renderer/font errors MUST fall back to presentation failure/tofu without changing canonical terminal text/width;
 - no diagnostic artifact may include arbitrary terminal contents by default;
 - no Unicode/IME feature may add a cloud/commercial dependency to OSS terminal progress.
@@ -441,17 +530,18 @@ At minimum:
 25. overwrite wide lead;
 26. overwrite wide continuation;
 27. right-edge late widen with DECAWM set;
-28. accepted DECAWM-reset wide-at-edge fixture from #672;
+28. DECAWM reset direct width-2-at-final-column is ignored, plus late-widen extension rejection preserving the committed width-1 prefix;
 29. width-2 alternate-screen behavior;
-30. 4096-combining-mark bounded overflow and recovery;
-31. projection single-scalar inline round-trip;
-32. projection multi-scalar sidecar round-trip;
-33. malformed/out-of-bounds sidecar rejection/resync;
-34. IME marked text -> commit;
-35. IME cancel/abandon;
-36. IME replacement commit;
-37. IME candidate-coordinate validity;
-38. detach/reconnect discards stale preedit.
+30. `base + 4096 combining marks` crosses 8,192 bytes, yields bounded overflow/sentinel exactly once for the grapheme and recovers on the next grapheme;
+31. projection v2 single-scalar inline round-trip;
+32. projection v2 multi-scalar sidecar round-trip;
+33. projection v2 malformed/out-of-bounds/overlapping/gapped/invalid-role/invalid-width/invalid-reserved sidecar rejection and resync;
+34. v2 capability/message negotiation does not reinterpret legacy types 12/13 or BlockState type 26;
+35. IME marked text -> commit;
+36. IME cancel/abandon;
+37. IME replacement commit;
+38. IME candidate-coordinate validity;
+39. detach/reconnect discards stale preedit.
 
 ## 16. Property/fuzz requirements
 
@@ -464,15 +554,16 @@ Production work MUST add or extend fuzz/property coverage for:
 - lead/continuation overwrite invariants;
 - mode 2027 transitions;
 - width-policy transitions;
-- grapheme payload overflow;
-- projection sidecar lengths/offsets/UTF-8/role combinations;
+- 8,192-byte grapheme payload overflow and 2 MiB live-store pressure;
+- projection-v2 sidecar lengths/offsets/UTF-8/role/width/reserved-bit combinations;
+- v1/v2 capability/message negotiation and resync;
 - resize/reflow integration with canonical grapheme units.
 
 Fuzzing MUST prove bounded memory/progress rather than merely absence of crashes.
 
 ## 17. Performance/resource acceptance
 
-Numeric gates are owned by #673, but M002 Unicode implementation MUST measure at minimum:
+Numeric release gates are owned by #673, but M002 Unicode implementation MUST measure at minimum:
 
 - scalar decode/feed throughput;
 - Unicode-core incremental grapheme mutation p50/p95/p99;
@@ -485,15 +576,17 @@ Numeric gates are owned by #673, but M002 Unicode implementation MUST measure at
 - IME commit latency;
 - 1/10/50/100 execution resource scaling with Unicode-heavy retained history.
 
-Acceptance MUST distinguish semantic-path time from renderer shaping and must not present CI-host shaping microbenchmarks as key-to-photon latency.
+#816/#817 MUST compare exact-head results against the closest accepted baseline and explain any material regression. Acceptance MUST distinguish semantic-path time from renderer shaping and MUST NOT present CI-host shaping microbenchmarks as key-to-photon latency.
 
-## 18. Definition of done for #684 spike
+## 18. Implementation readiness after #815
 
-The architecture spike is complete when:
+The #684 architecture spike is complete and its accepted ownership model remains unchanged. #815 closes the production-value gaps that previously blocked Unicode implementation:
 
-- ADR-011 and this specification are accepted;
-- the final #684 isolated evidence is retained in `SEYAL-UNICODE-GRAPHEME-RD-001.md`;
-- non-mergeable spike PR #794 is closed without merge;
-- production follow-ups remain assigned to #672/#673/#685-compatible implementation rather than leaving experimental code in the production tree.
+- Unicode version is pinned to 17.0.0;
+- grapheme/live-store bounds and non-content counters are exact;
+- DECAWM-reset wide-at-edge behavior is exact;
+- Candidate-D v2 capability, message IDs, header/cell packing and sidecar bounds are exact.
+
+After #815 is reviewed and merged, #816 may pass its separate exact-head development-readiness gate. #817 remains dependency-blocked on #816. #673 remains the authority for release-level performance ceilings.
 
 Acceptance of this specification does **not** mean M002 Unicode production implementation is complete.

@@ -21,6 +21,7 @@ pub struct TerminalExecution {
     terminal: TerminalState,
     initial_primary_line_id: Option<LineId>,
     pending_protocol_replies: VecDeque<PendingProtocolReply>,
+    dropped_protocol_replies: u64,
 }
 
 impl TerminalExecution {
@@ -37,6 +38,7 @@ impl TerminalExecution {
             terminal,
             initial_primary_line_id,
             pending_protocol_replies: VecDeque::with_capacity(MAX_PROTOCOL_REPLIES),
+            dropped_protocol_replies: 0,
         })
     }
 
@@ -136,6 +138,12 @@ impl TerminalExecution {
         !self.pending_protocol_replies.is_empty()
     }
 
+    /// Number of terminal-generated replies rejected at this execution queue
+    /// because the bounded pending-reply capacity was already full.
+    pub fn dropped_protocol_replies(&self) -> u64 {
+        self.dropped_protocol_replies
+    }
+
     /// Writes queued protocol replies toward the child PTY, preferring them
     /// ahead of host-originated input. Returns bytes written this call.
     pub fn write_protocol_replies(&mut self, max_bytes: usize) -> Result<usize, ExecError> {
@@ -215,13 +223,11 @@ impl TerminalExecution {
     fn capture_protocol_replies(&mut self) {
         while let Some(reply) = self.terminal.take_protocol_reply() {
             if self.pending_protocol_replies.len() >= MAX_PROTOCOL_REPLIES {
-                break;
+                self.dropped_protocol_replies = self.dropped_protocol_replies.saturating_add(1);
+                continue;
             }
             self.pending_protocol_replies
                 .push_back(PendingProtocolReply { reply, offset: 0 });
         }
-        // Drop any surplus still sitting on TerminalState so a stalled write
-        // path cannot grow unbounded parser-side effects.
-        while self.terminal.take_protocol_reply().is_some() {}
     }
 }

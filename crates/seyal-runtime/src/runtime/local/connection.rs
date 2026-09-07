@@ -11,6 +11,7 @@ pub(in crate::runtime) struct ConnectionMeta {
     pub(super) last_resize_request_id: u64,
     pub(super) client_capabilities: u32,
     pub(super) last_terminal_key_action_id: u32,
+    pub(super) close_after_flush: bool,
 }
 
 impl Runtime {

@@ -1,9 +1,15 @@
 use crate::{
+    active_grapheme::{
+        append_payload, build_lead_cell, edge_decision_late_widen, edge_decision_new_unit,
+        try_append_scalar, ActiveGrapheme, EdgeDecision,
+    },
     damage::{DamageTracker, Mutation},
+    grapheme_store::GraphemeStore,
     line::LineIdAllocator,
     parser::{Actions, Parser},
     protocol_reply::{encode_decrqm_private, encode_dsr_cpr, ProtocolReply, MAX_PROTOCOL_REPLIES},
     screen::{PreparedScreen, Screen},
+    width::{grapheme_terminal_width, AmbiguousWidthPolicy},
     Cell, CursorState, Damage, LineId, ModeState, TerminalError,
 };
 use std::collections::VecDeque;
@@ -18,6 +24,8 @@ pub struct Diagnostics {
     pub deferred_sequences: u64,
     pub unknown_sequences: u64,
     pub malformed_sequences: u64,
+    pub grapheme_payload_overflow_count: u64,
+    pub grapheme_store_capacity_fallback_count: u64,
 }
 
 /// Bounded shell-integration metadata emitted by the canonical VT parser.
@@ -155,7 +163,33 @@ impl TerminalState {
     }
 
     pub fn diagnostics(&self) -> Diagnostics {
-        self.core.diagnostics
+        let mut diagnostics = self.core.diagnostics;
+        diagnostics.grapheme_payload_overflow_count =
+            self.core.grapheme_store.grapheme_payload_overflow_count;
+        diagnostics.grapheme_store_capacity_fallback_count = self
+            .core
+            .grapheme_store
+            .grapheme_store_capacity_fallback_count;
+        diagnostics
+    }
+
+    pub fn ambiguous_width_policy(&self) -> AmbiguousWidthPolicy {
+        self.core.ambiguous_width
+    }
+
+    pub fn set_ambiguous_width_policy(&mut self, policy: AmbiguousWidthPolicy) {
+        if self.core.ambiguous_width != policy {
+            self.core.ambiguous_width = policy;
+            self.core.invalidate_active_grapheme();
+        }
+    }
+
+    pub fn grapheme_store_live_bytes(&self) -> usize {
+        self.core.grapheme_store.live_bytes()
+    }
+
+    pub fn pending_wrap(&self) -> bool {
+        self.core.current().pending_wrap()
     }
 
     pub fn cell(&self, col: u16, row: u16) -> Option<Cell> {
@@ -266,6 +300,9 @@ struct TerminalCore {
     fault: Option<TerminalError>,
     shell_events: VecDeque<ShellIntegrationEvent>,
     protocol_replies: VecDeque<ProtocolReply>,
+    grapheme_store: GraphemeStore,
+    active_grapheme: Option<ActiveGrapheme>,
+    ambiguous_width: AmbiguousWidthPolicy,
 }
 
 impl TerminalCore {
@@ -285,7 +322,14 @@ impl TerminalCore {
             fault: None,
             shell_events: VecDeque::with_capacity(16),
             protocol_replies: VecDeque::with_capacity(MAX_PROTOCOL_REPLIES),
+            grapheme_store: GraphemeStore::default(),
+            active_grapheme: None,
+            ambiguous_width: AmbiguousWidthPolicy::default(),
         })
+    }
+
+    fn invalidate_active_grapheme(&mut self) {
+        self.active_grapheme = None;
     }
 
     fn current(&self) -> &Screen {
@@ -387,9 +431,25 @@ impl TerminalCore {
     fn reply_decrqm(&mut self, params: &[u16]) {
         for mode in params {
             match *mode {
+                7 => {
+                    let status = if self.modes.wraparound { 1 } else { 2 };
+                    if let Some(reply) = encode_decrqm_private(7, status) {
+                        self.enqueue_protocol_reply(reply);
+                    } else {
+                        self.record_deferred();
+                    }
+                }
                 25 => {
                     let status = if self.modes.cursor_visible { 1 } else { 2 };
                     if let Some(reply) = encode_decrqm_private(25, status) {
+                        self.enqueue_protocol_reply(reply);
+                    } else {
+                        self.record_deferred();
+                    }
+                }
+                2027 => {
+                    let status = if self.modes.unicode_core { 1 } else { 2 };
+                    if let Some(reply) = encode_decrqm_private(2027, status) {
                         self.enqueue_protocol_reply(reply);
                     } else {
                         self.record_deferred();
@@ -413,18 +473,21 @@ impl TerminalCore {
         if enabled == self.modes.alternate_screen {
             return Ok(());
         }
+        self.invalidate_active_grapheme();
 
         if enabled {
             let cols = self.primary.cols();
             let rows = self.primary.rows();
             let pen = self.primary.pen();
             let mut screen = Screen::new(cols, rows, &mut self.line_ids)?;
-            screen.inherit_pen_for_clean_buffer(pen);
+            screen.inherit_pen_for_clean_buffer(pen, &mut self.grapheme_store);
             self.alternate = Some(screen);
             self.modes.alternate_screen = true;
             self.apply(Mutation::full(rows));
         } else {
-            self.alternate = None;
+            if let Some(mut screen) = self.alternate.take() {
+                screen.release_all_payloads(&mut self.grapheme_store);
+            }
             self.modes.alternate_screen = false;
             self.apply(Mutation::full(self.primary.rows()));
         }
@@ -432,15 +495,236 @@ impl TerminalCore {
     }
 
     fn print_current(&mut self, character: char) -> Result<Mutation, TerminalError> {
-        if self.modes.alternate_screen
-            && let Some(screen) = &mut self.alternate
-        {
-            return screen.print(character, &mut self.line_ids);
+        self.print_scalar(character)
+    }
+
+    fn print_scalar(&mut self, character: char) -> Result<Mutation, TerminalError> {
+        let unicode_core = self.modes.unicode_core;
+        let wraparound = self.modes.wraparound;
+        let ambiguous = self.ambiguous_width;
+        let style = self.current().pen();
+
+        // Append to active grapheme when eligible.
+        if let Some(active) = self.active_grapheme.as_ref() {
+            if try_append_scalar(active, character, unicode_core)
+                || (!unicode_core
+                    && grapheme_terminal_width(&character.to_string(), ambiguous) == 0)
+            {
+                return self.append_to_active(character, wraparound, ambiguous);
+            }
+            // Boundary: active unit stays committed; start a new one.
+            self.active_grapheme = None;
         }
-        self.primary.print(character, &mut self.line_ids)
+
+        // Legacy combining onto previous cell without active anchor.
+        if !unicode_core {
+            let width = grapheme_terminal_width(&character.to_string(), ambiguous);
+            if width == 0 {
+                return Ok(Mutation::none());
+            }
+        }
+
+        let mut text = String::new();
+        text.push(character);
+        let width = if unicode_core {
+            grapheme_terminal_width(&text, ambiguous)
+        } else {
+            grapheme_terminal_width(&text, ambiguous).max(1)
+        };
+
+        if width == 0 {
+            // Isolated combining in Unicode-core with no active base: ignore.
+            return Ok(Mutation::none());
+        }
+
+        let cursor = self.current().cursor(true);
+        match edge_decision_new_unit(cursor.col, self.current().cols(), width, wraparound) {
+            EdgeDecision::IgnoreUnit => {
+                // SPEC-011 §8.4: ignore atomically; leave active unset.
+                return Ok(Mutation::none());
+            }
+            EdgeDecision::RejectExtension | EdgeDecision::Place => {}
+        }
+
+        let lead = build_lead_cell(&text, width, style, false, &mut self.grapheme_store, None);
+        let (mutation, soft_wrapped, lead_col, lead_row) = {
+            let line_ids = &mut self.line_ids;
+            let store = &mut self.grapheme_store;
+            let screen = if self.modes.alternate_screen {
+                self.alternate.as_mut().unwrap_or(&mut self.primary)
+            } else {
+                &mut self.primary
+            };
+            screen.place_new_unit(lead, wraparound, line_ids, store)?
+        };
+        let _ = soft_wrapped;
+
+        self.active_grapheme = Some(ActiveGrapheme {
+            col: lead_col,
+            row: lead_row,
+            utf8: text,
+            width,
+            style,
+            store_id: self
+                .current()
+                .cell(lead_col, lead_row)
+                .map(|c| c.store_id)
+                .unwrap_or(crate::grapheme_store::INLINE_STORE_ID),
+            overflow: false,
+        });
+        Ok(mutation)
+    }
+
+    fn append_to_active(
+        &mut self,
+        character: char,
+        wraparound: bool,
+        ambiguous: AmbiguousWidthPolicy,
+    ) -> Result<Mutation, TerminalError> {
+        let Some(mut active) = self.active_grapheme.take() else {
+            return Ok(Mutation::none());
+        };
+        let previous_width = active.width;
+        let result = append_payload(&mut active, character, &mut self.grapheme_store, ambiguous);
+
+        if result.width_changed && result.width > previous_width {
+            match edge_decision_late_widen(
+                active.col,
+                self.current().cols(),
+                result.width,
+                wraparound,
+            ) {
+                EdgeDecision::RejectExtension => {
+                    // SPEC-011 §8.4: reject only the width-changing extension.
+                    active.utf8.pop();
+                    self.active_grapheme = Some(active);
+                    return Ok(Mutation::none());
+                }
+                EdgeDecision::IgnoreUnit => {
+                    active.utf8.pop();
+                    self.active_grapheme = Some(active);
+                    return Ok(Mutation::none());
+                }
+                EdgeDecision::Place => {
+                    if active.col + 1 >= self.current().cols() && wraparound {
+                        // Late widen that must soft-wrap: clear old, re-place on next row.
+                        let style = active.style;
+                        let text = active.utf8.clone();
+                        let overflow = active.overflow;
+                        let old_store = active.store_id;
+                        let clear_mut = {
+                            let store = &mut self.grapheme_store;
+                            let screen = if self.modes.alternate_screen {
+                                self.alternate.as_mut().unwrap_or(&mut self.primary)
+                            } else {
+                                &mut self.primary
+                            };
+                            screen.clear_unit_at(active.col, active.row, store)
+                        };
+                        // Soft-wrap lineage: mark previous row wrap by setting pending and LF.
+                        {
+                            let screen = if self.modes.alternate_screen {
+                                self.alternate.as_mut().unwrap_or(&mut self.primary)
+                            } else {
+                                &mut self.primary
+                            };
+                            screen.set_pending_wrap(true);
+                        }
+                        let lead = build_lead_cell(
+                            &text,
+                            result.width,
+                            style,
+                            overflow,
+                            &mut self.grapheme_store,
+                            Some(old_store),
+                        );
+                        let (place_mut, _, lead_col, lead_row) = {
+                            let line_ids = &mut self.line_ids;
+                            let store = &mut self.grapheme_store;
+                            let screen = if self.modes.alternate_screen {
+                                self.alternate.as_mut().unwrap_or(&mut self.primary)
+                            } else {
+                                &mut self.primary
+                            };
+                            screen.place_new_unit(lead, wraparound, line_ids, store)?
+                        };
+                        active.col = lead_col;
+                        active.row = lead_row;
+                        active.width = result.width;
+                        active.store_id = self
+                            .current()
+                            .cell(lead_col, lead_row)
+                            .map(|c| c.store_id)
+                            .unwrap_or(crate::grapheme_store::INLINE_STORE_ID);
+                        self.active_grapheme = Some(active);
+                        return Ok(clear_mut.merge(place_mut));
+                    }
+                }
+            }
+        }
+
+        active.width = result.width;
+        let release = if active.store_id != crate::grapheme_store::INLINE_STORE_ID {
+            Some(active.store_id)
+        } else {
+            None
+        };
+        let lead = build_lead_cell(
+            &active.utf8,
+            active.width.max(1),
+            active.style,
+            active.overflow,
+            &mut self.grapheme_store,
+            release,
+        );
+        active.store_id = lead.store_id;
+        active.overflow = lead.overflow;
+        let mutation = {
+            let store = &mut self.grapheme_store;
+            let screen = if self.modes.alternate_screen {
+                self.alternate.as_mut().unwrap_or(&mut self.primary)
+            } else {
+                &mut self.primary
+            };
+            screen.replace_active_lead(active.col, active.row, lead, previous_width, store)
+        };
+        // Adjust cursor after late widen occupying an extra cell.
+        if result.width > previous_width && result.width >= 2 {
+            let screen = if self.modes.alternate_screen {
+                self.alternate.as_mut().unwrap_or(&mut self.primary)
+            } else {
+                &mut self.primary
+            };
+            let cursor = screen.cursor(true);
+            if !screen.pending_wrap() && cursor.col == active.col + 1 {
+                // Was width-1 with cursor after lead; now need cursor after continuation.
+                let _ = screen; // cursor advance handled below
+            }
+        }
+        if result.width > previous_width {
+            let cols = self.current().cols();
+            let screen = if self.modes.alternate_screen {
+                self.alternate.as_mut().unwrap_or(&mut self.primary)
+            } else {
+                &mut self.primary
+            };
+            let next = active.col.saturating_add(u16::from(result.width));
+            if next >= cols {
+                // Move cursor to last col with pending wrap.
+                let _ = screen.set_col(cols.saturating_sub(1));
+                screen.set_pending_wrap(true);
+            } else {
+                let _ = screen.set_col(next);
+            }
+        }
+        self.active_grapheme = Some(active);
+        Ok(mutation)
     }
 
     fn execute_current(&mut self, byte: u8) -> Result<Mutation, TerminalError> {
+        if let 0x08..=0x0d = byte {
+            self.invalidate_active_grapheme();
+        }
         if self.modes.alternate_screen
             && let Some(screen) = &mut self.alternate
         {
@@ -511,7 +795,19 @@ impl Actions for TerminalCore {
                 let enabled = final_byte == b'h';
                 for mode in params {
                     match *mode {
+                        7 => {
+                            if self.modes.wraparound != enabled {
+                                self.modes.wraparound = enabled;
+                                self.invalidate_active_grapheme();
+                            }
+                        }
                         25 => self.set_cursor_visible(enabled),
+                        2027 => {
+                            if self.modes.unicode_core != enabled {
+                                self.modes.unicode_core = enabled;
+                                self.invalidate_active_grapheme();
+                            }
+                        }
                         1049 => {
                             if let Err(error) = self.set_alternate_screen(enabled) {
                                 self.record_fault(error);
@@ -528,27 +824,75 @@ impl Actions for TerminalCore {
         }
 
         let mutation = match final_byte {
-            b'A' => self.current_mut().cursor_up(param_one(params, 0)),
-            b'B' => self.current_mut().cursor_down(param_one(params, 0)),
-            b'C' => self.current_mut().cursor_forward(param_one(params, 0)),
-            b'D' => self.current_mut().cursor_back(param_one(params, 0)),
-            b'H' | b'f' => self.current_mut().set_cursor(
-                param_one(params, 0).saturating_sub(1),
-                param_one(params, 1).saturating_sub(1),
-            ),
-            b'G' => self
-                .current_mut()
-                .set_col(param_one(params, 0).saturating_sub(1)),
-            b'd' => self
-                .current_mut()
-                .set_row(param_one(params, 0).saturating_sub(1)),
-            b'J' => self.current_mut().erase_display(param_zero(params, 0)),
-            b'K' => self.current_mut().erase_line(param_zero(params, 0)),
+            b'A' => {
+                self.invalidate_active_grapheme();
+                self.current_mut().cursor_up(param_one(params, 0))
+            }
+            b'B' => {
+                self.invalidate_active_grapheme();
+                self.current_mut().cursor_down(param_one(params, 0))
+            }
+            b'C' => {
+                self.invalidate_active_grapheme();
+                self.current_mut().cursor_forward(param_one(params, 0))
+            }
+            b'D' => {
+                self.invalidate_active_grapheme();
+                self.current_mut().cursor_back(param_one(params, 0))
+            }
+            b'H' | b'f' => {
+                self.invalidate_active_grapheme();
+                self.current_mut().set_cursor(
+                    param_one(params, 0).saturating_sub(1),
+                    param_one(params, 1).saturating_sub(1),
+                )
+            }
+            b'G' => {
+                self.invalidate_active_grapheme();
+                self.current_mut()
+                    .set_col(param_one(params, 0).saturating_sub(1))
+            }
+            b'd' => {
+                self.invalidate_active_grapheme();
+                self.current_mut()
+                    .set_row(param_one(params, 0).saturating_sub(1))
+            }
+            b'J' => {
+                self.invalidate_active_grapheme();
+                let mode = param_zero(params, 0);
+                let store = &mut self.grapheme_store;
+                if self.modes.alternate_screen {
+                    if let Some(screen) = &mut self.alternate {
+                        screen.erase_display(mode, store)
+                    } else {
+                        self.primary.erase_display(mode, store)
+                    }
+                } else {
+                    self.primary.erase_display(mode, store)
+                }
+            }
+            b'K' => {
+                self.invalidate_active_grapheme();
+                let mode = param_zero(params, 0);
+                let store = &mut self.grapheme_store;
+                if self.modes.alternate_screen {
+                    if let Some(screen) = &mut self.alternate {
+                        screen.erase_line(mode, store)
+                    } else {
+                        self.primary.erase_line(mode, store)
+                    }
+                } else {
+                    self.primary.erase_line(mode, store)
+                }
+            }
             b's' => {
                 self.current_mut().save_cursor();
                 Mutation::none()
             }
-            b'u' => self.current_mut().restore_cursor(),
+            b'u' => {
+                self.invalidate_active_grapheme();
+                self.current_mut().restore_cursor()
+            }
             b'm' => {
                 if self.current_mut().apply_sgr(params) {
                     self.record_deferred();
@@ -861,11 +1205,16 @@ mod tests {
             b"\x1b[?25;2$y"
         );
 
-        let unknown_before = terminal.diagnostics().unknown_sequences;
+        // Mode 2027 defaults to set and is queryable (SPEC-011 §3).
+        terminal.feed(b"\x1b[?2027$p").unwrap();
+        assert_eq!(
+            terminal.take_protocol_reply().unwrap().as_bytes(),
+            b"\x1b[?2027;1$y"
+        );
+
         let deferred_before = terminal.diagnostics().deferred_sequences;
-        terminal.feed(b"\x1b[0n\x1b[?2027$p\x1b[?999$p").unwrap();
+        terminal.feed(b"\x1b[0n\x1b[?999$p").unwrap();
         assert!(terminal.take_protocol_reply().is_none());
-        assert!(terminal.diagnostics().unknown_sequences > unknown_before);
         assert!(terminal.diagnostics().deferred_sequences > deferred_before);
     }
 

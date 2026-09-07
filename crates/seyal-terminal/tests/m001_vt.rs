@@ -238,10 +238,10 @@ fn allocated_line_ids_do_not_repeat_across_scroll_resize_and_alternate_lifetimes
 #[test]
 fn deferred_and_unknown_sequences_leave_parser_continuity_intact() {
     let mut terminal = terminal(8, 2);
-    feed(&mut terminal, b"\x1b[3@A");
-    feed(&mut terminal, b"\x1b]0;title\x07B");
-    feed(&mut terminal, b"\x1b[?9999hC");
-    feed(&mut terminal, b"\x1b[999zD");
+    feed(&mut terminal, b"\x1b]52;c;YWJj\x07A");
+    feed(&mut terminal, b"\x1b[?9999hB");
+    feed(&mut terminal, b"\x1b[999zC");
+    feed(&mut terminal, b"\x1b(BD");
 
     assert_eq!(&row(&terminal, 0)[..4], "ABCD");
     assert!(terminal.diagnostics().deferred_sequences >= 3);

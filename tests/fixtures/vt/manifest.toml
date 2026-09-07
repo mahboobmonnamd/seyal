@@ -28,7 +28,7 @@ source_reference = "docs/specs/SPEC-001-M001-VT.md sections 3.3 and 15"
 license_or_terms = "Apache-2.0; fixture authored for Seyal"
 recorded_at = "2026-08-24"
 owner_issue = "#38"
-notes = "OSC title semantics remain deferred; this fixture claims only parser continuity after a BEL-terminated OSC. It is project regression evidence, not independent conformance evidence."
+notes = "OSC 52 clipboard remains deferred; fixture claims only parser continuity after a BEL-terminated unsupported OSC. Project regression evidence, not independent conformance evidence."
 
 [[fixtures]]
 id = "m001-ecma48-core"
@@ -89,3 +89,64 @@ license_or_terms = "IETF RFC consulted as normative encoding reference; no sourc
 recorded_at = "2026-08-24"
 owner_issue = "#88"
 notes = "Retained UTF-8 fixture is fed both one-shot and byte-by-byte by the production TerminalState integration test, proving chunk-boundary independence for a multibyte scalar within M001's scalar-only width contract."
+
+[[fixtures]]
+id = "m002-scroll-region-il"
+classification = "supported"
+evidence_kind = "independent-reference"
+cols = 4
+rows = 4
+input = "tests/fixtures/vt/m002-scroll-region.input"
+expected = "tests/fixtures/vt/m002-scroll-region.expected.txt"
+source = "ECMA-48 / XTerm Control Sequences"
+source_reference = "ECMA-48 IL; xterm ctlseqs DECSTBM; expectation independently authored for Seyal"
+license_or_terms = "Public standards consulted as behavioral references; no source text copied"
+recorded_at = "2026-09-07"
+owner_issue = "#821"
+notes = "DECSTBM margins plus IL within the region. Partial-region scroll-out does not enter primary history."
+
+[[fixtures]]
+id = "m002-su-sd"
+classification = "supported"
+evidence_kind = "independent-reference"
+cols = 4
+rows = 4
+input = "tests/fixtures/vt/m002-su-sd.input"
+expected = "tests/fixtures/vt/m002-su-sd.expected.txt"
+source = "XTerm Control Sequences"
+source_reference = "xterm ctlseqs CSI S (SU) with DECSTBM; expectation independently authored for Seyal"
+license_or_terms = "Public xterm control-sequence documentation consulted as behavioral reference; no xterm source copied"
+recorded_at = "2026-09-07"
+owner_issue = "#821"
+notes = "SU scrolls only inside DECSTBM; rows above the region are preserved."
+
+[[fixtures]]
+id = "m002-ich-dch-ech"
+classification = "supported"
+evidence_kind = "independent-reference"
+cols = 8
+rows = 1
+input = "tests/fixtures/vt/m002-ich-dch-ech.input"
+expected = "tests/fixtures/vt/m002-ich-dch-ech.expected.txt"
+source = "ECMA-48 Control Functions"
+source_reference = "ECMA-48 ICH/DCH/ECH; expectation independently authored for Seyal"
+license_or_terms = "ECMA standard consulted as normative reference; no source text copied"
+recorded_at = "2026-09-07"
+owner_issue = "#821"
+notes = "In-line insert/delete/erase characters on a single row."
+
+[[fixtures]]
+id = "m002-osc-presentation"
+classification = "supported"
+evidence_kind = "independent-reference"
+cols = 8
+rows = 2
+input = "tests/fixtures/vt/m002-osc-presentation.input"
+expected = "tests/fixtures/vt/m002-osc-presentation.expected.txt"
+source = "XTerm Control Sequences"
+source_reference = "xterm ctlseqs OSC 0/2/7/8; grid continuity expectation independently authored for Seyal"
+license_or_terms = "Public xterm control-sequence documentation consulted as behavioral reference; no xterm source copied"
+recorded_at = "2026-09-07"
+owner_issue = "#821"
+notes = "OSC title/CWD/hyperlink must not corrupt printable state. Host presentation events are covered by seyal-terminal unit tests; payloads remain untrusted."
+

@@ -110,4 +110,36 @@ classification = "supported-continuity"
 basis = "external-plus-seyal-invariant"
 evidence = ["m001-deferred-osc-continuity", "crates/seyal-terminal/tests/m001_vt.rs::deferred_and_unknown_sequences_leave_parser_continuity_intact", "crates/seyal-terminal/tests/m001_vt.rs::truncated_input_is_held_across_feed_and_reported_only_on_finish"]
 reference = "ECMA-48 control-string framing, RFC 3629 UTF-8 validity, and SPEC-001 section 15"
-notes = "Semantics of deferred families remain deferred; only bounded consumption and recovery continuity are claimed."
+notes = "Semantics of deferred families remain deferred; only bounded consumption and recovery continuity are claimed. OSC 52 remains the deferred OSC continuity fixture after OSC 0/2/7/8 became supported under #821."
+
+[[behavior]]
+id = "scroll-region-decstbm-il-dl-su-sd"
+classification = "supported"
+basis = "external"
+evidence = ["m002-scroll-region-il", "m002-su-sd", "crates/seyal-terminal/tests/m002_vt_breadth.rs"]
+reference = "ECMA-48 IL/DL and xterm ctlseqs DECSTBM/SU/SD"
+notes = "Partial-region scroll-out does not enter primary history; full-screen upward scroll retains existing history behavior."
+
+[[behavior]]
+id = "ich-dch-ech"
+classification = "supported"
+basis = "external"
+evidence = ["m002-ich-dch-ech", "crates/seyal-terminal/tests/m002_vt_breadth.rs::ich_dch_ech_edit_current_line"]
+reference = "ECMA-48 ICH/DCH/ECH"
+notes = "In-line character editing on the current row."
+
+[[behavior]]
+id = "osc-title-cwd-hyperlink"
+classification = "supported"
+basis = "external-plus-seyal-invariant"
+evidence = ["m002-osc-presentation", "crates/seyal-terminal/tests/m002_vt_breadth.rs::osc_presentation_events_are_bounded_and_do_not_execute"]
+reference = "xterm ctlseqs OSC 0/2/7/8; Seyal host-presentation trust boundary"
+notes = "Payloads are bounded untrusted presentation events only; they never become host authority."
+
+[[behavior]]
+id = "primary-da-and-decrqm-1049"
+classification = "supported"
+basis = "external"
+evidence = ["crates/seyal-terminal/tests/m002_vt_breadth.rs::primary_da_and_decrqm_1049_reply_through_protocol_seam"]
+reference = "VT/xterm DA1 and DECRQM for implemented private modes"
+notes = "Replies use the existing bounded protocol-reply seam."

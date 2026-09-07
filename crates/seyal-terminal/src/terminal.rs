@@ -7,7 +7,11 @@ use crate::{
     grapheme_store::GraphemeStore,
     line::LineIdAllocator,
     parser::{Actions, Parser},
-    protocol_reply::{encode_decrqm_private, encode_dsr_cpr, ProtocolReply, MAX_PROTOCOL_REPLIES},
+    presentation::{parse_osc_presentation, HostPresentationEvent, MAX_HOST_PRESENTATION_EVENTS},
+    protocol_reply::{
+        encode_decrqm_private, encode_dsr_cpr, encode_primary_da, ProtocolReply,
+        MAX_PROTOCOL_REPLIES,
+    },
     screen::{PreparedScreen, Screen},
     width::{grapheme_terminal_width, AmbiguousWidthPolicy},
     Cell, CursorState, Damage, LineId, ModeState, TerminalError,
@@ -275,6 +279,12 @@ impl TerminalState {
         self.core.shell_events.pop_front()
     }
 
+    /// Transfers one bounded, untrusted host-presentation event (OSC title/CWD/hyperlink).
+    /// Embedders must treat payloads as display-only input, never as host authority.
+    pub fn take_host_presentation_event(&mut self) -> Option<HostPresentationEvent> {
+        self.core.presentation_events.pop_front()
+    }
+
     /// Transfers one bounded terminal-generated protocol reply. Transport
     /// layers write these opaque bytes to the child PTY without interpreting
     /// query semantics.
@@ -299,6 +309,7 @@ struct TerminalCore {
     diagnostics: Diagnostics,
     fault: Option<TerminalError>,
     shell_events: VecDeque<ShellIntegrationEvent>,
+    presentation_events: VecDeque<HostPresentationEvent>,
     protocol_replies: VecDeque<ProtocolReply>,
     grapheme_store: GraphemeStore,
     active_grapheme: Option<ActiveGrapheme>,
@@ -321,6 +332,7 @@ impl TerminalCore {
             diagnostics: Diagnostics::default(),
             fault: None,
             shell_events: VecDeque::with_capacity(16),
+            presentation_events: VecDeque::with_capacity(MAX_HOST_PRESENTATION_EVENTS),
             protocol_replies: VecDeque::with_capacity(MAX_PROTOCOL_REPLIES),
             grapheme_store: GraphemeStore::default(),
             active_grapheme: None,
@@ -447,6 +459,14 @@ impl TerminalCore {
                         self.record_deferred();
                     }
                 }
+                1049 => {
+                    let status = if self.modes.alternate_screen { 1 } else { 2 };
+                    if let Some(reply) = encode_decrqm_private(1049, status) {
+                        self.enqueue_protocol_reply(reply);
+                    } else {
+                        self.record_deferred();
+                    }
+                }
                 2027 => {
                     let status = if self.modes.unicode_core { 1 } else { 2 };
                     if let Some(reply) = encode_decrqm_private(2027, status) {
@@ -456,6 +476,56 @@ impl TerminalCore {
                     }
                 }
                 _ => self.record_deferred(),
+            }
+        }
+    }
+
+    fn reply_primary_da(&mut self) {
+        if let Some(reply) = encode_primary_da() {
+            self.enqueue_protocol_reply(reply);
+        } else {
+            self.record_deferred();
+        }
+    }
+
+    fn enqueue_presentation(&mut self, event: HostPresentationEvent) {
+        if self.presentation_events.len() == self.presentation_events.capacity() {
+            self.record_deferred();
+            return;
+        }
+        self.presentation_events.push_back(event);
+    }
+
+    fn editing_mutation<F>(&mut self, op: F) -> Mutation
+    where
+        F: FnOnce(
+            &mut Screen,
+            &mut LineIdAllocator,
+            &mut GraphemeStore,
+        ) -> Result<Mutation, TerminalError>,
+    {
+        let result = if self.modes.alternate_screen {
+            if let Some(screen) = &mut self.alternate {
+                op(screen, &mut self.line_ids, &mut self.grapheme_store)
+            } else {
+                op(
+                    &mut self.primary,
+                    &mut self.line_ids,
+                    &mut self.grapheme_store,
+                )
+            }
+        } else {
+            op(
+                &mut self.primary,
+                &mut self.line_ids,
+                &mut self.grapheme_store,
+            )
+        };
+        match result {
+            Ok(mutation) => mutation,
+            Err(error) => {
+                self.record_fault(error);
+                Mutation::none()
             }
         }
     }
@@ -906,7 +976,63 @@ impl Actions for TerminalCore {
                 }
                 Mutation::none()
             }
-            b'@' | b'P' | b'X' | b'L' | b'M' | b'S' | b'T' | b'r' | b'h' | b'l' => {
+            b'c' => {
+                match param_zero(params, 0) {
+                    0 => self.reply_primary_da(),
+                    _ => self.record_unknown(),
+                }
+                Mutation::none()
+            }
+            b'r' => {
+                self.invalidate_active_grapheme();
+                let top = param_zero(params, 0);
+                let bottom = param_zero(params, 1);
+                self.current_mut().set_scroll_region(top, bottom)
+            }
+            b'@' => {
+                self.invalidate_active_grapheme();
+                let count = param_one(params, 0);
+                self.editing_mutation(|screen, _, store| Ok(screen.insert_characters(count, store)))
+            }
+            b'P' => {
+                self.invalidate_active_grapheme();
+                let count = param_one(params, 0);
+                self.editing_mutation(|screen, _, store| Ok(screen.delete_characters(count, store)))
+            }
+            b'X' => {
+                self.invalidate_active_grapheme();
+                let count = param_one(params, 0);
+                self.editing_mutation(|screen, _, store| Ok(screen.erase_characters(count, store)))
+            }
+            b'L' => {
+                self.invalidate_active_grapheme();
+                let count = param_one(params, 0);
+                self.editing_mutation(|screen, line_ids, store| {
+                    screen.insert_lines(count, line_ids, store)
+                })
+            }
+            b'M' => {
+                self.invalidate_active_grapheme();
+                let count = param_one(params, 0);
+                self.editing_mutation(|screen, line_ids, store| {
+                    screen.delete_lines(count, line_ids, store)
+                })
+            }
+            b'S' => {
+                self.invalidate_active_grapheme();
+                let count = param_one(params, 0);
+                self.editing_mutation(|screen, line_ids, store| {
+                    screen.scroll_up(count, line_ids, Some(store))
+                })
+            }
+            b'T' => {
+                self.invalidate_active_grapheme();
+                let count = param_one(params, 0);
+                self.editing_mutation(|screen, line_ids, store| {
+                    screen.scroll_down(count, line_ids, Some(store))
+                })
+            }
+            b'h' | b'l' => {
                 self.record_deferred();
                 Mutation::none()
             }
@@ -932,9 +1058,17 @@ impl Actions for TerminalCore {
                 Mutation::none()
             }
             b'8' => self.current_mut().restore_cursor(),
-            b'D' | b'E' | b'M' => {
-                self.record_deferred();
-                Mutation::none()
+            b'D' => {
+                self.invalidate_active_grapheme();
+                self.editing_mutation(|screen, line_ids, _| screen.index_down(line_ids))
+            }
+            b'M' => {
+                self.invalidate_active_grapheme();
+                self.editing_mutation(|screen, line_ids, _| screen.reverse_index(line_ids))
+            }
+            b'E' => {
+                self.invalidate_active_grapheme();
+                self.editing_mutation(|screen, line_ids, _| screen.next_line(line_ids))
             }
             _ => {
                 self.record_unknown();
@@ -948,7 +1082,15 @@ impl Actions for TerminalCore {
         if self.fault.is_some() {
             return;
         }
-        if truncated || self.modes.alternate_screen {
+        if truncated {
+            self.record_deferred();
+            return;
+        }
+        if let Some(event) = parse_osc_presentation(bytes) {
+            self.enqueue_presentation(event);
+            return;
+        }
+        if self.modes.alternate_screen {
             self.record_deferred();
             return;
         }

@@ -2,7 +2,8 @@ use seyal_protocol::{
     framing::{
         decode_message, ErrorCode, FrameHeader, FramingError, Message, MessageType, ResizeRequest,
         ResizeResult, ResizeResultCode, TerminalKey, TerminalKeyKind, TerminalKeyModifiers,
-        CAP_CORRELATED_RESIZE, CAP_SEMANTIC_TERMINAL_KEY,
+        TerminalKeyV2, TerminalKeyV2Event, TerminalKeyV2Kind, TerminalKeyV2Modifiers,
+        CAP_CORRELATED_RESIZE, CAP_EXTENDED_TERMINAL_KEY, CAP_SEMANTIC_TERMINAL_KEY,
     },
     AttachmentId,
 };
@@ -78,6 +79,49 @@ fn terminal_key_rejects_invalid_m001_combinations() {
     unknown[16..18].copy_from_slice(&99u16.to_le_bytes());
     assert_eq!(
         TerminalKey::decode(&unknown),
+        Err(FramingError::MalformedPayload)
+    );
+}
+
+#[test]
+fn terminal_key_v2_is_fixed_size_versioned_and_round_trips() {
+    assert_eq!(CAP_EXTENDED_TERMINAL_KEY, 1 << 7);
+    let key = TerminalKeyV2 {
+        attachment_id: attachment_id(),
+        kind: TerminalKeyV2Kind::ArrowUp,
+        modifiers: TerminalKeyV2Modifiers::SHIFT,
+        value: 0,
+        event: TerminalKeyV2Event::Repeat,
+        shifted_ascii: 0,
+        action_id: 9,
+    };
+    let encoded = key.encode();
+    assert_eq!(encoded.len(), TerminalKeyV2::WIRE_LEN);
+    assert_eq!(TerminalKeyV2::decode(&encoded), Ok(key));
+    assert_eq!(MessageType::from_u16(29), Some(MessageType::TerminalKeyV2));
+}
+
+#[test]
+fn terminal_key_v2_rejects_reserved_and_invalid_ascii() {
+    let key = TerminalKeyV2 {
+        attachment_id: attachment_id(),
+        kind: TerminalKeyV2Kind::Ascii,
+        modifiers: TerminalKeyV2Modifiers::ALT,
+        value: b'a' as u32,
+        event: TerminalKeyV2Event::Press,
+        shifted_ascii: 0,
+        action_id: 1,
+    };
+    let mut encoded = key.encode();
+    encoded[25] = 1;
+    assert_eq!(
+        TerminalKeyV2::decode(&encoded),
+        Err(FramingError::MalformedPayload)
+    );
+    let mut invalid = key.encode();
+    invalid[20..24].copy_from_slice(&(b'A' as u32).to_le_bytes());
+    assert_eq!(
+        TerminalKeyV2::decode(&invalid),
         Err(FramingError::MalformedPayload)
     );
 }

@@ -10,9 +10,10 @@ pub use crate::pass7::{
     BlockTimeline, CommandBlock, CommandBlockState, ComposerCommandRef, ComposerEligibility,
     ComposerResult, ComposerResultCode, ComposerStatus, HistoryCell, HistoryRangeRequest,
     HistoryRangeSnapshot, HistoryRangeStatus, HistoryRow, ResizeRequest, ResizeResult,
-    ResizeResultCode, TerminalKey, TerminalKeyKind, TerminalKeyModifiers, CAP_CORRELATED_RESIZE,
-    CAP_SEMANTIC_TERMINAL_KEY, MAX_HISTORY_RANGE_BYTES, MAX_HISTORY_RANGE_CELLS,
-    MAX_HISTORY_RANGE_LINES,
+    ResizeResultCode, TerminalKey, TerminalKeyKind, TerminalKeyModifiers, TerminalKeyV2,
+    TerminalKeyV2Event, TerminalKeyV2Kind, TerminalKeyV2Modifiers, CAP_CORRELATED_RESIZE,
+    CAP_EXTENDED_TERMINAL_KEY, CAP_SEMANTIC_TERMINAL_KEY, MAX_HISTORY_RANGE_BYTES,
+    MAX_HISTORY_RANGE_CELLS, MAX_HISTORY_RANGE_LINES,
 };
 
 pub const MAGIC: [u8; 8] = *b"SEYALIPC";
@@ -573,6 +574,7 @@ pub enum MessageType {
     HistoryRangeSnapshot = 25,
     DisplaySnapshotV2 = 27,
     DisplayDeltaV2 = 28,
+    TerminalKeyV2 = 29,
 }
 impl MessageType {
     pub fn from_u16(value: u16) -> Option<Self> {
@@ -604,6 +606,7 @@ impl MessageType {
             25 => Self::HistoryRangeSnapshot,
             27 => Self::DisplaySnapshotV2,
             28 => Self::DisplayDeltaV2,
+            29 => Self::TerminalKeyV2,
             _ => return None,
         })
     }
@@ -638,6 +641,7 @@ pub enum Message<'a> {
     ComposerStatus(ComposerStatus),
     HistoryRangeRequest(HistoryRangeRequest),
     HistoryRangeSnapshot(HistoryRangeSnapshot),
+    TerminalKeyV2(TerminalKeyV2),
 }
 
 pub fn decode_message<'a>(
@@ -693,6 +697,7 @@ pub fn decode_message<'a>(
         MessageType::HistoryRangeSnapshot => {
             Message::HistoryRangeSnapshot(HistoryRangeSnapshot::decode(payload)?)
         }
+        MessageType::TerminalKeyV2 => Message::TerminalKeyV2(TerminalKeyV2::decode(payload)?),
     })
 }
 

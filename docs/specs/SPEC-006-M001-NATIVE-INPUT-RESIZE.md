@@ -1019,7 +1019,7 @@ Pass 7 implementation is complete only when:
 
 ## 21. M002 keyboard extension contract (#834 → #823)
 
-**Status: proposed for independent review; not implemented or advertised.** Sections 1–20 remain the historical accepted M001 contract. This section graduates only the keyboard behaviors listed here for M002; it does not change resize, terminal ownership, mouse, clipboard, or the M003 keybinding product scope. Acceptance of the specification is separate from #823 production acceptance.
+**Status: accepted specification (2026-09-07, #834); not implemented or advertised.** Sections 1–20 remain the historical accepted M001 contract. This section graduates only the keyboard behaviors listed here for M002; it does not change resize, terminal ownership, mouse, clipboard, or the M003 keybinding product scope. Acceptance of the specification is separate from #823 production acceptance.
 
 ### 21.1 Ownership and admission
 

@@ -56,18 +56,38 @@ An Issue or PR cannot override architecture/specification. Existing code is neve
 - Structural refactoring must not add synchronous IPC, serialization, copies, allocations, locks, thread/process hops, or language round-trips to terminal hot paths merely to satisfy code organization rules.
 - These rules apply to Rust and native macOS Swift/Metal code equally.
 
+## Implementation pickup
+
+Any request to **implement, fix, finish, code, or complete a specific GitHub Issue** must enter through `.agents/skills/implement-issue/SKILL.md` before production edits. Do not implement a Ready Issue directly from chat instructions or bypass the skill because the requested change appears small.
+
+Seyal uses an exclusive active-work claim:
+
+```text
+fresh Ready Issue
+→ authenticated GitHub login
+→ exactly one assignee (current implementer)
+→ confirmed implementation plan
+→ deterministic remote branch issue/<number>
+→ isolated worktree
+→ production edits
+→ one scoped PR
+```
+
+If the Issue is assigned to another GitHub login, has multiple assignees, the authenticated implementer identity cannot be established, or `issue/<number>` already exists for an unrequested resume, **STOP before production work** and report the collision. Never clear or steal another contributor's assignment. Project status fields are lifecycle metadata, not an ownership lock.
+
 ## Before changing code
 
-1. Read the Issue and verify Project status is **Ready**.
-2. When the task needs broader project context than the Issue links provide, use the `project-context` skill to load the smallest relevant node/relationship set, validate it, then read the returned authoritative sources. Do not broadly reread the repository or trust the index summary as authority.
-3. Read every linked/retrieved architecture/spec/milestone document that materially governs the work.
-4. Verify dependencies are complete and ownership/module boundary is explicit.
-5. If architecture is missing or contradictory: **STOP** and use the `architecture-change` skill. Do not invent a workaround. Never amend an ADR inside an implementation PR; ADR create/amendment is always a separate PR.
-6. Confirm the requested work is production implementation rather than a spike/POC. If it is exploratory, isolate it on a non-mergeable path and do not open a mergeable production PR from that code.
-7. Use one Issue → one assignee/agent → one isolated worktree → one branch → one PR.
-8. Core behavior is test-first. Do not weaken tests to make code pass.
-9. Do not refactor unrelated code. Create/link another Issue instead.
-10. If an approved screenshot/mockup is visual authority for native UI, run the `image-to-code` skill before implementation. Complete its forensic design/component inventory and issue plan first; split the work into multiple Issues when the visual spans independently reviewable boundaries.
+1. For a production GitHub Issue, invoke `implement-issue` and pass its exclusive GitHub ownership/branch preflight before editing code.
+2. Read the Issue and verify Project status is **Ready**.
+3. When the task needs broader project context than the Issue links provide, use the `project-context` skill to load the smallest relevant node/relationship set, validate it, then read the returned authoritative sources. Do not broadly reread the repository or trust the index summary as authority.
+4. Read every linked/retrieved architecture/spec/milestone document that materially governs the work.
+5. Verify dependencies are complete and ownership/module boundary is explicit.
+6. If architecture is missing or contradictory: **STOP** and use the `architecture-change` skill. Do not invent a workaround. Never amend an ADR inside an implementation PR; ADR create/amendment is always a separate PR.
+7. Confirm the requested work is production implementation rather than a spike/POC. If it is exploratory, isolate it on a non-mergeable path and do not open a mergeable production PR from that code.
+8. Use one Issue → one sole assignee/agent → one isolated worktree → one deterministic `issue/<number>` branch → one PR.
+9. Core behavior is test-first. Do not weaken tests to make code pass.
+10. Do not refactor unrelated code. Create/link another Issue instead.
+11. If an approved screenshot/mockup is visual authority for native UI, run the `image-to-code` skill before implementation. Complete its forensic design/component inventory and issue plan first; split the work into multiple Issues when the visual spans independently reviewable boundaries.
 
 ## Adversarial lifecycle and event-loop review
 
@@ -128,4 +148,4 @@ A mergeable implementation PR must contain only production-intent code. Explorat
 
 An implementation PR must not create, amend, reopen, or supersede an ADR. Any ADR change requires its own Architecture/R&D Issue and separate PR; reviewers must reject mixed ADR+implementation PRs. Land and accept the ADR first, then implement against the accepted authority.
 
-See `docs/engineering/ISSUE-PROTOCOL.md` for Ready/Done rules and `.agents/skills/implement-issue/SKILL.md` for the mandatory execution workflow.
+See `docs/engineering/ISSUE-PROTOCOL.md` for Ready/Done/claim rules and `.agents/skills/implement-issue/SKILL.md` for the mandatory execution workflow.

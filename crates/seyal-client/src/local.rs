@@ -543,28 +543,39 @@ mod tests {
         }
     }
 
-    fn v2_snapshot(generation: u64, scalar: char) -> Vec<u8> {
+    fn v2_snapshot_chunk(
+        generation: u64,
+        columns: u16,
+        first_col: u16,
+        chunk_index: u16,
+        chunk_count: u16,
+        scalar: char,
+    ) -> Vec<u8> {
         let mut payload = Vec::with_capacity(64);
         payload.extend_from_slice(&generation.to_le_bytes());
         payload.extend_from_slice(&0u64.to_le_bytes());
         payload.extend_from_slice(&1u16.to_le_bytes());
-        payload.extend_from_slice(&1u16.to_le_bytes());
+        payload.extend_from_slice(&columns.to_le_bytes());
         payload.extend_from_slice(&0u16.to_le_bytes());
         payload.extend_from_slice(&0u16.to_le_bytes());
         payload.extend_from_slice(&[1, 0, 0, 0]);
         payload.extend_from_slice(&0u16.to_le_bytes());
         payload.extend_from_slice(&1u16.to_le_bytes());
-        payload.extend_from_slice(&0u16.to_le_bytes());
-        payload.extend_from_slice(&1u16.to_le_bytes());
+        payload.extend_from_slice(&chunk_index.to_le_bytes());
+        payload.extend_from_slice(&chunk_count.to_le_bytes());
         payload.extend_from_slice(&1u32.to_le_bytes());
         payload.extend_from_slice(&0u32.to_le_bytes());
         payload.extend_from_slice(&2u16.to_le_bytes());
-        payload.extend_from_slice(&0u16.to_le_bytes());
+        payload.extend_from_slice(&first_col.to_le_bytes());
         payload.extend_from_slice(&(scalar as u32).to_le_bytes());
         payload.extend_from_slice(&0u32.to_le_bytes());
         payload.extend_from_slice(&0u32.to_le_bytes());
         payload.extend_from_slice(&(40u32).to_le_bytes());
         encode_frame(MessageType::DisplaySnapshotV2, &payload)
+    }
+
+    fn v2_snapshot(generation: u64, scalar: char) -> Vec<u8> {
+        v2_snapshot_chunk(generation, 1, 0, 0, 1, scalar)
     }
 
     #[test]
@@ -597,6 +608,48 @@ mod tests {
         let header = FrameHeader::decode(&outbound[..count]).expect("resync header");
         assert_eq!(header.message_type, MessageType::Resync as u16);
         assert!(!client.resync_needed);
+    }
+
+    #[test]
+    fn gapped_v2_display_keeps_committed_cache_and_resyncs_before_converging() {
+        let (client_stream, mut server_stream) = UnixStream::pair().expect("stream pair");
+        client_stream
+            .set_nonblocking(true)
+            .expect("nonblocking client");
+        server_stream
+            .write_all(&v2_snapshot(1, 'A'))
+            .expect("initial snapshot");
+
+        let mut client = test_client(client_stream);
+        client.poll_prepare().expect("initial commit");
+        assert_eq!(client.cache.generation, 1);
+        assert_eq!(client.cache.cells[0].scalar, 'A');
+
+        server_stream
+            .write_all(&v2_snapshot_chunk(2, 2, 1, 1, 2, 'X'))
+            .expect("gapped snapshot chunk");
+        let result = client
+            .poll_prepare()
+            .expect("semantic display corruption should request resync");
+        assert!(result.is_none());
+        assert_eq!(client.cache.generation, 1);
+        assert_eq!(client.cache.cells[0].scalar, 'A');
+
+        let mut outbound = [0u8; 128];
+        let count = server_stream.read(&mut outbound).expect("resync frame");
+        let header = FrameHeader::decode(&outbound[..count]).expect("resync header");
+        assert_eq!(header.message_type, MessageType::Resync as u16);
+        assert_eq!(count, HEADER_LEN + header.payload_len as usize);
+
+        server_stream
+            .write_all(&v2_snapshot(2, 'B'))
+            .expect("authoritative snapshot");
+        let result = client
+            .poll_prepare()
+            .expect("resync snapshot should commit");
+        assert!(result.is_some());
+        assert_eq!(client.cache.generation, 2);
+        assert_eq!(client.cache.cells[0].scalar, 'B');
     }
 
     #[test]

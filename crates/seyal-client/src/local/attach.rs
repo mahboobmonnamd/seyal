@@ -24,8 +24,89 @@ use super::{
     },
     display_apply::PendingDisplayBatch,
     input_resize::GridGeometry,
-    server_error, ClientError, LocalDisplayClient, READ_CHUNK_BYTES,
+    server_error, ClientError, LocalDisplayClient, MAX_FRAMES_PER_POLL, READ_CHUNK_BYTES,
 };
+
+const DISPLAY_CHUNK_INDEX_OFFSET: usize = 32;
+const DISPLAY_CHUNK_COUNT_OFFSET: usize = 34;
+const DISPLAY_CHUNK_SEQUENCE_END: usize = 36;
+
+fn display_chunk_remainder_hint(frame: &[u8]) -> Option<usize> {
+    let header = FrameHeader::decode(frame).ok()?;
+    let message_type = MessageType::from_u16(header.message_type)?;
+    if !matches!(
+        message_type,
+        MessageType::DisplaySnapshot
+            | MessageType::DisplayDelta
+            | MessageType::DisplaySnapshotV2
+            | MessageType::DisplayDeltaV2
+    ) {
+        return None;
+    }
+    let payload = frame.get(HEADER_LEN..)?;
+    let chunk_index = u16::from_le_bytes(
+        payload
+            .get(DISPLAY_CHUNK_INDEX_OFFSET..DISPLAY_CHUNK_COUNT_OFFSET)?
+            .try_into()
+            .ok()?,
+    );
+    let chunk_count = u16::from_le_bytes(
+        payload
+            .get(DISPLAY_CHUNK_COUNT_OFFSET..DISPLAY_CHUNK_SEQUENCE_END)?
+            .try_into()
+            .ok()?,
+    );
+    (chunk_count > chunk_index).then(|| usize::from(chunk_count - chunk_index - 1))
+}
+
+fn is_snapshot_chunk_zero(frame: &[u8]) -> Result<bool, ClientError> {
+    let header = FrameHeader::decode(frame).map_err(|_| ClientError::Protocol)?;
+    let message_type = MessageType::from_u16(header.message_type).ok_or(ClientError::Protocol)?;
+    if message_type == MessageType::Error {
+        let error = ErrorMessage::decode(frame.get(HEADER_LEN..).ok_or(ClientError::Protocol)?)
+            .map_err(|_| ClientError::Protocol)?;
+        return Err(server_error(error.error_code));
+    }
+    if !matches!(
+        message_type,
+        MessageType::DisplaySnapshot | MessageType::DisplaySnapshotV2
+    ) {
+        if matches!(
+            message_type,
+            MessageType::DisplayDelta | MessageType::DisplayDeltaV2
+        ) {
+            return Ok(false);
+        }
+        return Err(ClientError::Protocol);
+    }
+    let payload = frame.get(HEADER_LEN..).ok_or(ClientError::Protocol)?;
+    let Some(index_bytes) = payload.get(DISPLAY_CHUNK_INDEX_OFFSET..DISPLAY_CHUNK_COUNT_OFFSET)
+    else {
+        return Ok(false);
+    };
+    Ok(u16::from_le_bytes(index_bytes.try_into().map_err(|_| ClientError::Protocol)?) == 0)
+}
+
+fn read_resync_snapshot_start_until(
+    stream: &mut UnixStream,
+    deadline: Instant,
+    stale_remainder_hint: Option<usize>,
+) -> Result<Vec<u8>, ClientError> {
+    // A decoded header bounds the exact old logical remainder plus the next
+    // authoritative boundary. If corruption prevents that hint, use the same
+    // finite frame-work bound as a normal poll. Every read also shares the
+    // caller's original absolute startup deadline.
+    let scan_limit = stale_remainder_hint
+        .map(|remaining| remaining.saturating_add(1))
+        .unwrap_or(MAX_FRAMES_PER_POLL);
+    for _ in 0..scan_limit {
+        let frame = read_blocking_raw_frame_until(stream, deadline)?;
+        if is_snapshot_chunk_zero(&frame)? {
+            return Ok(frame);
+        }
+    }
+    Err(ClientError::Protocol)
+}
 
 /// Pass 9 owns one wall-clock second for discovery, handshake, attach and the
 /// initial authoritative snapshot.
@@ -228,9 +309,17 @@ impl LocalDisplayClient {
         // The caller's existing absolute startup deadline bounds the complete
         // attempt; a second malformed logical update terminates immediately.
         let mut resync_available = true;
+        let mut quarantined_remainder = None;
         let (cache, mut batch) = loop {
+            let mut stale_remainder_hint = None;
             let attempt = (|| {
-                let first_frame = read_blocking_raw_frame_until(&mut stream, deadline)?;
+                let first_frame = match quarantined_remainder.take() {
+                    Some(remainder) => {
+                        read_resync_snapshot_start_until(&mut stream, deadline, remainder)?
+                    }
+                    None => read_blocking_raw_frame_until(&mut stream, deadline)?,
+                };
+                stale_remainder_hint = display_chunk_remainder_hint(&first_frame);
                 let first = decode_chunk(&first_frame).map_err(|_| ClientError::Display)?;
                 if first.kind != DisplayKind::Snapshot || first.chunk_index != 0 {
                     return Err(ClientError::Protocol);
@@ -240,6 +329,7 @@ impl LocalDisplayClient {
                 let mut complete = batch.push(first)?;
                 for _ in 1..chunk_count {
                     let frame = read_blocking_raw_frame_until(&mut stream, deadline)?;
+                    stale_remainder_hint = display_chunk_remainder_hint(&frame);
                     complete =
                         batch.push(decode_chunk(&frame).map_err(|_| ClientError::Display)?)?;
                 }
@@ -269,6 +359,7 @@ impl LocalDisplayClient {
                         deadline,
                     )?;
                     resync_available = false;
+                    quarantined_remainder = Some(stale_remainder_hint);
                 }
                 Err(error) => return Err(error),
             }
@@ -511,28 +602,39 @@ mod tests {
         )
     }
 
-    fn snapshot(generation: u64, scalar: char) -> Vec<u8> {
+    fn snapshot_chunk(
+        generation: u64,
+        columns: u16,
+        first_col: u16,
+        chunk_index: u16,
+        chunk_count: u16,
+        scalar: char,
+    ) -> Vec<u8> {
         let mut payload = Vec::with_capacity(64);
         payload.extend_from_slice(&generation.to_le_bytes());
         payload.extend_from_slice(&0u64.to_le_bytes());
         payload.extend_from_slice(&1u16.to_le_bytes());
-        payload.extend_from_slice(&1u16.to_le_bytes());
+        payload.extend_from_slice(&columns.to_le_bytes());
         payload.extend_from_slice(&0u16.to_le_bytes());
         payload.extend_from_slice(&0u16.to_le_bytes());
         payload.extend_from_slice(&[1, 0, 0, 0]);
         payload.extend_from_slice(&0u16.to_le_bytes());
         payload.extend_from_slice(&1u16.to_le_bytes());
-        payload.extend_from_slice(&0u16.to_le_bytes());
-        payload.extend_from_slice(&1u16.to_le_bytes());
+        payload.extend_from_slice(&chunk_index.to_le_bytes());
+        payload.extend_from_slice(&chunk_count.to_le_bytes());
         payload.extend_from_slice(&1u32.to_le_bytes());
         payload.extend_from_slice(&0u32.to_le_bytes());
         payload.extend_from_slice(&2u16.to_le_bytes());
-        payload.extend_from_slice(&0u16.to_le_bytes());
+        payload.extend_from_slice(&first_col.to_le_bytes());
         payload.extend_from_slice(&(scalar as u32).to_le_bytes());
         payload.extend_from_slice(&0u32.to_le_bytes());
         payload.extend_from_slice(&0u32.to_le_bytes());
         payload.extend_from_slice(&(40u32).to_le_bytes());
         encode_frame(MessageType::DisplaySnapshotV2, &payload)
+    }
+
+    fn snapshot(generation: u64, scalar: char) -> Vec<u8> {
+        snapshot_chunk(generation, 1, 0, 0, 1, scalar)
     }
 
     fn malformed_snapshot(generation: u64) -> Vec<u8> {
@@ -617,6 +719,60 @@ mod tests {
         );
         assert_eq!(result.err(), Some(ClientError::Display));
         assert!(started.elapsed() < Duration::from_millis(250));
+        server_thread.join().expect("server thread");
+    }
+
+    #[test]
+    fn malformed_multichunk_attach_quarantines_stale_remainder_before_resync_snapshot() {
+        let (client, mut server) = UnixStream::pair().expect("unix stream pair");
+        let execution_id = ExecutionId::from_bytes([9; 16]);
+        let attachment_id = AttachmentId::from_bytes([10; 16]);
+        let (release_server, hold_server) = std::sync::mpsc::sync_channel(0);
+        let server_thread = std::thread::spawn(move || {
+            let (kind, _) = read_blocking_frame(&mut server).expect("attach request");
+            assert_eq!(kind, MessageType::Attach);
+            server
+                .write_all(&attached(execution_id, attachment_id, 4))
+                .expect("attached response");
+
+            let mut malformed_first = snapshot_chunk(4, 2, 0, 0, 2, 'X');
+            let meta_offset = HEADER_LEN + 48 + 12;
+            malformed_first[meta_offset..meta_offset + 4].copy_from_slice(&(104u32).to_le_bytes());
+            assert_eq!(display_chunk_remainder_hint(&malformed_first), Some(1));
+            server
+                .write_all(&malformed_first)
+                .expect("malformed first chunk");
+            server
+                .write_all(&snapshot_chunk(4, 2, 1, 1, 2, 'Y'))
+                .expect("stale remainder");
+
+            let (kind, payload) = read_blocking_frame(&mut server).expect("resync request");
+            assert_eq!(kind, MessageType::Resync);
+            assert_eq!(
+                Resync::decode(&payload).unwrap().attachment_id,
+                attachment_id
+            );
+            let valid = snapshot(4, 'V');
+            assert_eq!(display_chunk_remainder_hint(&valid), Some(0));
+            assert!(is_snapshot_chunk_zero(&valid).unwrap());
+            assert!(decode_chunk(&valid).is_ok());
+            server.write_all(&valid).expect("valid resync snapshot");
+            hold_server.recv().expect("client release");
+        });
+
+        let attached = LocalDisplayClient::finish_attach_with_deadline(
+            client,
+            execution_id,
+            Role::Controller,
+            false,
+            9,
+            false,
+            std::time::Instant::now() + Duration::from_millis(250),
+        )
+        .expect("stale remainder should not poison bounded resync");
+        assert_eq!(attached.cache().generation, 4);
+        assert_eq!(attached.cache().cells[0].scalar, 'V');
+        release_server.send(()).expect("release server");
         server_thread.join().expect("server thread");
     }
 }

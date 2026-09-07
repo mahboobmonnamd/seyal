@@ -244,8 +244,20 @@ impl LocalDisplayClient {
         damage: &mut RowDamage,
         full_invalidation: &mut bool,
     ) -> Result<bool, ClientError> {
-        if !self.pending_batch.push(chunk)? {
-            return Ok(false);
+        match self.pending_batch.push(chunk) {
+            Ok(false) => return Ok(false),
+            Ok(true) => {}
+            Err(ClientError::Protocol | ClientError::Capacity) => {
+                // A decodable frame can still violate the logical update
+                // sequence (gap, overlap, stale identity, or capacity bound).
+                // The projection is disposable: discard the complete pending
+                // transaction and ask for one authoritative snapshot while
+                // leaving the committed cache untouched.
+                self.pending_batch.clear();
+                self.request_resync()?;
+                return Ok(false);
+            }
+            Err(error) => return Err(error),
         }
 
         let first_kind = self

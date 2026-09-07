@@ -4,7 +4,7 @@
 - **Parent:** #672
 - **Architecture:** ADR-011
 - **Behavioral authority:** SPEC-011
-- **Baseline:** `e22e7a798d5a60fc78edff517dabbb70f22448ac`
+- **Baseline:** `baa7878f78bc50b8b4afd7715275841541f0e007`
 - **Purpose:** freeze implementation parameters deliberately left open by #684 / PR #805 before production Unicode work begins.
 
 ## Decision summary
@@ -19,11 +19,14 @@
 | Grapheme display schema | `2` |
 | Fixed physical-cell record | **16 bytes** |
 | Grapheme sidecar per display chunk | **65,536 bytes** maximum |
-| Existing display batch maximum | remains **4 MiB** |
+| Existing display transport-batch maximum | remains **4 MiB** per presentation batch |
+| V2 cell addressing | whole-row spans **or** contiguous partial-row spans via `first_col` |
 | DECAWM reset + new width-2 unit at final column | unit is ignored atomically; cursor/grid unchanged |
 | DECAWM reset + late widening of active width-1 unit at final column | reject only the width-changing extension; retain the already committed width-1 prefix and occupation |
 
 These values are M002 production contracts. Changing them after implementation requires a specification review with compatibility/resource evidence; they are not opportunistic tuning knobs inside #816/#817.
+
+Projection completeness: every legal Unicode-core `TerminalState` within the grapheme/live-store caps must remain losslessly representable by v2, using partial-row chunks and/or multiple 4 MiB transport batches when required. Unicode caps are not reduced to fit the wire.
 
 ## Unicode 17.0.0
 
@@ -111,7 +114,7 @@ The first 40 header bytes keep the existing Candidate-D fields in the same order
 ```text
 40..44  sidecar_len : u32 little-endian
 44..46  schema      : u16 little-endian = 2
-46..48  reserved    : u16 = 0
+46..48  first_col   : u16 little-endian
 ```
 
 Validation requires:
@@ -120,10 +123,29 @@ Validation requires:
 48 + cell_count * 16 + sidecar_len == payload_len
 sidecar_len <= 65,536
 payload_len <= MAX_FRAME_PAYLOAD (262,144)
+first_col < columns
+cell_count >= 1
 all checked arithmetic before allocation/use
 ```
 
-The existing `MAX_DISPLAY_BATCH_BYTES = 4 MiB` remains unchanged.
+Cell-span rules:
+
+- whole-row: `first_col == 0` and `cell_count == row_count * columns`;
+- partial-row: `row_count == 1` and `first_col + cell_count <= columns`;
+- lead/continuation pairs stay inside one chunk;
+- grapheme sidecar bytes are never split across chunks.
+
+The existing `MAX_DISPLAY_BATCH_BYTES = 4 MiB` remains the per-transport-batch ceiling. One logical generation update may span multiple transport batches; the client applies atomically only after all `chunk_count` chunks validate.
+
+### Representability proofs retained by #815
+
+#### One-row sidecar overflow without partial spans
+
+Nine legal 8,192-byte width-1 graphemes require `9 × 8192 = 73,728` sidecar bytes, which exceeds the 65,536-byte per-chunk sidecar. Whole-row-only Candidate-D packing cannot split that row under the frozen 48-byte header. Partial-row spans with at most eight such graphemes per chunk (`8 × 8192 = 65,536`) close the gap without weakening Unicode caps.
+
+#### Full-snapshot batch ceiling
+
+Maximum fixed-cell payload is `512 × 256 × 16 = 2,097,152` bytes. Maximum live variable payload is also `2,097,152` bytes. Content alone equals the 4 MiB batch ceiling before frame/chunk overhead, so a legal max-geometry `TerminalState` near the live-store cap cannot always fit in one transport batch. Multi-batch logical-update assembly preserves the 4 MiB batch constant and the Unicode caps.
 
 ### 16-byte cell record
 
@@ -152,11 +174,11 @@ Role constraints:
 - `Lead` width 1 or 2, multi-scalar/variable payload: sidecar=1, `text_ref` is a byte offset from the start of this chunk's sidecar, and decoded length is `sidecar_len_minus_1 + 1` in 1..8192.
 - `Continuation`: `text_ref=0`, width=0, sidecar=0, sidecar length field=0. It carries no independent text authority. Presentation colors/attributes are derived from its lead and must match the producer's lead styling.
 
-The producer writes sidecar payloads in physical-cell order with no gaps or overlap. The decoder validates the same canonical ordering, UTF-8 validity, bounds, role/width consistency and continuation adjacency before exposing a chunk to the client cache.
+The producer writes sidecar payloads in physical-cell order within each chunk span with no gaps or overlap. The decoder validates the same canonical ordering, UTF-8 validity, bounds, role/width consistency and continuation adjacency before exposing a chunk to the client cache.
 
 ### Atomicity and resync
 
-A malformed v2 chunk or sidecar invalidates the complete display batch. The client must not partially commit cells/sidecar and continue. It requests the existing bounded resync path. Client display state remains disposable; rebuilding from Runtime canonical state must reproduce the same roles/text/width/style.
+A malformed v2 chunk or sidecar invalidates the complete logical update, including any multi-batch transport fragments. The client must not partially commit cells/sidecar and continue. It requests the existing bounded resync path. Client display state remains disposable; rebuilding from Runtime canonical state must reproduce the same roles/text/width/style.
 
 ## Performance evidence contract
 
@@ -177,8 +199,9 @@ CI-host shaping numbers are comparative only and must never be labelled end-user
 2. Re-run the retained `base + 4096 combining marks` probe and confirm its payload is 8,193 bytes; the selected 8,192-byte cap must cross exactly once and recover on the next grapheme.
 3. Calculate maximum geometry `512 × 256 = 131,072` cells and representative width-2 family-emoji live payload `65,536 × 25 = 1,638,400` bytes; confirm it is below 2 MiB.
 4. Run the DECAWM-reset fixture for both direct width-2-at-last-column and late-widen-at-last-column behavior.
-5. Validate one inline v2 cell, one sidecar v2 cell, and malformed role/offset/length/reserved-bit cases against the schema above.
+5. Validate one inline v2 cell, one sidecar v2 cell, one partial-row multi-chunk row packing case (`9 × 8192` sidecar bytes), one multi-batch logical snapshot assembly case, and malformed role/offset/length/`first_col` cases against the schema above.
 6. Confirm type 26 and capability bit 5 remain Block metadata; v2 uses type 27/28 and bit 6 without reinterpreting 12/13.
+7. Confirm `512 × 256 × 16 + 2,097,152 = 4,194,304` reaches the 4 MiB batch ceiling before overhead, so multi-batch transport remains mandatory for adversarial max-geometry live-store pressure.
 
 ## Non-goals
 

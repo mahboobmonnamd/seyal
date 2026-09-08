@@ -2,7 +2,7 @@
 
 - **Issue:** #823
 - **Authority:** SPEC-006 M001 native input contract and the #823 issue acceptance gates
-- **Measured production code head:** `43d01234b1851f9a2d30281f8e6efebb645bb35e`
+- **Measured production code head:** `59dc4aec800256f4d9a1cddd2d1f7b21798af3f1`
 - **Recorded:** 2026-09-08
 - **Host/build boundary:** local Apple Silicon macOS host
 - **Claim status:** automated and source-build evidence only; native/manual gates remain unverified
@@ -17,6 +17,7 @@ cargo check -p seyal-client --locked
 cargo test -p seyal-client --lib --locked        # 46 passed
 cargo test -p seyal-terminal --test m002_keyboard --locked  # 3 passed
 cargo test -p seyal-protocol --test pass7_input_resize --locked  # 8 passed
+cargo test -p seyal-runtime --lib runtime::local::ingress::tests::v2_cursor_and_keypad_modes_select_canonical_bytes --locked  # 1 passed
 git diff --check
 ```
 
@@ -45,7 +46,7 @@ metadata retention when key-up events have no characters.
 | Gate | Status | Evidence / remaining work |
 | --- | --- | --- |
 | Runtime remains mode-sensitive key authority | **Automated** | Runtime V2 protocol and local IPC tests pass; Swift only classifies the bounded native intent. |
-| Navigation/function/keypad matrix | **Partial** | Deterministic classifier and Rust protocol fixtures pass; full native key matrix remains unrun. |
+| Navigation/function/keypad matrix | **Partial** | Runtime normal/application cursor and SS3 keypad regression fixtures pass; full native key matrix remains unrun. |
 | Opt-in modern protocol negotiation | **Automated** | Existing Pass 7 negotiation/rejection fixtures pass; target TUI workload remains unverified. |
 | IME/dead-key and shortcut non-leak | **Partial** | AppKit composition path is covered by component self-tests; headed IME/dead-key and Cmd shortcut evidence is missing. |
 | Stale/observer injection rejection | **Automated** | Existing client/runtime adversarial tests pass. |

@@ -2,7 +2,7 @@
 
 - **Issue:** #817
 - **Authority:** SPEC-011 / ADR-011 grapheme display projection and the #817 acceptance gates
-- **Measured production code head:** `019c5041b13e07416d194070d9dc130374940246`
+- **Measured production code head:** `f6279ded5ae762d9d50e6be730a787e86bb0313d`
 - **Recorded:** 2026-09-08
 - **Host/build boundary:** local Apple Silicon macOS host
 - **Claim status:** focused automated and source evidence only; native/manual/performance gates remain unverified

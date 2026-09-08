@@ -90,7 +90,7 @@ must not be used as the sole basis for merging or closing #819.
 ## Focused exact-head gates rerun (2026-09-08)
 
 The production regression boundary was rerun at the current branch head
-`92afcb8fd2296897f154d97106011d295db5e09b`:
+`0f6519f334c7d8249c4023beedf26bd1a1224fbd`:
 
 ```text
 cargo test -p seyal-terminal --test history_store_regressions -- --nocapture
@@ -105,7 +105,7 @@ SEYAL_HISTORY_BENCH_EXECUTIONS=1 \
 SEYAL_HISTORY_BENCH_COLUMNS=40,48,64,80,96,132,160 \
 SEYAL_HISTORY_BENCH_WORKLOADS=ascii,styled,cjk,emoji-combining \
 SEYAL_HISTORY_BENCH_SAMPLES=10 \
-SEYAL_BENCH_COMMIT=92afcb8fd2296897f154d97106011d295db5e09b \
+SEYAL_BENCH_COMMIT=0f6519f334c7d8249c4023beedf26bd1a1224fbd \
 cargo bench -p seyal-terminal --bench history_reflow --locked -- --quiet \
 python3 scripts/check-history-benchmark.py /tmp/history-819-10k-current.log
 28 cases passed; arm64 Release benchmark executable on arm64 host

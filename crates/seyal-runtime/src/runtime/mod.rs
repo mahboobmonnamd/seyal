@@ -173,6 +173,7 @@ impl Runtime {
         }
         self.process_deadlines()?;
         self.enforce_history_budget();
+        self.enforce_derived_history_cache_budget();
         self.reap_failed_creations()?;
         #[cfg(target_os = "macos")]
         self.publish_display_updates();
@@ -210,6 +211,33 @@ impl Runtime {
                 break;
             }
             resident = resident.saturating_sub(removed);
+        }
+    }
+
+    fn enforce_derived_history_cache_budget(&mut self) {
+        let mut total = self
+            .entries
+            .values()
+            .map(|entry| entry.execution.derived_history_cache_bytes())
+            .sum::<usize>();
+        while total > self.config.derived_history_aggregate_bytes {
+            let Some(id) = self
+                .entries
+                .iter()
+                .max_by_key(|(_, entry)| entry.execution.derived_history_cache_bytes())
+                .map(|(id, _)| *id)
+            else {
+                break;
+            };
+            let Some(entry) = self.entries.get_mut(&id) else {
+                break;
+            };
+            let before = entry.execution.derived_history_cache_bytes();
+            if before == 0 {
+                break;
+            }
+            entry.execution.drop_derived_history_cache();
+            total = total.saturating_sub(before);
         }
     }
 

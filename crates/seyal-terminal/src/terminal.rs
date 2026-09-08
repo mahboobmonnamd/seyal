@@ -405,6 +405,14 @@ impl TerminalState {
         self.core.primary.history().resident_bytes()
     }
 
+    pub fn primary_history_derived_cache_bytes(&self) -> usize {
+        self.core.primary.history().derived_cache_bytes()
+    }
+
+    pub fn drop_primary_history_derived_cache(&self) {
+        self.core.primary.history().drop_derived_cache();
+    }
+
     pub fn primary_history_eviction_generation(&self) -> u64 {
         self.core.primary.history().eviction_generation()
     }

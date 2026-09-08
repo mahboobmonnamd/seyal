@@ -16,6 +16,7 @@ pub const HISTORY_PER_EXECUTION_BYTE_CAP: usize = 32 * 1024 * 1024;
 pub const HISTORY_RUNTIME_AGGREGATE_BYTE_CAP: usize = 256 * 1024 * 1024;
 pub const HISTORY_PER_EXECUTION_DERIVED_INDEX_CAP: usize = 4 * 1024 * 1024;
 pub const HISTORY_RUNTIME_DERIVED_INDEX_CAP: usize = 32 * 1024 * 1024;
+pub const HISTORY_SELECTION_UNIT_CAP: usize = 64 * 1024;
 
 static NEXT_SEGMENT_AGE: AtomicU64 = AtomicU64::new(1);
 
@@ -352,6 +353,24 @@ impl HistoryStore {
 
     pub(crate) fn resident_bytes(&self) -> usize {
         self.resident_bytes
+    }
+
+    pub(crate) fn derived_cache_bytes(&self) -> usize {
+        self.reflow_cache
+            .borrow()
+            .as_ref()
+            .map_or(0, |(_, _, _, rows)| {
+                rows.iter()
+                    .map(|row| {
+                        row.cells.len() * size_of::<Cell>()
+                            + row.anchors.len() * size_of::<HistoryAnchor>()
+                    })
+                    .sum()
+            })
+    }
+
+    pub(crate) fn drop_derived_cache(&self) {
+        self.reflow_cache.borrow_mut().take();
     }
 
     pub(crate) fn eviction_generation(&self) -> u64 {
@@ -773,10 +792,11 @@ impl HistoryStore {
             return Vec::new();
         }
         let needle_units = needle.chars().count();
-        let mut units = Vec::new();
+        let mut window: Vec<HistoryUnitView> = Vec::with_capacity(needle_units.max(1));
+        let mut matches = Vec::new();
         for line in self.entries() {
             for (index, unit) in line.units().enumerate() {
-                units.push(HistoryUnitView {
+                window.push(HistoryUnitView {
                     anchor: HistoryAnchor {
                         line_id: line.line_id(),
                         unit_offset: line.start_offset().saturating_add(index as u32),
@@ -785,37 +805,25 @@ impl HistoryStore {
                     width: unit.width(),
                     style: unit.style(),
                 });
-            }
-            if line.break_after() == HistoryBreakAfter::HardBreak {
-                units.push(HistoryUnitView {
-                    anchor: HistoryAnchor {
-                        line_id: line.line_id(),
-                        unit_offset: u32::MAX,
-                    },
-                    text: "\n".to_owned(),
-                    width: 0,
-                    style: Style::default(),
-                });
-            }
-        }
-        let mut matches = Vec::new();
-        for start in 0..units.len() {
-            let mut text = String::new();
-            for end in start..units.len() {
-                text.push_str(&units[end].text);
+                while window.len() > needle_units {
+                    window.remove(0);
+                }
+                let text = window
+                    .iter()
+                    .map(|unit| unit.text.as_str())
+                    .collect::<String>();
                 if text == needle {
                     matches.push(HistoryMatch {
-                        start: units[start].anchor,
-                        end: units[end].anchor,
+                        start: window[0].anchor,
+                        end: window[window.len() - 1].anchor,
                     });
-                    break;
-                }
-                if !needle.starts_with(&text) || text.chars().count() >= needle_units {
-                    break;
+                    if matches.len() >= max_matches {
+                        return matches;
+                    }
                 }
             }
-            if matches.len() >= max_matches {
-                break;
+            if line.break_after() == HistoryBreakAfter::HardBreak {
+                window.clear();
             }
         }
         matches
@@ -832,11 +840,32 @@ impl HistoryStore {
         if self.range_intersects_evicted(start.line_id, end.line_id) {
             return Err(HistoryRangeError::Stale);
         }
-        let units = self.source_units(start.line_id, end.line_id, usize::MAX);
-        let selected = units
-            .into_iter()
-            .filter(|unit| unit.anchor >= start && unit.anchor <= end)
-            .collect::<Vec<_>>();
+        let mut selected = Vec::new();
+        for line in self.entries() {
+            if line.line_id() < start.line_id {
+                continue;
+            }
+            if line.line_id() > end.line_id {
+                break;
+            }
+            for (index, unit) in line.units().enumerate() {
+                let view = HistoryUnitView {
+                    anchor: HistoryAnchor {
+                        line_id: line.line_id(),
+                        unit_offset: line.start_offset().saturating_add(index as u32),
+                    },
+                    text: String::from_utf8_lossy(unit.utf8()).into_owned(),
+                    width: unit.width(),
+                    style: unit.style(),
+                };
+                if view.anchor >= start && view.anchor <= end {
+                    if selected.len() >= HISTORY_SELECTION_UNIT_CAP {
+                        return Err(HistoryRangeError::Unrepresentable);
+                    }
+                    selected.push(view);
+                }
+            }
+        }
         if selected.is_empty() {
             return Err(HistoryRangeError::Stale);
         }

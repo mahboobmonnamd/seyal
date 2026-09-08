@@ -70,6 +70,14 @@ impl TerminalExecution {
         self.terminal.primary_history_resident_bytes()
     }
 
+    pub fn derived_history_cache_bytes(&self) -> usize {
+        self.terminal.primary_history_derived_cache_bytes()
+    }
+
+    pub fn drop_derived_history_cache(&self) {
+        self.terminal.drop_primary_history_derived_cache();
+    }
+
     pub fn oldest_history_segment_age(&self) -> Option<u64> {
         self.terminal.primary_history_oldest_segment_age()
     }

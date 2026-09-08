@@ -53,7 +53,7 @@ CI rerun to prove the Runtime timeline Block is visibly published.
 | Native grapheme rendering | **Unverified** | Requires headed visual evidence with Unicode, combining, wide, and emoji cases. |
 | AppKit IME and candidate interaction | **Unverified** | Requires real headed IME commit/cancel/replacement evidence. |
 | Unicode-heavy latency/RSS | **Unverified** | No exact-head physical ARM64 performance matrix is retained. |
-| `make check` | **Automated** | Exact head `019c5041` completed with exit 0 on the Apple Silicon host. |
+| `make check` | **Automated** | Measured production code head `f655ed3` completed with exit 0 on the Apple Silicon host; subsequent branch commits are evidence-only. |
 | Independent review | **Pending** | Re-review of the layout/input fix is in progress; exact-head CI, native visual, manual Unicode/IME, and performance gates remain open. |
 
 This record documents the tested boundaries and does not authorize merging or

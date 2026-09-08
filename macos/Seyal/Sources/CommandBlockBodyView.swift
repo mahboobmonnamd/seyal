@@ -114,6 +114,12 @@ final class PaneTranscriptView: NSScrollView {
     transcriptDocument.layer?.backgroundColor = visual.colors.cg(.canvas)
     documentView = transcriptDocument
 
+    // NSScrollView does not infer a document width from edge constraints on
+    // subviews. Pin the document to the clip view so the pane-owned Metal
+    // surface and preview host receive the full viewport width instead of
+    // collapsing to their intrinsic content width at the leading edge.
+    transcriptDocument.widthAnchor.constraint(equalTo: contentView.widthAnchor).isActive = true
+
     if installSurface {
       terminalSurface.translatesAutoresizingMaskIntoConstraints = false
       transcriptDocument.addSubview(terminalSurface)

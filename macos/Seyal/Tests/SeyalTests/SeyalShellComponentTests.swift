@@ -872,11 +872,23 @@ final class SeyalShellComponentTests: XCTestCase {
   @MainActor
   func testPaneTranscriptOwnsOneDocumentAndOneSurface() {
     let transcript = PaneTranscriptView(visual: previewVisual())
+    transcript.frame = NSRect(x: 0, y: 0, width: 720, height: 420)
     transcript.layoutSubtreeIfNeeded()
 
     XCTAssertNotNil(transcript.documentView)
     XCTAssertEqual(descendants(of: NSScrollView.self, in: transcript).count, 0)
     XCTAssertEqual(descendants(of: InteractiveMetalSurfaceView.self, in: transcript).count, 1)
+    XCTAssertEqual(
+      transcript.transcriptDocument.bounds.width,
+      transcript.contentView.bounds.width,
+      accuracy: 1
+    )
+    XCTAssertEqual(
+      transcript.terminalSurface.bounds.width,
+      transcript.contentView.bounds.width,
+      accuracy: 1
+    )
+    XCTAssertGreaterThan(transcript.terminalSurface.bounds.width, 600)
   }
 
   @MainActor

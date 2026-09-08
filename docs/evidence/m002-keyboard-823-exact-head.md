@@ -2,7 +2,7 @@
 
 - **Issue:** #823
 - **Authority:** SPEC-006 M001 native input contract and the #823 issue acceptance gates
-- **Measured production code head:** `59dc4aec800256f4d9a1cddd2d1f7b21798af3f1`
+- **Measured production code head:** `8e4b52e34ed6461850cc66bbee90a301ee5e7e98`
 - **Recorded:** 2026-09-08
 - **Host/build boundary:** local Apple Silicon macOS host
 - **Claim status:** automated and source-build evidence only; native/manual gates remain unverified

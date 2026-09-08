@@ -85,6 +85,9 @@ pub struct LocalDisplayClient {
     pub(crate) attachment_id: AttachmentId,
     pub(crate) role: Role,
     pub(crate) block_metadata_negotiated: bool,
+    /// Whether the attached Runtime negotiated the additive TerminalKeyV2
+    /// message. Native input must fall back to M001 semantics when absent.
+    pub(crate) extended_terminal_key_supported: bool,
     pub(crate) block_cache: BlockCache,
     pub(crate) cache: DisplayCache,
     pub(crate) prepared: PreparedSurface,
@@ -129,6 +132,10 @@ impl LocalDisplayClient {
 
     pub fn attachment_id(&self) -> AttachmentId {
         self.attachment_id
+    }
+
+    pub fn extended_terminal_key_supported(&self) -> bool {
+        self.extended_terminal_key_supported
     }
 
     /// Disposable Pass 8 execution-level metadata. This never owns terminal

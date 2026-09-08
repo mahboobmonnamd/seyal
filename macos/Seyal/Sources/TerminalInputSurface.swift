@@ -496,7 +496,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
       return
     }
 
-    if let key = TerminalNativeKeyClassifier.v2(
+    if terminalSupportsKeyV2(), let key = TerminalNativeKeyClassifier.v2(
       keyCode: event.keyCode, specialKey: event.specialKey,
       charactersIgnoringModifiers: event.charactersIgnoringModifiers,
       characters: event.characters,

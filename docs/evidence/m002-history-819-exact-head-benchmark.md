@@ -87,6 +87,48 @@ keeps `performance_claim=false`.
 This record intentionally leaves incomplete and unavailable gates explicit. It
 must not be used as the sole basis for merging or closing #819.
 
+## Focused exact-head gates rerun (2026-09-08)
+
+The production regression boundary was rerun at the current branch head
+`92afcb8fd2296897f154d97106011d295db5e09b`:
+
+```text
+cargo test -p seyal-terminal --test history_store_regressions -- --nocapture
+16 passed; 0 failed
+
+python3 scripts/check-history-benchmark.py --self-test
+python3 scripts/test-history-benchmark.py
+benchmark contract self-test and integration test passed
+
+SEYAL_HISTORY_BENCH_LINES=10000 \
+SEYAL_HISTORY_BENCH_EXECUTIONS=1 \
+SEYAL_HISTORY_BENCH_COLUMNS=40,48,64,80,96,132,160 \
+SEYAL_HISTORY_BENCH_WORKLOADS=ascii,styled,cjk,emoji-combining \
+SEYAL_HISTORY_BENCH_SAMPLES=10 \
+SEYAL_BENCH_COMMIT=92afcb8fd2296897f154d97106011d295db5e09b \
+cargo bench -p seyal-terminal --bench history_reflow --locked -- --quiet \
+python3 scripts/check-history-benchmark.py /tmp/history-819-10k-current.log
+28 cases passed; arm64 Release benchmark executable on arm64 host
+```
+
+This 28-case run is a comparative 10k slice covering every required width and
+workload. It does not claim the 336-case population matrix, physical RSS
+attribution, or release performance acceptance.
+
+The retained parser-state mutation seed also passed:
+
+```text
+SEYAL_FUZZ_INPUT=/Users/mahboob/Developer/seyal-commercial/oss/.worktrees/issue-819-history-store/fuzz/corpus/parser-state-mutation/seed-history-unicode-resize.txt \
+cargo test -p seyal-terminal --test fuzz_smoke parser_state_mutation_seed -- --ignored --exact --nocapture
+1 passed; 0 failed
+```
+
+An attempted 1,000-run libFuzzer campaign was blocked before compilation
+because the installed toolchain is stable and `cargo-fuzz` requires nightly
+`-Zsanitizer=address`. No campaign result is claimed. The full acceptance
+matrix remains incomplete: the retained 10k log contains 112 of the required
+336 cases, so the validator correctly reports 224 missing cases.
+
 ## Matrix harness automation
 
 The exact tip also retains a reproducible matrix harness in

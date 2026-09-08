@@ -77,3 +77,23 @@ unavailable for any release or physical-host claim.
 
 This record intentionally leaves incomplete and unavailable gates explicit. It
 must not be used as the sole basis for merging or closing #819.
+
+## Matrix harness automation
+
+The exact tip also retains a reproducible matrix harness in
+`crates/seyal-terminal/benches/history_reflow.rs`. `SEYAL_HISTORY_BENCH_FULL=1`
+enumerates the complete SPEC-010 shape: 10k/100k/1M retained lines,
+1/10/50/100 `TerminalState` populations, 40/48/64/80/96/132/160 columns and
+ASCII/styled/CJK/emoji-combining workloads. Each case reports nearest-rank
+append/reflow/search/anchor p50/p95/p99, resident and derived-cache bytes, and
+best-effort process RSS. `scripts/check-history-benchmark.py
+--require-full-matrix` verifies that all 336 case keys are present and rejects
+missing required metrics or a `performance_claim=true` claim.
+
+The automation does not close the missing gates by itself. Its evidence scope is
+explicitly `TerminalState-comparative`; Runtime aggregate eviction/resource
+behavior, physical ARM64 Release latency/RSS attribution, and manual headed
+verification remain separate. Allocation counters are reported as
+`not-instrumented` because the benchmark inherits the repository's
+`unsafe-code` prohibition, so allocation churn remains missing until a safe,
+accepted instrumentation boundary exists.

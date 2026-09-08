@@ -47,6 +47,9 @@ def main() -> None:
         if result.returncode != 0:
             raise SystemExit(f"history benchmark failed with status {result.returncode}")
         log.flush()
+        output = Path(log.name).read_text(encoding="utf-8")
+        if "append_observations=2 append_samples_per_execution=2" not in output:
+            raise SystemExit("append benchmark did not collect two observations for the execution")
         check = subprocess.run(
             [sys.executable, str(VALIDATOR), log.name],
             cwd=ROOT,

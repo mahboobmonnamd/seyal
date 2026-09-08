@@ -50,6 +50,13 @@ selected with `SEYAL_HISTORY_BENCH_LINES`, `SEYAL_HISTORY_BENCH_EXECUTIONS`,
 controlled-host runs. Percentiles use nearest-rank samples and every output is
 marked `performance_claim=false`.
 
+Append timings use evenly sized feed chunks within each execution. The harness
+records up to `SEYAL_HISTORY_BENCH_SAMPLES` append observations per execution
+(bounded by the retained line count), then reports their p50/p95/p99. This keeps
+population-one append percentiles meaningful without feeding the retained scale
+multiple times; the reported append samples cover exactly the requested line
+count.
+
 The harness is intentionally scoped to `TerminalState-comparative` evidence. It
 does not claim Runtime aggregate-budget behavior, physical ARM64 release gates,
 renderer latency or manual UI evidence. Allocation-call/byte counters remain

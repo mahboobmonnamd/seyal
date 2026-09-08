@@ -45,6 +45,8 @@ def validate(text: str, require_full_matrix: bool = False) -> list[str]:
         "rss_after_kib",
         "rss_delta_kib",
         "rss_available",
+        "append_observations",
+        "append_samples_per_execution",
         "append_p50_ns",
         "append_p95_ns",
         "append_p99_ns",
@@ -86,6 +88,8 @@ def validate(text: str, require_full_matrix: bool = False) -> list[str]:
             "rss_before_kib",
             "rss_after_kib",
             "rss_delta_kib",
+            "append_observations",
+            "append_samples_per_execution",
             "resolved_anchors",
             "append_p50_ns",
             "append_p95_ns",
@@ -109,6 +113,19 @@ def validate(text: str, require_full_matrix: bool = False) -> list[str]:
             errors.append(f"case {index} has invalid rss_available")
         if case["allocation_status"] not in {"not-instrumented", "measured"}:
             errors.append(f"case {index} has invalid allocation_status")
+        try:
+            observations = int(case["append_observations"])
+            per_execution = int(case["append_samples_per_execution"])
+            executions = int(case["executions"])
+            samples = int(case["samples"])
+            if observations != executions * per_execution:
+                errors.append(f"case {index} has inconsistent append observation count")
+            if per_execution > samples:
+                errors.append(f"case {index} has more append observations than requested samples")
+            if observations <= 0 or per_execution <= 0:
+                errors.append(f"case {index} has no append observations")
+        except ValueError:
+            pass
         if case["percentile_method"] != "nearest-rank":
             errors.append(f"case {index} must use nearest-rank percentiles")
         if case["performance_claim"] != "false":
@@ -142,6 +159,8 @@ def validate(text: str, require_full_matrix: bool = False) -> list[str]:
             )
         if any(int(case["resolved_anchors"]) == 0 for case in cases):
             errors.append("full matrix contains a case without a resolved source anchor")
+        if any(int(case["append_samples_per_execution"]) < 10 for case in cases):
+            errors.append("full matrix needs at least 10 append observations per execution")
 
     return errors
 
@@ -154,7 +173,8 @@ def self_test() -> None:
         "append_p50_ns=1 append_p95_ns=1 append_p99_ns=1 "
         "reflow_p50_ns=1 reflow_p95_ns=1 reflow_p99_ns=1 search_p50_ns=1 "
         "search_p95_ns=1 search_p99_ns=1 anchor_p50_ns=1 anchor_p95_ns=1 "
-        "anchor_p99_ns=1 resolved_anchors=1 allocation_calls=1 allocated_bytes=1 "
+        "anchor_p99_ns=1 resolved_anchors=1 append_observations=1 "
+        "append_samples_per_execution=1 allocation_calls=1 allocated_bytes=1 "
         "deallocated_bytes=1 "
         "allocation_status=measured "
         "samples=1 percentile_method=nearest-rank performance_claim=false "
@@ -164,6 +184,8 @@ def self_test() -> None:
         raise SystemExit("valid benchmark fixture was rejected")
     if not validate(valid.replace("performance_claim=false", "performance_claim=true")):
         raise SystemExit("invalid performance claim was accepted")
+    if not validate(valid.replace("append_observations=1", "append_observations=2")):
+        raise SystemExit("inconsistent append observation count was accepted")
     if not validate(valid, require_full_matrix=True):
         raise SystemExit("incomplete matrix was accepted")
     print("[seyal history benchmark contract] self-test passed.")

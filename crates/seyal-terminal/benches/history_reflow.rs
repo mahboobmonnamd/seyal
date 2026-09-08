@@ -119,17 +119,23 @@ fn measure(
     commit: &str,
 ) {
     let rss_before = process_rss_kib();
-    let mut append_samples = Vec::with_capacity(executions);
+    let append_samples_per_execution = samples.min(lines);
+    let mut append_samples = Vec::with_capacity(executions * append_samples_per_execution);
     let mut terminals = Vec::with_capacity(executions);
 
     for execution in 0..executions {
         let (line, needle) = line_for(workload, execution);
         let mut terminal = TerminalState::new(120, 40).expect("valid benchmark geometry");
-        let started = Instant::now();
-        for _ in 0..lines {
-            terminal.feed(&line).expect("history feed succeeds");
+        let base_lines_per_sample = lines / append_samples_per_execution;
+        let remainder = lines % append_samples_per_execution;
+        for sample in 0..append_samples_per_execution {
+            let lines_for_sample = base_lines_per_sample + usize::from(sample < remainder);
+            let started = Instant::now();
+            for _ in 0..lines_for_sample {
+                terminal.feed(&line).expect("history feed succeeds");
+            }
+            append_samples.push(started.elapsed().as_nanos());
         }
-        append_samples.push(started.elapsed().as_nanos());
         let _ = terminal.take_damage();
         terminals.push((terminal, needle));
     }
@@ -177,8 +183,9 @@ fn measure(
     let rss_delta = rss_after_value.saturating_sub(rss_before_value);
 
     println!(
-        "[seyal history benchmark] case workload={workload} lines={lines} executions={executions} columns={columns} commit={commit} resident_history_bytes={resident_history_bytes} derived_cache_bytes={derived_cache_bytes} rss_before_kib={rss_before_value} rss_after_kib={rss_after_value} rss_delta_kib={rss_delta} rss_available={} append_p50_ns={} append_p95_ns={} append_p99_ns={} reflow_p50_ns={} reflow_p95_ns={} reflow_p99_ns={} search_p50_ns={} search_p95_ns={} search_p99_ns={} anchor_p50_ns={} anchor_p95_ns={} anchor_p99_ns={} resolved_anchors={resolved_anchors} allocation_calls=not-instrumented allocated_bytes=not-instrumented deallocated_bytes=not-instrumented allocation_status=not-instrumented samples={samples} percentile_method=nearest-rank performance_claim=false evidence_scope=TerminalState-comparative",
+        "[seyal history benchmark] case workload={workload} lines={lines} executions={executions} columns={columns} commit={commit} resident_history_bytes={resident_history_bytes} derived_cache_bytes={derived_cache_bytes} rss_before_kib={rss_before_value} rss_after_kib={rss_after_value} rss_delta_kib={rss_delta} rss_available={} append_observations={} append_samples_per_execution={append_samples_per_execution} append_p50_ns={} append_p95_ns={} append_p99_ns={} reflow_p50_ns={} reflow_p95_ns={} reflow_p99_ns={} search_p50_ns={} search_p95_ns={} search_p99_ns={} anchor_p50_ns={} anchor_p95_ns={} anchor_p99_ns={} resolved_anchors={resolved_anchors} allocation_calls=not-instrumented allocated_bytes=not-instrumented deallocated_bytes=not-instrumented allocation_status=not-instrumented samples={samples} percentile_method=nearest-rank performance_claim=false evidence_scope=TerminalState-comparative",
         rss_before.is_some(),
+        append_samples.len(),
         percentile(&mut append_samples, 50),
         percentile(&mut append_samples, 95),
         percentile(&mut append_samples, 99),

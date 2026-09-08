@@ -97,3 +97,11 @@ verification remain separate. Allocation counters are reported as
 `not-instrumented` because the benchmark inherits the repository's
 `unsafe-code` prohibition, so allocation churn remains missing until a safe,
 accepted instrumentation boundary exists.
+
+Append percentile sampling is now explicit: each execution feeds its exact
+requested line count in up to `SEYAL_HISTORY_BENCH_SAMPLES` evenly sized chunks,
+and the case records `append_observations` plus
+`append_samples_per_execution`. The full-matrix validator requires at least ten
+append observations per execution before accepting the matrix shape. These are
+chunk append latencies, rather than repeated full-history construction times;
+the ledger still contains no physical performance claim.

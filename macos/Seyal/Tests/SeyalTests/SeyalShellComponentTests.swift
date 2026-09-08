@@ -1087,8 +1087,10 @@ final class SeyalShellComponentTests: XCTestCase {
     let editor = try XCTUnwrap(descendants(of: NSTextView.self, in: composer).first)
     composer.setBusy(true, process: "echo busy")
     XCTAssertFalse(editor.isEditable)
+    XCTAssertEqual(editor.string, "echo busy")
     composer.setBusy(false, process: "")
     XCTAssertTrue(editor.isEditable)
+    XCTAssertEqual(editor.string, "echo busy")
   }
 
   @MainActor

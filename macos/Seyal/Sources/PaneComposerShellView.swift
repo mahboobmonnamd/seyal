@@ -164,10 +164,13 @@ final class PaneComposerShellView: NSView, NSTextViewDelegate {
     }
 
     func setBusy(_ busy: Bool, process: String) {
-        guard let editor else { return }
-        editor.isEditable = !busy
-        editor.alphaValue = busy ? 0.55 : 1
-        editor.setAccessibilityValue(busy ? "Busy: \(process)" : "Available")
+      guard let editor else { return }
+      editor.isEditable = !busy
+      editor.alphaValue = busy ? 0.55 : 1
+      // Keep the AX value owned by NSTextView so it remains the actual draft.
+      // Status belongs in help text; replacing the value with "Busy" or
+      // "Available" makes AX/UI automation type into that status string.
+      editor.setAccessibilityHelp(busy ? "Busy: \(process)" : nil)
     }
 
     func clearAcceptedDraft() {

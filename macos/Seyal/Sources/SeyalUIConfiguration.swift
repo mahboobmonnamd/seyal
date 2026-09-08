@@ -17,6 +17,7 @@ enum SeyalUIConfiguration {
 
     struct LoadResult: Equatable, Sendable {
         var settings: SeyalUserUISettings
+        var inputPolicy: SeyalInputPolicy
         var diagnostics: SeyalConfigurationDiagnostics
         var source: String
     }
@@ -56,7 +57,16 @@ enum SeyalUIConfiguration {
         }
 
         settings.clampToBounds()
-        return LoadResult(settings: settings, diagnostics: diagnostics, source: source)
+        let input = tableValue(tomlText: tomlText)
+        return LoadResult(settings: settings, inputPolicy: input, diagnostics: diagnostics, source: source)
+    }
+
+    private static func tableValue(tomlText: String?) -> SeyalInputPolicy {
+        guard let text = tomlText,
+              let table = try? SeyalTOMLParser.parse(text).get(),
+              let input = table["input"]?.table,
+              let value = input["option_as_alt"]?.bool else { return .default }
+        return SeyalInputPolicy(optionAsAlt: value)
     }
 
     static func loadFromDisk(

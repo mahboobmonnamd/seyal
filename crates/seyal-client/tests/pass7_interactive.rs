@@ -158,7 +158,9 @@ fn composer_command_reaches_real_pty_without_quarantining_block_metadata() {
 
     assert!(client.last_composer_result().is_some());
     assert!(client.block_state().is_some());
-    pump_until(&mut client, |client| !client.block_timeline().records.is_empty());
+    pump_until(&mut client, |client| {
+        !client.block_timeline().records.is_empty()
+    });
     assert_eq!(client.block_timeline().records.len(), 1);
     drop(client);
     runtime.finish();

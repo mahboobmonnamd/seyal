@@ -8,7 +8,11 @@ import AppKit
 final class TranscriptBlockStackView: NSStackView {
   override func hitTest(_ point: NSPoint) -> NSView? {
     guard let hit = super.hitTest(point) else { return nil }
-    return hit is NSControl ? hit : nil
+    if hit is NSButton { return hit }
+    if let field = hit as? NSTextField, field.isEditable || field.isSelectable {
+      return hit
+    }
+    return nil
   }
 }
 

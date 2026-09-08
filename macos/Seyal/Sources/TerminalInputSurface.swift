@@ -197,7 +197,7 @@ private struct CompositionDocument: Equatable {
   }
 }
 
-private struct TerminalLayoutSample: Equatable {
+struct TerminalLayoutSample: Equatable {
   let viewportWidth: Double
   let viewportHeight: Double
   let horizontalInsets: Double
@@ -622,14 +622,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
   private func synchronizeTerminalGeometry() {
     guard terminalBridgeIsConnected else { return }
     let cell = terminalLogicalCellSize()
-    let sample = TerminalLayoutSample(
-      viewportWidth: Double(bounds.width),
-      viewportHeight: Double(bounds.height),
-      horizontalInsets: 0,
-      verticalInsets: 0,
-      cellWidth: Double(cell.width),
-      cellHeight: Double(cell.height)
-    )
+    let sample = Self.runtimeGeometrySample(for: bounds, cellSize: cell)
     let meaningfulEpoch = lastLayoutSample != sample
     lastLayoutSample = sample
     let result = terminalProposeGeometry(
@@ -646,6 +639,23 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
     if result != 0 && result != -17 {
       refreshFailurePresentation()
     }
+  }
+
+  /// Builds the exact bounded sample sent to Runtime during surface layout.
+  /// Keeping this calculation pure lets component tests cover transient
+  /// narrow-to-final viewport changes without fabricating a bridge or PTY.
+  static func runtimeGeometrySample(
+    for bounds: NSRect,
+    cellSize: CGSize
+  ) -> TerminalLayoutSample {
+    TerminalLayoutSample(
+      viewportWidth: Double(bounds.width),
+      viewportHeight: Double(bounds.height),
+      horizontalInsets: 0,
+      verticalInsets: 0,
+      cellWidth: Double(cellSize.width),
+      cellHeight: Double(cellSize.height)
+    )
   }
 
   @discardableResult

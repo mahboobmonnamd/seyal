@@ -903,6 +903,10 @@ final class SeyalShellComponentTests: XCTestCase {
       accuracy: 1
     )
     XCTAssertGreaterThan(transcript.terminalSurface.bounds.width, 600)
+    let initialSample = InteractiveMetalSurfaceView.runtimeGeometrySample(
+      for: transcript.terminalSurface.bounds,
+      cellSize: CGSize(width: 8, height: 18)
+    )
 
     transcript.frame.size.width = 980
     transcript.needsLayout = true
@@ -914,17 +918,40 @@ final class SeyalShellComponentTests: XCTestCase {
       accuracy: 1
     )
     XCTAssertGreaterThan(transcript.terminalSurface.bounds.width, 850)
+
+    let sample = InteractiveMetalSurfaceView.runtimeGeometrySample(
+      for: transcript.terminalSurface.bounds,
+      cellSize: CGSize(width: 8, height: 18)
+    )
+    XCTAssertNotEqual(sample.viewportWidth, initialSample.viewportWidth)
+    XCTAssertGreaterThan(sample.viewportWidth, initialSample.viewportWidth)
+    XCTAssertEqual(sample.viewportWidth, Double(transcript.terminalSurface.bounds.width))
+    XCTAssertEqual(sample.viewportHeight, Double(transcript.terminalSurface.bounds.height))
   }
 
   @MainActor
   func testPaneTranscriptBlockOverlayDoesNotCaptureTerminalSurfaceInput() {
     let transcript = PaneTranscriptView(visual: previewVisual())
     let blockStack = TranscriptBlockStackView()
+    let block = BlockView(
+      presentation: BlockPresentation(
+        id: "block-1", command: "printf output", state: .completed,
+        elapsed: "Done", timestamp: nil, isSelected: false, actions: []
+      ),
+      bodyView: CommandBlockBodyView(),
+      visual: previewVisual()
+    )
+    blockStack.addArrangedSubview(block)
     transcript.frame = NSRect(x: 0, y: 0, width: 720, height: 420)
     transcript.installBlockStack(blockStack)
     transcript.layoutSubtreeIfNeeded()
 
-    let point = NSPoint(x: 360, y: 200)
+    XCTAssertGreaterThan(block.frame.width, 0)
+    XCTAssertGreaterThan(block.frame.height, 0)
+    let point = block.convert(
+      NSPoint(x: block.bounds.midX, y: block.bounds.midY),
+      to: transcript.transcriptDocument
+    )
     XCTAssertTrue(
       transcript.transcriptDocument.hitTest(point) === transcript.terminalSurface,
       "the timeline overlay must pass empty-area hits through to the terminal surface"

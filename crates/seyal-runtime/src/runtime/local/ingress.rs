@@ -341,6 +341,34 @@ fn encode_terminal_key_v2(key: TerminalKeyV2, modes: ModeState) -> Result<Vec<u8
     }
     let mut out = match key.kind {
         TerminalKeyV2Kind::Escape => vec![0x1b],
+        TerminalKeyV2Kind::ArrowUp => {
+            if modes.application_cursor {
+                b"\x1bOA".to_vec()
+            } else {
+                b"\x1b[A".to_vec()
+            }
+        }
+        TerminalKeyV2Kind::ArrowDown => {
+            if modes.application_cursor {
+                b"\x1bOB".to_vec()
+            } else {
+                b"\x1b[B".to_vec()
+            }
+        }
+        TerminalKeyV2Kind::ArrowRight => {
+            if modes.application_cursor {
+                b"\x1bOC".to_vec()
+            } else {
+                b"\x1b[C".to_vec()
+            }
+        }
+        TerminalKeyV2Kind::ArrowLeft => {
+            if modes.application_cursor {
+                b"\x1bOD".to_vec()
+            } else {
+                b"\x1b[D".to_vec()
+            }
+        }
         TerminalKeyV2Kind::Ascii => {
             if modifiers & 4 != 0 {
                 vec![control_byte(key.value).ok_or(())?]
@@ -401,9 +429,9 @@ fn encode_terminal_key_v2(key: TerminalKeyV2, modes: ModeState) -> Result<Vec<u8
                 }
             } else {
                 match key.value {
-                    0..=9 => vec![0x1b, b'p' + key.value as u8],
-                    10 => b"\x1b[n".to_vec(),
-                    11 => b"\x1b[o".to_vec(),
+                    0..=9 => vec![0x1b, b'O', b'p' + key.value as u8],
+                    10 => b"\x1bOn".to_vec(),
+                    11 => b"\x1bOo".to_vec(),
                     12 => b"\x1bOj".to_vec(),
                     13 => b"\x1bOm".to_vec(),
                     14 => b"\x1bOk".to_vec(),
@@ -816,6 +844,54 @@ mod tests {
             .unwrap()
             .len()
                 <= 64
+        );
+    }
+
+    #[test]
+    fn v2_cursor_and_keypad_modes_select_canonical_bytes() {
+        let base = TerminalKeyV2 {
+            attachment_id: crate::AttachmentId::from_bytes([0; 16]),
+            kind: TerminalKeyV2Kind::ArrowLeft,
+            modifiers: TerminalKeyV2Modifiers::NONE,
+            value: 0,
+            event: TerminalKeyV2Event::Press,
+            shifted_ascii: 0,
+            action_id: 1,
+        };
+        assert_eq!(
+            encode_terminal_key_v2(base, ModeState::default()).unwrap(),
+            b"\x1b[D"
+        );
+        assert_eq!(
+            encode_terminal_key_v2(
+                base,
+                ModeState {
+                    application_cursor: true,
+                    ..ModeState::default()
+                }
+            )
+            .unwrap(),
+            b"\x1bOD"
+        );
+        let keypad = TerminalKeyV2 {
+            kind: TerminalKeyV2Kind::Keypad,
+            value: 4,
+            ..base
+        };
+        assert_eq!(
+            encode_terminal_key_v2(keypad, ModeState::default()).unwrap(),
+            b"4"
+        );
+        assert_eq!(
+            encode_terminal_key_v2(
+                keypad,
+                ModeState {
+                    application_keypad: true,
+                    ..ModeState::default()
+                }
+            )
+            .unwrap(),
+            b"\x1bOt"
         );
     }
 

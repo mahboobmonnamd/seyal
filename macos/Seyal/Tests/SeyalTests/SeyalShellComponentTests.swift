@@ -892,8 +892,12 @@ final class SeyalShellComponentTests: XCTestCase {
   }
 
   @MainActor
-  func testPaneTranscriptSurfaceTracksViewportAfterInitialAndResizeLayout() {
+  func testPaneTranscriptSurfaceTracksViewportAfterInitialAndResizeLayout() throws {
     let transcript = PaneTranscriptView(visual: previewVisual())
+    var proposedWidths = [Double]()
+    transcript.terminalSurface.geometryProposalObserver = { sample in
+      proposedWidths.append(sample.viewportWidth)
+    }
     transcript.frame = NSRect(x: 0, y: 0, width: 720, height: 420)
     transcript.layoutSubtreeIfNeeded()
 
@@ -927,6 +931,9 @@ final class SeyalShellComponentTests: XCTestCase {
     XCTAssertGreaterThan(sample.viewportWidth, initialSample.viewportWidth)
     XCTAssertEqual(sample.viewportWidth, Double(transcript.terminalSurface.bounds.width))
     XCTAssertEqual(sample.viewportHeight, Double(transcript.terminalSurface.bounds.height))
+    XCTAssertGreaterThanOrEqual(proposedWidths.count, 2)
+    XCTAssertEqual(proposedWidths.last, sample.viewportWidth)
+    XCTAssertGreaterThan(proposedWidths.last ?? 0, proposedWidths.first ?? 0)
   }
 
   @MainActor
@@ -948,8 +955,12 @@ final class SeyalShellComponentTests: XCTestCase {
 
     XCTAssertGreaterThan(block.frame.width, 0)
     XCTAssertGreaterThan(block.frame.height, 0)
-    let point = block.convert(
-      NSPoint(x: block.bounds.midX, y: block.bounds.midY),
+    let commandLabel = try XCTUnwrap(
+      block.subviewsRecursively.compactMap { $0 as? NSTextField }
+        .first { $0.stringValue == "printf output" }
+    )
+    let point = commandLabel.convert(
+      NSPoint(x: commandLabel.bounds.midX, y: commandLabel.bounds.midY),
       to: transcript.transcriptDocument
     )
     XCTAssertTrue(

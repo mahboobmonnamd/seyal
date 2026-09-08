@@ -284,6 +284,9 @@ private enum TerminalNativeKeyClassifier {
 final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
   private var composition = CompositionDocument()
   private var lastLayoutSample: TerminalLayoutSample?
+  /// Component-test seam for observing the exact sample produced by layout.
+  /// Production leaves this nil; Runtime remains the only geometry authority.
+  var geometryProposalObserver: ((TerminalLayoutSample) -> Void)?
   private var nativeFailure: NativeInputFailure?
   private let failureLayer = CATextLayer()
   /// IME activate is sticky for a given surface/window session. AppKit may
@@ -620,9 +623,10 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
   }
 
   private func synchronizeTerminalGeometry() {
-    guard terminalBridgeIsConnected else { return }
     let cell = terminalLogicalCellSize()
     let sample = Self.runtimeGeometrySample(for: bounds, cellSize: cell)
+    geometryProposalObserver?(sample)
+    guard terminalBridgeIsConnected else { return }
     let meaningfulEpoch = lastLayoutSample != sample
     lastLayoutSample = sample
     let result = terminalProposeGeometry(

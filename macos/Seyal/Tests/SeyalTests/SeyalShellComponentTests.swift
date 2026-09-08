@@ -1068,6 +1068,29 @@ final class SeyalShellComponentTests: XCTestCase {
   }
 
   @MainActor
+  func testBlockViewExposesAccessibleCommandGroup() {
+    let block = BlockView(
+      presentation: BlockPresentation(
+        id: "accessible",
+        command: "printf output",
+        state: .completed,
+        elapsed: "Done",
+        timestamp: nil,
+        isSelected: false,
+        actions: []
+      ),
+      bodyView: NSView(),
+      visual: previewVisual()
+    )
+
+    XCTAssertTrue(block.isAccessibilityElement())
+    XCTAssertEqual(block.accessibilityRole(), NSAccessibility.Role.group)
+    XCTAssertEqual(block.accessibilityRoleDescription(), "Command Block")
+    XCTAssertEqual(block.accessibilityLabel(), "printf output")
+    XCTAssertEqual(block.accessibilityValue() as? String, BlockPresentationState.completed.rawValue)
+  }
+
+  @MainActor
   func testBlockTUITakeoverHidesOnlyPresentationChrome() {
     let body = NSView()
     body.translatesAutoresizingMaskIntoConstraints = false

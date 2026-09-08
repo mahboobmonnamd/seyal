@@ -47,7 +47,7 @@ extension SeyalShellView {
     } else {
       stack = TranscriptBlockStackView()
       stack.orientation = .vertical
-      stack.alignment = .leading
+      stack.alignment = .width
       stack.spacing = 8
       stack.translatesAutoresizingMaskIntoConstraints = false
       blockStacks[paneID] = stack

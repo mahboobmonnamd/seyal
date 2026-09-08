@@ -25,15 +25,6 @@ private struct TerminalNativeKeyV2 {
 struct SeyalInputPolicy: Equatable, Sendable {
   let optionAsAlt: Bool
   static let `default` = SeyalInputPolicy(optionAsAlt: false)
-
-  static func from(tomlText: String?) -> SeyalInputPolicy {
-    guard let tomlText,
-      let result = try? SeyalTOMLParser.parse(tomlText).get(),
-      let input = result["input"]?.table,
-      let value = input["option_as_alt"]?.bool
-    else { return .default }
-    return SeyalInputPolicy(optionAsAlt: value)
-  }
 }
 
 private enum NativeInputFailure: Int32 {
@@ -374,7 +365,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
   private var inputContextActivatedForNativeRestore = false
   private let inputPolicy: SeyalInputPolicy
   private var nextKeyboardActionID: UInt32 = 1
-  private var heldKeyboardKinds: Set<UInt16> = []
+  private var heldKeyboardKinds: [UInt16: TerminalNativeKeyV2] = [:]
 
   convenience init(frame frameRect: NSRect) {
     self.init(frame: frameRect, paneID: "unbound")
@@ -519,7 +510,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
       guard actionID != 0 else { return }
       nextKeyboardActionID &+= 1
       guard heldKeyboardKinds.count < 256 else { return }
-      heldKeyboardKinds.insert(event.keyCode)
+      heldKeyboardKinds[event.keyCode] = key
       terminalSubmitKeyV2(
         kind: key.kind, modifiers: key.modifiers, value: key.value,
         event: event.isARepeat ? 2 : 1, shiftedASCII: key.shiftedASCII, actionID: actionID
@@ -557,13 +548,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
   }
 
   override func keyUp(with event: NSEvent) {
-    guard let key = TerminalNativeKeyClassifier.v2(
-      keyCode: event.keyCode, specialKey: event.specialKey,
-      charactersIgnoringModifiers: event.charactersIgnoringModifiers,
-      characters: event.characters,
-      modifierFlags: event.modifierFlags,
-      optionAsAlt: inputPolicy.optionAsAlt
-    ), heldKeyboardKinds.remove(event.keyCode) != nil else { return }
+    guard let key = heldKeyboardKinds.removeValue(forKey: event.keyCode) else { return }
     let actionID = nextKeyboardActionID
     guard actionID != 0 else { return }
     nextKeyboardActionID &+= 1
@@ -969,6 +954,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
       && compositionBoundsSelfTest()
       && composedSubstringSelfTest()
       && semanticKeyMatrixSelfTest()
+      && keyReleaseMetadataSelfTest()
   }
 
   private static func controlNormalizationSelfTest() -> Bool {
@@ -1161,7 +1147,21 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
         keyCode: 0, specialKey: nil, charactersIgnoringModifiers: "a",
         characters: "A", modifierFlags: [.shift, .option], optionAsAlt: true
       )?.shiftedASCII == 65
-      && SeyalInputPolicy.from(tomlText: "[input]\noption_as_alt = true").optionAsAlt
-      && !SeyalInputPolicy.from(tomlText: "[input]\noption_as_alt = false").optionAsAlt
+      && SeyalUIConfiguration.load(tomlText: "[input]\noption_as_alt = true").inputPolicy.optionAsAlt
+      && !SeyalUIConfiguration.load(tomlText: "[input]\noption_as_alt = false").inputPolicy.optionAsAlt
+  }
+
+  private static func keyReleaseMetadataSelfTest() -> Bool {
+    guard let key = TerminalNativeKeyClassifier.v2(
+      keyCode: 0,
+      specialKey: nil,
+      charactersIgnoringModifiers: "a",
+      characters: "A",
+      modifierFlags: [.shift, .option],
+      optionAsAlt: true
+    ) else { return false }
+    var held: [UInt16: TerminalNativeKeyV2] = [0: key]
+    let released = held.removeValue(forKey: 0)
+    return released?.shiftedASCII == 65 && held.isEmpty
   }
 }

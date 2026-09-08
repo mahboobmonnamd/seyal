@@ -335,9 +335,10 @@ final class SeyalShellUITests: XCTestCase {
         )
         if blocks.count > 0 {
             let block = blocks.element(boundBy: blocks.count - 1)
-            XCTAssertGreaterThan(surface.frame.width, 600)
             XCTAssertGreaterThan(block.frame.width, 0)
-            XCTAssertGreaterThanOrEqual(block.frame.width, surface.frame.width - 1)
+            // The transcript Block stack has the specified 8pt outer inset on
+            // each side of the pane-owned terminal surface.
+            XCTAssertEqual(block.frame.width, surface.frame.width - 16, accuracy: 2)
             XCTAssertLessThanOrEqual(block.frame.width, surface.frame.width + 1)
             XCTAssertGreaterThan(block.frame.height, 0)
             XCTAssertTrue(block.frame.intersects(surface.frame))

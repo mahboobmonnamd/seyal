@@ -545,7 +545,11 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
   }
 
   override func keyUp(with event: NSEvent) {
-    guard let key = heldKeyboardKinds.removeValue(forKey: event.keyCode) else { return }
+    guard let key = Self.takeHeldKeyForV2Release(
+      from: &heldKeyboardKinds,
+      keyCode: event.keyCode,
+      v2Supported: terminalSupportsKeyV2()
+    ) else { return }
     let actionID = nextKeyboardActionID
     guard actionID != 0 else { return }
     nextKeyboardActionID &+= 1
@@ -578,6 +582,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
 
   override func terminalBridgeDidFail(_ code: Int32) {
     super.terminalBridgeDidFail(code)
+    heldKeyboardKinds.removeAll(keepingCapacity: true)
     cancelComposition(discardInputContext: true)
     nativeFailure = .disconnected
     refreshFailurePresentation()
@@ -585,6 +590,9 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
 
   override func terminalBridgeStatusDidChange() {
     super.terminalBridgeStatusDidChange()
+    if !terminalBridgeIsConnected {
+      heldKeyboardKinds.removeAll(keepingCapacity: true)
+    }
     if terminalBridgeIsConnected, nativeFailure == .disconnected {
       nativeFailure = nil
     }
@@ -941,6 +949,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
       && composedSubstringSelfTest()
       && semanticKeyMatrixSelfTest()
       && keyReleaseMetadataSelfTest()
+      && capabilityLossDropsHeldKeyReleaseSelfTest()
   }
 
   private static func controlNormalizationSelfTest() -> Bool {
@@ -1149,5 +1158,38 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
     var held: [UInt16: TerminalNativeKeyV2] = [0: key]
     let released = held.removeValue(forKey: 0)
     return released?.shiftedASCII == 65 && held.isEmpty
+  }
+
+  /// A Runtime reconnect may select an older peer after a V2 press. In that
+  /// case the native adapter must discard the retained key rather than send an
+  /// unnegotiated V2 release to the replacement attachment.
+  private static func capabilityLossDropsHeldKeyReleaseSelfTest() -> Bool {
+    guard let key = TerminalNativeKeyClassifier.v2(
+      keyCode: 0,
+      specialKey: nil,
+      charactersIgnoringModifiers: "a",
+      characters: "A",
+      modifierFlags: [.shift, .option],
+      optionAsAlt: true
+    ) else { return false }
+    var held: [UInt16: TerminalNativeKeyV2] = [0: key]
+    let released = takeHeldKeyForV2Release(
+      from: &held,
+      keyCode: 0,
+      v2Supported: false
+    )
+    return released == nil && held.isEmpty
+  }
+
+  private static func takeHeldKeyForV2Release(
+    from held: inout [UInt16: TerminalNativeKeyV2],
+    keyCode: UInt16,
+    v2Supported: Bool
+  ) -> TerminalNativeKeyV2? {
+    guard v2Supported else {
+      held.removeAll(keepingCapacity: true)
+      return nil
+    }
+    return held.removeValue(forKey: keyCode)
   }
 }

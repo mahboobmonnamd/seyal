@@ -22,6 +22,9 @@ The benchmark used the production `TerminalState` history path, a 120x40 source
 geometry, 80 reflow columns, 32 nearest-rank samples, and reported aggregate
 resident bytes for the retained executions. The run completed successfully.
 
+The ten-execution rows were captured with the same command and
+`SEYAL_HISTORY_BENCH_EXECUTIONS=10`.
+
 ## Retained output
 
 | Retained source lines | Executions | Resident bytes | p50 (ns) | p95 (ns) | p99 (ns) |
@@ -29,6 +32,11 @@ resident bytes for the retained executions. The run completed successfully.
 | 10,000 | 1 | 5,512,757 | 8,833 | 18,959 | 111,959 |
 | 100,000 | 1 | 33,541,947 | 8,667 | 21,333 | 107,250 |
 | 1,000,000 | 1 | 33,537,653 | 8,834 | 13,041 | 81,208 |
+| 10,000 | 10 | 55,127,570 | 92,542 | 108,250 | 968,959 |
+| 100,000 | 10 | 335,419,470 | 98,791 | 121,125 | 997,916 |
+| 1,000,000 | 10 | 335,376,530 | 92,042 | 115,834 | 826,250 |
+| 10,000 | 50 | 275,637,850 | 486,000 | 537,375 | 4,576,250 |
+| 10,000 | 100 | 551,275,700 | 974,625 | 1,094,209 | 8,333,958 |
 
 The output included `percentile_method=nearest-rank` and
 `performance_claim=false` for every case. The resident values are benchmark
@@ -42,7 +50,7 @@ the physical-host latency gates.
 | Exact-head benchmark execution | **Recorded** | The command and output above ran against the measured code head. This documentation commit is evidence-only. |
 | 10k/100k/1M single-execution reflow comparison | **Recorded** | Three completed cases above; comparative only. |
 | Append latency, search, anchor resolution, allocation churn | **Missing** | This benchmark does not emit those dimensions. |
-| Execution populations 1/10/50/100 | **Incomplete** | Only the 1-execution cases are retained here. |
+| Execution populations 1/10/50/100 | **Incomplete** | 1/10 are recorded at all three scales; 50/100 are recorded only at 10k lines. Larger 50/100 cases remain unrun. |
 | Required column oscillation 40/48/64/80/96/132/160 | **Missing** | Current harness record covers only reflow at 80 columns. |
 | ASCII, styled, CJK, emoji/combining workloads | **Missing** | Current workload is numbered ASCII history lines. |
 | Physical ARM64 p50/p95/p99 acceptance gates | **Unverified** | This run is comparative and does not provide the controlled release matrix or RSS attribution required by #818/#673. |

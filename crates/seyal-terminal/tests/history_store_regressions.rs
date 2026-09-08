@@ -4,6 +4,13 @@ use seyal_terminal::{
 };
 
 #[test]
+fn search_does_not_cross_hard_break_separator() {
+    let mut terminal = TerminalState::new(4, 1).expect("terminal");
+    terminal.feed(b"ab\r\ncd\r\n").expect("feed");
+    assert!(terminal.primary_history_search("bc", 8).is_empty());
+}
+
+#[test]
 fn canonical_search_matches_across_soft_wrap_and_returns_source_anchors() {
     let mut terminal = TerminalState::new(4, 1).expect("terminal");
     terminal.feed(b"abcdefgh\r\n").expect("feed");

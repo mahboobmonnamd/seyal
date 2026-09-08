@@ -198,6 +198,14 @@ pub(crate) enum HistoryLineRef<'a> {
     Tail(&'a HistoryLine),
 }
 
+#[derive(Clone, Debug)]
+struct ReflowCache {
+    columns: u16,
+    max_rows: usize,
+    eviction_generation: u64,
+    rows: Vec<ReflowRow>,
+}
+
 #[derive(Clone, Copy)]
 enum HistoryUnitRef<'a> {
     Sealed(&'a Segment, &'a SegmentUnit),
@@ -335,7 +343,7 @@ pub(crate) struct HistoryStore {
     // absorbed into an unavailable range. The Vec allocation is included in
     // resident_bytes, so this metadata participates in the same hard cap.
     evicted_id_ranges: Vec<EvictedIdRange>,
-    reflow_cache: RefCell<Option<(u16, usize, u64, Vec<ReflowRow>)>>,
+    reflow_cache: RefCell<Option<ReflowCache>>,
 }
 
 impl HistoryStore {
@@ -356,17 +364,16 @@ impl HistoryStore {
     }
 
     pub(crate) fn derived_cache_bytes(&self) -> usize {
-        self.reflow_cache
-            .borrow()
-            .as_ref()
-            .map_or(0, |(_, _, _, rows)| {
-                rows.iter()
-                    .map(|row| {
-                        row.cells.len() * size_of::<Cell>()
-                            + row.anchors.len() * size_of::<HistoryAnchor>()
-                    })
-                    .sum()
-            })
+        self.reflow_cache.borrow().as_ref().map_or(0, |cache| {
+            cache
+                .rows
+                .iter()
+                .map(|row| {
+                    row.cells.len() * size_of::<Cell>()
+                        + row.anchors.len() * size_of::<HistoryAnchor>()
+                })
+                .sum()
+        })
     }
 
     pub(crate) fn drop_derived_cache(&self) {
@@ -620,7 +627,12 @@ impl HistoryStore {
     }
 
     pub(crate) fn resolve_anchor(&self, anchor: HistoryAnchor) -> HistoryAnchorResolution {
-        let line = self.entries().find(|line| line.line_id() == anchor.line_id);
+        let line = self.entries().find(|line| {
+            line.line_id() == anchor.line_id
+                && anchor.unit_offset >= line.start_offset()
+                && anchor.unit_offset.saturating_sub(line.start_offset())
+                    < line.units().count() as u32
+        });
         let Some(line) = line else {
             return if self.line_was_evicted(anchor.line_id) {
                 HistoryAnchorResolution::Unavailable
@@ -649,11 +661,11 @@ impl HistoryStore {
 
     pub(crate) fn reflow(&self, cols: u16, max_rows: usize) -> Vec<ReflowRow> {
         let generation = self.eviction_generation;
-        if let Some((cached_cols, cached_rows, cached_generation, rows)) =
-            self.reflow_cache.borrow().as_ref()
-            && (*cached_cols, *cached_rows, *cached_generation) == (cols, max_rows, generation)
+        if let Some(cache) = self.reflow_cache.borrow().as_ref()
+            && (cache.columns, cache.max_rows, cache.eviction_generation)
+                == (cols, max_rows, generation)
         {
-            return rows.clone();
+            return cache.rows.clone();
         }
         let rows = self.reflow_uncached(cols, max_rows);
         let estimated = rows
@@ -664,7 +676,12 @@ impl HistoryStore {
             })
             .sum::<usize>();
         if estimated <= HISTORY_PER_EXECUTION_DERIVED_INDEX_CAP {
-            *self.reflow_cache.borrow_mut() = Some((cols, max_rows, generation, rows.clone()));
+            *self.reflow_cache.borrow_mut() = Some(ReflowCache {
+                columns: cols,
+                max_rows,
+                eviction_generation: generation,
+                rows: rows.clone(),
+            });
         }
         rows
     }
@@ -1003,5 +1020,24 @@ mod tests {
             .expect("wide source unit has a visual row");
         assert_eq!(wide.cells.len(), 2);
         assert!(wide.cells[1].is_continuation());
+    }
+
+    #[test]
+    fn oversized_fragment_later_source_offset_resolves() {
+        let mut store = HistoryStore::default();
+        let mut line = ascii_line(
+            7,
+            &"a".repeat(HISTORY_SEGMENT_PAYLOAD_TARGET * 2),
+            HistoryBreakAfter::HardBreak,
+        );
+        store.append_line(line);
+        let anchor = HistoryAnchor {
+            line_id: LineId(7),
+            unit_offset: (HISTORY_SEGMENT_PAYLOAD_TARGET + 1) as u32,
+        };
+        assert!(matches!(
+            store.resolve_anchor(anchor),
+            HistoryAnchorResolution::Resolved { .. }
+        ));
     }
 }

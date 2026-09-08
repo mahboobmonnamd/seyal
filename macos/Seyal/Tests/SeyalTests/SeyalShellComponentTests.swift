@@ -937,7 +937,7 @@ final class SeyalShellComponentTests: XCTestCase {
   }
 
   @MainActor
-  func testPaneTranscriptBlockOverlayDoesNotCaptureTerminalSurfaceInput() {
+  func testPaneTranscriptBlockOverlayDoesNotCaptureTerminalSurfaceInput() throws {
     let transcript = PaneTranscriptView(visual: previewVisual())
     let blockStack = TranscriptBlockStackView()
     let block = BlockView(

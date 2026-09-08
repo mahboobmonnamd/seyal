@@ -14,16 +14,16 @@ fn input_byte(data: &[u8], index: usize) -> u8 {
 }
 
 fn cell(seed: u8) -> ProjectionCell {
-    ProjectionCell {
-        scalar: char::from(b' ' + seed % 95),
-        foreground: ProjectionColor::Default,
-        background: ProjectionColor::Default,
-        attributes: ProjectionAttributes {
+    ProjectionCell::lead(
+        char::from(b' ' + seed % 95),
+        ProjectionColor::Default,
+        ProjectionColor::Default,
+        ProjectionAttributes {
             bold: seed & 0x01 != 0,
             underline: seed & 0x02 != 0,
             inverse: seed & 0x04 != 0,
         },
-    }
+    )
 }
 
 fn cells(data: &[u8], offset: usize, count: usize) -> Vec<ProjectionCell> {

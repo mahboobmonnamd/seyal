@@ -180,6 +180,9 @@ pub struct SeyalPreparedFrame {
     pub damage_word1: u64,
     pub damage_word2: u64,
     pub damage_word3: u64,
+    pub grapheme_utf8: *const u8,
+    pub grapheme_utf8_len: u32,
+    pub reserved2: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -259,7 +262,7 @@ mod pass8_execution_block_abi_tests {
 
     #[test]
     fn prepared_frame_matches_seyal_bridge_h() {
-        assert_eq!(size_of::<SeyalPreparedFrame>(), 72);
+        assert_eq!(size_of::<SeyalPreparedFrame>(), 88);
         assert_eq!(align_of::<SeyalPreparedFrame>(), 8);
         assert_eq!(offset_of!(SeyalPreparedFrame, cells), 0);
         assert_eq!(offset_of!(SeyalPreparedFrame, cell_count), 8);
@@ -276,6 +279,8 @@ mod pass8_execution_block_abi_tests {
         assert_eq!(offset_of!(SeyalPreparedFrame, reserved1), 38);
         assert_eq!(offset_of!(SeyalPreparedFrame, damage_word0), 40);
         assert_eq!(offset_of!(SeyalPreparedFrame, damage_word3), 64);
+        assert_eq!(offset_of!(SeyalPreparedFrame, grapheme_utf8), 72);
+        assert_eq!(offset_of!(SeyalPreparedFrame, grapheme_utf8_len), 80);
     }
 
     #[test]
@@ -424,6 +429,9 @@ impl SeyalPreparedFrame {
             damage_word1: 0,
             damage_word2: 0,
             damage_word3: 0,
+            grapheme_utf8: ptr::null(),
+            grapheme_utf8_len: 0,
+            reserved2: 0,
         }
     }
 }

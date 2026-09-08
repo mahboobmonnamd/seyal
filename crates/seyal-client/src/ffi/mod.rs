@@ -66,7 +66,8 @@ pub use session::{
     seyal_bridge_adopt_handle, seyal_bridge_attachment_id_high, seyal_bridge_attachment_id_low,
     seyal_bridge_connect_first, seyal_bridge_disconnect, seyal_bridge_disconnect_handle,
     seyal_bridge_execution_id_high, seyal_bridge_execution_id_low, seyal_bridge_open_execution,
-    seyal_bridge_open_execution_until, seyal_bridge_open_first, seyal_bridge_open_first_until,
+    seyal_bridge_open_execution_until, seyal_bridge_open_first,
+    seyal_bridge_open_first_observer_until, seyal_bridge_open_first_until,
     seyal_bridge_runtime_id_high, seyal_bridge_runtime_id_low, seyal_bridge_select,
     seyal_bridge_socket_fd, test_register_pending_client,
 };

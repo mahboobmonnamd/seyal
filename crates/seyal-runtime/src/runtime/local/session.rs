@@ -79,7 +79,10 @@ impl Runtime {
             );
             return;
         };
-        if hello.client_capabilities & !(CAP_COMMAND_BLOCKS | CAP_BLOCK_METADATA) != 0 {
+        if hello.client_capabilities
+            & !(CAP_COMMAND_BLOCKS | CAP_BLOCK_METADATA | framing::CAP_GRAPHEME_DISPLAY)
+            != 0
+        {
             self.send_error(
                 token,
                 ErrorCode::MalformedPayload,
@@ -94,7 +97,8 @@ impl Runtime {
                 | framing::CAP_SEMANTIC_TERMINAL_KEY
                 | framing::CAP_CORRELATED_RESIZE
                 | CAP_COMMAND_BLOCKS
-                | CAP_BLOCK_METADATA,
+                | CAP_BLOCK_METADATA
+                | framing::CAP_GRAPHEME_DISPLAY,
             max_frame_payload: framing::MAX_FRAME_PAYLOAD,
             max_input_payload: framing::MAX_INPUT_BYTES,
         };
@@ -191,7 +195,12 @@ impl Runtime {
 
         let snapshot = entry.execution.projection_snapshot();
         let workspace_id = entry.workspace_id;
-        let Ok(snapshot_batch) = display::encode_snapshot(&snapshot) else {
+        let snapshot_batch = if self.local_connection_supports_grapheme_display(token) {
+            display::encode_snapshot_v2(&snapshot)
+        } else {
+            display::encode_snapshot(&snapshot)
+        };
+        let Ok(snapshot_batch) = snapshot_batch else {
             self.send_error(
                 token,
                 ErrorCode::DisplayUnavailable,

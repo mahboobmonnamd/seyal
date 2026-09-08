@@ -98,6 +98,21 @@ def main() -> None:
         write(benchmark / "crates/seyal-terminal/benches/bad.rs", 'fn main() { println!("performance_claim=true"); }\n')
         run_negative(["python3", str(ROOT / "scripts/check-benchmark-contract.py")], benchmark, "performance_claim=false")
 
+        unicode_benchmark = base / "unicode-benchmark-contract"
+        write(
+            unicode_benchmark / "crates/seyal-terminal/benches/good.rs",
+            'use std::time::Instant; fn main() { let _ = Instant::now(); println!("performance_claim=false"); }\n',
+        )
+        write(
+            unicode_benchmark / "macos/Seyal/Sources/RendererValidation.swift",
+            'print("m002_unicode_renderer performance_claim=false")\n',
+        )
+        run_negative(
+            ["python3", str(ROOT / "scripts/check-benchmark-contract.py")],
+            unicode_benchmark,
+            "baseline_unicode_pipeline=UNSUPPORTED_NONCOMPARABLE",
+        )
+
         ui_policy = base / "ui-test-policy"
         write(ui_policy / "macos/Seyal/Tests/SeyalTests/SeyalShellComponentTests.swift", "// fixture\n")
         write(ui_policy / "macos/Seyal/Tests/SeyalUITests/SeyalShellUITests.swift", "// fixture\n")

@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import Darwin
 import Metal
 @preconcurrency import QuartzCore
 
@@ -333,6 +334,199 @@ enum RendererValidation {
         }
     }
 
+    /// #817 — a width-two lead grapheme must draw into its continuation cell.
+    /// The assertion samples the real offscreen Metal output, rather than only
+    /// checking that the production surface exists.
+    static func wideGraphemeOffscreenSelfTest() -> Bool {
+        guard let device = MTLCreateSystemDefaultDevice() else { return false }
+        do {
+            let renderer = try MetalTerminalRenderer(device: device)
+            let leadReserved: UInt16 = 1 | (2 << 2) | (1 << 4)
+            let continuationReserved: UInt16 = 2
+            var lead = preparedCell(
+                foreground: terminalRGB(red: 255, green: 255, blue: 255)
+            )
+            lead.reserved = leadReserved
+            var continuation = preparedCell()
+            continuation.reserved = continuationReserved
+            let cells = [lead, continuation]
+            let payload = Data("👩‍💻".utf8)
+            var sidecar = Data([
+                UInt8(payload.count & 0xff),
+                UInt8((payload.count >> 8) & 0xff),
+            ])
+            sidecar.append(payload)
+            var damage = DamageMask()
+            damage.mark(row: 0)
+            return try cells.withUnsafeBufferPointer { buffer in
+                let frame = NativePreparedFrame(
+                    cells: buffer,
+                    generation: 1,
+                    rows: 1,
+                    columns: 2,
+                    damage: damage,
+                    graphemeUtf8: sidecar
+                )
+                guard try renderer.update(
+                    frame: frame,
+                    backingScale: 1,
+                    forceFullRebuild: true
+                ) == .updated else {
+                    return false
+                }
+                let cellSize = renderer.cellPixelSize(backingScale: 1)
+                guard let texture = renderer.renderOffscreenAndWait(
+                    width: cellSize.width * 2,
+                    height: cellSize.height
+                ) else {
+                    return false
+                }
+                return textureRegionContainsBrightGlyph(
+                    texture,
+                    xStart: cellSize.width,
+                    xEnd: cellSize.width * 2
+                )
+            }
+        } catch {
+            return false
+        }
+    }
+
+    /// #817 — a normal glyph in the live two-pass path must match the same
+    /// glyph rendered by the history single-pass path. This catches sampling
+    /// the atlas during the background pass, which would blend the glyph twice.
+    static func normalGlyphMatchesSinglePassOffscreenSelfTest() -> Bool {
+        guard let device = MTLCreateSystemDefaultDevice() else { return false }
+        do {
+            let renderer = try MetalTerminalRenderer(device: device)
+            let cell = preparedCell(scalar: UInt32(ascii: "A"))
+            let blank = preparedCell()
+            var damage = DamageMask()
+            damage.mark(row: 0)
+            let cells = [cell, blank]
+            guard try cells.withUnsafeBufferPointer({ buffer in
+                try renderer.update(
+                    frame: NativePreparedFrame(
+                        cells: buffer,
+                        generation: 1,
+                        rows: 1,
+                        columns: 2,
+                        fullRebuild: true,
+                        damage: damage
+                    ),
+                    backingScale: 1
+                ) == .updated
+            }) else {
+                return false
+            }
+            let cellSize = renderer.cellPixelSize(backingScale: 1)
+            let history = NativeHistoryRange(
+                startLine: 1,
+                endLine: 1,
+                blockID: 817,
+                requestID: 1,
+                revision: 1,
+                rows: [[
+                    NativeHistoryRange.Cell(
+                        scalar: UInt32(ascii: "A"),
+                        foreground: 0xffe9_e1d8,
+                        background: 0xff10_0d0b,
+                        flags: 0
+                    )
+                ]]
+            )
+            let region = NativeTranscriptRegion(
+                id: 817,
+                origin: NSPoint(x: CGFloat(cellSize.width), y: 0),
+                clip: NSRect(
+                    x: CGFloat(cellSize.width),
+                    y: 0,
+                    width: CGFloat(cellSize.width),
+                    height: CGFloat(cellSize.height)
+                )
+            )
+            guard try renderer.update(
+                historyRange: history,
+                region: region,
+                backingScale: 1
+            ) == .updated else {
+                return false
+            }
+            renderer.setHistoryRegionOrder([817])
+            guard let texture = renderer.renderOffscreenAndWait(
+                width: cellSize.width * 2,
+                height: cellSize.height
+            ) else {
+                return false
+            }
+            return textureRegionsMatch(
+                texture,
+                firstX: 0,
+                secondX: cellSize.width,
+                width: cellSize.width,
+                height: cellSize.height
+            )
+        } catch {
+            return false
+        }
+    }
+
+    /// #817 — a generation with no damaged rows must reuse the prepared
+    /// grapheme projection without invoking the sidecar scan again.
+    static func noDamageGraphemeReuseSelfTest() -> Bool {
+        guard let device = MTLCreateSystemDefaultDevice() else { return false }
+        do {
+            let renderer = try MetalTerminalRenderer(device: device)
+            var cell = preparedCell(scalar: UInt32(ascii: "e"))
+            cell.reserved = 1 | (1 << 2) | (1 << 4)
+            let cells = [cell]
+            let payload = Data("e\u{301}".utf8)
+            var sidecar = Data([
+                UInt8(payload.count & 0xff),
+                UInt8((payload.count >> 8) & 0xff),
+            ])
+            sidecar.append(payload)
+            var fullDamage = DamageMask()
+            fullDamage.mark(row: 0)
+            let first = try cells.withUnsafeBufferPointer { buffer in
+                try renderer.update(
+                    frame: NativePreparedFrame(
+                        cells: buffer,
+                        generation: 1,
+                        rows: 1,
+                        columns: 1,
+                        fullRebuild: true,
+                        damage: fullDamage,
+                        graphemeUtf8: sidecar
+                    ),
+                    backingScale: 1
+                )
+            }
+            guard first == .updated else { return false }
+            let glyphsBefore = renderer.glyphStats
+            let rebuiltRowsBefore = renderer.stats.rebuiltRows
+            let second = try cells.withUnsafeBufferPointer { buffer in
+                try renderer.update(
+                    frame: NativePreparedFrame(
+                        cells: buffer,
+                        generation: 2,
+                        rows: 1,
+                        columns: 1,
+                        fullRebuild: false,
+                        damage: DamageMask(),
+                        graphemeUtf8: sidecar
+                    ),
+                    backingScale: 1
+                )
+            }
+            return second == .updated
+                && renderer.glyphStats == glyphsBefore
+                && renderer.stats.rebuiltRows == rebuiltRowsBefore
+        } catch {
+            return false
+        }
+    }
+
     static func liveSelfTest(expectAlternateScreen: Bool) -> Bool {
         guard let device = MTLCreateSystemDefaultDevice() else { return false }
         let connect = seyal_bridge_connect_first()
@@ -549,11 +743,165 @@ enum RendererValidation {
                 print("committed_generation_to_presented_frame_proxy status=PLATFORM_LIMITED samples=0 reason=SEYAL_REQUIRE_DISPLAY_LINK_BENCHMARK_not_set")
             }
             print("renderer submitted_frames=\(renderer.stats.submittedFrames) display_link_samples=\(displayLinkDriver?.samples.count ?? 0) coalesced_frames=\(renderer.stats.coalescedFrames) rebuilt_rows=\(renderer.stats.rebuiltRows) rebuilt_cells=\(renderer.stats.rebuiltCells) instance_bytes=\(renderer.stats.instanceBytes) glyph_hits=\(glyph.hits) glyph_misses=\(glyph.misses) glyph_uploads=\(glyph.uploads) glyph_uploaded_bytes=\(glyph.uploadedBytes) atlas_budget_bytes=\(GlyphAtlas.budgetBytes) dedicated_gpu_bytes=\(renderer.estimatedDedicatedGPUBytes)")
+            guard runUnicodeRendererBenchmark(device: device) else { return false }
             benchmarkWindow.orderOut(nil)
             return true
         } catch {
             return false
         }
+    }
+
+    /// M002 renderer diagnostics use the production NativePreparedFrame ->
+    /// MetalTerminalRenderer -> CoreText/GlyphAtlas path. The accepted base
+    /// predates complete grapheme presentation, so its Unicode result is
+    /// explicitly noncomparable while the scalar benchmark above remains the
+    /// common regression series.
+    private static func runUnicodeRendererBenchmark(device: MTLDevice) -> Bool {
+        let rows = 40
+        let columns = 120
+        let workload = unicodeRendererWorkload(rows: rows, columns: columns)
+        guard workload.graphemeCount > 0 else { return false }
+
+        do {
+            let renderer = try MetalTerminalRenderer(device: device)
+            var damage = DamageMask()
+            damage.markAll(rows: rows)
+            let resourcesBeforeCold = processResourceSnapshot()
+            let statsBeforeCold = renderer.glyphStats
+            let coldStarted = DispatchTime.now().uptimeNanoseconds
+            let coldResult = try workload.cells.withUnsafeBufferPointer { buffer in
+                try renderer.update(
+                    frame: NativePreparedFrame(
+                        cells: buffer,
+                        generation: 1,
+                        rows: rows,
+                        columns: columns,
+                        fullRebuild: true,
+                        damage: damage,
+                        graphemeUtf8: workload.sidecar
+                    ),
+                    backingScale: 1,
+                    forceFullRebuild: true
+                )
+            }
+            let coldPreparation = DispatchTime.now().uptimeNanoseconds - coldStarted
+            let resourcesAfterCold = processResourceSnapshot()
+            let statsAfterCold = renderer.glyphStats
+            guard coldResult == .updated,
+                  statsAfterCold.graphemeMisses > statsBeforeCold.graphemeMisses,
+                  statsAfterCold.graphemeFallbackRuns
+                    > statsBeforeCold.graphemeFallbackRuns
+            else {
+                return false
+            }
+
+            let resourcesBeforeWarm = resourcesAfterCold
+            let statsBeforeWarm = statsAfterCold
+            let warmStarted = DispatchTime.now().uptimeNanoseconds
+            let warmResult = try workload.cells.withUnsafeBufferPointer { buffer in
+                try renderer.update(
+                    frame: NativePreparedFrame(
+                        cells: buffer,
+                        generation: 2,
+                        rows: rows,
+                        columns: columns,
+                        fullRebuild: false,
+                        damage: damage,
+                        graphemeUtf8: workload.sidecar
+                    ),
+                    backingScale: 1
+                )
+            }
+            let warmPreparation = DispatchTime.now().uptimeNanoseconds - warmStarted
+            let resourcesAfterWarm = processResourceSnapshot()
+            let statsAfterWarm = renderer.glyphStats
+            guard warmResult == .updated,
+                  statsAfterWarm.graphemeHits > statsBeforeWarm.graphemeHits,
+                  statsAfterWarm.graphemeMisses == statsBeforeWarm.graphemeMisses
+            else {
+                return false
+            }
+
+            print("m002_unicode_renderer performance_claim=false baseline_commit=3359dc8 baseline_unicode_pipeline=UNSUPPORTED_NONCOMPARABLE common_scalar_series=pass6_native_renderer workload=complete_grapheme_fallback geometry=\(columns)x\(rows) grapheme_leads=\(workload.graphemeCount) backing_scale=1")
+            print("m002_unicode_renderer cache_phase=cold_miss preparation_ns=\(coldPreparation) cache_hits=\(statsAfterCold.graphemeHits - statsBeforeCold.graphemeHits) cache_misses=\(statsAfterCold.graphemeMisses - statsBeforeCold.graphemeMisses) full_shaping_ns=\(statsAfterCold.graphemeShapingNanoseconds - statsBeforeCold.graphemeShapingNanoseconds) font_fallback_runs=\(statsAfterCold.graphemeFallbackRuns - statsBeforeCold.graphemeFallbackRuns) process_cpu_ns=\(resourcesAfterCold.cpuNanoseconds - resourcesBeforeCold.cpuNanoseconds) process_rss_bytes=\(resourcesAfterCold.peakResidentBytes) rss_semantics=process_peak")
+            print("m002_unicode_renderer cache_phase=warm_hit preparation_ns=\(warmPreparation) cache_hits=\(statsAfterWarm.graphemeHits - statsBeforeWarm.graphemeHits) cache_misses=\(statsAfterWarm.graphemeMisses - statsBeforeWarm.graphemeMisses) full_shaping_ns=\(statsAfterWarm.graphemeShapingNanoseconds - statsBeforeWarm.graphemeShapingNanoseconds) font_fallback_runs=\(statsAfterWarm.graphemeFallbackRuns - statsBeforeWarm.graphemeFallbackRuns) process_cpu_ns=\(resourcesAfterWarm.cpuNanoseconds - resourcesBeforeWarm.cpuNanoseconds) process_rss_bytes=\(resourcesAfterWarm.peakResidentBytes) rss_semantics=process_peak")
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private static func unicodeRendererWorkload(
+        rows: Int,
+        columns: Int
+    ) -> (cells: [SeyalPreparedCell], sidecar: Data, graphemeCount: Int) {
+        let samples: [(text: String, width: UInt16)] = [
+            ("e\u{301}", 1),
+            ("\u{2764}\u{fe0f}", 2),
+            ("\u{1f44d}\u{1f3fd}", 2),
+            ("\u{1f469}\u{200d}\u{1f4bb}", 2),
+            ("\u{1f1ee}\u{1f1f3}", 2),
+            ("\u{0ba8}\u{0bbf}", 1),
+            ("\u{0646}\u{0651}", 1),
+        ]
+        var cells = [SeyalPreparedCell]()
+        var sidecar = Data()
+        var sampleIndex = 0
+        var graphemeCount = 0
+        cells.reserveCapacity(rows * columns)
+
+        for _ in 0..<rows {
+            var column = 0
+            while column < columns {
+                var sample = samples[sampleIndex % samples.count]
+                sampleIndex += 1
+                if sample.width == 2, column + 1 == columns {
+                    sample = samples[0]
+                }
+                let payload = Data(sample.text.utf8)
+                guard payload.count <= Int(UInt16.max) else { continue }
+                var lead = preparedCell(
+                    scalar: sample.text.unicodeScalars.first?.value ?? 0xfffd
+                )
+                lead.reserved = 1 | (sample.width << 2) | (1 << 4)
+                cells.append(lead)
+                sidecar.append(UInt8(payload.count & 0xff))
+                sidecar.append(UInt8((payload.count >> 8) & 0xff))
+                sidecar.append(payload)
+                graphemeCount += 1
+                column += 1
+                if sample.width == 2 {
+                    var continuation = preparedCell()
+                    continuation.reserved = 2
+                    cells.append(continuation)
+                    column += 1
+                }
+            }
+        }
+        return (cells, sidecar, graphemeCount)
+    }
+
+    private struct ProcessResourceSnapshot {
+        let cpuNanoseconds: UInt64
+        let peakResidentBytes: UInt64
+    }
+
+    private static func processResourceSnapshot() -> ProcessResourceSnapshot {
+        var usage = rusage()
+        guard getrusage(RUSAGE_SELF, &usage) == 0 else {
+            return ProcessResourceSnapshot(cpuNanoseconds: 0, peakResidentBytes: 0)
+        }
+        let user = timevalNanoseconds(usage.ru_utime)
+        let system = timevalNanoseconds(usage.ru_stime)
+        return ProcessResourceSnapshot(
+            cpuNanoseconds: user &+ system,
+            peakResidentBytes: UInt64(max(0, usage.ru_maxrss))
+        )
+    }
+
+    private static func timevalNanoseconds(_ value: timeval) -> UInt64 {
+        UInt64(max(0, value.tv_sec)) &* 1_000_000_000
+            &+ UInt64(max(0, value.tv_usec)) &* 1_000
     }
 
     private static func atlasPressureSelfTest(device: MTLDevice) -> Bool {
@@ -1116,6 +1464,75 @@ enum RendererValidation {
             offset += 4
         }
         return false
+    }
+
+    private static func textureRegionContainsBrightGlyph(
+        _ texture: MTLTexture,
+        xStart: Int,
+        xEnd: Int
+    ) -> Bool {
+        let bytesPerRow = texture.width * 4
+        var bytes = [UInt8](repeating: 0, count: bytesPerRow * texture.height)
+        texture.getBytes(
+            &bytes,
+            bytesPerRow: bytesPerRow,
+            from: MTLRegionMake2D(0, 0, texture.width, texture.height),
+            mipmapLevel: 0
+        )
+        let clampedStart = max(0, xStart)
+        let clampedEnd = min(texture.width, xEnd)
+        guard clampedStart < clampedEnd else { return false }
+        for y in 0..<texture.height {
+            for x in clampedStart..<clampedEnd {
+                let offset = y * bytesPerRow + x * 4
+                let blue = bytes[offset]
+                let green = bytes[offset + 1]
+                let red = bytes[offset + 2]
+                if max(red, max(green, blue)) > 128 {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private static func textureRegionsMatch(
+        _ texture: MTLTexture,
+        firstX: Int,
+        secondX: Int,
+        width: Int,
+        height: Int
+    ) -> Bool {
+        guard width > 0, height > 0,
+              firstX >= 0, secondX >= 0,
+              firstX + width <= texture.width,
+              secondX + width <= texture.width,
+              height <= texture.height
+        else {
+            return false
+        }
+        let bytesPerRow = texture.width * 4
+        var bytes = [UInt8](repeating: 0, count: bytesPerRow * texture.height)
+        texture.getBytes(
+            &bytes,
+            bytesPerRow: bytesPerRow,
+            from: MTLRegionMake2D(0, 0, texture.width, texture.height),
+            mipmapLevel: 0
+        )
+        var maximumDifference = 0
+        for y in 0..<height {
+            for x in 0..<width {
+                let first = (y * bytesPerRow) + ((firstX + x) * 4)
+                let second = (y * bytesPerRow) + ((secondX + x) * 4)
+                for channel in 0..<4 {
+                    maximumDifference = max(
+                        maximumDifference,
+                        abs(Int(bytes[first + channel]) - Int(bytes[second + channel]))
+                    )
+                }
+            }
+        }
+        return maximumDifference <= 1
     }
 
     private static func pixelMatches(

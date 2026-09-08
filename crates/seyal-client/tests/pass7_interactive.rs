@@ -140,6 +140,74 @@ fn committed_text_is_one_controller_action_and_reaches_real_pty() {
 }
 
 #[test]
+fn composer_command_reaches_real_pty_without_quarantining_block_metadata() {
+    let runtime = RuntimeHarness::start(CommandSpec::new("/bin/zsh"));
+    let mut client = runtime.connect_controller();
+
+    // Drain the attach snapshot and the initial activity BlockState before
+    // admitting the first composer command. This mirrors the native surface
+    // becoming usable before the user presses Return.
+    pump_until(&mut client, |client| client.block_state().is_some());
+
+    client
+        .submit_composer_command("printf COMPOSER_PASS7")
+        .expect("composer command admission");
+    pump_until(&mut client, |client| {
+        prepared_text(client).contains("COMPOSER_PASS7")
+    });
+
+    assert!(client.last_composer_result().is_some());
+    assert!(client.block_state().is_some());
+    pump_until(&mut client, |client| {
+        !client.block_timeline().records.is_empty()
+    });
+    assert_eq!(client.block_timeline().records.len(), 1);
+    drop(client);
+    runtime.finish();
+}
+
+#[test]
+fn composer_command_does_not_race_initial_block_metadata() {
+    let runtime = RuntimeHarness::start(CommandSpec::new("/bin/zsh"));
+    let mut client = runtime.connect_controller();
+
+    client
+        .submit_composer_command("printf COMPOSER_RACE_PASS7")
+        .expect("composer command admission");
+    pump_until(&mut client, |client| {
+        prepared_text(client).contains("COMPOSER_RACE_PASS7")
+    });
+
+    assert!(client.last_composer_result().is_some());
+    drop(client);
+    runtime.finish();
+}
+
+#[test]
+fn composer_command_survives_resize_traffic() {
+    let runtime = RuntimeHarness::start(CommandSpec::new("/bin/zsh"));
+    let mut client = runtime.connect_controller();
+
+    client
+        .set_desired_geometry(GridGeometry {
+            rows: 28,
+            columns: 96,
+        })
+        .expect("resize admission");
+    client
+        .submit_composer_command("printf COMPOSER_RESIZE_PASS7")
+        .expect("composer command admission");
+    pump_until(&mut client, |client| {
+        prepared_text(client).contains("COMPOSER_RESIZE_PASS7")
+    });
+
+    assert!(client.last_composer_result().is_some());
+    assert!(client.block_state().is_some());
+    drop(client);
+    runtime.finish();
+}
+
+#[test]
 fn oversized_committed_text_is_rejected_whole_and_next_input_still_works() {
     let runtime = RuntimeHarness::start(CommandSpec::new("/bin/cat"));
     let mut client = runtime.connect_controller();

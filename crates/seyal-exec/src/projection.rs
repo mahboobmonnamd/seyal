@@ -1,4 +1,6 @@
-use seyal_terminal::{Color, TerminalState};
+use std::sync::Arc;
+
+use seyal_terminal::{CellRole, Color, TerminalState};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProjectionColor {
@@ -24,12 +26,61 @@ pub struct ProjectionAttributes {
     pub inverse: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectionCell {
+    pub role: CellRole,
+    pub width: u8,
+    /// Full grapheme UTF-8 for Lead; empty for Empty/Continuation.
+    pub text: Arc<[u8]>,
+    /// First scalar convenience for scalar-only encode paths.
     pub scalar: char,
     pub foreground: ProjectionColor,
     pub background: ProjectionColor,
     pub attributes: ProjectionAttributes,
+}
+
+impl ProjectionCell {
+    pub fn lead(
+        scalar: char,
+        foreground: ProjectionColor,
+        background: ProjectionColor,
+        attributes: ProjectionAttributes,
+    ) -> Self {
+        let mut buf = [0u8; 4];
+        let encoded = scalar.encode_utf8(&mut buf);
+        Self {
+            role: CellRole::Lead,
+            width: 1,
+            text: Arc::from(encoded.as_bytes().to_vec()),
+            scalar,
+            foreground,
+            background,
+            attributes,
+        }
+    }
+
+    pub fn lead_scalar(scalar: char, attributes: ProjectionAttributes) -> Self {
+        Self::lead(
+            scalar,
+            ProjectionColor::Default,
+            ProjectionColor::Default,
+            attributes,
+        )
+    }
+
+    pub fn is_scalar_lossless(&self) -> bool {
+        match self.role {
+            CellRole::Empty => self.text.is_empty() && self.width == 0,
+            CellRole::Continuation => false,
+            CellRole::Lead => {
+                self.width == 1
+                    && !self.text.is_empty()
+                    && std::str::from_utf8(&self.text)
+                        .ok()
+                        .is_some_and(|s| s.chars().count() == 1)
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,12 +122,13 @@ pub struct TerminalProjectionSnapshot {
     pub cells: Vec<ProjectionCell>,
 }
 
+impl TerminalProjectionSnapshot {
+    pub fn is_scalar_lossless(&self) -> bool {
+        self.cells.iter().all(ProjectionCell::is_scalar_lossless)
+    }
+}
+
 /// Damage-sized, projection-neutral steady-state update.
-///
-/// `cells` contains only the rows described by `damage`, in row-major order.
-/// A full damage record therefore contains the complete visible grid, while a
-/// one-row change copies exactly one canonical row. This type deliberately has
-/// no UDS/framing knowledge; `seyal-runtime` remains the display-wire owner.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TerminalProjectionUpdate {
     pub rows: u16,
@@ -88,6 +140,12 @@ pub struct TerminalProjectionUpdate {
     pub source_damage_generation: u64,
     pub damage: ProjectionDamage,
     pub cells: Vec<ProjectionCell>,
+}
+
+impl TerminalProjectionUpdate {
+    pub fn is_scalar_lossless(&self) -> bool {
+        self.cells.iter().all(ProjectionCell::is_scalar_lossless)
+    }
 }
 
 pub(crate) fn snapshot(
@@ -148,8 +206,22 @@ fn copy_rows(terminal: &TerminalState, first_row: u16, row_count: u16) -> Vec<Pr
     for row in first_row..first_row.saturating_add(row_count) {
         for col in 0..columns {
             let cell = terminal.cell(col, row).unwrap_or_default();
+            let text = terminal
+                .lead_utf8(col, row)
+                .map(|cow| Arc::<[u8]>::from(cow.into_owned()))
+                .unwrap_or_else(|| Arc::from([]));
+            let scalar = match cell.role {
+                CellRole::Lead => std::str::from_utf8(&text)
+                    .ok()
+                    .and_then(|s| s.chars().next())
+                    .unwrap_or(cell.canonical_scalar()),
+                CellRole::Empty | CellRole::Continuation => ' ',
+            };
             cells.push(ProjectionCell {
-                scalar: cell.character,
+                role: cell.role,
+                width: cell.width,
+                text,
+                scalar,
                 foreground: cell.style.fg.into(),
                 background: cell.style.bg.into(),
                 attributes: ProjectionAttributes {
@@ -204,5 +276,19 @@ mod tests {
         assert_eq!(update.cells.len(), 60);
         assert!(update.damage.full);
         assert_eq!((update.damage.first_row, update.damage.last_row), (0, 4));
+    }
+
+    #[test]
+    fn multi_scalar_lead_projects_store_utf8() {
+        let mut terminal = TerminalState::new(8, 2).unwrap();
+        terminal.feed("❤️".as_bytes()).unwrap();
+        let snapshot = snapshot(&terminal, 1);
+        let lead = &snapshot.cells[0];
+        assert_eq!(lead.role, CellRole::Lead);
+        assert_eq!(lead.text.as_ref(), "❤️".as_bytes());
+        if lead.width == 2 {
+            assert_eq!(snapshot.cells[1].role, CellRole::Continuation);
+            assert!(snapshot.cells[1].text.is_empty());
+        }
     }
 }

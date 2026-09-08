@@ -39,21 +39,43 @@ final class SeyalShellUITests: XCTestCase {
         }
     }
 
+    /// Resolve the exact app produced by this checkout instead of asking
+    /// LaunchServices for a bundle identifier. Multiple isolated Seyal
+    /// worktrees may be installed at once; bundle-id launch can otherwise
+    /// attach the production assertions to a stale app from another issue.
+    private func productionAppURL() -> URL {
+        var repoRoot = URL(fileURLWithPath: #filePath)
+        for _ in 0..<5 { repoRoot.deleteLastPathComponent() }
+        return repoRoot.appendingPathComponent(
+            "target/macos-ui-tests/Build/Products/Debug/Seyal.app"
+        )
+    }
+
     @MainActor
     private func launchProductionApp(requireUsableConnection: Bool = true) -> XCUIElement {
-        app = XCUIApplication()
+        app = XCUIApplication(url: productionAppURL())
         app.launchArguments = []
         app.launchEnvironment = [:]
         app.launch()
+        // XCUITest may leave a directly-launched bundle backgrounded when
+        // another Seyal worktree is already registered with LaunchServices.
+        // Production recovery is intentionally visibility-gated, so make the
+        // exact candidate app the active foreground window before asserting
+        // its Runtime state.
+        app.activate()
         let surface = app.descendants(matching: .any)["terminal-surface.pane-local"]
         XCTAssertTrue(surface.waitForExistence(timeout: 5))
         guard requireUsableConnection else { return surface }
         // Recovery accessibility publishes connection=usable only after
         // Runtime attach completes. Allow the full foreground episode budget
         // rather than the default 5s helper wait used elsewhere in this suite.
+        let reachedUsableConnection = wait(timeout: 15) {
+            self.recoveryFields(surface)?["connection"] == "usable"
+        }
         XCTAssertTrue(
-            wait(timeout: 15) { self.recoveryFields(surface)?["connection"] == "usable" },
-            "production Seyal.app did not reach connection=usable after launch"
+            reachedUsableConnection,
+            "production Seyal.app did not reach connection=usable after launch; "
+                + "last recovery state: \(surface.value ?? "<unavailable>")"
         )
         return surface
     }
@@ -275,6 +297,177 @@ final class SeyalShellUITests: XCTestCase {
             FileManager.default.fileExists(atPath: markerURL.path),
             "normal Seyal.app input did not reach the external Runtime-owned PTY shell"
         )
+    }
+
+    @MainActor
+    func testProductionComposerReturnCreatesAcceptedCommandAndClearsDraft() throws {
+        app.terminate()
+        terminateOrphanedRuntimes()
+
+        var repoRoot = URL(fileURLWithPath: #filePath)
+        for _ in 0..<5 { repoRoot.deleteLastPathComponent() }
+        let runtimeURL = repoRoot.appendingPathComponent("target/debug/seyal-runtime")
+        let appBinaryURL = repoRoot.appendingPathComponent(
+            "target/macos-ui-tests/Build/Products/Debug/Seyal.app/Contents/MacOS/Seyal"
+        )
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: runtimeURL.path))
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: appBinaryURL.path))
+
+        let markerURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "seyal-composer-return-\(UUID().uuidString)"
+        )
+        try? FileManager.default.removeItem(at: markerURL)
+        defer { try? FileManager.default.removeItem(at: markerURL) }
+
+        let runtime = Process()
+        runtime.executableURL = runtimeURL
+        runtime.arguments = ["/bin/zsh"]
+        runtime.standardOutput = Pipe()
+        runtime.standardError = Pipe()
+        try runtime.run()
+        defer {
+            if runtime.isRunning { runtime.terminate() }
+            runtime.waitUntilExit()
+        }
+
+        try waitForExternalRuntimeAttachable(appBinaryURL: appBinaryURL, runtime: runtime)
+        let surface = launchProductionApp()
+        let composer = app.textViews["composer.pane-local"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        composer.click()
+        let command = "printf M002_COMPOSER_RETURN; printf ok > \(markerURL.path)"
+        composer.typeText(command)
+        composer.typeKey(.return, modifierFlags: [])
+
+        XCTAssertTrue(
+            wait(timeout: 5) { FileManager.default.fileExists(atPath: markerURL.path) },
+            "Return submission did not reach the Runtime-owned PTY shell"
+        )
+        XCTAssertEqual(try String(contentsOf: markerURL, encoding: .utf8), "ok")
+        XCTAssertTrue(
+            wait(timeout: 5) { self.recoveryFields(surface)?["connection"] == "usable" },
+            "terminal display connection was lost after composer Return"
+        )
+        let blocks = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier CONTAINS '.block.'")
+        )
+        XCTAssertTrue(
+            wait(timeout: 5) { blocks.count > 0 },
+            "accepted composer command did not create a visible Block"
+        )
+        if blocks.count > 0 {
+            let block = blocks.element(boundBy: blocks.count - 1)
+            // The production pane minimum is 520pt; the visible surface loses
+            // the transcript scroller allowance, so 480pt is a stable lower
+            // bound that still catches a startup narrow-strip collapse.
+            XCTAssertGreaterThan(surface.frame.width, 480)
+            XCTAssertGreaterThan(block.frame.width, 0)
+            // The transcript Block stack has the specified 8pt outer inset on
+            // each side of the pane-owned terminal surface.
+            XCTAssertEqual(block.frame.width, surface.frame.width - 16, accuracy: 2)
+            XCTAssertLessThanOrEqual(block.frame.width, surface.frame.width + 1)
+            XCTAssertGreaterThan(block.frame.height, 0)
+            XCTAssertTrue(block.frame.intersects(surface.frame))
+        }
+        XCTAssertTrue(
+            wait(timeout: 5) { (composer.value as? String) == "" },
+            "accepted composer draft was not cleared after the correlated Runtime result"
+        )
+    }
+
+    @MainActor
+    func testProductionUnicodeCommandRetainsHeadedRenderedEvidence() throws {
+        app.terminate()
+        terminateOrphanedRuntimes()
+
+        var repoRoot = URL(fileURLWithPath: #filePath)
+        for _ in 0..<5 { repoRoot.deleteLastPathComponent() }
+        let runtimeURL = repoRoot.appendingPathComponent("target/debug/seyal-runtime")
+        let appBinaryURL = repoRoot.appendingPathComponent(
+            "target/macos-ui-tests/Build/Products/Debug/Seyal.app/Contents/MacOS/Seyal"
+        )
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: runtimeURL.path))
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: appBinaryURL.path))
+
+        let markerURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "seyal-m002-unicode-headed-\(UUID().uuidString)"
+        )
+        try? FileManager.default.removeItem(at: markerURL)
+        defer { try? FileManager.default.removeItem(at: markerURL) }
+
+        let runtime = Process()
+        runtime.executableURL = runtimeURL
+        runtime.arguments = ["/bin/zsh"]
+        runtime.standardOutput = Pipe()
+        runtime.standardError = Pipe()
+        try runtime.run()
+        defer {
+            if runtime.isRunning { runtime.terminate() }
+            runtime.waitUntilExit()
+        }
+
+        try waitForExternalRuntimeAttachable(appBinaryURL: appBinaryURL, runtime: runtime)
+        let surface = launchProductionApp()
+        let composer = app.textViews["composer.pane-local"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        composer.click()
+        let baselineSurfacePNG = surface.screenshot().pngRepresentation
+
+        // Keep the typed command ASCII so XCTest's keyboard path is stable;
+        // printf expands locale-independent UTF-8 octal bytes at the PTY
+        // boundary. The payload is captured before being echoed with cat so
+        // the terminal and exact fixture assertion use the same bytes without
+        // relying on XCTest to type a shell pipeline character.
+        let expectedUnicode = "é 界 👩‍💻 🇮🇳 क्ष مرحبا\n"
+        let command =
+            "LC_ALL=C printf '%b' '\\0145\\0314\\0201 \\0347\\0225\\0214 \\0360\\0237\\0221\\0251\\0342\\0200\\0215\\0360\\0237\\0222\\0273 \\0360\\0237\\0207\\0256\\0360\\0237\\0207\\0263 \\0340\\0244\\0225\\0340\\0245\\0215\\0340\\0244\\0267 \\0331\\0205\\0330\\0261\\0330\\0255\\0330\\0250\\0330\\0247\\0012' > '\(markerURL.path)' && LC_ALL=C cat '\(markerURL.path)'"
+        composer.typeText(command)
+        composer.typeKey(.return, modifierFlags: [])
+
+        XCTAssertTrue(
+            wait(timeout: 5) { FileManager.default.fileExists(atPath: markerURL.path) },
+            "Unicode workload did not reach the Runtime-owned PTY shell"
+        )
+        XCTAssertEqual(try Data(contentsOf: markerURL), Data(expectedUnicode.utf8))
+
+        let blocks = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier CONTAINS '.block.'")
+        )
+        XCTAssertTrue(
+            wait(timeout: 5) { blocks.count > 0 },
+            "Unicode command did not create a visible production Block"
+        )
+        XCTAssertGreaterThan(surface.frame.width, 480)
+        if blocks.count > 0 {
+            let block = blocks.element(boundBy: blocks.count - 1)
+            XCTAssertTrue(
+                wait(timeout: 5) {
+                    block.frame.width > 0
+                        && block.frame.height > 0
+                        && block.frame.intersects(surface.frame)
+                        && abs(block.frame.width - (surface.frame.width - 16)) <= 2
+                },
+                "Unicode Block did not receive a visible frame"
+            )
+            XCTAssertEqual(block.frame.width, surface.frame.width - 16, accuracy: 2)
+        }
+
+        var renderedSurfacePNG = baselineSurfacePNG
+        XCTAssertTrue(
+            wait(timeout: 5) {
+                renderedSurfacePNG = surface.screenshot().pngRepresentation
+                return renderedSurfacePNG != baselineSurfacePNG
+            },
+            "terminal surface did not present a changed frame after Unicode output"
+        )
+        let attachment = XCTAttachment(
+            data: renderedSurfacePNG,
+            uniformTypeIdentifier: "public.png"
+        )
+        attachment.name = "m002-817-unicode-headed-render"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertGreaterThan(renderedSurfacePNG.count, 0)
     }
 
     @MainActor
@@ -763,6 +956,24 @@ final class SeyalShellUITests: XCTestCase {
         XCTAssertTrue(surface.exists)
         XCTAssertTrue(surface.isHittable)
         surface.click()
+        XCTAssertTrue(surface.isHittable)
+    }
+
+    @MainActor
+
+    func testProductionGraphemeDisplaySurfaceRemainsReachable() {
+        app.terminate()
+        let surface = launchProductionApp(requireUsableConnection: false)
+
+        // The grapheme projection is rendered by the existing pane-owned
+        // Metal surface. This test checks only its established XCUI contract;
+        // Unicode shaping details remain covered by native component tests.
+        XCTAssertEqual(surface.identifier, "terminal-surface.pane-local")
+        XCTAssertEqual(surface.label, "Seyal Terminal")
+        XCTAssertTrue(surface.isHittable)
+        XCTAssertGreaterThan(surface.frame.width, 0)
+        XCTAssertGreaterThan(surface.frame.height, 0)
+        surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
         XCTAssertTrue(surface.isHittable)
     }
 

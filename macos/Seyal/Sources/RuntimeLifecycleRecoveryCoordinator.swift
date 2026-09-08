@@ -82,7 +82,24 @@ func openRuntimeRecoveryHandle(
     if result.failure_class == 3, result.retryable != 0 { return .controllerBusy }
     return result.retryable != 0 ? .retryable : .blocked
   }
-  return .opened(handle)
+  // `LAST_RECOVERY_RESULT` is executor-local in the Rust bridge. Capture the
+  // accepted attachment identities on this lifecycle queue and carry them to
+  // the MainActor adopter with the handle; reading them again there returns an
+  // empty thread-local result and falsely looks like an identity mismatch.
+  let result = seyal_bridge_last_recovery_result()
+  return .opened(RuntimeRecoveryOpenedHandle(
+    handle: handle,
+    stage: result.stage,
+    failureClass: result.failure_class,
+    retryable: result.retryable != 0,
+    connectionOrigin: result.connection_origin,
+    runtimeIDLow: result.runtime_id_low,
+    runtimeIDHigh: result.runtime_id_high,
+    executionIDLow: result.execution_id_low,
+    executionIDHigh: result.execution_id_high,
+    attachmentIDLow: result.attachment_id_low,
+    attachmentIDHigh: result.attachment_id_high
+  ))
 }
 
 private func runtimeRecoveryExecutionWords(_ value: String) -> (low: UInt64, high: UInt64)? {
@@ -96,9 +113,39 @@ private func runtimeRecoveryExecutionWords(_ value: String) -> (low: UInt64, hig
   return (low, high)
 }
 
+struct RuntimeRecoveryOpenedHandle: Equatable, Sendable {
+  let handle: UInt64
+  let stage: UInt8
+  let failureClass: UInt8
+  let retryable: Bool
+  let connectionOrigin: UInt8
+  let runtimeIDLow: UInt64
+  let runtimeIDHigh: UInt64
+  let executionIDLow: UInt64
+  let executionIDHigh: UInt64
+  let attachmentIDLow: UInt64
+  let attachmentIDHigh: UInt64
+
+  static func testOnly(_ handle: UInt64) -> RuntimeRecoveryOpenedHandle {
+    RuntimeRecoveryOpenedHandle(
+      handle: handle,
+      stage: 0,
+      failureClass: 0,
+      retryable: false,
+      connectionOrigin: 0,
+      runtimeIDLow: 0,
+      runtimeIDHigh: 0,
+      executionIDLow: 0,
+      executionIDHigh: 0,
+      attachmentIDLow: 0,
+      attachmentIDHigh: 0
+    )
+  }
+}
+
 enum RuntimeRecoveryAttemptOutcome: Equatable, Sendable {
   case connected
-  case opened(UInt64)
+  case opened(RuntimeRecoveryOpenedHandle)
   case endpointMissing
   case retryable
   case controllerBusy
@@ -109,8 +156,8 @@ private func disposeRuntimeRecoveryOutcome(
   _ outcome: RuntimeRecoveryAttemptOutcome,
   using disposer: @Sendable (UInt64) -> Void
 ) {
-  if case let .opened(handle) = outcome {
-    disposer(handle)
+  if case let .opened(opened) = outcome {
+    disposer(opened.handle)
   }
 }
 
@@ -193,7 +240,7 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
   /// `seyalRunAsMainActorFromMainQueue` when returning from the lifecycle queue.
   typealias Launcher = @MainActor () -> Void
   typealias Attempt = () -> RuntimeRecoveryAttemptOutcome
-  typealias HandleAdopter = @MainActor (UInt64) -> Bool
+  typealias HandleAdopter = @MainActor (RuntimeRecoveryOpenedHandle) -> Bool
   typealias HandleDisposer = @Sendable (UInt64) -> Void
 
   /// Production attempts are always dispatched to the lifecycle queue. The
@@ -286,7 +333,7 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
       attempt: {
         cancelledStarted.signal()
         _ = cancelledRelease.wait(timeout: .now() + 1)
-        return .opened(101)
+        return .opened(.testOnly(101))
       },
       handleAdopter: { _ in true },
       handleDisposer: { cancelledRecorder.record($0) }
@@ -310,7 +357,7 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
       attempt: {
         deallocatedStarted.signal()
         _ = deallocatedRelease.wait(timeout: .now() + 1)
-        return .opened(102)
+        return .opened(.testOnly(102))
       },
       handleAdopter: { _ in true },
       handleDisposer: { deallocatedRecorder.record($0) }
@@ -328,7 +375,7 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
       clock: { 0 },
       scheduler: { _, _ in {} },
       launcher: {},
-      attempt: { .opened(103) },
+      attempt: { .opened(.testOnly(103)) },
       handleAdopter: { _ in false },
       handleDisposer: { rejectedRecorder.record($0) },
       attemptExecution: .inline
@@ -469,7 +516,7 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
     switch outcome {
     case .connected:
       finishConnected(generation: generation)
-    case let .opened(handle):
+    case let .opened(opened):
       // Adoption publishes the first Candidate-D frame on @MainActor bridge
       // state. Even when this method is already inside a main-queue hop, the
       // adopter closure itself is MainActor-isolated and must be entered
@@ -477,10 +524,10 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
       // Trace/BPTs under Xcode 16.4.
       var adopted = false
       seyalRunAsMainActorFromMainQueue {
-        adopted = self.handleAdopter(handle)
+        adopted = self.handleAdopter(opened)
       }
       guard adopted else {
-        handleDisposer(handle)
+        handleDisposer(opened.handle)
         state.transition(to: .blocked)
         self.deadline = nil
         return

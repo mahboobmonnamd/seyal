@@ -112,34 +112,24 @@ mod tests {
                 last_row: 1,
             },
             cells: vec![
-                ProjectionCell {
-                    scalar: 'h',
-                    foreground: ProjectionColor::Default,
-                    background: ProjectionColor::Default,
-                    attributes: ProjectionAttributes::default(),
-                },
-                ProjectionCell {
-                    scalar: 'i',
-                    foreground: ProjectionColor::Indexed(4),
-                    background: ProjectionColor::Default,
-                    attributes: ProjectionAttributes {
+                ProjectionCell::lead(
+                    'h',
+                    ProjectionColor::Default,
+                    ProjectionColor::Default,
+                    ProjectionAttributes::default(),
+                ),
+                ProjectionCell::lead(
+                    'i',
+                    ProjectionColor::Indexed(4),
+                    ProjectionColor::Default,
+                    ProjectionAttributes {
                         bold: true,
                         underline: false,
                         inverse: false,
                     },
-                },
-                ProjectionCell {
-                    scalar: ' ',
-                    foreground: ProjectionColor::Default,
-                    background: ProjectionColor::Default,
-                    attributes: ProjectionAttributes::default(),
-                },
-                ProjectionCell {
-                    scalar: ' ',
-                    foreground: ProjectionColor::Default,
-                    background: ProjectionColor::Default,
-                    attributes: ProjectionAttributes::default(),
-                },
+                ),
+                ProjectionCell::lead_scalar(' ', ProjectionAttributes::default()),
+                ProjectionCell::lead_scalar(' ', ProjectionAttributes::default()),
             ],
         };
         let owned = from_execution(snapshot);

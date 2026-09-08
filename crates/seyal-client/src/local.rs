@@ -282,8 +282,27 @@ impl LocalDisplayClient {
                     MessageType::from_u16(header.message_type).ok_or(ClientError::Protocol)?;
 
                 match message_type {
-                    MessageType::DisplaySnapshot | MessageType::DisplayDelta => {
-                        let chunk = decode_chunk(frame).map_err(|_| ClientError::Display)?;
+                    MessageType::DisplaySnapshot
+                    | MessageType::DisplayDelta
+                    | MessageType::DisplaySnapshotV2
+                    | MessageType::DisplayDeltaV2 => {
+                        let chunk = match decode_chunk(frame) {
+                            Ok(chunk) => chunk,
+                            Err(_) => {
+                                // A malformed display frame is recoverable at
+                                // the disposable projection boundary. Consume
+                                // this complete frame, discard any partial
+                                // batch, and request one bounded authoritative
+                                // snapshot instead of surfacing ClientError::Display
+                                // (-8), which would stop the native bridge before
+                                // accept_display_chunk can resynchronize.
+                                self.pending_batch.clear();
+                                self.read_offset = frame_end;
+                                parsed_frames += 1;
+                                self.request_resync()?;
+                                continue;
+                            }
+                        };
                         if self.accept_display_chunk(chunk, &mut damage, &mut full_invalidation)? {
                             committed_any = true;
                         }
@@ -472,6 +491,166 @@ pub(crate) fn validate_composer_result(
 mod tests {
     use super::*;
     use seyal_runtime::pass8::CAP_BLOCK_METADATA;
+    use std::io::{Read, Write};
+
+    fn test_client(stream: UnixStream) -> LocalDisplayClient {
+        LocalDisplayClient {
+            stream,
+            buffered: Vec::new(),
+            read_offset: 0,
+            pending_batch: display_apply::PendingDisplayBatch::default(),
+            outbound: VecDeque::new(),
+            outbound_wire_bytes: 0,
+            runtime_id: 1,
+            execution_id: ExecutionId::from_bytes([1; 16]),
+            attachment_id: AttachmentId::from_bytes([2; 16]),
+            role: Role::Controller,
+            block_metadata_negotiated: false,
+            block_cache: BlockCache::default(),
+            cache: seyal_runtime::display::empty_cache(),
+            prepared: PreparedSurface::default(),
+            last_preparation: PreparationResult {
+                generation: 0,
+                rebuilt_rows: RowDamage::none(),
+                rebuilt_row_count: 0,
+                rebuilt_cell_count: 0,
+                full_rebuild: false,
+            },
+            needs_initial_prepare: false,
+            next_resize_request_id: 1,
+            desired_geometry: None,
+            committed_geometry: GridGeometry {
+                rows: 1,
+                columns: 1,
+            },
+            unresolved_resizes: VecDeque::new(),
+            applied_awaiting_projection: None,
+            retry_suppression: None,
+            resync_needed: false,
+            input_failure: None,
+            resize_failure: None,
+            block_timeline: BlockTimeline {
+                revision: 0,
+                records: Vec::new(),
+            },
+            command_blocks_supported: false,
+            last_composer_result: None,
+            pending_composer_requests: std::collections::HashSet::new(),
+            next_composer_request_id: 1,
+            history_ranges: HashMap::new(),
+            history_requests: HashMap::new(),
+            next_history_request_id: 1,
+        }
+    }
+
+    fn v2_snapshot_chunk(
+        generation: u64,
+        columns: u16,
+        first_col: u16,
+        chunk_index: u16,
+        chunk_count: u16,
+        scalar: char,
+    ) -> Vec<u8> {
+        let mut payload = Vec::with_capacity(64);
+        payload.extend_from_slice(&generation.to_le_bytes());
+        payload.extend_from_slice(&0u64.to_le_bytes());
+        payload.extend_from_slice(&1u16.to_le_bytes());
+        payload.extend_from_slice(&columns.to_le_bytes());
+        payload.extend_from_slice(&0u16.to_le_bytes());
+        payload.extend_from_slice(&0u16.to_le_bytes());
+        payload.extend_from_slice(&[1, 0, 0, 0]);
+        payload.extend_from_slice(&0u16.to_le_bytes());
+        payload.extend_from_slice(&1u16.to_le_bytes());
+        payload.extend_from_slice(&chunk_index.to_le_bytes());
+        payload.extend_from_slice(&chunk_count.to_le_bytes());
+        payload.extend_from_slice(&1u32.to_le_bytes());
+        payload.extend_from_slice(&0u32.to_le_bytes());
+        payload.extend_from_slice(&2u16.to_le_bytes());
+        payload.extend_from_slice(&first_col.to_le_bytes());
+        payload.extend_from_slice(&(scalar as u32).to_le_bytes());
+        payload.extend_from_slice(&0u32.to_le_bytes());
+        payload.extend_from_slice(&0u32.to_le_bytes());
+        payload.extend_from_slice(&(40u32).to_le_bytes());
+        encode_frame(MessageType::DisplaySnapshotV2, &payload)
+    }
+
+    fn v2_snapshot(generation: u64, scalar: char) -> Vec<u8> {
+        v2_snapshot_chunk(generation, 1, 0, 0, 1, scalar)
+    }
+
+    #[test]
+    fn malformed_v2_display_requests_resync_before_valid_snapshot_converges() {
+        let (client_stream, mut server_stream) = UnixStream::pair().expect("stream pair");
+        client_stream
+            .set_nonblocking(true)
+            .expect("nonblocking client");
+        let malformed = {
+            let mut frame = v2_snapshot(1, 'A');
+            let meta_offset = HEADER_LEN + 48 + 12;
+            frame[meta_offset..meta_offset + 4].copy_from_slice(&(104u32).to_le_bytes());
+            frame
+        };
+        server_stream
+            .write_all(&malformed)
+            .expect("malformed frame");
+        server_stream
+            .write_all(&v2_snapshot(2, 'B'))
+            .expect("valid snapshot");
+
+        let mut client = test_client(client_stream);
+        let result = client.poll_prepare().expect("resync should recover");
+        assert!(result.is_some());
+        assert_eq!(client.cache.generation, 2);
+        assert_eq!(client.cache.cells[0].scalar, 'B');
+
+        let mut outbound = [0u8; 128];
+        let count = server_stream.read(&mut outbound).expect("resync frame");
+        let header = FrameHeader::decode(&outbound[..count]).expect("resync header");
+        assert_eq!(header.message_type, MessageType::Resync as u16);
+        assert!(!client.resync_needed);
+    }
+
+    #[test]
+    fn gapped_v2_display_keeps_committed_cache_and_resyncs_before_converging() {
+        let (client_stream, mut server_stream) = UnixStream::pair().expect("stream pair");
+        client_stream
+            .set_nonblocking(true)
+            .expect("nonblocking client");
+        server_stream
+            .write_all(&v2_snapshot(1, 'A'))
+            .expect("initial snapshot");
+
+        let mut client = test_client(client_stream);
+        client.poll_prepare().expect("initial commit");
+        assert_eq!(client.cache.generation, 1);
+        assert_eq!(client.cache.cells[0].scalar, 'A');
+
+        server_stream
+            .write_all(&v2_snapshot_chunk(2, 2, 1, 1, 2, 'X'))
+            .expect("gapped snapshot chunk");
+        let result = client
+            .poll_prepare()
+            .expect("semantic display corruption should request resync");
+        assert!(result.is_none());
+        assert_eq!(client.cache.generation, 1);
+        assert_eq!(client.cache.cells[0].scalar, 'A');
+
+        let mut outbound = [0u8; 128];
+        let count = server_stream.read(&mut outbound).expect("resync frame");
+        let header = FrameHeader::decode(&outbound[..count]).expect("resync header");
+        assert_eq!(header.message_type, MessageType::Resync as u16);
+        assert_eq!(count, HEADER_LEN + header.payload_len as usize);
+
+        server_stream
+            .write_all(&v2_snapshot(2, 'B'))
+            .expect("authoritative snapshot");
+        let result = client
+            .poll_prepare()
+            .expect("resync snapshot should commit");
+        assert!(result.is_some());
+        assert_eq!(client.cache.generation, 2);
+        assert_eq!(client.cache.cells[0].scalar, 'B');
+    }
 
     #[test]
     fn raw_metadata_fallback_keeps_pass71_but_drops_only_pass8_capability() {

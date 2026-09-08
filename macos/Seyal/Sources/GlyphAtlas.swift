@@ -21,6 +21,10 @@ struct GlyphAtlasStats: Equatable {
     var uploads: UInt64 = 0
     var uploadedBytes: UInt64 = 0
     var resets: UInt64 = 0
+    var graphemeHits: UInt64 = 0
+    var graphemeMisses: UInt64 = 0
+    var graphemeShapingNanoseconds: UInt64 = 0
+    var graphemeFallbackRuns: UInt64 = 0
 }
 
 enum GlyphAtlasError: Error {
@@ -35,6 +39,14 @@ private struct GlyphKey: Hashable {
     let glyph: UInt16
     let pixelSizeBits: UInt64
     let bold: Bool
+}
+
+private struct GraphemeKey: Hashable {
+    let utf8: Data
+    let fontName: String
+    let pixelSizeBits: UInt64
+    let bold: Bool
+    let fallbackGeneration: UInt64
 }
 
 private struct ResolvedGlyph {
@@ -54,6 +66,9 @@ final class TerminalFontResolver {
     private let regular: CTFont
     private let bold: CTFont
     let resolvedFamily: String
+
+    var regularFontForShaping: CTFont { regular }
+    var boldFontForShaping: CTFont { bold }
 
     init(spec: SeyalResolvedFontSpec = .canonicalTerminal) {
         self.pointSize = spec.pointSize
@@ -268,6 +283,9 @@ final class GlyphAtlas {
     private let fontResolver: TerminalFontResolver
     private var textureStorage: MTLTexture?
     private var entries: [GlyphKey: GlyphAtlasEntry] = [:]
+    private var graphemeEntries: [GraphemeKey: GlyphAtlasEntry] = [:]
+    private var fallbackGeneration: UInt64 = 0
+    private let maxGraphemeEntries = 2048
     private var cursors = Array(repeating: AtlasCursor(), count: sliceCount)
     private(set) var stats = GlyphAtlasStats()
 
@@ -360,11 +378,116 @@ final class GlyphAtlas {
         return entry
     }
 
+    /// Shape a multi-scalar grapheme into one atlas tile for the lead cell.
+    /// Typographic advances never change terminal width/cursor authority.
+    func lookupGrapheme(
+        text: String,
+        bold: Bool,
+        backingScale: CGFloat,
+        cellMetrics: TerminalFontMetrics
+    ) throws -> GlyphAtlasEntry {
+        let scale = max(backingScale, 1)
+        let base = bold ? fontResolver.boldFontForShaping : fontResolver.regularFontForShaping
+        let pixelFont = CTFontCreateCopyWithAttributes(base, CTFontGetSize(base) * scale, nil, nil)
+        let fontName = CTFontCopyPostScriptName(pixelFont) as String
+        let utf8 = Data(text.utf8)
+        let key = GraphemeKey(
+            utf8: utf8,
+            fontName: fontName,
+            pixelSizeBits: Double(CTFontGetSize(pixelFont)).bitPattern,
+            bold: bold,
+            fallbackGeneration: fallbackGeneration
+        )
+        if let entry = graphemeEntries[key] {
+            stats.hits &+= 1
+            stats.graphemeHits &+= 1
+            return entry
+        }
+        if graphemeEntries.count >= maxGraphemeEntries {
+            graphemeEntries.removeAll(keepingCapacity: true)
+            fallbackGeneration &+= 1
+        }
+
+        stats.misses &+= 1
+        stats.graphemeMisses &+= 1
+        let shapingStarted = DispatchTime.now().uptimeNanoseconds
+        let attributed = NSAttributedString(
+            string: text,
+            attributes: [NSAttributedString.Key(kCTFontAttributeName as String): pixelFont]
+        )
+        let line = CTLineCreateWithAttributedString(attributed as CFAttributedString)
+        let bounds = CTLineGetImageBounds(line, nil)
+        for run in CTLineGetGlyphRuns(line) as! [CTRun] {
+            let attributes = CTRunGetAttributes(run) as NSDictionary
+            guard let value = attributes[kCTFontAttributeName] else { continue }
+            let runFont = value as! CTFont
+            if CTFontCopyPostScriptName(runFont) as String != fontName {
+                stats.graphemeFallbackRuns &+= 1
+            }
+        }
+        stats.graphemeShapingNanoseconds &+= DispatchTime.now().uptimeNanoseconds
+            - shapingStarted
+        let width = max(cellMetrics.cellWidth, Int(ceil(bounds.width)) + 2)
+        let height = max(cellMetrics.cellHeight, Int(ceil(bounds.height)) + 2)
+        var bytes = [UInt8](repeating: 0, count: width * height)
+        let colorSpace = CGColorSpaceCreateDeviceGray()
+        guard let context = CGContext(
+            data: &bytes,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.none.rawValue
+        ) else {
+            throw GlyphAtlasError.rasterizationFailed
+        }
+        context.translateBy(x: 0, y: CGFloat(height))
+        context.scaleBy(x: 1, y: -1)
+        context.setFillColor(gray: 1, alpha: 1)
+        let ascent = CTFontGetAscent(pixelFont)
+        context.textPosition = CGPoint(x: 1, y: CGFloat(height) - ascent - 1)
+        CTLineDraw(line, context)
+
+        guard let allocation = allocate(width: width, height: height) else {
+            throw GlyphAtlasError.capacityExceeded
+        }
+        let texture = try ensureTexture()
+        bytes.withUnsafeBytes { rawBuffer in
+            guard let baseAddress = rawBuffer.baseAddress else { return }
+            texture.replace(
+                region: MTLRegionMake2D(allocation.x, allocation.y, width, height),
+                mipmapLevel: 0,
+                slice: allocation.slice,
+                withBytes: baseAddress,
+                bytesPerRow: width,
+                bytesPerImage: width * height
+            )
+        }
+        let atlasWidth = Float(Self.width)
+        let atlasHeight = Float(Self.height)
+        let entry = GlyphAtlasEntry(
+            uvRect: SIMD4<Float>(
+                Float(allocation.x) / atlasWidth,
+                Float(allocation.y) / atlasHeight,
+                Float(allocation.x + width) / atlasWidth,
+                Float(allocation.y + height) / atlasHeight
+            ),
+            slice: UInt32(allocation.slice)
+        )
+        graphemeEntries[key] = entry
+        stats.uploads &+= 1
+        stats.uploadedBytes &+= UInt64(width * height)
+        return entry
+    }
+
     /// Reclaim the finite atlas. Callers must prove no submitted command buffer
     /// can still reference the old texture before invoking this method.
     func resetWhenGPUIdle() {
         textureStorage = nil
         entries.removeAll(keepingCapacity: true)
+        graphemeEntries.removeAll(keepingCapacity: true)
+        fallbackGeneration &+= 1
         cursors = Array(repeating: AtlasCursor(), count: Self.sliceCount)
         stats.resets &+= 1
     }

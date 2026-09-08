@@ -14,20 +14,20 @@ fn input() -> Vec<u8> {
 
 fn valid_frame() -> Vec<u8> {
     let cells = vec![
-        ProjectionCell {
-            scalar: 'A',
-            foreground: ProjectionColor::Rgb {
+        ProjectionCell::lead(
+            'A',
+            ProjectionColor::Rgb {
                 r: 0x12,
                 g: 0x34,
                 b: 0x56,
             },
-            background: ProjectionColor::Indexed(7),
-            attributes: ProjectionAttributes {
+            ProjectionColor::Indexed(7),
+            ProjectionAttributes {
                 bold: true,
                 underline: true,
                 inverse: false,
             },
-        };
+        );
         8
     ];
     let snapshot = TerminalProjectionSnapshot {
@@ -57,15 +57,15 @@ fn display_state_machine_seed() {
     let total = rows as usize * columns as usize;
     let cell_seed = |index: usize| bytes.get(index % bytes.len().max(1)).copied().unwrap_or(0);
     let cells = (0..total)
-        .map(|index| ProjectionCell {
-            scalar: char::from(b' ' + cell_seed(index) % 95),
-            foreground: ProjectionColor::Default,
-            background: ProjectionColor::Default,
-            attributes: ProjectionAttributes {
-                bold: false,
-                underline: false,
-                inverse: false,
-            },
+        .map(|index| {
+            ProjectionCell::lead_scalar(
+                char::from(b' ' + cell_seed(index) % 95),
+                ProjectionAttributes {
+                    bold: false,
+                    underline: false,
+                    inverse: false,
+                },
+            )
         })
         .collect();
     let snapshot = TerminalProjectionSnapshot {
@@ -135,6 +135,9 @@ fn display_binary_decode_seed() {
                     | DisplayError::InvalidColor
                     | DisplayError::InvalidAttributes
                     | DisplayError::InvalidUnicode
+                    | DisplayError::InvalidRole
+                    | DisplayError::InvalidWidth
+                    | DisplayError::InvalidSidecar
                     | DisplayError::WrongMessageType
                     | DisplayError::GenerationMismatch
                     | DisplayError::DimensionMismatch
@@ -144,4 +147,40 @@ fn display_binary_decode_seed() {
             ));
         }
     }
+}
+
+#[test]
+#[ignore = "executed by fuzz/targets/display-v2-decode with retained seeds"]
+fn display_v2_decode_seed() {
+    use seyal_runtime::display::{decode_chunk, encode_snapshot_v2};
+
+    let bytes = input();
+    // Hostile/malformed inputs must fail closed without panicking.
+    let _ = decode_chunk(&bytes);
+
+    // Valid v2 frame must decode.
+    let cells = vec![
+        ProjectionCell::lead(
+            'A',
+            ProjectionColor::Default,
+            ProjectionColor::Default,
+            ProjectionAttributes::default(),
+        );
+        4
+    ];
+    let snapshot = TerminalProjectionSnapshot {
+        rows: 1,
+        columns: 4,
+        cursor_row: 0,
+        cursor_col: 0,
+        cursor_visible: true,
+        alternate_screen: false,
+        source_damage_generation: 9,
+        damage: ProjectionDamage::full(1),
+        cells,
+    };
+    let batch = encode_snapshot_v2(&snapshot).expect("v2 seed frame");
+    let chunk = decode_chunk(&batch.frames[0]).expect("valid v2 decode");
+    assert_eq!(chunk.schema, display::DISPLAY_SCHEMA_V2);
+    assert_eq!(chunk.cells.len(), 4);
 }

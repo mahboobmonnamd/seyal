@@ -200,6 +200,31 @@ impl TerminalState {
         self.core.current().cell(col, row)
     }
 
+    /// UTF-8 payload for a physical cell used by Candidate-D grapheme projection.
+    ///
+    /// Empty/Continuation return an empty slice. Lead returns store UTF-8 when
+    /// present, otherwise the inline scalar encoding (overflow yields U+FFFD).
+    pub fn lead_utf8(&self, col: u16, row: u16) -> Option<std::borrow::Cow<'_, [u8]>> {
+        let cell = self.cell(col, row)?;
+        match cell.role {
+            crate::CellRole::Empty | crate::CellRole::Continuation => {
+                Some(std::borrow::Cow::Borrowed(b""))
+            }
+            crate::CellRole::Lead => {
+                if cell.overflow {
+                    return Some(std::borrow::Cow::Borrowed("\u{FFFD}".as_bytes()));
+                }
+                if let Some(bytes) = self.core.grapheme_store.get(cell.store_id) {
+                    Some(std::borrow::Cow::Borrowed(bytes))
+                } else {
+                    let mut buf = [0u8; 4];
+                    let encoded = cell.character.encode_utf8(&mut buf);
+                    Some(std::borrow::Cow::Owned(encoded.as_bytes().to_vec()))
+                }
+            }
+        }
+    }
+
     pub fn line_id(&self, row: u16) -> Option<LineId> {
         self.core.current().line_id(row)
     }

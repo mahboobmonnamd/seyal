@@ -66,6 +66,7 @@ private let preparedUnderlineFlag: UInt16 = 1 << 1
 private let instanceGlyphFlag: UInt32 = 1 << 0
 private let instanceUnderlineFlag: UInt32 = 1 << 1
 private let instanceCursorFlag: UInt32 = 1 << 2
+private let instanceWideGlyphFlag: UInt32 = 1 << 3
 
 private struct TerminalInstance {
     var origin: SIMD2<Float>
@@ -131,6 +132,8 @@ struct NativePreparedFrame {
     /// Owned cell copy. Bridge frames are copied at construction so Rust
     /// `PreparedCell` storage never escapes into long-lived Swift state.
     let cells: [SeyalPreparedCell]
+    /// Length-prefixed UTF-8 payloads for multi-scalar lead cells (SPEC-011 §12).
+    let graphemeUtf8: Data
     let generation: UInt64
     let rows: Int
     let columns: Int
@@ -156,6 +159,14 @@ struct NativePreparedFrame {
         }
         // Synchronous consume: copy before any later poll can invalidate Rust.
         cells = Array(UnsafeBufferPointer(start: pointer, count: count))
+        if bridgeFrame.grapheme_utf8_len > 0, let graphemePtr = bridgeFrame.grapheme_utf8 {
+            graphemeUtf8 = Data(
+                bytes: graphemePtr,
+                count: Int(bridgeFrame.grapheme_utf8_len)
+            )
+        } else {
+            graphemeUtf8 = Data()
+        }
         generation = bridgeFrame.generation
         self.rows = rows
         self.columns = columns
@@ -182,9 +193,11 @@ struct NativePreparedFrame {
         cursorVisible: Bool = false,
         alternateScreen: Bool = false,
         fullRebuild: Bool = true,
-        damage: DamageMask = DamageMask()
+        damage: DamageMask = DamageMask(),
+        graphemeUtf8: Data = Data()
     ) {
         self.cells = Array(cells)
+        self.graphemeUtf8 = graphemeUtf8
         self.generation = generation
         self.rows = rows
         self.columns = columns
@@ -206,9 +219,11 @@ struct NativePreparedFrame {
         cursorVisible: Bool = false,
         alternateScreen: Bool = false,
         fullRebuild: Bool = true,
-        damage: DamageMask = DamageMask()
+        damage: DamageMask = DamageMask(),
+        graphemeUtf8: Data = Data()
     ) {
         self.cells = cells
+        self.graphemeUtf8 = graphemeUtf8
         self.generation = generation
         self.rows = rows
         self.columns = columns
@@ -376,6 +391,14 @@ final class MetalTerminalRenderer: @unchecked Sendable {
         pipelineDescriptor.vertexFunction = vertex
         pipelineDescriptor.fragmentFunction = fragment
         pipelineDescriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
+        pipelineDescriptor.colorAttachments[0].isBlendingEnabled = true
+        pipelineDescriptor.colorAttachments[0].sourceRGBBlendFactor = .sourceAlpha
+        pipelineDescriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
+        // Keep the render target opaque while glyph coverage controls only
+        // RGB blending. Using sourceAlpha for the alpha channel would apply
+        // coverage twice and leave normal glyph pixels partially transparent.
+        pipelineDescriptor.colorAttachments[0].sourceAlphaBlendFactor = .one
+        pipelineDescriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
         do {
             pipeline = try device.makeRenderPipelineState(descriptor: pipelineDescriptor)
         } catch {
@@ -566,6 +589,23 @@ final class MetalTerminalRenderer: @unchecked Sendable {
             try allocateInstanceBuffer(rows: frame.rows, columns: frame.columns)
             fullRebuild = true
             damage.markAll(rows: frame.rows)
+        }
+
+        if damage.isEmpty {
+            // The committed Candidate-D frame can advance without changing
+            // any rows. Reuse the prepared instance/sidecar state and avoid
+            // rescanning or copying the full grapheme payload.
+            currentRows = frame.rows
+            currentColumns = frame.columns
+            currentMetrics = metrics
+            currentScale = scale
+            currentAlternateScreen = frame.alternateScreen
+            deferredDamage = DamageMask()
+            deferredNeedsFullRebuild = false
+            needsCurrentFrameWhenIdle = false
+            needsPresent = true
+            preparationSucceeded = true
+            return .updated
         }
 
         do {
@@ -1040,28 +1080,106 @@ final class MetalTerminalRenderer: @unchecked Sendable {
             capacity: instanceCount
         )
         let cellSize = SIMD2<Float>(Float(metrics.cellWidth), Float(metrics.cellHeight))
+        let preparedRoleContinuation: UInt16 = 2
+        let preparedHasGrapheme: UInt16 = 1 << 4
+
+        // Grapheme sidecar is length-prefixed payloads in physical-cell order
+        // for every multi-scalar lead on the surface.
+        var graphemeCursor = 0
+        let graphemeBytes = frame.graphemeUtf8
+        var rowGraphemeOffsets = [Int](repeating: 0, count: frame.rows + 1)
+        for index in 0..<frame.cells.count {
+            if index.isMultiple(of: frame.columns) {
+                rowGraphemeOffsets[index / frame.columns] = graphemeCursor
+            }
+            let reserved = frame.cells[index].reserved
+            let role = reserved & 0b11
+            let width = (reserved >> 2) & 0b11
+            let hasGrapheme = reserved & preparedHasGrapheme != 0
+            let knownBits = 0b11 | (0b11 << 2) | preparedHasGrapheme
+            guard reserved & ~knownBits == 0,
+                  role <= 2,
+                  (role == 1 ? (width == 1 || width == 2) : width == 0),
+                  !hasGrapheme || role == 1
+            else {
+                throw MetalTerminalRendererError.invalidFrame
+            }
+            if reserved & preparedHasGrapheme != 0 {
+                guard graphemeCursor + 2 <= graphemeBytes.count else {
+                    throw MetalTerminalRendererError.invalidFrame
+                }
+                let len = Int(graphemeBytes[graphemeCursor])
+                    | (Int(graphemeBytes[graphemeCursor + 1]) << 8)
+                graphemeCursor += 2
+                guard graphemeCursor + len <= graphemeBytes.count else {
+                    throw MetalTerminalRendererError.invalidFrame
+                }
+                graphemeCursor += len
+            }
+        }
+        rowGraphemeOffsets[frame.rows] = graphemeCursor
+        graphemeCursor = 0
 
         for row in 0..<frame.rows where damage.contains(row: row) {
             for column in 0..<frame.columns {
                 let index = row * frame.columns + column
                 let cell = frame.cells[index]
-                guard cell.reserved == 0 else {
-                    throw MetalTerminalRendererError.invalidFrame
-                }
+                let role = cell.reserved & 0b11
+                let width = (cell.reserved >> 2) & 0b11
 
                 var flags: UInt32 = 0
                 var uvRect = SIMD4<Float>(repeating: 0)
                 var atlasSlice: UInt32 = 0
-                if cell.scalar != 0 && cell.scalar != 32 {
-                    let entry = try glyphAtlas.lookup(
-                        scalar: cell.scalar,
-                        bold: cell.flags & preparedBoldFlag != 0,
-                        backingScale: backingScale,
-                        cellMetrics: metrics
+
+                // Start from the validated row offset. This keeps sparse damage
+                // preparation linear in the damaged rows instead of rescanning
+                // every preceding cell for each row.
+                if column == 0 {
+                    graphemeCursor = rowGraphemeOffsets[row]
+                }
+
+                var graphemePayload: Data?
+                if cell.reserved & preparedHasGrapheme != 0 {
+                    let len = Int(frame.graphemeUtf8[graphemeCursor])
+                        | (Int(frame.graphemeUtf8[graphemeCursor + 1]) << 8)
+                    graphemeCursor += 2
+                    graphemePayload = frame.graphemeUtf8.subdata(
+                        in: graphemeCursor..<(graphemeCursor + len)
                     )
-                    flags |= instanceGlyphFlag
-                    uvRect = entry.uvRect
-                    atlasSlice = entry.slice
+                    graphemeCursor += len
+                }
+
+                if role != preparedRoleContinuation {
+                    if let graphemePayload,
+                       let text = String(data: graphemePayload, encoding: .utf8),
+                       !text.isEmpty
+                    {
+                        let entry = try glyphAtlas.lookupGrapheme(
+                            text: text,
+                            bold: cell.flags & preparedBoldFlag != 0,
+                            backingScale: backingScale,
+                            cellMetrics: metrics
+                        )
+                        flags |= instanceGlyphFlag
+                        if width == 2 {
+                            flags |= instanceWideGlyphFlag
+                        }
+                        uvRect = entry.uvRect
+                        atlasSlice = entry.slice
+                    } else if cell.scalar != 0 && cell.scalar != 32 {
+                        let entry = try glyphAtlas.lookup(
+                            scalar: cell.scalar,
+                            bold: cell.flags & preparedBoldFlag != 0,
+                            backingScale: backingScale,
+                            cellMetrics: metrics
+                        )
+                        flags |= instanceGlyphFlag
+                        if width == 2 {
+                            flags |= instanceWideGlyphFlag
+                        }
+                        uvRect = entry.uvRect
+                        atlasSlice = entry.slice
+                    }
                 }
                 if cell.flags & preparedUnderlineFlag != 0 {
                     flags |= instanceUnderlineFlag
@@ -1127,6 +1245,39 @@ final class MetalTerminalRenderer: @unchecked Sendable {
         )
         encoder.setFragmentTexture(atlasTexture, index: 0)
         encoder.setFragmentSamplerState(sampler, index: 0)
+        var renderMode: UInt32 = 0
+        encoder.setVertexBytes(
+            &renderMode,
+            length: MemoryLayout<UInt32>.stride,
+            index: 2
+        )
+        encoder.setFragmentBytes(
+            &renderMode,
+            length: MemoryLayout<UInt32>.stride,
+            index: 2
+        )
+        encoder.drawPrimitives(
+            type: .triangle,
+            vertexStart: 0,
+            vertexCount: 6,
+            instanceCount: instanceCount
+        )
+        // Wide grapheme glyphs span the lead and continuation cells. Draw
+        // every cell background first, then draw glyphs in a second pass so a
+        // continuation cell's background cannot cover the glyph's second
+        // half. The glyph pass discards non-glyph instances in the fragment
+        // stage and keeps the existing fixed-size instance buffer layout.
+        renderMode = 1
+        encoder.setVertexBytes(
+            &renderMode,
+            length: MemoryLayout<UInt32>.stride,
+            index: 2
+        )
+        encoder.setFragmentBytes(
+            &renderMode,
+            length: MemoryLayout<UInt32>.stride,
+            index: 2
+        )
         encoder.drawPrimitives(
             type: .triangle,
             vertexStart: 0,
@@ -1135,6 +1286,17 @@ final class MetalTerminalRenderer: @unchecked Sendable {
         )
         for region in historyRegions where region.instanceCount > 0 {
             encoder.setVertexBuffer(region.buffer, offset: 0, index: 0)
+            renderMode = 2
+            encoder.setVertexBytes(
+                &renderMode,
+                length: MemoryLayout<UInt32>.stride,
+                index: 2
+            )
+            encoder.setFragmentBytes(
+                &renderMode,
+                length: MemoryLayout<UInt32>.stride,
+                index: 2
+            )
             let x = max(0, Int(region.clip.minX.rounded(.down)))
             let y = max(0, Int(region.clip.minY.rounded(.down)))
             let maxX = min(target.width, Int(region.clip.maxX.rounded(.up)))

@@ -23,6 +23,11 @@ final class BlockView: NSView {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         setAccessibilityIdentifier("block.\(presentation.id)")
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
+        setAccessibilityRoleDescription("Command Block")
+        setAccessibilityLabel(presentation.command)
+        setAccessibilityValue(presentation.state.rawValue)
         buildUI()
     }
 
@@ -50,6 +55,8 @@ final class BlockView: NSView {
         stateMark?.toolTip = presentation.state.rawValue
         commandField?.stringValue = presentation.command
         elapsedField?.stringValue = presentation.elapsed
+        setAccessibilityLabel(presentation.command)
+        setAccessibilityValue(presentation.state.rawValue)
         applyPresentationChrome()
         seam?.apply(role: seamRole)
     }

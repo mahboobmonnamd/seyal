@@ -265,6 +265,10 @@ pub extern "C" fn seyal_bridge_frame() -> SeyalPreparedFrame {
         let result = client.last_preparation();
         let cursor = prepared.cursor();
         let damage = result.rebuilt_rows.words();
+        let grapheme = prepared.grapheme_bytes();
+        let Ok(grapheme_utf8_len) = u32::try_from(grapheme.len()) else {
+            return SeyalPreparedFrame::empty();
+        };
         SeyalPreparedFrame {
             cells: cells.as_ptr(),
             cell_count,
@@ -283,6 +287,9 @@ pub extern "C" fn seyal_bridge_frame() -> SeyalPreparedFrame {
             damage_word1: damage[1],
             damage_word2: damage[2],
             damage_word3: damage[3],
+            grapheme_utf8: grapheme.as_ptr(),
+            grapheme_utf8_len,
+            reserved2: 0,
         }
     })
     .unwrap_or_else(SeyalPreparedFrame::empty)

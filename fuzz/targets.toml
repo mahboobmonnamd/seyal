@@ -38,6 +38,14 @@ adapter = "fuzz/targets/display-binary-decode"
 libfuzzer = "display_decode"
 
 [[target]]
+name = "display-v2-decode"
+owner_pass = 5
+status = "active"
+corpus = "fuzz/corpus/display-v2-decode"
+adapter = "fuzz/targets/display-v2-decode"
+libfuzzer = "display_v2_decode"
+
+[[target]]
 name = "display-state-machine"
 owner_pass = 5
 status = "active"

@@ -19,7 +19,14 @@ HOT_FUNCTIONS = {
     ],
     "crates/seyal-runtime/src/input.rs": ["try_submit"],
     # Candidate-D display encode/publish (Runtime → UDS presentation).
-    "crates/seyal-runtime/src/display.rs": ["encode_snapshot", "encode_delta", "encode_rows"],
+    "crates/seyal-runtime/src/display.rs": [
+        "encode_snapshot",
+        "encode_delta",
+        "encode_rows",
+        "encode_snapshot_v2",
+        "encode_delta_v2",
+        "encode_cells_v2",
+    ],
     "crates/seyal-runtime/src/runtime/local/display_publish.rs": ["publish_display_updates"],
     # Metal prepare/present: first `update` is the NativePreparedFrame prepare path.
     "macos/Seyal/Sources/MetalTerminalRenderer.swift": ["update", "present"],

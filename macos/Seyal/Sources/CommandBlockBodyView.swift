@@ -1,5 +1,21 @@
 import AppKit
 
+/// Timeline chrome is laid over the one input surface. Empty areas must remain
+/// hit-test transparent so keyboard/mouse events continue to reach the
+/// Runtime-backed terminal; future interactive Block controls can still be
+/// returned by the normal descendant hit-test.
+@MainActor
+final class TranscriptBlockStackView: NSStackView {
+  override func hitTest(_ point: NSPoint) -> NSView? {
+    guard let hit = super.hitTest(point) else { return nil }
+    if hit is NSButton { return hit }
+    if let field = hit as? NSTextField, field.isEditable || field.isSelectable {
+      return hit
+    }
+    return nil
+  }
+}
+
 @MainActor
 final class CommandBlockBodyView: NSView {
   private weak var surface: InteractiveMetalSurfaceView?
@@ -114,6 +130,13 @@ final class PaneTranscriptView: NSScrollView {
     transcriptDocument.layer?.backgroundColor = visual.colors.cg(.canvas)
     documentView = transcriptDocument
 
+    // NSScrollView does not infer a document width from edge constraints on
+    // subviews. Pin the document to the clip view's viewport bounds so the
+    // pane-owned Metal surface receives the final visible width before it
+    // proposes terminal geometry to Runtime. The explicit layout pass below
+    // avoids the transient zero/narrow content bounds seen during startup.
+    transcriptDocument.widthAnchor.constraint(equalTo: contentView.widthAnchor).isActive = true
+
     if installSurface {
       terminalSurface.translatesAutoresizingMaskIntoConstraints = false
       transcriptDocument.addSubview(terminalSurface)
@@ -129,6 +152,16 @@ final class PaneTranscriptView: NSScrollView {
 
   @available(*, unavailable)
   required init?(coder: NSCoder) { fatalError("PaneTranscriptView is programmatic") }
+
+  override func layout() {
+    super.layout()
+    // AppKit may lay out the scroll view and its document in separate passes.
+    // Complete both passes before the interactive surface samples its viewport
+    // for Runtime geometry, so a startup narrow width cannot become sticky.
+    transcriptDocument.layoutSubtreeIfNeeded()
+    terminalSurface.needsLayout = true
+    terminalSurface.layoutSubtreeIfNeeded()
+  }
 
   func applyVisual(_ visual: SeyalResolvedVisualConfiguration) {
     transcriptDocument.layer?.backgroundColor = visual.colors.cg(.canvas)

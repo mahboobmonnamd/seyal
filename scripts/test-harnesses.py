@@ -104,12 +104,18 @@ def validate_fixture_harness() -> None:
         "line-identity",
         "damage",
         "deferred-and-malformed-recovery",
+        # M002 compatibility additions remain mandatory while the subset
+        # check below permits future behavior rows to be added.
         "scroll-region-decstbm-il-dl-su-sd",
         "ich-dch-ech",
         "osc-title-cwd-hyperlink",
         "primary-da-and-decrqm-1049",
     }
-    require(set(behavior_ids) == required_behaviors, "VT supported-M001 coverage matrix is incomplete")
+    missing_behaviors = required_behaviors - set(behavior_ids)
+    require(
+        not missing_behaviors,
+        f"VT supported-M001 coverage matrix is incomplete: missing {sorted(missing_behaviors)}",
+    )
     allowed_bases = {
         "external",
         "external-plus-seyal-invariant",
@@ -127,7 +133,7 @@ def validate_fixture_harness() -> None:
         reference = behavior.get("reference")
         require(isinstance(reference, str) and reference, f"VT coverage {behavior_id} has no reference")
         for item in evidence:
-            if item.startswith("m001-") or item.startswith("m002-"):
+            if item.startswith(("m001-", "m002-")):
                 require(item in fixture_ids, f"VT coverage {behavior_id} references unknown fixture {item}")
     alternate = next(item for item in behaviors if item["id"] == "alternate-screen-1049")
     require(
@@ -163,6 +169,7 @@ def validate_fuzz_registry() -> None:
         "shared-projection-validation",
         "reconnect-resync-state-machine",
         "display-binary-decode",
+        "display-v2-decode",
         "display-state-machine",
         "pass7-protocol-decode",
         "block-state-decode",

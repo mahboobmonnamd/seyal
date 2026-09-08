@@ -257,7 +257,7 @@ final class SeyalShellComponentTests: XCTestCase {
       onError: { _ in },
       paneID: "pass9-stale-adopt"
     )
-    XCTAssertFalse(bridge.adoptRecoveredHandle(UInt64.max - 17))
+    XCTAssertFalse(bridge.adoptRecoveredHandle(.testOnly(UInt64.max - 17)))
     XCTAssertFalse(bridge.isConnected)
     let after = seyal_bridge_pass9_diag_snapshot()
     XCTAssertEqual(after.connected, before.connected)
@@ -457,6 +457,40 @@ final class SeyalShellComponentTests: XCTestCase {
     XCTAssertFalse(coordinator.isActive)
   }
 
+  @MainActor
+  func testLifecycleCoordinatorCarriesOpenedHandleIdentityToAdopter() {
+    let expected = RuntimeRecoveryOpenedHandle(
+      handle: 41,
+      stage: 2,
+      failureClass: 0,
+      retryable: false,
+      connectionOrigin: 2,
+      runtimeIDLow: 1,
+      runtimeIDHigh: 2,
+      executionIDLow: 3,
+      executionIDHigh: 4,
+      attachmentIDLow: 5,
+      attachmentIDHigh: 6
+    )
+    var adopted: RuntimeRecoveryOpenedHandle?
+    let coordinator = RuntimeLifecycleRecoveryCoordinator(
+      clock: { 0 },
+      scheduler: { _, _ in {} },
+      launcher: {},
+      attempt: { .opened(expected) },
+      handleAdopter: { opened in
+        adopted = opened
+        return true
+      },
+      attemptExecution: .inline
+    )
+
+    coordinator.beginEpisode()
+
+    XCTAssertEqual(adopted, expected)
+    XCTAssertEqual(coordinator.state.stage, .reconstructing)
+  }
+
   func testReconnectReconstructionPinsRuntimeExecutionAndRequiresFreshAttachment() {
     let runtime = RuntimeContinuityIdentity(low: 1, high: 2)
     let execution = RuntimeContinuityIdentity(low: 3, high: 4)
@@ -586,8 +620,8 @@ final class SeyalShellComponentTests: XCTestCase {
   }
 
   func testPreparedFrameAndHistoryRowCABIsMatchRust() {
-    XCTAssertEqual(MemoryLayout<SeyalPreparedFrame>.size, 72)
-    XCTAssertEqual(MemoryLayout<SeyalPreparedFrame>.stride, 72)
+    XCTAssertEqual(MemoryLayout<SeyalPreparedFrame>.size, 88)
+    XCTAssertEqual(MemoryLayout<SeyalPreparedFrame>.stride, 88)
     XCTAssertEqual(MemoryLayout<SeyalPreparedFrame>.alignment, 8)
     XCTAssertEqual(MemoryLayout.offset(of: \SeyalPreparedFrame.cells), 0)
     XCTAssertEqual(MemoryLayout.offset(of: \SeyalPreparedFrame.cell_count), 8)
@@ -872,11 +906,101 @@ final class SeyalShellComponentTests: XCTestCase {
   @MainActor
   func testPaneTranscriptOwnsOneDocumentAndOneSurface() {
     let transcript = PaneTranscriptView(visual: previewVisual())
+    transcript.frame = NSRect(x: 0, y: 0, width: 720, height: 420)
     transcript.layoutSubtreeIfNeeded()
 
     XCTAssertNotNil(transcript.documentView)
     XCTAssertEqual(descendants(of: NSScrollView.self, in: transcript).count, 0)
     XCTAssertEqual(descendants(of: InteractiveMetalSurfaceView.self, in: transcript).count, 1)
+    XCTAssertEqual(
+      transcript.transcriptDocument.bounds.width,
+      transcript.contentView.bounds.width,
+      accuracy: 1
+    )
+    XCTAssertEqual(
+      transcript.terminalSurface.bounds.width,
+      transcript.contentView.bounds.width,
+      accuracy: 1
+    )
+    XCTAssertGreaterThan(transcript.terminalSurface.bounds.width, 600)
+  }
+
+  @MainActor
+  func testPaneTranscriptSurfaceTracksViewportAfterInitialAndResizeLayout() throws {
+    let transcript = PaneTranscriptView(visual: previewVisual())
+    var proposedWidths = [Double]()
+    transcript.terminalSurface.geometryProposalObserver = { sample in
+      proposedWidths.append(sample.viewportWidth)
+    }
+    transcript.frame = NSRect(x: 0, y: 0, width: 720, height: 420)
+    transcript.layoutSubtreeIfNeeded()
+
+    XCTAssertEqual(
+      transcript.terminalSurface.bounds.width,
+      transcript.contentView.bounds.width,
+      accuracy: 1
+    )
+    XCTAssertGreaterThan(transcript.terminalSurface.bounds.width, 600)
+    let initialSample = InteractiveMetalSurfaceView.runtimeGeometrySample(
+      for: transcript.terminalSurface.bounds,
+      cellSize: CGSize(width: 8, height: 18)
+    )
+
+    transcript.frame.size.width = 980
+    transcript.needsLayout = true
+    transcript.layoutSubtreeIfNeeded()
+
+    XCTAssertEqual(
+      transcript.terminalSurface.bounds.width,
+      transcript.contentView.bounds.width,
+      accuracy: 1
+    )
+    XCTAssertGreaterThan(transcript.terminalSurface.bounds.width, 850)
+
+    let sample = InteractiveMetalSurfaceView.runtimeGeometrySample(
+      for: transcript.terminalSurface.bounds,
+      cellSize: CGSize(width: 8, height: 18)
+    )
+    XCTAssertNotEqual(sample.viewportWidth, initialSample.viewportWidth)
+    XCTAssertGreaterThan(sample.viewportWidth, initialSample.viewportWidth)
+    XCTAssertEqual(sample.viewportWidth, Double(transcript.terminalSurface.bounds.width))
+    XCTAssertEqual(sample.viewportHeight, Double(transcript.terminalSurface.bounds.height))
+    XCTAssertGreaterThanOrEqual(proposedWidths.count, 2)
+    XCTAssertEqual(proposedWidths.last, sample.viewportWidth)
+    XCTAssertGreaterThan(proposedWidths.last ?? 0, proposedWidths.first ?? 0)
+  }
+
+  @MainActor
+  func testPaneTranscriptBlockOverlayDoesNotCaptureTerminalSurfaceInput() throws {
+    let transcript = PaneTranscriptView(visual: previewVisual())
+    let blockStack = TranscriptBlockStackView()
+    let block = BlockView(
+      presentation: BlockPresentation(
+        id: "block-1", command: "printf output", state: .completed,
+        elapsed: "Done", timestamp: nil, isSelected: false, actions: []
+      ),
+      bodyView: CommandBlockBodyView(),
+      visual: previewVisual()
+    )
+    blockStack.addArrangedSubview(block)
+    transcript.frame = NSRect(x: 0, y: 0, width: 720, height: 420)
+    transcript.installBlockStack(blockStack)
+    transcript.layoutSubtreeIfNeeded()
+
+    XCTAssertGreaterThan(block.frame.width, 0)
+    XCTAssertGreaterThan(block.frame.height, 0)
+    let commandLabel = try XCTUnwrap(
+      block.subviewsRecursively.compactMap { $0 as? NSTextField }
+        .first { $0.stringValue == "printf output" }
+    )
+    let point = commandLabel.convert(
+      NSPoint(x: commandLabel.bounds.midX, y: commandLabel.bounds.midY),
+      to: transcript.transcriptDocument
+    )
+    XCTAssertTrue(
+      transcript.transcriptDocument.hitTest(point) === transcript.terminalSurface,
+      "the timeline overlay must pass empty-area hits through to the terminal surface"
+    )
   }
 
   @MainActor
@@ -978,6 +1102,29 @@ final class SeyalShellComponentTests: XCTestCase {
   }
 
   @MainActor
+  func testBlockViewExposesAccessibleCommandGroup() {
+    let block = BlockView(
+      presentation: BlockPresentation(
+        id: "accessible",
+        command: "printf output",
+        state: .completed,
+        elapsed: "Done",
+        timestamp: nil,
+        isSelected: false,
+        actions: []
+      ),
+      bodyView: NSView(),
+      visual: previewVisual()
+    )
+
+    XCTAssertTrue(block.isAccessibilityElement())
+    XCTAssertEqual(block.accessibilityRole(), NSAccessibility.Role.group)
+    XCTAssertEqual(block.accessibilityRoleDescription(), "Command Block")
+    XCTAssertEqual(block.accessibilityLabel(), "printf output")
+    XCTAssertEqual(block.accessibilityValue() as? String, BlockPresentationState.completed.rawValue)
+  }
+
+  @MainActor
   func testBlockTUITakeoverHidesOnlyPresentationChrome() {
     let body = NSView()
     body.translatesAutoresizingMaskIntoConstraints = false
@@ -1051,7 +1198,7 @@ final class SeyalShellComponentTests: XCTestCase {
     editor.doCommand(by: #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)))
 
     XCTAssertEqual(submitted, "pwd")
-    XCTAssertEqual(editor.string, "")
+    XCTAssertEqual(editor.string, "pwd")
   }
 
   @MainActor
@@ -1075,8 +1222,10 @@ final class SeyalShellComponentTests: XCTestCase {
     let editor = try XCTUnwrap(descendants(of: NSTextView.self, in: composer).first)
     composer.setBusy(true, process: "echo busy")
     XCTAssertFalse(editor.isEditable)
+    XCTAssertEqual(editor.string, "echo busy")
     composer.setBusy(false, process: "")
     XCTAssertTrue(editor.isEditable)
+    XCTAssertEqual(editor.string, "echo busy")
   }
 
   @MainActor
@@ -1166,6 +1315,103 @@ final class SeyalShellComponentTests: XCTestCase {
       RendererValidation.historyPrepareDefersWhileFrameInFlightSelfTest(),
       "history prepare must not texture.replace the shared glyph atlas while GPU in flight"
     )
+  }
+
+  /// #817 — exercise the production multi-scalar CTLine path and its cache
+  /// identity. This is component evidence for shaping and bounded eviction;
+  /// real Unicode matrix and AppKit IME acceptance remain manual gates.
+  @MainActor
+  func testGraphemeAtlasShapesAndBoundsMultiScalarEntries() throws {
+    guard let device = MTLCreateSystemDefaultDevice() else {
+      throw XCTSkip("Metal device unavailable in this environment")
+    }
+
+    let resolver = TerminalFontResolver()
+    let atlas = GlyphAtlas(device: device, fontResolver: resolver)
+    let regularMetrics = resolver.metrics(backingScale: 1)
+    let grapheme = "👩‍💻"
+
+    _ = try atlas.lookupGrapheme(
+      text: grapheme,
+      bold: false,
+      backingScale: 1,
+      cellMetrics: regularMetrics
+    )
+    XCTAssertEqual(atlas.stats.misses, 1)
+    XCTAssertEqual(atlas.stats.uploads, 1)
+    XCTAssertGreaterThan(atlas.stats.uploadedBytes, 0)
+    XCTAssertEqual(atlas.stats.graphemeMisses, 1)
+    XCTAssertGreaterThan(atlas.stats.graphemeShapingNanoseconds, 0)
+    XCTAssertGreaterThan(atlas.stats.graphemeFallbackRuns, 0)
+
+    _ = try atlas.lookupGrapheme(
+      text: grapheme,
+      bold: false,
+      backingScale: 1,
+      cellMetrics: regularMetrics
+    )
+    XCTAssertEqual(atlas.stats.hits, 1)
+    XCTAssertEqual(atlas.stats.misses, 1)
+    XCTAssertEqual(atlas.stats.graphemeHits, 1)
+    XCTAssertEqual(atlas.stats.graphemeMisses, 1)
+
+    _ = try atlas.lookupGrapheme(
+      text: grapheme,
+      bold: true,
+      backingScale: 1,
+      cellMetrics: regularMetrics
+    )
+    _ = try atlas.lookupGrapheme(
+      text: grapheme,
+      bold: false,
+      backingScale: 2,
+      cellMetrics: resolver.metrics(backingScale: 2)
+    )
+    XCTAssertEqual(atlas.stats.misses, 3)
+
+    atlas.resetWhenGPUIdle()
+    _ = try atlas.lookupGrapheme(
+      text: grapheme,
+      bold: false,
+      backingScale: 1,
+      cellMetrics: regularMetrics
+    )
+    XCTAssertEqual(atlas.stats.resets, 1)
+    XCTAssertEqual(atlas.stats.misses, 4)
+
+    // The first entry is retained while the bounded cache fills, then must be
+    // invalidated when the 2048-entry limit is reached.
+    for index in 0..<2048 {
+      _ = try atlas.lookupGrapheme(
+        text: "e\u{301}-\(index)",
+        bold: false,
+        backingScale: 1,
+        cellMetrics: regularMetrics
+      )
+    }
+    let missesBeforeEvictedEntryLookup = atlas.stats.misses
+    _ = try atlas.lookupGrapheme(
+      text: grapheme,
+      bold: false,
+      backingScale: 1,
+      cellMetrics: regularMetrics
+    )
+    XCTAssertEqual(atlas.stats.misses, missesBeforeEvictedEntryLookup + 1)
+  }
+
+  @MainActor
+  func testWideGraphemeRendersAcrossContinuationCellOffscreen() {
+    XCTAssertTrue(RendererValidation.wideGraphemeOffscreenSelfTest())
+  }
+
+  @MainActor
+  func testNormalGlyphMatchesSinglePassOffscreen() {
+    XCTAssertTrue(RendererValidation.normalGlyphMatchesSinglePassOffscreenSelfTest())
+  }
+
+  @MainActor
+  func testUndamagedGraphemeProjectionReusesPreparedRows() {
+    XCTAssertTrue(RendererValidation.noDamageGraphemeReuseSelfTest())
   }
 
   @MainActor

@@ -525,8 +525,8 @@ enum Pass663MetalScalability {
           allowsImplicitExecutionBootstrap: true
         )
       },
-      handleAdopter: { handle in
-        bridge.adoptRecoveredHandle(handle)
+      handleAdopter: { opened in
+        bridge.adoptRecoveredHandle(opened)
       }
     )
 

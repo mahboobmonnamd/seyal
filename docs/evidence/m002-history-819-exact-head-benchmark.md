@@ -4,7 +4,6 @@
 - **Authority:** ADR-010 and SPEC-010, with the frozen budgets from #818
 - **Measured production code head:** `9cd8e3976a8d34d598d702deebe66c2b7694cd12`
 - **Benchmark harness head:** `e9aa0a40e8aa458c83983f5ca9eaff63e708f312` (canonical branch exact head)
-- **Issue branch production-code head:** `9074e53eccfee6955ce752d6605e7adfa3fc9258` (the subsequent commits are evidence-only)
 - **Recorded:** 2026-09-08
 - **Host/build boundary:** local Apple Silicon macOS host, ARM64 Release Cargo benchmark for the retained legacy run; current harness smoke runs are comparative only
 - **Claim status:** comparative evidence only (`performance_claim=false`); merge gates remain incomplete

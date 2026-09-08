@@ -69,6 +69,7 @@ final class SeyalShellView: NSView {
 
   let state: SeyalShellState
   let productionShell: Bool
+  let inputPolicy: SeyalInputPolicy
   var visual: SeyalResolvedVisualConfiguration
   var attentionPopover: NSPopover?
   var paneContainers: [String: NSView] = [:]
@@ -103,10 +104,12 @@ final class SeyalShellView: NSView {
     frame frameRect: NSRect,
     state: SeyalShellState,
     productionShell: Bool = false,
+    inputPolicy: SeyalInputPolicy = .default,
     visual: SeyalResolvedVisualConfiguration
   ) {
     self.state = state
     self.productionShell = productionShell
+    self.inputPolicy = inputPolicy
     self.visual = visual
     super.init(frame: frameRect)
     wantsLayer = true

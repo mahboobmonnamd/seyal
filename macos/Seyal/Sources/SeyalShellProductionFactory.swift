@@ -7,12 +7,14 @@ import AppKit
 enum SeyalShellProductionFactory {
     static func make(
         frame: NSRect,
-        visual: SeyalResolvedVisualConfiguration
+        visual: SeyalResolvedVisualConfiguration,
+        inputPolicy: SeyalInputPolicy = .default
     ) -> SeyalShellView {
         let shell = SeyalShellView(
             frame: frame,
             state: SeyalShellState.makeProduction(),
             productionShell: true,
+            inputPolicy: inputPolicy,
             visual: visual
         )
         shell.translatesAutoresizingMaskIntoConstraints = true

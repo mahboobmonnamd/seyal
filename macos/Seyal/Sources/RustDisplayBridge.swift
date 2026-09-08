@@ -909,6 +909,10 @@ final class RustDisplayBridge {
     return finishMutation(seyal_bridge_submit_key(kind, scalar))
   }
 
+  func supportsKeyV2() -> Bool {
+    seyal_bridge_supports_key_v2() != 0
+  }
+
   @discardableResult
   func submitKeyV2(kind: UInt16, modifiers: UInt16, value: UInt32, event: UInt8, shiftedASCII: UInt32, actionID: UInt32) -> Int32 {
     guard isConnected, reconstructionState.canMutate, selectClient() else {

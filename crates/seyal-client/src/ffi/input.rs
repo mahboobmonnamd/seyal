@@ -8,6 +8,14 @@ use crate::{local::derive_grid_geometry, LocalDisplayClient};
 
 use super::{error_code, with_active_client_mut};
 
+/// Reports whether the attached Runtime negotiated the additive TerminalKeyV2
+/// message. Native input uses this to preserve M001 routing with older peers.
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_supports_key_v2() -> u8 {
+    super::with_active_client(|client| u8::from(client.extended_terminal_key_supported()))
+        .unwrap_or(0)
+}
+
 /// Atomically submit one already-committed UTF-8 native text action.
 ///
 /// # Safety

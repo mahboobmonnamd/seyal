@@ -230,6 +230,10 @@ pub(crate) fn requested_capabilities(request_block_metadata: bool) -> u32 {
         }
 }
 
+pub(crate) fn extended_terminal_key_supported(server_capabilities: u32) -> bool {
+    server_capabilities & CAP_EXTENDED_TERMINAL_KEY != 0
+}
+
 pub(crate) fn hello_until(
     stream: &mut UnixStream,
     interactive: bool,
@@ -294,9 +298,51 @@ pub(crate) fn send_control_until(
 
 #[cfg(test)]
 mod connect_error_tests {
-    use super::{classify_connect_error, classify_discovery_error, ClientError, DiscoveryFailure};
-    use seyal_runtime::local_ipc::discovery::DiscoveryError;
-    use std::io;
+    use super::{
+        classify_connect_error, classify_discovery_error, extended_terminal_key_supported,
+        hello_until, ClientError, DiscoveryFailure,
+    };
+    use seyal_runtime::local_ipc::{discovery::DiscoveryError, framing::*};
+    use std::{
+        io::{self, Read, Write},
+        os::unix::net::UnixStream,
+        time::{Duration, Instant},
+    };
+
+    #[test]
+    fn old_server_hello_without_extended_key_capability_disables_v2() {
+        let (mut client, mut server) = UnixStream::pair().expect("unix stream pair");
+        let server_thread = std::thread::spawn(move || {
+            let mut header = [0_u8; HEADER_LEN];
+            server.read_exact(&mut header).expect("client hello header");
+            let payload_len = u32::from_le_bytes(header[16..20].try_into().unwrap()) as usize;
+            let mut payload = vec![0_u8; payload_len];
+            server
+                .read_exact(&mut payload)
+                .expect("client hello payload");
+            let hello = ServerHello {
+                runtime_id: 1,
+                server_capabilities: CAP_BINARY_DISPLAY
+                    | CAP_SEMANTIC_TERMINAL_KEY
+                    | CAP_CORRELATED_RESIZE,
+                max_frame_payload: MAX_FRAME_PAYLOAD,
+                max_input_payload: 65_536,
+            };
+            server
+                .write_all(&encode_frame(MessageType::ServerHello, &hello.encode()))
+                .expect("server hello");
+        });
+
+        let hello = hello_until(
+            &mut client,
+            true,
+            true,
+            Instant::now() + Duration::from_secs(1),
+        )
+        .expect("old server hello remains usable");
+        assert!(!extended_terminal_key_supported(hello.server_capabilities));
+        server_thread.join().expect("server thread");
+    }
 
     #[test]
     fn endpoint_absence_refusal_and_disappearance_remain_distinct() {

@@ -190,6 +190,7 @@ SeyalComposerResult seyal_bridge_composer_result(void);
 SeyalRecoveryResult seyal_bridge_last_recovery_result(void);
 SeyalPass9DiagSnapshot seyal_bridge_pass9_diag_snapshot(void);
 int32_t seyal_bridge_submit_key(uint16_t kind, uint32_t scalar);
+uint8_t seyal_bridge_supports_key_v2(void);
 int32_t seyal_bridge_submit_key_v2(uint16_t kind, uint16_t modifiers, uint32_t value, uint8_t event, uint32_t shifted_ascii, uint32_t action_id);
 int32_t seyal_bridge_propose_geometry(
     double viewport_width,

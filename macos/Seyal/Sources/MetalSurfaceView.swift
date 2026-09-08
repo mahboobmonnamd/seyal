@@ -678,6 +678,16 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
         name: NSWindow.didChangeOcclusionStateNotification,
         object: window
       )
+      NotificationCenter.default.removeObserver(
+        self,
+        name: NSWindow.didBecomeKeyNotification,
+        object: window
+      )
+      NotificationCenter.default.removeObserver(
+        self,
+        name: NSWindow.didBecomeMainNotification,
+        object: window
+      )
     }
     if newWindow == nil {
       // Suppress status-driven reconnect before stop() publishes its
@@ -702,12 +712,35 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
         name: NSWindow.didChangeOcclusionStateNotification,
         object: window
       )
+      NotificationCenter.default.addObserver(
+        self,
+        selector: #selector(windowActivationChanged),
+        name: NSWindow.didBecomeKeyNotification,
+        object: window
+      )
+      NotificationCenter.default.addObserver(
+        self,
+        selector: #selector(windowActivationChanged),
+        name: NSWindow.didBecomeMainNotification,
+        object: window
+      )
     }
     updateDrawableSize()
     updateVisibility()
+    // The production shell installs its content view before ordering the
+    // window front. Recheck after AppKit completes that ordering so the
+    // visibility-gated Runtime recovery episode cannot be stranded at
+    // `disconnected` during launch.
+    DispatchQueue.main.async { [weak self] in
+      self?.updateVisibility()
+    }
   }
 
   @objc private func windowOcclusionChanged() {
+    updateVisibility()
+  }
+
+  @objc private func windowActivationChanged() {
     updateVisibility()
   }
 

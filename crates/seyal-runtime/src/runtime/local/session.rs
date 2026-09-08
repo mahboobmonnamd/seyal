@@ -195,7 +195,12 @@ impl Runtime {
 
         let snapshot = entry.execution.projection_snapshot();
         let workspace_id = entry.workspace_id;
-        let Ok(snapshot_batch) = display::encode_snapshot(&snapshot) else {
+        let snapshot_batch = if self.local_connection_supports_grapheme_display(token) {
+            display::encode_snapshot_v2(&snapshot)
+        } else {
+            display::encode_snapshot(&snapshot)
+        };
+        let Ok(snapshot_batch) = snapshot_batch else {
             self.send_error(
                 token,
                 ErrorCode::DisplayUnavailable,

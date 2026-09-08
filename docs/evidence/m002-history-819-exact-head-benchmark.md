@@ -3,7 +3,7 @@
 - **Issue:** #819
 - **Authority:** ADR-010 and SPEC-010, with the frozen budgets from #818
 - **Measured production code head:** `9cd8e3976a8d34d598d702deebe66c2b7694cd12`
-- **Benchmark harness head:** `8e8b0e018722d80b1c90adc9cf4365e833bd3f52`
+- **Benchmark harness head:** `e9aa0a40e8aa458c83983f5ca9eaff63e708f312` (canonical branch exact head)
 - **Recorded:** 2026-09-08
 - **Host/build boundary:** local Apple Silicon macOS host, ARM64 Release Cargo benchmark for the retained legacy run; current harness smoke runs are comparative only
 - **Claim status:** comparative evidence only (`performance_claim=false`)
@@ -72,7 +72,7 @@ unavailable for any release or physical-host claim.
 | ASCII, styled, CJK, emoji/combining workloads | **Automation ready; evidence incomplete** | The selector and smoke cover all four workload classes, but no normative 10k/100k/1M matrix is recorded. |
 | Physical ARM64 p50/p95/p99 acceptance gates | **Unverified** | This run is comparative and does not provide the controlled release matrix or RSS attribution required by #818/#673. |
 | Fuzz/property and focused regression tests | **Separate evidence** | See the issue/PR validation record; this file does not replace those results. |
-| `make check` / Foundation gates | **Blocked on host** | The exact branch run reached the existing Pass 8 Runtime-to-Swift metadata singleton failure (`AlreadyRunning`). |
+| `make check` / Foundation gates | **Passed** | Exact-head `make check` exited 0, including ARM64 build, native shell smoke, Runtime-to-Swift metadata, and live renderer checks. |
 | Manual verification | **Unverified** | Headed manual evidence remains required for the user-visible history/reflow cases. |
 
 This record intentionally leaves incomplete and unavailable gates explicit. It

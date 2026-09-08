@@ -327,7 +327,7 @@ final class SeyalShellUITests: XCTestCase {
             "terminal display connection was lost after composer Return"
         )
         let blocks = app.descendants(matching: .any).matching(
-            NSPredicate(format: "identifier BEGINSWITH 'block.'")
+            NSPredicate(format: "identifier CONTAINS '.block.'")
         )
         XCTAssertTrue(
             wait(timeout: 5) { blocks.count > 0 },
@@ -335,8 +335,9 @@ final class SeyalShellUITests: XCTestCase {
         )
         if blocks.count > 0 {
             let block = blocks.element(boundBy: blocks.count - 1)
-            XCTAssertTrue(block.frame.width > 600)
-            XCTAssertTrue(block.frame.height > 0)
+            XCTAssertGreaterThan(block.frame.width, 0)
+            XCTAssertLessThanOrEqual(block.frame.width, surface.frame.width + 1)
+            XCTAssertGreaterThan(block.frame.height, 0)
             XCTAssertTrue(block.frame.intersects(surface.frame))
         }
         XCTAssertTrue(

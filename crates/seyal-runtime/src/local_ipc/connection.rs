@@ -217,6 +217,23 @@ struct Connection {
 }
 
 impl Connection {
+    fn display_frame_is_partial(&self) -> bool {
+        let Some(item) = self.display_inflight.as_ref() else {
+            return false;
+        };
+        item.current_batch()
+            .and_then(|batch| batch.frames.get(item.frame_index))
+            .is_some_and(|_| item.sent > 0)
+    }
+
+    fn mandatory_frame_is_partial(&self) -> bool {
+        self.mandatory.front().is_some_and(|item| item.sent > 0)
+    }
+
+    fn after_display_frame_is_partial(&self) -> bool {
+        self.after_display.front().is_some_and(|item| item.sent > 0)
+    }
+
     fn queue_snapshot(&mut self, snapshot: EncodedDisplayBatch) {
         self.display_generation = snapshot.generation;
         #[cfg(feature = "benchmark-instrumentation")]
@@ -669,19 +686,23 @@ fn drain_frames(
 }
 
 fn flush_outbound(connection: &mut Connection) -> io::Result<()> {
-    while let Some(item) = connection.mandatory.front_mut() {
-        let before = item.remaining_len();
-        match flush_bytes(connection.stream.as_raw_fd(), &item.bytes, &mut item.sent)? {
-            FlushProgress::WouldBlock => return Ok(()),
-            FlushProgress::Progress => {
-                let after = item.remaining_len();
-                connection.queued_control_bytes = connection
-                    .queued_control_bytes
-                    .saturating_sub(before.saturating_sub(after));
-                if after == 0 {
-                    connection.mandatory.pop_front();
-                }
+    // A mandatory frame may preempt display work only between complete
+    // display frames. If a display frame was partially written, finishing it
+    // first preserves the binary framing boundary; inserting a control frame
+    // in the middle would make the peer observe a malformed header.
+    if connection.mandatory_frame_is_partial() && !flush_mandatory(connection)? {
+        return Ok(());
+    }
+    if !connection.display_frame_is_partial() {
+        if connection.after_display_frame_is_partial() {
+            if !flush_one_after_display(connection)? {
+                return Ok(());
             }
+            if !flush_mandatory(connection)? {
+                return Ok(());
+            }
+        } else if !flush_mandatory(connection)? {
+            return Ok(());
         }
     }
 
@@ -715,6 +736,9 @@ fn flush_outbound(connection: &mut Connection) -> io::Result<()> {
             item.batches.pop_front();
             item.frame_index = 0;
             item.sent = 0;
+            if !connection.mandatory.is_empty() {
+                break;
+            }
             continue;
         }
         let frame = Arc::clone(
@@ -750,11 +774,21 @@ fn flush_outbound(connection: &mut Connection) -> io::Result<()> {
                     }
                 }
                 if connection.display_inflight.is_none() {
+                    if !connection.mandatory.is_empty() {
+                        break;
+                    }
                     continue;
                 }
                 return Ok(());
             }
         }
+    }
+
+    // A one-frame display batch can complete in this call. Revisit mandatory
+    // control work before allowing after-display work to run, otherwise a
+    // queued control frame could still be delayed behind a later class.
+    if !flush_mandatory(connection)? {
+        return Ok(());
     }
 
     while let Some(item) = connection.after_display.front_mut() {
@@ -773,6 +807,49 @@ fn flush_outbound(connection: &mut Connection) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Flush all queued mandatory frames, returning `false` when the socket would
+/// block with one still pending. This helper is called both before and after
+/// display work so control frames never overtake partial display bytes and are
+/// never left behind a completed display batch.
+fn flush_mandatory(connection: &mut Connection) -> io::Result<bool> {
+    while let Some(item) = connection.mandatory.front_mut() {
+        let before = item.remaining_len();
+        match flush_bytes(connection.stream.as_raw_fd(), &item.bytes, &mut item.sent)? {
+            FlushProgress::WouldBlock => return Ok(false),
+            FlushProgress::Progress => {
+                let after = item.remaining_len();
+                connection.queued_control_bytes = connection
+                    .queued_control_bytes
+                    .saturating_sub(before.saturating_sub(after));
+                if after == 0 {
+                    connection.mandatory.pop_front();
+                }
+            }
+        }
+    }
+    Ok(true)
+}
+
+fn flush_one_after_display(connection: &mut Connection) -> io::Result<bool> {
+    let Some(item) = connection.after_display.front_mut() else {
+        return Ok(true);
+    };
+    let before = item.remaining_len();
+    match flush_bytes(connection.stream.as_raw_fd(), &item.bytes, &mut item.sent)? {
+        FlushProgress::WouldBlock => Ok(false),
+        FlushProgress::Progress => {
+            let after = item.remaining_len();
+            connection.queued_control_bytes = connection
+                .queued_control_bytes
+                .saturating_sub(before.saturating_sub(after));
+            if after == 0 {
+                connection.after_display.pop_front();
+            }
+            Ok(after == 0)
+        }
+    }
 }
 
 enum FlushProgress {
@@ -821,6 +898,7 @@ mod tests {
         ProjectionAttributes, ProjectionCell, ProjectionDamage, TerminalProjectionSnapshot,
         TerminalProjectionUpdate,
     };
+    use std::io::Read;
 
     fn sample_cells(count: usize) -> Vec<ProjectionCell> {
         vec![ProjectionCell::lead_scalar('x', ProjectionAttributes::default()); count]
@@ -926,5 +1004,94 @@ mod tests {
         assert!(fragments
             .iter()
             .all(|fragment| fragment.total_bytes <= MAX_DISPLAY_BATCH_BYTES));
+    }
+
+    #[test]
+    fn mandatory_frame_waits_for_a_partially_written_display_frame() {
+        let (stream, mut peer) = UnixStream::pair().unwrap();
+        let display_frame = Arc::<[u8]>::from(vec![1u8, 2, 3, 4]);
+        let mut connection = Connection {
+            stream,
+            state: ConnectionState::Attached,
+            read_buf: Vec::new(),
+            mandatory: VecDeque::from([OutboundItem::new(vec![9u8, 10])]),
+            after_display: VecDeque::from([OutboundItem::new(vec![11u8, 12])]),
+            queued_control_bytes: 4,
+            display_inflight: Some(DisplayItem {
+                #[cfg(feature = "benchmark-instrumentation")]
+                kind: DisplayKind::Snapshot,
+                batches: VecDeque::from([EncodedDisplayBatch {
+                    kind: DisplayKind::Snapshot,
+                    schema: 2,
+                    generation: 1,
+                    base_generation: 0,
+                    rows: 1,
+                    columns: 1,
+                    frames: vec![display_frame],
+                    total_bytes: 4,
+                }]),
+                frame_index: 0,
+                sent: 1,
+            }),
+            pending_display: None,
+            display_generation: 1,
+        };
+
+        flush_outbound(&mut connection).unwrap();
+        let mut first = [0u8; 3];
+        peer.read_exact(&mut first).unwrap();
+        assert_eq!(first, [2, 3, 4]);
+
+        flush_outbound(&mut connection).unwrap();
+        let mut second = [0u8; 2];
+        peer.read_exact(&mut second).unwrap();
+        assert_eq!(second, [9, 10]);
+
+        flush_outbound(&mut connection).unwrap();
+        let mut third = [0u8; 2];
+        peer.read_exact(&mut third).unwrap();
+        assert_eq!(third, [11, 12]);
+    }
+
+    #[test]
+    fn partial_after_display_frame_finishes_before_mandatory_and_display_work() {
+        let (stream, mut peer) = UnixStream::pair().unwrap();
+        let mut connection = Connection {
+            stream,
+            state: ConnectionState::Attached,
+            read_buf: Vec::new(),
+            mandatory: VecDeque::from([OutboundItem::new(vec![9u8, 10])]),
+            after_display: VecDeque::from([OutboundItem {
+                bytes: vec![1u8, 2, 3, 4],
+                sent: 1,
+            }]),
+            queued_control_bytes: 5,
+            display_inflight: None,
+            pending_display: Some(VecDeque::from([EncodedDisplayBatch {
+                kind: DisplayKind::Snapshot,
+                schema: 2,
+                generation: 1,
+                base_generation: 0,
+                rows: 1,
+                columns: 1,
+                frames: vec![Arc::<[u8]>::from(vec![5u8, 6])],
+                total_bytes: 2,
+            }])),
+            display_generation: 1,
+        };
+
+        flush_outbound(&mut connection).unwrap();
+        let mut first = [0u8; 3];
+        peer.read_exact(&mut first).unwrap();
+        assert_eq!(first, [2, 3, 4]);
+        let mut second = [0u8; 2];
+        peer.read_exact(&mut second).unwrap();
+        assert_eq!(second, [9, 10]);
+        let mut third = [0u8; 2];
+        peer.read_exact(&mut third).unwrap();
+        assert_eq!(third, [5, 6]);
+
+        flush_outbound(&mut connection).unwrap();
+        assert_eq!(connection.queued_control_bytes, 0);
     }
 }

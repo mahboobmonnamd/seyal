@@ -116,10 +116,8 @@ final class PaneComposerShellView: NSView, NSTextViewDelegate {
         editor.insertionPointColor = visual.colors.ns(.focus)
         editor.string = draft
         editor.delegate = self
-        editor.onSubmit = { [weak self, weak editor] command in
-            guard self?.onSubmit?(command) == true else { return false }
-            editor?.string = ""
-            return true
+        editor.onSubmit = { [weak self] command in
+            self?.onSubmit?(command) ?? false
         }
         editor.isHorizontallyResizable = false
         editor.isVerticallyResizable = true

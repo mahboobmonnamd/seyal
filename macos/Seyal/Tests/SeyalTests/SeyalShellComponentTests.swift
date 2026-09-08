@@ -1051,7 +1051,7 @@ final class SeyalShellComponentTests: XCTestCase {
     editor.doCommand(by: #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)))
 
     XCTAssertEqual(submitted, "pwd")
-    XCTAssertEqual(editor.string, "")
+    XCTAssertEqual(editor.string, "pwd")
   }
 
   @MainActor

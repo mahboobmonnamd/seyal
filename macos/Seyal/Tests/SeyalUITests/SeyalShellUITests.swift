@@ -354,6 +354,101 @@ final class SeyalShellUITests: XCTestCase {
     }
 
     @MainActor
+    func testProductionUnicodeCommandRetainsHeadedRenderedEvidence() throws {
+        app.terminate()
+        terminateOrphanedRuntimes()
+
+        var repoRoot = URL(fileURLWithPath: #filePath)
+        for _ in 0..<5 { repoRoot.deleteLastPathComponent() }
+        let runtimeURL = repoRoot.appendingPathComponent("target/debug/seyal-runtime")
+        let appBinaryURL = repoRoot.appendingPathComponent(
+            "target/macos-ui-tests/Build/Products/Debug/Seyal.app/Contents/MacOS/Seyal"
+        )
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: runtimeURL.path))
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: appBinaryURL.path))
+
+        let markerURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "seyal-m002-unicode-headed-\(UUID().uuidString)"
+        )
+        try? FileManager.default.removeItem(at: markerURL)
+        defer { try? FileManager.default.removeItem(at: markerURL) }
+
+        let runtime = Process()
+        runtime.executableURL = runtimeURL
+        runtime.arguments = ["/bin/zsh"]
+        runtime.standardOutput = Pipe()
+        runtime.standardError = Pipe()
+        try runtime.run()
+        defer {
+            if runtime.isRunning { runtime.terminate() }
+            runtime.waitUntilExit()
+        }
+
+        try waitForExternalRuntimeAttachable(appBinaryURL: appBinaryURL, runtime: runtime)
+        let surface = launchProductionApp()
+        let composer = app.textViews["composer.pane-local"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        composer.click()
+        let baselineSurfacePNG = surface.screenshot().pngRepresentation
+
+        // Keep the typed command ASCII so XCTest's keyboard path is stable;
+        // printf expands locale-independent UTF-8 octal bytes at the PTY
+        // boundary. The payload is captured before being echoed with cat so
+        // the terminal and exact fixture assertion use the same bytes without
+        // relying on XCTest to type a shell pipeline character.
+        let expectedUnicode = "é 界 👩‍💻 🇮🇳 क्ष مرحبا\n"
+        let command =
+            "LC_ALL=C printf '%b' '\\0145\\0314\\0201 \\0347\\0225\\0214 \\0360\\0237\\0221\\0251\\0342\\0200\\0215\\0360\\0237\\0222\\0273 \\0360\\0237\\0207\\0256\\0360\\0237\\0207\\0263 \\0340\\0244\\0225\\0340\\0245\\0215\\0340\\0244\\0267 \\0331\\0205\\0330\\0261\\0330\\0255\\0330\\0250\\0330\\0247\\0012' > '\(markerURL.path)' && LC_ALL=C cat '\(markerURL.path)'"
+        composer.typeText(command)
+        composer.typeKey(.return, modifierFlags: [])
+
+        XCTAssertTrue(
+            wait(timeout: 5) { FileManager.default.fileExists(atPath: markerURL.path) },
+            "Unicode workload did not reach the Runtime-owned PTY shell"
+        )
+        XCTAssertEqual(try Data(contentsOf: markerURL), Data(expectedUnicode.utf8))
+
+        let blocks = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier CONTAINS '.block.'")
+        )
+        XCTAssertTrue(
+            wait(timeout: 5) { blocks.count > 0 },
+            "Unicode command did not create a visible production Block"
+        )
+        XCTAssertGreaterThan(surface.frame.width, 480)
+        if blocks.count > 0 {
+            let block = blocks.element(boundBy: blocks.count - 1)
+            XCTAssertTrue(
+                wait(timeout: 5) {
+                    block.frame.width > 0
+                        && block.frame.height > 0
+                        && block.frame.intersects(surface.frame)
+                        && abs(block.frame.width - (surface.frame.width - 16)) <= 2
+                },
+                "Unicode Block did not receive a visible frame"
+            )
+            XCTAssertEqual(block.frame.width, surface.frame.width - 16, accuracy: 2)
+        }
+
+        var renderedSurfacePNG = baselineSurfacePNG
+        XCTAssertTrue(
+            wait(timeout: 5) {
+                renderedSurfacePNG = surface.screenshot().pngRepresentation
+                return renderedSurfacePNG != baselineSurfacePNG
+            },
+            "terminal surface did not present a changed frame after Unicode output"
+        )
+        let attachment = XCTAttachment(
+            data: renderedSurfacePNG,
+            uniformTypeIdentifier: "public.png"
+        )
+        attachment.name = "m002-817-unicode-headed-render"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertGreaterThan(renderedSurfacePNG.count, 0)
+    }
+
+    @MainActor
 
     func testPass9ProductionRecoverySurvivesGracefulAndForcedGUIExit() throws {
         app.terminate()

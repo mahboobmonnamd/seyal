@@ -230,6 +230,7 @@ private struct TerminalLayoutSample: Equatable {
 
 private enum TerminalNativeKeyClassifier {
   static func v2(
+    keyCode: UInt16,
     specialKey: NSEvent.SpecialKey?,
     charactersIgnoringModifiers: String?,
     modifierFlags: NSEvent.ModifierFlags,
@@ -242,6 +243,16 @@ private enum TerminalNativeKeyClassifier {
     if flags.contains(.control) { modifiers |= 4 }
     let kind: UInt16
     let value: UInt32
+    let functionKeys: [UInt16: UInt32] = [122: 1, 120: 2, 99: 3, 118: 4, 96: 5, 97: 6, 98: 7, 100: 8, 101: 9, 109: 10, 103: 11, 111: 12]
+    if let function = functionKeys[keyCode] {
+      return TerminalNativeKeyV2(kind: 15, modifiers: modifiers, value: function, shiftedASCII: 0)
+    }
+    if flags.contains(.numericPad) {
+      let keypad: [UInt16: UInt32] = [82: 0, 83: 1, 84: 2, 85: 3, 86: 4, 87: 5, 88: 6, 89: 7, 91: 8, 92: 9, 65: 10, 75: 11, 67: 12, 78: 13, 69: 14, 81: 15, 76: 16]
+      if let value = keypad[keyCode] {
+        return TerminalNativeKeyV2(kind: 16, modifiers: modifiers, value: value, shiftedASCII: 0)
+      }
+    }
     switch specialKey {
     // These retain the M001 legacy path, including AppKit text/IME routing.
     case .carriageReturn, .newline, .enter, .tab, .backspace: return nil
@@ -400,6 +411,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
   }
 
   override func resignFirstResponder() -> Bool {
+    heldKeyboardKinds.removeAll(keepingCapacity: true)
     cancelComposition(discardInputContext: true)
     inputContext?.deactivate()
     inputContextActivatedForNativeRestore = false
@@ -463,7 +475,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
     }
 
     if let key = TerminalNativeKeyClassifier.v2(
-      specialKey: event.specialKey,
+      keyCode: event.keyCode, specialKey: event.specialKey,
       charactersIgnoringModifiers: event.charactersIgnoringModifiers,
       modifierFlags: event.modifierFlags,
       optionAsAlt: SeyalInputPolicy.current.optionAsAlt
@@ -511,7 +523,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
 
   override func keyUp(with event: NSEvent) {
     guard let key = TerminalNativeKeyClassifier.v2(
-      specialKey: event.specialKey,
+      keyCode: event.keyCode, specialKey: event.specialKey,
       charactersIgnoringModifiers: event.charactersIgnoringModifiers,
       modifierFlags: event.modifierFlags,
       optionAsAlt: SeyalInputPolicy.current.optionAsAlt
@@ -540,6 +552,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
 
   override func viewWillMove(toWindow newWindow: NSWindow?) {
     if newWindow == nil {
+      heldKeyboardKinds.removeAll(keepingCapacity: true)
       cancelComposition(discardInputContext: true)
     }
     super.viewWillMove(toWindow: newWindow)
@@ -1088,11 +1101,11 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
         modifierFlags: []
       ) == nil
       && TerminalNativeKeyClassifier.v2(
-        specialKey: .enter, charactersIgnoringModifiers: nil,
+        keyCode: 36, specialKey: .enter, charactersIgnoringModifiers: nil,
         modifierFlags: [], optionAsAlt: false
       ) == nil
       && TerminalNativeKeyClassifier.v2(
-        specialKey: nil, charactersIgnoringModifiers: "a",
+        keyCode: 0, specialKey: nil, charactersIgnoringModifiers: "a",
         modifierFlags: [], optionAsAlt: false
       ) == nil
       && SeyalInputPolicy.from(tomlText: "[input]\noption_as_alt = true").optionAsAlt

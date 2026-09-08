@@ -55,6 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         let loaded = SeyalUIConfiguration.loadFromDisk()
+        SeyalInputPolicy.current = loaded.inputPolicy
         let appearance = SeyalAppearanceController(
             settings: loaded.settings,
             diagnostics: loaded.diagnostics

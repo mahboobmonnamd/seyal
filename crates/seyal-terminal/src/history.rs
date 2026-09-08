@@ -1025,7 +1025,7 @@ mod tests {
     #[test]
     fn oversized_fragment_later_source_offset_resolves() {
         let mut store = HistoryStore::default();
-        let mut line = ascii_line(
+        let line = ascii_line(
             7,
             &"a".repeat(HISTORY_SEGMENT_PAYLOAD_TARGET * 2),
             HistoryBreakAfter::HardBreak,

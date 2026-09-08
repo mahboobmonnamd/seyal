@@ -2,7 +2,7 @@
 
 - **Issue:** #823
 - **Authority:** SPEC-006 M001 native input contract and the #823 issue acceptance gates
-- **Measured production code head:** `15c44a6cba337e10de9710889b4052508e0e7372`
+- **Measured production code head:** `e2c6213239aa7ef74c3a573bfda4c4607f2a9b62`
 - **Recorded:** 2026-09-08
 - **Host/build boundary:** local Apple Silicon macOS host
 - **Claim status:** automated and source-build evidence only; native/manual gates remain unverified
@@ -18,8 +18,29 @@ cargo test -p seyal-client --lib --locked        # 47 passed
 cargo test -p seyal-terminal --test m002_keyboard --locked  # 3 passed
 cargo test -p seyal-protocol --test pass7_input_resize --locked  # 8 passed
 cargo test -p seyal-runtime --lib runtime::local::ingress::tests::v2_cursor_and_keypad_modes_select_canonical_bytes --locked  # 1 passed
+python3 scripts/check-benchmark-contract.py  # Benchmark contracts passed (13 target(s)).
 git diff --check
 ```
+
+At exact head `e2c6213`, the focused commands above passed: 47 client unit
+tests, 3 M002 keyboard terminal tests, 8 protocol input/resize tests, and the
+targeted Runtime mode test. `cargo fmt --all -- --check`, the benchmark
+contract validator, and `git diff --check` also passed.
+
+The repository fuzz-smoke command reached the active targets but the retained
+`reconnect-resync-state-machine` seed failed before exercising the state
+machine because the macOS Runtime could not create its endpoint in this
+restricted environment:
+
+```text
+fuzz Runtime: Io(Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" })
+```
+
+This is an environment blocker, not a passing fuzz result. The ARM64 Xcode
+application build completed with `BUILD SUCCEEDED`. The aggregate
+`--renderer-self-test` exited 1 with only its generic failure message, and
+`--pass8-native-metadata-self-test` aborted with exit 134; neither result is
+accepted as native behavior evidence.
 
 The recorded green `make check` result belongs to the prior measured head and
 therefore provides historical repository/build evidence only. It covered fuzz
@@ -60,7 +81,7 @@ capability loss or bridge disconnect.
 | Fuzzing and latency evidence | **Missing** | No exact-head native key latency matrix or dedicated keyboard fuzz campaign is retained here. |
 | Native/XCUI keyboard integration | **Unverified** | Requires a clean headed macOS test lane with real key events. |
 | Manual physical keyboard/layout/IME gates | **Unverified** | Do not infer these from source tests or synthetic events. |
-| `make check` | **Prior head only** | The recorded green run predates `15c44a6`; current-head renderer self-test exited nonzero without naming a component and requires a clean rerun before acceptance. |
+| `make check` | **Prior head only** | The recorded green run predates `e2c6213`; focused exact-head checks pass, but the retained Runtime fuzz seed and current native self-tests are blocked by the environment/nonzero results above. |
 
 This record is evidence for the tested boundaries and does not authorize
 merging or closing #823 while the native, manual, latency, and workload gates

@@ -1,6 +1,8 @@
 use std::{slice, str};
 
-use seyal_runtime::local_ipc::framing::TerminalKeyKind;
+use seyal_runtime::local_ipc::framing::{
+    TerminalKeyKind, TerminalKeyV2Event, TerminalKeyV2Kind, TerminalKeyV2Modifiers,
+};
 
 use crate::{local::derive_grid_geometry, LocalDisplayClient};
 
@@ -74,6 +76,31 @@ pub extern "C" fn seyal_bridge_submit_key(kind: u16, scalar: u32) -> i32 {
         .map_or(-1, |result| result.map_or_else(error_code, |_| 0))
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_submit_key_v2(
+    kind: u16,
+    modifiers: u16,
+    value: u32,
+    event: u8,
+    shifted_ascii: u32,
+    action_id: u32,
+) -> i32 {
+    let Some(kind) = terminal_key_v2_kind(kind) else {
+        return -4;
+    };
+    let Some(event) = terminal_key_v2_event(event) else {
+        return -4;
+    };
+    let modifiers = TerminalKeyV2Modifiers::from_bits_for_ffi(modifiers);
+    let Some(modifiers) = modifiers else {
+        return -4;
+    };
+    with_active_client_mut(|client| {
+        client.submit_terminal_key_v2(kind, modifiers, value, event, shifted_ascii, action_id)
+    })
+    .map_or(-1, |result| result.map_or_else(error_code, |_| 0))
+}
+
 /// Validate logical viewport/cell metrics, derive a bounded rows/columns
 /// proposal, and reconcile it through correlated Pass-7 resize.
 #[unsafe(no_mangle)]
@@ -119,6 +146,38 @@ fn terminal_key_kind(value: u16) -> Option<TerminalKeyKind> {
         7 => TerminalKeyKind::ArrowRight,
         8 => TerminalKeyKind::ArrowLeft,
         9 => TerminalKeyKind::ControlAscii,
+        _ => return None,
+    })
+}
+
+fn terminal_key_v2_kind(value: u16) -> Option<TerminalKeyV2Kind> {
+    Some(match value {
+        1 => TerminalKeyV2Kind::Enter,
+        2 => TerminalKeyV2Kind::Tab,
+        3 => TerminalKeyV2Kind::Backspace,
+        4 => TerminalKeyV2Kind::Escape,
+        5 => TerminalKeyV2Kind::ArrowUp,
+        6 => TerminalKeyV2Kind::ArrowDown,
+        7 => TerminalKeyV2Kind::ArrowRight,
+        8 => TerminalKeyV2Kind::ArrowLeft,
+        9 => TerminalKeyV2Kind::Home,
+        10 => TerminalKeyV2Kind::End,
+        11 => TerminalKeyV2Kind::Insert,
+        12 => TerminalKeyV2Kind::Delete,
+        13 => TerminalKeyV2Kind::PageUp,
+        14 => TerminalKeyV2Kind::PageDown,
+        15 => TerminalKeyV2Kind::Function,
+        16 => TerminalKeyV2Kind::Keypad,
+        17 => TerminalKeyV2Kind::Ascii,
+        _ => return None,
+    })
+}
+
+fn terminal_key_v2_event(value: u8) -> Option<TerminalKeyV2Event> {
+    Some(match value {
+        1 => TerminalKeyV2Event::Press,
+        2 => TerminalKeyV2Event::Repeat,
+        3 => TerminalKeyV2Event::Release,
         _ => return None,
     })
 }

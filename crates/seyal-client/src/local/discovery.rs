@@ -13,7 +13,8 @@ use seyal_runtime::{
         },
         framing::{
             encode_frame, ClientHello, ErrorMessage, MessageType, ServerHello, CAP_BINARY_DISPLAY,
-            CAP_COMMAND_BLOCKS, CAP_CORRELATED_RESIZE, CAP_SEMANTIC_TERMINAL_KEY,
+            CAP_COMMAND_BLOCKS, CAP_CORRELATED_RESIZE, CAP_EXTENDED_TERMINAL_KEY,
+            CAP_SEMANTIC_TERMINAL_KEY,
         },
     },
     pass8::CAP_BLOCK_METADATA,
@@ -219,6 +220,7 @@ pub(crate) fn classify_connect_error(error: std::io::Error) -> ClientError {
 
 pub(crate) fn requested_capabilities(request_block_metadata: bool) -> u32 {
     CAP_COMMAND_BLOCKS
+        | CAP_EXTENDED_TERMINAL_KEY
         | if request_block_metadata {
             CAP_BLOCK_METADATA
         } else {

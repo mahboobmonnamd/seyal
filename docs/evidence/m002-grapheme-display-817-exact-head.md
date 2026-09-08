@@ -3,7 +3,8 @@
 - **Issue:** #817
 - **Authority:** SPEC-011 / ADR-011 grapheme display projection and the #817 acceptance gates
 - **Measured production code head:** `d9775b85fb5659cb0e62e0b5c375344416fbd417`
-- **Exact evidence-test head:** current branch tip recorded in PR #833
+- **Exact evidence-test head:** `432c493dbb533bb891c8504995866c48c942d19e`
+- **Final docs-only descendant:** `f5f9f95c477017912d1da32ae09931478e546663`
 - **Recorded:** 2026-09-08
 - **Host/build boundary:** local Apple Silicon macOS host
 - **Claim status:** focused automated evidence plus a retained headed Unicode XCUI case; real IME and release performance gates remain open
@@ -78,7 +79,7 @@ published and to retain the screenshot artifact.
 | AppKit IME and candidate interaction | **Unverified** | Requires real headed IME commit/cancel/replacement evidence. |
 | Unicode-heavy latency/RSS | **Diagnostic measured** | Exact-head ARM64 M5 Pro Unicode shaping/cache/RSS output is retained above; release ceilings, scaling matrix, and IME latency remain open. |
 | `make check` | **Automated** | Exact head `d9775b8` completed the repository checks with exit 0 on the Apple Silicon host. |
-| Independent review | **GO** | Exact-head review of the current branch tip found no P0-P2 findings; manual IME and release performance gates remain open. |
+| Independent review | **GO** | Exact-head review of implementation/test head `432c493dbb533bb891c8504995866c48c942d19e` found no P0-P2 findings; final descendant `f5f9f95c477017912d1da32ae09931478e546663` is docs-only. Manual IME and release performance gates remain open. |
 
 This record documents the tested boundaries and does not authorize merging or
 closing #817 while the native, manual, and performance gates remain open.

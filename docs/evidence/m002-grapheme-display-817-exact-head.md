@@ -2,7 +2,7 @@
 
 - **Issue:** #817
 - **Authority:** SPEC-011 / ADR-011 grapheme display projection and the #817 acceptance gates
-- **Measured production code head:** `f6279ded5ae762d9d50e6be730a787e86bb0313d`
+- **Measured production code head:** `f655ed399d08aeb120ed958e4945d064712b6349`
 - **Recorded:** 2026-09-08
 - **Host/build boundary:** local Apple Silicon macOS host
 - **Claim status:** focused automated and source evidence only; native/manual/performance gates remain unverified
@@ -36,10 +36,11 @@ canonical native CI job remains the headed acceptance boundary.
 The prior canonical native CI run exposed a real startup layout defect: the
 scroll document could report a transient narrow width, causing the Metal
 surface to propose narrow terminal geometry and become non-hittable. Exact
-head `019c5041` forces the document and surface through a completed layout pass
+head `f655ed3` forces the document and surface through a completed layout pass
 and makes the timeline overlay pass empty-area input through to the surface.
-Focused component regressions cover initial/resize viewport tracking and
-surface hit-testing. The composer Return test still needs the canonical native
+Focused component regressions cover initial/resize viewport tracking, the exact
+geometry samples emitted by layout, and populated Block overlay hit-testing.
+The composer Return test still needs the canonical native
 CI rerun to prove the Runtime timeline Block is visibly published.
 
 ## Acceptance ledger

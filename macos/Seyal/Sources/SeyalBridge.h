@@ -149,6 +149,7 @@ enum SeyalTerminalKeyKind {
 int32_t seyal_bridge_connect_first(void);
 uint64_t seyal_bridge_open_first(void);
 uint64_t seyal_bridge_open_first_until(uint64_t budget_micros);
+uint64_t seyal_bridge_open_first_observer_until(uint64_t budget_micros);
 uint64_t seyal_bridge_open_execution(uint64_t execution_low, uint64_t execution_high);
 uint64_t seyal_bridge_open_execution_until(
     uint64_t execution_low,

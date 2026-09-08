@@ -167,8 +167,8 @@ enum Pass9MergeAcceptance {
           allowsImplicitExecutionBootstrap: true
         )
       },
-      handleAdopter: { handle in
-        bridge.adoptRecoveredHandle(handle)
+      handleAdopter: { opened in
+        bridge.adoptRecoveredHandle(opened)
       }
     )
     // Soak cycles call beginEpisode explicitly. Do not auto-recover on every

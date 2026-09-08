@@ -39,21 +39,43 @@ final class SeyalShellUITests: XCTestCase {
         }
     }
 
+    /// Resolve the exact app produced by this checkout instead of asking
+    /// LaunchServices for a bundle identifier. Multiple isolated Seyal
+    /// worktrees may be installed at once; bundle-id launch can otherwise
+    /// attach the production assertions to a stale app from another issue.
+    private func productionAppURL() -> URL {
+        var repoRoot = URL(fileURLWithPath: #filePath)
+        for _ in 0..<5 { repoRoot.deleteLastPathComponent() }
+        return repoRoot.appendingPathComponent(
+            "target/macos-ui-tests/Build/Products/Debug/Seyal.app"
+        )
+    }
+
     @MainActor
     private func launchProductionApp(requireUsableConnection: Bool = true) -> XCUIElement {
-        app = XCUIApplication()
+        app = XCUIApplication(url: productionAppURL())
         app.launchArguments = []
         app.launchEnvironment = [:]
         app.launch()
+        // XCUITest may leave a directly-launched bundle backgrounded when
+        // another Seyal worktree is already registered with LaunchServices.
+        // Production recovery is intentionally visibility-gated, so make the
+        // exact candidate app the active foreground window before asserting
+        // its Runtime state.
+        app.activate()
         let surface = app.descendants(matching: .any)["terminal-surface.pane-local"]
         XCTAssertTrue(surface.waitForExistence(timeout: 5))
         guard requireUsableConnection else { return surface }
         // Recovery accessibility publishes connection=usable only after
         // Runtime attach completes. Allow the full foreground episode budget
         // rather than the default 5s helper wait used elsewhere in this suite.
+        let reachedUsableConnection = wait(timeout: 15) {
+            self.recoveryFields(surface)?["connection"] == "usable"
+        }
         XCTAssertTrue(
-            wait(timeout: 15) { self.recoveryFields(surface)?["connection"] == "usable" },
-            "production Seyal.app did not reach connection=usable after launch"
+            reachedUsableConnection,
+            "production Seyal.app did not reach connection=usable after launch; "
+                + "last recovery state: \(surface.value ?? "<unavailable>")"
         )
         return surface
     }

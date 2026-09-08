@@ -246,8 +246,8 @@ enum Pass9ReleaseQualification {
         attemptTiming.lastAttemptNs = DispatchTime.now().uptimeNanoseconds &- started
         return outcome
       },
-      handleAdopter: { handle in
-        bridge.adoptRecoveredHandle(handle)
+      handleAdopter: { opened in
+        bridge.adoptRecoveredHandle(opened)
       }
     )
 

@@ -125,31 +125,36 @@ enum SeyalMain {
         let application = NSApplication.shared
         application.setActivationPolicy(.prohibited)
 
-        let bridge = RustDisplayBridge(
-            onFrame: { _ in },
-            onError: { _ in },
-            paneID: "pass8-native-self-test"
-        )
         let deadline = Date().addingTimeInterval(2)
-        while !bridge.start() && Date() < deadline {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        var handle: UInt64 = 0
+        while handle == 0 && Date() < deadline {
+            // This metadata qualification is read-only. Taking Controller
+            // authority here can race the production app's subsequent
+            // controller attach after this short-lived probe exits.
+            handle = seyal_bridge_open_first_observer_until(100_000)
+            if handle == 0 {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+            }
         }
-        guard bridge.isConnected else { return false }
-        defer { bridge.stop() }
+        guard handle != 0, seyal_bridge_adopt_handle(handle) == 0 else {
+            if handle != 0 {
+                seyal_bridge_disconnect_handle(handle)
+            }
+            return false
+        }
+        defer { seyal_bridge_disconnect_handle(handle) }
 
         repeat {
-            guard bridge.clientHandle != 0,
-                  seyal_bridge_select(bridge.clientHandle) == 0
-            else { return false }
+            guard seyal_bridge_select(handle) == 0 else { return false }
 
             let pollResult = seyal_bridge_poll()
             guard pollResult >= 0 else { return false }
 
-            if let metadata = bridge.currentBlockMetadata() {
-                return (metadata.blockIDLow != 0 || metadata.blockIDHigh != 0)
-                    && metadata.revision == 1
-                    && metadata.startLineID > 0
-                    && metadata.state == .current
+            let metadata = seyal_bridge_execution_block_metadata()
+            if metadata.block_id_low != 0 || metadata.block_id_high != 0 {
+                return metadata.revision == 1
+                    && metadata.start_line_id > 0
+                    && metadata.state == 1
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.01))
         } while Date() < deadline

@@ -257,7 +257,7 @@ final class SeyalShellComponentTests: XCTestCase {
       onError: { _ in },
       paneID: "pass9-stale-adopt"
     )
-    XCTAssertFalse(bridge.adoptRecoveredHandle(UInt64.max - 17))
+    XCTAssertFalse(bridge.adoptRecoveredHandle(.testOnly(UInt64.max - 17)))
     XCTAssertFalse(bridge.isConnected)
     let after = seyal_bridge_pass9_diag_snapshot()
     XCTAssertEqual(after.connected, before.connected)
@@ -455,6 +455,40 @@ final class SeyalShellComponentTests: XCTestCase {
     XCTAssertEqual(coordinator.state.stage, .reconstructing)
     XCTAssertFalse(coordinator.hasScheduledAttempt)
     XCTAssertFalse(coordinator.isActive)
+  }
+
+  @MainActor
+  func testLifecycleCoordinatorCarriesOpenedHandleIdentityToAdopter() {
+    let expected = RuntimeRecoveryOpenedHandle(
+      handle: 41,
+      stage: 2,
+      failureClass: 0,
+      retryable: false,
+      connectionOrigin: 2,
+      runtimeIDLow: 1,
+      runtimeIDHigh: 2,
+      executionIDLow: 3,
+      executionIDHigh: 4,
+      attachmentIDLow: 5,
+      attachmentIDHigh: 6
+    )
+    var adopted: RuntimeRecoveryOpenedHandle?
+    let coordinator = RuntimeLifecycleRecoveryCoordinator(
+      clock: { 0 },
+      scheduler: { _, _ in {} },
+      launcher: {},
+      attempt: { .opened(expected) },
+      handleAdopter: { opened in
+        adopted = opened
+        return true
+      },
+      attemptExecution: .inline
+    )
+
+    coordinator.beginEpisode()
+
+    XCTAssertEqual(adopted, expected)
+    XCTAssertEqual(coordinator.state.stage, .reconstructing)
   }
 
   func testReconnectReconstructionPinsRuntimeExecutionAndRequiresFreshAttachment() {

@@ -199,10 +199,21 @@ impl LocalDisplayClient {
     }
 
     pub fn connect_first_running_until(deadline: Instant) -> Result<Self, ClientError> {
+        Self::connect_first_running_as_until(Role::Controller, deadline)
+    }
+
+    /// Connect to the verified per-user Runtime and attach with an explicit
+    /// role to its single running execution. Controller remains the permanent
+    /// native-pane default; read-only native qualification may use Observer
+    /// without borrowing controller authority from the app it will launch.
+    pub(crate) fn connect_first_running_as_until(
+        role: Role,
+        deadline: Instant,
+    ) -> Result<Self, ClientError> {
         let socket_path = canonical_control_socket_path()?;
 
         let mut stream = connect_stream_until(&socket_path, deadline)?;
-        let mut server_hello = hello_until(&mut stream, true, true, deadline)?;
+        let mut server_hello = hello_until(&mut stream, role == Role::Controller, true, deadline)?;
         send_control_until(&mut stream, MessageType::ListExecutions, &[], deadline)?;
         let (kind, payload) = read_blocking_frame_until(&mut stream, deadline)?;
         if kind != MessageType::ExecutionList {
@@ -214,7 +225,7 @@ impl LocalDisplayClient {
         if is_epoch_quarantined(server_hello.runtime_id, execution_id) {
             drop(stream);
             stream = connect_stream_until(&socket_path, deadline)?;
-            server_hello = hello_until(&mut stream, true, false, deadline)?;
+            server_hello = hello_until(&mut stream, role == Role::Controller, false, deadline)?;
         }
         let block_metadata_negotiated =
             server_hello.server_capabilities & seyal_runtime::pass8::CAP_BLOCK_METADATA != 0
@@ -222,7 +233,7 @@ impl LocalDisplayClient {
         Self::finish_attach_with_deadline(
             stream,
             execution_id,
-            Role::Controller,
+            role,
             server_hello.server_capabilities & CAP_COMMAND_BLOCKS != 0,
             server_hello.runtime_id,
             block_metadata_negotiated,
@@ -606,6 +617,41 @@ mod tests {
             assert_eq!(result.err(), Some(expected));
             server_thread.join().expect("server thread");
         }
+    }
+
+    #[test]
+    fn read_only_attach_requests_observer_authority() {
+        let (client, mut server) = UnixStream::pair().expect("unix stream pair");
+        let execution_id = ExecutionId::from_bytes([7; 16]);
+        let server_thread = std::thread::spawn(move || {
+            let (kind, payload) = read_blocking_frame(&mut server).expect("attach request");
+            assert_eq!(kind, MessageType::Attach);
+            let attach = Attach::decode(&payload).expect("decode attach request");
+            assert_eq!(attach.execution_id, execution_id);
+            assert_eq!(attach.requested_role, Role::Observer);
+            let error = ErrorMessage {
+                error_code: ErrorCode::InvalidExecution as u16,
+                offending_message_type: MessageType::Attach as u16,
+                detail_code: 0,
+            };
+            server
+                .write_all(&encode_frame(MessageType::Error, &error.encode()))
+                .expect("attach error response");
+        });
+
+        let result = LocalDisplayClient::finish_attach(
+            client,
+            execution_id,
+            Role::Observer,
+            false,
+            9,
+            false,
+        );
+        assert_eq!(
+            result.err(),
+            Some(ClientError::Server(ErrorCode::InvalidExecution))
+        );
+        server_thread.join().expect("server thread");
     }
 
     #[test]

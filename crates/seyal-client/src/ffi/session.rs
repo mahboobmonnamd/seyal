@@ -218,6 +218,18 @@ pub extern "C" fn seyal_bridge_open_first() -> u64 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn seyal_bridge_open_first_until(budget_micros: u64) -> u64 {
+    open_first_with_role_until(Role::Controller, budget_micros, 1)
+}
+
+/// Opens a read-only Observer attachment to the sole running execution.
+/// Native qualification uses this to prove Runtime metadata readiness without
+/// claiming controller authority that the following Seyal.app launch needs.
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_open_first_observer_until(budget_micros: u64) -> u64 {
+    open_first_with_role_until(Role::Observer, budget_micros, 3)
+}
+
+fn open_first_with_role_until(role: Role, budget_micros: u64, origin: u8) -> u64 {
     let deadline = match recovery_deadline(budget_micros) {
         Ok(deadline) => deadline,
         Err(error) => {
@@ -232,7 +244,7 @@ pub extern "C" fn seyal_bridge_open_first_until(budget_micros: u64) -> u64 {
             return 0;
         }
     };
-    let client = match LocalDisplayClient::connect_first_running_until(deadline) {
+    let client = match LocalDisplayClient::connect_first_running_as_until(role, deadline) {
         Ok(client) => client,
         Err(error) => {
             set_recovery_failure(error);
@@ -243,7 +255,7 @@ pub extern "C" fn seyal_bridge_open_first_until(budget_micros: u64) -> u64 {
         set_recovery_failure(error);
         return 0;
     }
-    match register_pending_client(client, 1) {
+    match register_pending_client(client, origin) {
         Ok(handle) => handle,
         Err(error) => {
             set_recovery_failure(error);

@@ -285,6 +285,32 @@ final class RustDisplayBridge {
     let attachmentIDLow: UInt64
     let attachmentIDHigh: UInt64
 
+    init(
+      stage: UInt8,
+      failureClass: UInt8,
+      retryable: Bool,
+      connectionOrigin: UInt8,
+      handle: UInt64,
+      runtimeIDLow: UInt64,
+      runtimeIDHigh: UInt64,
+      executionIDLow: UInt64,
+      executionIDHigh: UInt64,
+      attachmentIDLow: UInt64,
+      attachmentIDHigh: UInt64
+    ) {
+      self.stage = stage
+      self.failureClass = failureClass
+      self.retryable = retryable
+      self.connectionOrigin = connectionOrigin
+      self.handle = handle
+      self.runtimeIDLow = runtimeIDLow
+      self.runtimeIDHigh = runtimeIDHigh
+      self.executionIDLow = executionIDLow
+      self.executionIDHigh = executionIDHigh
+      self.attachmentIDLow = attachmentIDLow
+      self.attachmentIDHigh = attachmentIDHigh
+    }
+
     static func current() -> RecoveryResult {
       let result = seyal_bridge_last_recovery_result()
       return RecoveryResult(
@@ -299,6 +325,22 @@ final class RustDisplayBridge {
         executionIDHigh: result.execution_id_high,
         attachmentIDLow: result.attachment_id_low,
         attachmentIDHigh: result.attachment_id_high
+      )
+    }
+
+    init(opened: RuntimeRecoveryOpenedHandle) {
+      self.init(
+        stage: opened.stage,
+        failureClass: opened.failureClass,
+        retryable: opened.retryable,
+        connectionOrigin: opened.connectionOrigin,
+        handle: opened.handle,
+        runtimeIDLow: opened.runtimeIDLow,
+        runtimeIDHigh: opened.runtimeIDHigh,
+        executionIDLow: opened.executionIDLow,
+        executionIDHigh: opened.executionIDHigh,
+        attachmentIDLow: opened.attachmentIDLow,
+        attachmentIDHigh: opened.attachmentIDHigh
       )
     }
   }
@@ -425,7 +467,8 @@ final class RustDisplayBridge {
   /// the disposable Rust connection. Adoption moves the client into this
   /// Pane's executor-local registry before AppKit registers socket sources.
   @discardableResult
-  func adoptRecoveredHandle(_ handle: UInt64) -> Bool {
+  func adoptRecoveredHandle(_ opened: RuntimeRecoveryOpenedHandle) -> Bool {
+    let handle = opened.handle
     guard !isConnected, !teardown.disconnectPending else {
       seyal_bridge_disconnect_handle(handle)
       return false
@@ -438,8 +481,9 @@ final class RustDisplayBridge {
       onStatusChanged()
       return false
     }
-    lastRecoveryResult = RecoveryResult.current()
-    return finishAdoptedHandle(handle, recoveryResult: lastRecoveryResult)
+    let recoveryResult = RecoveryResult(opened: opened)
+    lastRecoveryResult = recoveryResult
+    return finishAdoptedHandle(handle, recoveryResult: recoveryResult)
   }
 
   @discardableResult

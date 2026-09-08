@@ -229,8 +229,8 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
         allowsImplicitExecutionBootstrap: allowsImplicitExecutionBootstrap
       )
     },
-    handleAdopter: { [weak self] handle in
-      self?.bridge?.adoptRecoveredHandle(handle) ?? false
+    handleAdopter: { [weak self] opened in
+      self?.bridge?.adoptRecoveredHandle(opened) ?? false
     }
   )
   var runtimeRecoveryState: RuntimeRecoveryState { bridgeRecoveryCoordinator.state }

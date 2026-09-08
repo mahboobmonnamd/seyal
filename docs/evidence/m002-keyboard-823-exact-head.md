@@ -21,20 +21,20 @@ cargo test -p seyal-runtime --lib runtime::local::ingress::tests::v2_cursor_and_
 git diff --check
 ```
 
-`make check` completed repository validation, fuzz smoke, workspace tests,
-Rust tests, ARM64 Swift compilation, native shell smoke, and deterministic
-renderer/input/recovery self-tests. It stopped at the existing host singleton
-condition:
+The exact-head `make check` completed repository validation, fuzz smoke,
+workspace tests, Rust tests, ARM64 Swift compilation, native shell smoke,
+deterministic renderer/input/recovery self-tests, Runtime-to-Swift metadata,
+and live Candidate-D-to-Metal checks:
 
 ```text
-Error: AlreadyRunning
-Seyal Pass 8 Runtime-to-Swift metadata self-test failed.
-make: *** [check] Error 1
+[seyal macOS test] Pass 8 real Runtime-to-Swift metadata acceptance passed.
+[seyal macOS test] AppKit + Candidate-D + permanent Metal renderer acceptance passed.
+[seyal macOS test] Swift + AppKit + Metal + UI shell scaffold acceptance passed.
 ```
 
-The ARM64 Xcode build itself reported `BUILD SUCCEEDED`; the final app link
-and packaged native test lane were not treated as production evidence because
-the local Rust bridge/runtime singleton gate was not clean.
+The ARM64 Xcode build reported `BUILD SUCCEEDED`. This is exact-head build and
+native smoke evidence; it does not substitute for the missing headed keyboard
+matrix or physical/manual IME evidence.
 
 The production input self-test covers legacy Enter/Tab/Backspace exclusions,
 navigation/function/keypad classification, immutable `[input] option_as_alt`
@@ -54,7 +54,7 @@ metadata retention when key-up events have no characters.
 | Fuzzing and latency evidence | **Missing** | No exact-head native key latency matrix or dedicated keyboard fuzz campaign is retained here. |
 | Native/XCUI keyboard integration | **Unverified** | Requires a clean headed macOS test lane with real key events. |
 | Manual physical keyboard/layout/IME gates | **Unverified** | Do not infer these from source tests or synthetic events. |
-| `make check` | **Blocked on host** | Existing `AlreadyRunning` Pass 8 singleton failure described above. |
+| `make check` | **Passed** | Exact-head `make check` exited 0, including ARM64 build, native shell smoke, Runtime-to-Swift metadata, and live renderer checks. |
 
 This record is evidence for the tested boundaries and does not authorize
 merging or closing #823 while the native, manual, latency, and workload gates

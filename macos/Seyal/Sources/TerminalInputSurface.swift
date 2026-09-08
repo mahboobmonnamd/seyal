@@ -15,6 +15,27 @@ private enum TerminalKeyIntent: UInt16 {
   case controlASCII = 9
 }
 
+private struct TerminalNativeKeyV2 {
+  let kind: UInt16
+  let modifiers: UInt16
+  let value: UInt32
+  let shiftedASCII: UInt32
+}
+
+private struct SeyalInputPolicy: Equatable, Sendable {
+  let optionAsAlt: Bool
+  static let `default` = SeyalInputPolicy(optionAsAlt: false)
+
+  static func from(tomlText: String?) -> SeyalInputPolicy {
+    guard let tomlText,
+      let result = try? SeyalTOMLParser.parse(tomlText).get(),
+      let input = result["input"]?.table,
+      let value = input["option_as_alt"]?.bool
+    else { return .default }
+    return SeyalInputPolicy(optionAsAlt: value)
+  }
+}
+
 private enum NativeInputFailure: Int32 {
   case clientBackpressure = 1
   case commitTooLarge = 2
@@ -207,6 +228,42 @@ struct TerminalLayoutSample: Equatable {
 }
 
 private enum TerminalNativeKeyClassifier {
+  static func v2(
+    specialKey: NSEvent.SpecialKey?,
+    charactersIgnoringModifiers: String?,
+    modifierFlags: NSEvent.ModifierFlags,
+    optionAsAlt: Bool
+  ) -> TerminalNativeKeyV2? {
+    let flags = modifierFlags.intersection(.deviceIndependentFlagsMask)
+    var modifiers: UInt16 = 0
+    if flags.contains(.shift) { modifiers |= 1 }
+    if flags.contains(.option) && (optionAsAlt || specialKey != nil) { modifiers |= 2 }
+    if flags.contains(.control) { modifiers |= 4 }
+    let kind: UInt16
+    let value: UInt32
+    switch specialKey {
+    // These retain the M001 legacy path, including AppKit text/IME routing.
+    case .carriageReturn, .newline, .enter, .tab, .backspace: return nil
+    case .upArrow: kind = 5; value = 0
+    case .downArrow: kind = 6; value = 0
+    case .rightArrow: kind = 7; value = 0
+    case .leftArrow: kind = 8; value = 0
+    case .home: kind = 9; value = 0
+    case .end: kind = 10; value = 0
+    case .insert: kind = 11; value = 0
+    case .delete: kind = 12; value = 0
+    case .pageUp: kind = 13; value = 0
+    case .pageDown: kind = 14; value = 0
+    default:
+      guard let chars = charactersIgnoringModifiers, chars.unicodeScalars.count == 1,
+        let scalar = chars.unicodeScalars.first?.value, (0x20...0x7e).contains(scalar),
+        modifiers & 6 != 0
+      else { return nil }
+      kind = 17; value = scalar >= 0x41 && scalar <= 0x5a ? scalar + 0x20 : scalar
+    }
+    return TerminalNativeKeyV2(kind: kind, modifiers: modifiers, value: value, shiftedASCII: 0)
+  }
+
   static func controlASCII(
     modifierFlags: NSEvent.ModifierFlags,
     charactersIgnoringModifiers: String?
@@ -294,6 +351,9 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
   /// reference inequality re-activates IMK every Usable transition and grows
   /// process RSS across Pass 9 reconnect soaks.
   private var inputContextActivatedForNativeRestore = false
+  private var inputPolicy = SeyalInputPolicy.default
+  private var nextKeyboardActionID: UInt32 = 1
+  private var heldKeyboardKinds: Set<UInt16> = []
 
   convenience init(frame frameRect: NSRect) {
     self.init(frame: frameRect, paneID: "unbound")
@@ -404,6 +464,24 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
       return
     }
 
+    if let key = TerminalNativeKeyClassifier.v2(
+      specialKey: event.specialKey,
+      charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+      modifierFlags: event.modifierFlags,
+      optionAsAlt: inputPolicy.optionAsAlt
+    ) {
+      let actionID = nextKeyboardActionID
+      guard actionID != 0 else { return }
+      nextKeyboardActionID &+= 1
+      guard heldKeyboardKinds.count < 256 else { return }
+      heldKeyboardKinds.insert(event.keyCode)
+      terminalSubmitKeyV2(
+        kind: key.kind, modifiers: key.modifiers, value: key.value,
+        event: event.isARepeat ? 2 : 1, shiftedASCII: key.shiftedASCII, actionID: actionID
+      )
+      return
+    }
+
     if let controlScalar = TerminalNativeKeyClassifier.controlASCII(
       modifierFlags: event.modifierFlags,
       charactersIgnoringModifiers: event.charactersIgnoringModifiers
@@ -431,6 +509,22 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
     }
 
     interpretKeyEvents([event])
+  }
+
+  override func keyUp(with event: NSEvent) {
+    guard let key = TerminalNativeKeyClassifier.v2(
+      specialKey: event.specialKey,
+      charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+      modifierFlags: event.modifierFlags,
+      optionAsAlt: inputPolicy.optionAsAlt
+    ), heldKeyboardKinds.remove(event.keyCode) != nil else { return }
+    let actionID = nextKeyboardActionID
+    guard actionID != 0 else { return }
+    nextKeyboardActionID &+= 1
+    terminalSubmitKeyV2(
+      kind: key.kind, modifiers: key.modifiers, value: key.value,
+      event: 3, shiftedASCII: key.shiftedASCII, actionID: actionID
+    )
   }
 
   override func layout() {

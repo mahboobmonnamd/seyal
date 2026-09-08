@@ -1078,6 +1078,14 @@ impl TerminalKeyV2Modifiers {
         self.0
     }
 
+    pub fn from_bits_for_ffi(bits: u16) -> Option<Self> {
+        if bits & !0b111 != 0 {
+            None
+        } else {
+            Some(Self(bits))
+        }
+    }
+
     fn from_bits(bits: u16) -> Result<Self, FramingError> {
         if bits & !0b111 != 0 {
             return Err(FramingError::MalformedPayload);

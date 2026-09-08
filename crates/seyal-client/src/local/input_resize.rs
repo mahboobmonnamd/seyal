@@ -3,7 +3,7 @@ use std::{collections::VecDeque, io::Write};
 use seyal_runtime::local_ipc::framing::{
     encode_frame, ErrorCode, ErrorMessage, InputRef, MessageType, ResizeRequest, ResizeResult,
     ResizeResultCode, Resync, Role, TerminalKey, TerminalKeyKind, TerminalKeyModifiers,
-    MAX_INPUT_BYTES,
+    TerminalKeyV2, TerminalKeyV2Event, TerminalKeyV2Kind, TerminalKeyV2Modifiers, MAX_INPUT_BYTES,
 };
 
 use super::{
@@ -288,6 +288,35 @@ impl LocalDisplayClient {
         }
         .encode();
         let frame = encode_frame(MessageType::TerminalKey, &payload);
+        if let Err(error) = self.admit_frame(frame, OutboundKind::TerminalKey) {
+            self.input_failure = Some(InputAdmissionFailure::ClientBackpressure);
+            return Err(error);
+        }
+        self.input_failure = None;
+        self.flush_control_write()
+    }
+
+    pub fn submit_terminal_key_v2(
+        &mut self,
+        kind: TerminalKeyV2Kind,
+        modifiers: TerminalKeyV2Modifiers,
+        value: u32,
+        event: TerminalKeyV2Event,
+        shifted_ascii: u32,
+        action_id: u32,
+    ) -> Result<(), ClientError> {
+        self.require_controller()?;
+        let payload = TerminalKeyV2 {
+            attachment_id: self.attachment_id,
+            kind,
+            modifiers,
+            value,
+            event,
+            shifted_ascii,
+            action_id,
+        }
+        .encode();
+        let frame = encode_frame(MessageType::TerminalKeyV2, &payload);
         if let Err(error) = self.admit_frame(frame, OutboundKind::TerminalKey) {
             self.input_failure = Some(InputAdmissionFailure::ClientBackpressure);
             return Err(error);

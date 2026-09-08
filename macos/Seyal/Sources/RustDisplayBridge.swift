@@ -910,6 +910,15 @@ final class RustDisplayBridge {
   }
 
   @discardableResult
+  func submitKeyV2(kind: UInt16, modifiers: UInt16, value: UInt32, event: UInt8, shiftedASCII: UInt32, actionID: UInt32) -> Int32 {
+    guard isConnected, reconstructionState.canMutate, selectClient() else {
+      onStatusChanged()
+      return -10
+    }
+    return finishMutation(seyal_bridge_submit_key_v2(kind, modifiers, value, event, shiftedASCII, actionID))
+  }
+
+  @discardableResult
   func proposeGeometry(
     viewportWidth: Double,
     viewportHeight: Double,

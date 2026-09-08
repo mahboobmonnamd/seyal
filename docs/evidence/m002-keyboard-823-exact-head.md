@@ -21,10 +21,11 @@ cargo test -p seyal-runtime --lib runtime::local::ingress::tests::v2_cursor_and_
 git diff --check
 ```
 
-The exact-head `make check` completed repository validation, fuzz smoke,
-workspace tests, Rust tests, ARM64 Swift compilation, native shell smoke,
-deterministic renderer/input/recovery self-tests, Runtime-to-Swift metadata,
-and live Candidate-D-to-Metal checks:
+The recorded green `make check` result belongs to the prior measured head and
+therefore provides historical repository/build evidence only. It covered fuzz
+smoke, workspace tests, Rust tests, ARM64 Swift compilation, native shell
+smoke, deterministic renderer/input/recovery self-tests, Runtime-to-Swift
+metadata, and live Candidate-D-to-Metal checks:
 
 ```text
 [seyal macOS test] Pass 8 real Runtime-to-Swift metadata acceptance passed.
@@ -32,11 +33,12 @@ and live Candidate-D-to-Metal checks:
 [seyal macOS test] Swift + AppKit + Metal + UI shell scaffold acceptance passed.
 ```
 
-The ARM64 Xcode build reported `BUILD SUCCEEDED`. The deterministic renderer
-self-test was not accepted as green because the aggregate `--renderer-self-test`
-run exited nonzero without naming a component. This is exact-head build and
-source/native smoke evidence; it does not substitute for the missing headed
-keyboard matrix or physical/manual IME evidence.
+The current exact-head ARM64 Xcode build reported `BUILD SUCCEEDED`. The
+current deterministic renderer self-test was not accepted as green because
+the aggregate `--renderer-self-test` run exited nonzero without naming a
+component. This is exact-head build and source/native smoke evidence; it does
+not substitute for the missing headed keyboard matrix or physical/manual IME
+evidence.
 
 The production input self-test covers legacy Enter/Tab/Backspace exclusions,
 navigation/function/keypad classification, immutable `[input] option_as_alt`

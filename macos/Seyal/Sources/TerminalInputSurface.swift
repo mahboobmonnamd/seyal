@@ -25,7 +25,6 @@ private struct TerminalNativeKeyV2 {
 struct SeyalInputPolicy: Equatable, Sendable {
   let optionAsAlt: Bool
   static let `default` = SeyalInputPolicy(optionAsAlt: false)
-  @MainActor static var current = SeyalInputPolicy.default
 
   static func from(tomlText: String?) -> SeyalInputPolicy {
     guard let tomlText,
@@ -363,7 +362,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
   /// reference inequality re-activates IMK every Usable transition and grows
   /// process RSS across Pass 9 reconnect soaks.
   private var inputContextActivatedForNativeRestore = false
-  private var inputPolicy: SeyalInputPolicy { SeyalInputPolicy.current }
+  private let inputPolicy = SeyalInputPolicy.default
   private var nextKeyboardActionID: UInt32 = 1
   private var heldKeyboardKinds: Set<UInt16> = []
 
@@ -481,7 +480,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
       keyCode: event.keyCode, specialKey: event.specialKey,
       charactersIgnoringModifiers: event.charactersIgnoringModifiers,
       modifierFlags: event.modifierFlags,
-      optionAsAlt: SeyalInputPolicy.current.optionAsAlt
+      optionAsAlt: inputPolicy.optionAsAlt
     ) {
       let actionID = nextKeyboardActionID
       guard actionID != 0 else { return }
@@ -529,7 +528,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
       keyCode: event.keyCode, specialKey: event.specialKey,
       charactersIgnoringModifiers: event.charactersIgnoringModifiers,
       modifierFlags: event.modifierFlags,
-      optionAsAlt: SeyalInputPolicy.current.optionAsAlt
+      optionAsAlt: inputPolicy.optionAsAlt
     ), heldKeyboardKinds.remove(event.keyCode) != nil else { return }
     let actionID = nextKeyboardActionID
     guard actionID != 0 else { return }

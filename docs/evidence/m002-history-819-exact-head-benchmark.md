@@ -58,6 +58,15 @@ Append, search and anchor values are therefore **comparative measurements now
 emitted by the harness**, while this smoke run remains too small and sandbox RSS
 unavailable for any release or physical-host claim.
 
+## Current 10k matrix slice
+
+The exact `c9030fa` harness also ran the complete 10k-line slice across all four
+execution populations, seven required column widths and four workload classes:
+112 cases, one execution per population, ten append samples per execution.
+The validator accepted every emitted case. The raw machine output is retained
+in `m002-history-819-10k-comparative.log`; RSS was unavailable and every case
+keeps `performance_claim=false`.
+
 ## Acceptance ledger
 
 | Gate | Status | Evidence / remaining work |

@@ -96,7 +96,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.title = "Seyal"
             window.contentView = SeyalShellProductionFactory.make(
                 frame: contentRect,
-                visual: snapshot
+                visual: snapshot,
+                inputPolicy: loaded.inputPolicy
             )
         }
         appearance.onChange = { [weak self] next in

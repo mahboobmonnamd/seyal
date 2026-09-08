@@ -232,6 +232,7 @@ private enum TerminalNativeKeyClassifier {
     keyCode: UInt16,
     specialKey: NSEvent.SpecialKey?,
     charactersIgnoringModifiers: String?,
+    characters: String?,
     modifierFlags: NSEvent.ModifierFlags,
     optionAsAlt: Bool
   ) -> TerminalNativeKeyV2? {
@@ -272,7 +273,16 @@ private enum TerminalNativeKeyClassifier {
       else { return nil }
       kind = 17; value = scalar >= 0x41 && scalar <= 0x5a ? scalar + 0x20 : scalar
     }
-    return TerminalNativeKeyV2(kind: kind, modifiers: modifiers, value: value, shiftedASCII: 0)
+    let shiftedASCII: UInt32
+    if kind == 17, flags.contains(.shift) {
+      guard let chars = characters, chars.unicodeScalars.count == 1,
+        let scalar = chars.unicodeScalars.first?.value, (0x20...0x7e).contains(scalar)
+      else { return nil }
+      shiftedASCII = scalar
+    } else {
+      shiftedASCII = 0
+    }
+    return TerminalNativeKeyV2(kind: kind, modifiers: modifiers, value: value, shiftedASCII: shiftedASCII)
   }
 
   static func controlASCII(
@@ -362,7 +372,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
   /// reference inequality re-activates IMK every Usable transition and grows
   /// process RSS across Pass 9 reconnect soaks.
   private var inputContextActivatedForNativeRestore = false
-  private let inputPolicy = SeyalInputPolicy.default
+  private let inputPolicy: SeyalInputPolicy
   private var nextKeyboardActionID: UInt32 = 1
   private var heldKeyboardKinds: Set<UInt16> = []
 
@@ -378,6 +388,28 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
     terminalFont: SeyalResolvedFontSpec = .canonicalTerminal,
     installation: Installation = .fullDisplay
   ) {
+    inputPolicy = .default
+    super.init(
+      frame: frameRect,
+      paneID: paneID,
+      executionIdentity: executionIdentity,
+      allowsImplicitExecutionBootstrap: allowsImplicitExecutionBootstrap,
+      terminalFont: terminalFont,
+      installation: installation
+    )
+    configureInteractiveSurface()
+  }
+
+  init(
+    frame frameRect: NSRect,
+    paneID: String,
+    executionIdentity: String? = nil,
+    allowsImplicitExecutionBootstrap: Bool = true,
+    terminalFont: SeyalResolvedFontSpec = .canonicalTerminal,
+    installation: Installation = .fullDisplay,
+    inputPolicy: SeyalInputPolicy
+  ) {
+    self.inputPolicy = inputPolicy
     super.init(
       frame: frameRect,
       paneID: paneID,
@@ -479,6 +511,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
     if let key = TerminalNativeKeyClassifier.v2(
       keyCode: event.keyCode, specialKey: event.specialKey,
       charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+      characters: event.characters,
       modifierFlags: event.modifierFlags,
       optionAsAlt: inputPolicy.optionAsAlt
     ) {
@@ -527,6 +560,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
     guard let key = TerminalNativeKeyClassifier.v2(
       keyCode: event.keyCode, specialKey: event.specialKey,
       charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+      characters: event.characters,
       modifierFlags: event.modifierFlags,
       optionAsAlt: inputPolicy.optionAsAlt
     ), heldKeyboardKinds.remove(event.keyCode) != nil else { return }
@@ -1115,12 +1149,18 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
       ) == nil
       && TerminalNativeKeyClassifier.v2(
         keyCode: 36, specialKey: .enter, charactersIgnoringModifiers: nil,
+        characters: nil,
         modifierFlags: [], optionAsAlt: false
       ) == nil
       && TerminalNativeKeyClassifier.v2(
         keyCode: 0, specialKey: nil, charactersIgnoringModifiers: "a",
+        characters: "a",
         modifierFlags: [], optionAsAlt: false
       ) == nil
+      && TerminalNativeKeyClassifier.v2(
+        keyCode: 0, specialKey: nil, charactersIgnoringModifiers: "a",
+        characters: "A", modifierFlags: [.shift, .option], optionAsAlt: true
+      )?.shiftedASCII == 65
       && SeyalInputPolicy.from(tomlText: "[input]\noption_as_alt = true").optionAsAlt
       && !SeyalInputPolicy.from(tomlText: "[input]\noption_as_alt = false").optionAsAlt
   }

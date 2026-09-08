@@ -143,6 +143,7 @@ extension SeyalShellView {
       installSurface: productionShell,
       executionIdentity: paneState?.executionIdentity,
       allowsImplicitExecutionBootstrap: paneState?.allowsImplicitExecutionBootstrap ?? false,
+      inputPolicy: inputPolicy,
       visual: visual
     )
     transcript.setAccessibilityIdentifier("transcript.\(paneID)")

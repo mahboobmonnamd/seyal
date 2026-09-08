@@ -17,6 +17,7 @@ enum SeyalUIConfiguration {
 
     struct LoadResult: Equatable, Sendable {
         var settings: SeyalUserUISettings
+        let inputPolicy: SeyalInputPolicy
         var diagnostics: SeyalConfigurationDiagnostics
         var source: String
     }
@@ -29,12 +30,14 @@ enum SeyalUIConfiguration {
     ) -> LoadResult {
         var diagnostics = SeyalConfigurationDiagnostics()
         var settings = defaultSettings
+        var inputPolicy = SeyalInputPolicy.default
         var source = "defaults"
 
         if let tomlText {
             switch SeyalTOMLParser.parse(tomlText) {
             case let .success(table):
                 apply(table: table, to: &settings, diagnostics: &diagnostics)
+                inputPolicy = parseInputPolicy(table: table, diagnostics: &diagnostics)
                 source = "toml"
             case let .failure(error):
                 diagnostics.warnings.append("TOML ignored: \(error)")
@@ -56,7 +59,25 @@ enum SeyalUIConfiguration {
         }
 
         settings.clampToBounds()
-        return LoadResult(settings: settings, diagnostics: diagnostics, source: source)
+        return LoadResult(settings: settings, inputPolicy: inputPolicy, diagnostics: diagnostics, source: source)
+    }
+
+    private static func parseInputPolicy(
+        table: [String: SeyalTOMLValue],
+        diagnostics: inout SeyalConfigurationDiagnostics
+    ) -> SeyalInputPolicy {
+        guard let raw = table["input"] else { return .default }
+        guard let input = raw.table else {
+            diagnostics.warnings.append("input ignored; expected a table")
+            return .default
+        }
+        warnUnknown(prefix: "input", table: input, known: ["option_as_alt"], diagnostics: &diagnostics)
+        guard let value = input["option_as_alt"] else { return .default }
+        guard let optionAsAlt = value.bool else {
+            diagnostics.warnings.append("input.option_as_alt ignored; expected true|false")
+            return .default
+        }
+        return SeyalInputPolicy(optionAsAlt: optionAsAlt)
     }
 
     static func loadFromDisk(

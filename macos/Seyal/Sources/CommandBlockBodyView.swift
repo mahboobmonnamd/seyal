@@ -108,6 +108,7 @@ final class PaneTranscriptView: NSScrollView {
     installSurface: Bool = true,
     executionIdentity: String? = nil,
     allowsImplicitExecutionBootstrap: Bool = true,
+    inputPolicy: SeyalInputPolicy = .default,
     visual: SeyalResolvedVisualConfiguration
   ) {
     self.paneID = paneID
@@ -116,7 +117,8 @@ final class PaneTranscriptView: NSScrollView {
       paneID: paneID,
       executionIdentity: executionIdentity,
       allowsImplicitExecutionBootstrap: allowsImplicitExecutionBootstrap,
-      terminalFont: visual.terminalFont
+      terminalFont: visual.terminalFont,
+      inputPolicy: inputPolicy
     )
     super.init(frame: .zero)
     translatesAutoresizingMaskIntoConstraints = false

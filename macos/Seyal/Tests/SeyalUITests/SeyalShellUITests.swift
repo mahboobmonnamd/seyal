@@ -278,6 +278,61 @@ final class SeyalShellUITests: XCTestCase {
     }
 
     @MainActor
+    func testProductionComposerReturnCreatesAcceptedCommandAndClearsDraft() throws {
+        app.terminate()
+        terminateOrphanedRuntimes()
+
+        var repoRoot = URL(fileURLWithPath: #filePath)
+        for _ in 0..<5 { repoRoot.deleteLastPathComponent() }
+        let runtimeURL = repoRoot.appendingPathComponent("target/debug/seyal-runtime")
+        let appBinaryURL = repoRoot.appendingPathComponent(
+            "target/macos-ui-tests/Build/Products/Debug/Seyal.app/Contents/MacOS/Seyal"
+        )
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: runtimeURL.path))
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: appBinaryURL.path))
+
+        let markerURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "seyal-composer-return-\(UUID().uuidString)"
+        )
+        try? FileManager.default.removeItem(at: markerURL)
+        defer { try? FileManager.default.removeItem(at: markerURL) }
+
+        let runtime = Process()
+        runtime.executableURL = runtimeURL
+        runtime.arguments = ["/bin/zsh"]
+        runtime.standardOutput = Pipe()
+        runtime.standardError = Pipe()
+        try runtime.run()
+        defer {
+            if runtime.isRunning { runtime.terminate() }
+            runtime.waitUntilExit()
+        }
+
+        try waitForExternalRuntimeAttachable(appBinaryURL: appBinaryURL, runtime: runtime)
+        let surface = launchProductionApp()
+        let composer = app.textViews["composer.pane-local"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        composer.click()
+        let command = "printf M002_COMPOSER_RETURN; printf ok > \(markerURL.path)"
+        composer.typeText(command)
+        composer.typeKey(.return, modifierFlags: [])
+
+        XCTAssertTrue(
+            wait(timeout: 5) { FileManager.default.fileExists(atPath: markerURL.path) },
+            "Return submission did not reach the Runtime-owned PTY shell"
+        )
+        XCTAssertEqual(try String(contentsOf: markerURL, encoding: .utf8), "ok")
+        XCTAssertTrue(
+            wait(timeout: 5) { self.recoveryFields(surface)?["connection"] == "usable" },
+            "terminal display connection was lost after composer Return"
+        )
+        XCTAssertTrue(
+            wait(timeout: 5) { (composer.value as? String) == "" },
+            "accepted composer draft was not cleared after the correlated Runtime result"
+        )
+    }
+
+    @MainActor
 
     func testPass9ProductionRecoverySurvivesGracefulAndForcedGUIExit() throws {
         app.terminate()

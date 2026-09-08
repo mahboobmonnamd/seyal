@@ -335,6 +335,10 @@ final class SeyalShellUITests: XCTestCase {
         )
         if blocks.count > 0 {
             let block = blocks.element(boundBy: blocks.count - 1)
+            // The production pane minimum is 520pt; the visible surface loses
+            // the transcript scroller allowance, so 480pt is a stable lower
+            // bound that still catches a startup narrow-strip collapse.
+            XCTAssertGreaterThan(surface.frame.width, 480)
             XCTAssertGreaterThan(block.frame.width, 0)
             // The transcript Block stack has the specified 8pt outer inset on
             // each side of the pane-owned terminal surface.

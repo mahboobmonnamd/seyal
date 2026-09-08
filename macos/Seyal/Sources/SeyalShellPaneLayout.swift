@@ -152,8 +152,10 @@ extension SeyalShellView {
         self?.state.updateDraft(draft, paneID: paneID)
       },
       onSubmit: { [weak self] command in
-        _ = self?.submitCommand(command, paneID: paneID)
-        return false
+        // A true result means the ComposerCommand was queued successfully;
+        // the editor still retains its draft until the correlated Runtime
+        // ComposerResult reports authoritative acceptance.
+        return self?.submitCommand(command, paneID: paneID) ?? false
       }
     )
     composerViews[paneID] = composer

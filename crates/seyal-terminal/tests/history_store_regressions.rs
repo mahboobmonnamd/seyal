@@ -11,6 +11,22 @@ fn search_does_not_cross_hard_break_separator() {
 }
 
 #[test]
+fn canonical_search_keeps_multiscalar_grapheme_units_atomic() {
+    let mut terminal = TerminalState::new(8, 1).expect("terminal");
+    terminal.feed("x e\u{301} y\r\n".as_bytes()).expect("feed");
+    let matches = terminal.primary_history_search("e\u{301}", 1);
+    assert_eq!(matches.len(), 1);
+    assert_eq!(
+        terminal.primary_history_unit(matches[0].start),
+        HistoryAnchorResolution::Resolved {
+            text: "e\u{301}".to_owned(),
+            width: 1,
+            style: Default::default()
+        }
+    );
+}
+
+#[test]
 fn canonical_search_matches_across_soft_wrap_and_returns_source_anchors() {
     let mut terminal = TerminalState::new(4, 1).expect("terminal");
     terminal.feed(b"abcdefgh\r\n").expect("feed");

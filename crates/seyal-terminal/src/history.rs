@@ -9,6 +9,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::mem::size_of;
 use std::sync::atomic::{AtomicU64, Ordering};
+use unicode_segmentation::UnicodeSegmentation;
 
 pub const HISTORY_SEGMENT_PAYLOAD_TARGET: usize = 16 * 1024;
 pub const HISTORY_TAIL_PAYLOAD_LIMIT: usize = 2 * HISTORY_SEGMENT_PAYLOAD_TARGET;
@@ -808,7 +809,7 @@ impl HistoryStore {
         if needle.is_empty() || max_matches == 0 {
             return Vec::new();
         }
-        let needle_units = needle.chars().count();
+        let needle_units = needle.graphemes(true).count();
         let mut window: Vec<HistoryUnitView> = Vec::with_capacity(needle_units.max(1));
         let mut matches = Vec::new();
         for line in self.entries() {

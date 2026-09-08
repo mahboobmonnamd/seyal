@@ -5,6 +5,7 @@
 //! sealed segments are the bounded handoff seam for those consumers.
 
 use crate::{grapheme_store::GraphemeStore, Cell, CellRole, LineId, Style};
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::mem::size_of;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -24,10 +25,16 @@ pub enum HistoryBreakAfter {
     SoftWrap,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct HistoryAnchor {
     pub line_id: LineId,
     pub unit_offset: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HistoryMatch {
+    pub start: HistoryAnchor,
+    pub end: HistoryAnchor,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -327,6 +334,7 @@ pub(crate) struct HistoryStore {
     // absorbed into an unavailable range. The Vec allocation is included in
     // resident_bytes, so this metadata participates in the same hard cap.
     evicted_id_ranges: Vec<EvictedIdRange>,
+    reflow_cache: RefCell<Option<(u16, usize, u64, Vec<ReflowRow>)>>,
 }
 
 impl HistoryStore {
@@ -361,6 +369,7 @@ impl HistoryStore {
     }
 
     pub(crate) fn append_line(&mut self, line: HistoryLine) {
+        self.reflow_cache.get_mut().take();
         let bytes = line.payload_len();
         // A source line can be arbitrarily long. Fragmenting at unit boundaries
         // keeps the tail bounded while preserving its LineId and break lineage.
@@ -536,6 +545,7 @@ impl HistoryStore {
     }
 
     pub(crate) fn evict_oldest_segment(&mut self) -> usize {
+        self.reflow_cache.get_mut().take();
         let before = self.resident_bytes;
         let Some(segment) = self.segments.pop_front() else {
             return 0;
@@ -619,6 +629,28 @@ impl HistoryStore {
     }
 
     pub(crate) fn reflow(&self, cols: u16, max_rows: usize) -> Vec<ReflowRow> {
+        let generation = self.eviction_generation;
+        if let Some((cached_cols, cached_rows, cached_generation, rows)) =
+            self.reflow_cache.borrow().as_ref()
+            && (*cached_cols, *cached_rows, *cached_generation) == (cols, max_rows, generation)
+        {
+            return rows.clone();
+        }
+        let rows = self.reflow_uncached(cols, max_rows);
+        let estimated = rows
+            .iter()
+            .map(|row| {
+                row.cells.len() * std::mem::size_of::<Cell>()
+                    + row.anchors.len() * std::mem::size_of::<HistoryAnchor>()
+            })
+            .sum::<usize>();
+        if estimated <= HISTORY_PER_EXECUTION_DERIVED_INDEX_CAP {
+            *self.reflow_cache.borrow_mut() = Some((cols, max_rows, generation, rows.clone()));
+        }
+        rows
+    }
+
+    pub(crate) fn reflow_uncached(&self, cols: u16, max_rows: usize) -> Vec<ReflowRow> {
         if cols == 0 || max_rows == 0 {
             return Vec::new();
         }
@@ -734,6 +766,81 @@ impl HistoryStore {
             }
         }
         units
+    }
+
+    pub(crate) fn search(&self, needle: &str, max_matches: usize) -> Vec<HistoryMatch> {
+        if needle.is_empty() || max_matches == 0 {
+            return Vec::new();
+        }
+        let needle_units = needle.chars().count();
+        let mut units = Vec::new();
+        for line in self.entries() {
+            for (index, unit) in line.units().enumerate() {
+                units.push(HistoryUnitView {
+                    anchor: HistoryAnchor {
+                        line_id: line.line_id(),
+                        unit_offset: line.start_offset().saturating_add(index as u32),
+                    },
+                    text: String::from_utf8_lossy(unit.utf8()).into_owned(),
+                    width: unit.width(),
+                    style: unit.style(),
+                });
+            }
+            if line.break_after() == HistoryBreakAfter::HardBreak {
+                units.push(HistoryUnitView {
+                    anchor: HistoryAnchor {
+                        line_id: line.line_id(),
+                        unit_offset: u32::MAX,
+                    },
+                    text: "\n".to_owned(),
+                    width: 0,
+                    style: Style::default(),
+                });
+            }
+        }
+        let mut matches = Vec::new();
+        for start in 0..units.len() {
+            let mut text = String::new();
+            for end in start..units.len() {
+                text.push_str(&units[end].text);
+                if text == needle {
+                    matches.push(HistoryMatch {
+                        start: units[start].anchor,
+                        end: units[end].anchor,
+                    });
+                    break;
+                }
+                if !needle.starts_with(&text) || text.chars().count() >= needle_units {
+                    break;
+                }
+            }
+            if matches.len() >= max_matches {
+                break;
+            }
+        }
+        matches
+    }
+
+    pub(crate) fn selection(
+        &self,
+        start: HistoryAnchor,
+        end: HistoryAnchor,
+    ) -> Result<Vec<HistoryUnitView>, HistoryRangeError> {
+        if start > end {
+            return Err(HistoryRangeError::Unrepresentable);
+        }
+        if self.range_intersects_evicted(start.line_id, end.line_id) {
+            return Err(HistoryRangeError::Stale);
+        }
+        let units = self.source_units(start.line_id, end.line_id, usize::MAX);
+        let selected = units
+            .into_iter()
+            .filter(|unit| unit.anchor >= start && unit.anchor <= end)
+            .collect::<Vec<_>>();
+        if selected.is_empty() {
+            return Err(HistoryRangeError::Stale);
+        }
+        Ok(selected)
     }
 }
 

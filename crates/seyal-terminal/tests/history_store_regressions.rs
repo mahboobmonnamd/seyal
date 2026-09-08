@@ -4,6 +4,54 @@ use seyal_terminal::{
 };
 
 #[test]
+fn canonical_search_matches_across_soft_wrap_and_returns_source_anchors() {
+    let mut terminal = TerminalState::new(4, 1).expect("terminal");
+    terminal.feed(b"abcdefgh\r\n").expect("feed");
+
+    let matches = terminal.primary_history_search("de", 1);
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].start.unit_offset, 3);
+    assert_eq!(matches[0].end.unit_offset, 0);
+    assert_ne!(matches[0].start.line_id, matches[0].end.line_id);
+}
+
+#[test]
+fn canonical_selection_resolves_source_units_after_reflow() {
+    let mut terminal = TerminalState::new(4, 1).expect("terminal");
+    terminal.feed(b"abcdef").expect("feed");
+    terminal.feed(b"\r\n").expect("scroll source into history");
+    let source = terminal.primary_history_units_range(LineId(1), LineId(u64::MAX), 8);
+    let start = HistoryAnchor {
+        line_id: source[1].anchor.line_id,
+        unit_offset: source[1].anchor.unit_offset,
+    };
+    let end = HistoryAnchor {
+        line_id: source[2].anchor.line_id,
+        unit_offset: source[2].anchor.unit_offset,
+    };
+    terminal.resize(8, 1).expect("reflow");
+    let selected = terminal
+        .primary_history_selection(start, end)
+        .expect("selection");
+    assert_eq!(
+        selected
+            .iter()
+            .map(|unit| unit.text.as_str())
+            .collect::<String>(),
+        "bc"
+    );
+}
+
+#[test]
+fn reflow_cache_matches_rebuild_from_canonical_history() {
+    let mut terminal = TerminalState::new(4, 2).expect("terminal");
+    terminal.feed(b"abcdefgh\r\nijkl\r\n").expect("feed");
+    let cached = terminal.primary_history_reflow(3, 32);
+    let rebuilt = terminal.primary_history_reflow_uncached(3, 32);
+    assert_eq!(cached, rebuilt);
+}
+
+#[test]
 fn reflow_at_one_column_never_emits_an_orphan_wide_unit() {
     let mut terminal = TerminalState::new(2, 1).expect("terminal");
     terminal.feed("界\r\n".as_bytes()).expect("feed");

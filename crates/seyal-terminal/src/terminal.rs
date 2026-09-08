@@ -14,8 +14,8 @@ use crate::{
     },
     screen::{PreparedScreen, Screen},
     width::{grapheme_terminal_width, AmbiguousWidthPolicy},
-    Cell, CellRole, CursorState, Damage, HistoryAnchor, HistoryAnchorResolution, HistoryRangeError,
-    HistoryUnitView, LineId, ModeState, ReflowRow, TerminalError,
+    Cell, CellRole, CursorState, Damage, HistoryAnchor, HistoryAnchorResolution, HistoryMatch,
+    HistoryRangeError, HistoryUnitView, LineId, ModeState, ReflowRow, TerminalError,
 };
 use std::collections::VecDeque;
 
@@ -397,6 +397,10 @@ impl TerminalState {
         self.core.primary.history().reflow(cols, max_rows)
     }
 
+    pub fn primary_history_reflow_uncached(&self, cols: u16, max_rows: usize) -> Vec<ReflowRow> {
+        self.core.primary.history().reflow_uncached(cols, max_rows)
+    }
+
     pub fn primary_history_resident_bytes(&self) -> usize {
         self.core.primary.history().resident_bytes()
     }
@@ -417,6 +421,18 @@ impl TerminalState {
     /// with an invalid line or unit offset.
     pub fn primary_history_unit(&self, anchor: HistoryAnchor) -> HistoryAnchorResolution {
         self.core.primary.history().resolve_anchor(anchor)
+    }
+
+    pub fn primary_history_search(&self, needle: &str, max_matches: usize) -> Vec<HistoryMatch> {
+        self.core.primary.history().search(needle, max_matches)
+    }
+
+    pub fn primary_history_selection(
+        &self,
+        start: HistoryAnchor,
+        end: HistoryAnchor,
+    ) -> Result<Vec<HistoryUnitView>, HistoryRangeError> {
+        self.core.primary.history().selection(start, end)
     }
 
     pub fn row_text(&self, row: u16) -> Option<String> {

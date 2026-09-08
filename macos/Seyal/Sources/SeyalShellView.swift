@@ -76,7 +76,7 @@ final class SeyalShellView: NSView {
   var tuiBlocks: [String: BlockView] = [:]
   var surfaces: [String: InteractiveMetalSurfaceView] = [:]
   var transcriptDocuments: [String: PaneTranscriptView] = [:]
-  var blockStacks: [String: NSStackView] = [:]
+  var blockStacks: [String: TranscriptBlockStackView] = [:]
   var tuiPaneIDs: Set<String> = []
   var pendingComposerRequests: [String: UInt64] = [:]
   var requestedHistoryBlocks: Set<PaneBlockKey> = []

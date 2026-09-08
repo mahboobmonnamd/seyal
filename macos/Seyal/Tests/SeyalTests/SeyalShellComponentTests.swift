@@ -892,6 +892,46 @@ final class SeyalShellComponentTests: XCTestCase {
   }
 
   @MainActor
+  func testPaneTranscriptSurfaceTracksViewportAfterInitialAndResizeLayout() {
+    let transcript = PaneTranscriptView(visual: previewVisual())
+    transcript.frame = NSRect(x: 0, y: 0, width: 720, height: 420)
+    transcript.layoutSubtreeIfNeeded()
+
+    XCTAssertEqual(
+      transcript.terminalSurface.bounds.width,
+      transcript.contentView.bounds.width,
+      accuracy: 1
+    )
+    XCTAssertGreaterThan(transcript.terminalSurface.bounds.width, 600)
+
+    transcript.frame.size.width = 980
+    transcript.needsLayout = true
+    transcript.layoutSubtreeIfNeeded()
+
+    XCTAssertEqual(
+      transcript.terminalSurface.bounds.width,
+      transcript.contentView.bounds.width,
+      accuracy: 1
+    )
+    XCTAssertGreaterThan(transcript.terminalSurface.bounds.width, 850)
+  }
+
+  @MainActor
+  func testPaneTranscriptBlockOverlayDoesNotCaptureTerminalSurfaceInput() {
+    let transcript = PaneTranscriptView(visual: previewVisual())
+    let blockStack = TranscriptBlockStackView()
+    transcript.frame = NSRect(x: 0, y: 0, width: 720, height: 420)
+    transcript.installBlockStack(blockStack)
+    transcript.layoutSubtreeIfNeeded()
+
+    let point = NSPoint(x: 360, y: 200)
+    XCTAssertTrue(
+      transcript.transcriptDocument.hitTest(point) === transcript.terminalSurface,
+      "the timeline overlay must pass empty-area hits through to the terminal surface"
+    )
+  }
+
+  @MainActor
   func testPaneTranscriptRegistersAllBlockRegionsOnOneSurfaceInLifecycleOrder() {
     let transcript = PaneTranscriptView(installSurface: false, visual: previewVisual())
     let first = CommandBlockBodyView()

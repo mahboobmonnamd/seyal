@@ -41,11 +41,11 @@ extension SeyalShellView {
     }
     renderedBlockIDs[paneID] = blockKeys
     transcript.unregisterMissingBlockBodies(Set(blocks.compactMap { UInt64($0.id) }))
-    let stack: NSStackView
+    let stack: TranscriptBlockStackView
     if let existing = blockStacks[paneID] {
       stack = existing
     } else {
-      stack = NSStackView()
+      stack = TranscriptBlockStackView()
       stack.orientation = .vertical
       stack.alignment = .leading
       stack.spacing = 8

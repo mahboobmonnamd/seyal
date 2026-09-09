@@ -56,6 +56,7 @@ case "$cmd" in
     python3 scripts/check-layering.py
     python3 scripts/check-hot-path.py
     python3 scripts/check-benchmark-contract.py
+    python3 scripts/check-m002-performance-contract.py
     python3 scripts/check-pass5-benchmark-coverage.py --self-test
     python3 scripts/check-pass7-benchmark-coverage.py --self-test
     python3 scripts/check-pass7-validation-matrix.py --self-test
@@ -76,6 +77,7 @@ case "$cmd" in
   bench)
     bash scripts/check-toolchain.sh
     python3 scripts/check-benchmark-contract.py
+    python3 scripts/check-m002-performance-contract.py
     python3 scripts/benchmark-smoke.py
     if find crates -type f -path '*/benches/*.rs' -print -quit 2>/dev/null | grep -q .; then
       # Darwin Unix-domain sockets have a 104-byte sun_path limit. The production

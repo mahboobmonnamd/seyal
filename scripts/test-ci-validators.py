@@ -98,6 +98,14 @@ def main() -> None:
         write(benchmark / "crates/seyal-terminal/benches/bad.rs", 'fn main() { println!("performance_claim=true"); }\n')
         run_negative(["python3", str(ROOT / "scripts/check-benchmark-contract.py")], benchmark, "performance_claim=false")
 
+        performance = base / "m002-performance-contract"
+        performance.mkdir()
+        run_negative(
+            ["python3", str(ROOT / "scripts/check-m002-performance-contract.py")],
+            performance,
+            "missing M002 performance contract",
+        )
+
         unicode_benchmark = base / "unicode-benchmark-contract"
         write(
             unicode_benchmark / "crates/seyal-terminal/benches/good.rs",

@@ -191,6 +191,19 @@ headed manual history/reflow evidence, or independent review.
 The raw validator output is retained at
 `/tmp/seyal-819-1m-1-samples10-full-XXXXXX.log`.
 
+## 10k-line full scaling tier
+
+The exact head completed the complete 10k-line tier across 1, 10, 50 and 100
+executions, all seven widths, and all four workloads, using `samples=10`.
+The validator reported 112 cases passed. Every case had at least 10 append
+observations per execution, available RSS, measured allocation counters, and
+exact commit provenance `9e691a9`.
+
+This remains comparative evidence (`performance_claim=false`) and does not
+establish product performance acceptance or replace the physical ARM64 lane.
+The raw validator output is retained at
+`/tmp/seyal-819-10k-full-samples10-XXXXXX.log`.
+
 ## 100k-line scaling point
 
 A bounded resource shard also completed at 100k lines, 50 executions and 40

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -116,6 +117,38 @@ def main() -> None:
             ["python3", str(ROOT / "scripts/check-m002-performance-contract.py")],
             malformed_performance,
             "unsupported identity",
+        )
+
+        invalid_result = base / "m002-performance-invalid-result"
+        write(
+            invalid_result / "docs/evidence/M002-PERFORMANCE-CONTRACT-V1.md",
+            "Status: proposed contract for Issue #673\nexact production SHA\nbaseline SHA\nnearest-rank\n",
+        )
+        shutil.copy(ROOT / "docs/evidence/M002-PERFORMANCE-CONTRACT-V1.toml", invalid_result / "docs/evidence/M002-PERFORMANCE-CONTRACT-V1.toml")
+        write(
+            invalid_result / "record.toml",
+            "contract_schema = 'seyal.m002.performance-contract'\ncontract_version = 1\n",
+        )
+        run_negative(
+            ["python3", str(ROOT / "scripts/check-m002-performance-contract.py"), "--record", "record.toml"],
+            invalid_result,
+            "performance result missing",
+        )
+
+        invalid_percentiles = base / "m002-performance-invalid-percentiles"
+        write(
+            invalid_percentiles / "docs/evidence/M002-PERFORMANCE-CONTRACT-V1.md",
+            "Status: proposed contract for Issue #673\nexact production SHA\nbaseline SHA\nnearest-rank\n",
+        )
+        shutil.copy(ROOT / "docs/evidence/M002-PERFORMANCE-CONTRACT-V1.toml", invalid_percentiles / "docs/evidence/M002-PERFORMANCE-CONTRACT-V1.toml")
+        write(
+            invalid_percentiles / "record.toml",
+            "contract_schema = 'seyal.m002.performance-contract'\ncontract_version = 1\nproduction_sha = 'prod'\nharness_sha = 'harness'\nbaseline_sha = 'base'\nevidence_class = 'PHYSICAL_ARM64'\nmetric = 'history_active_reflow_ms'\nboundary = 'active'\nunit = 'ms'\npercentile_method = 'nearest-rank'\nsample_count = 100\ncohort_count = 5\nenvironment_status = 'VALID'\ncomparator = 'less_equal'\np50 = 3\np95 = 2\np99 = 4\nceiling_p50 = 2\nceiling_p95 = 4\nceiling_p99 = 8\n",
+        )
+        run_negative(
+            ["python3", str(ROOT / "scripts/check-m002-performance-contract.py"), "--record", "record.toml"],
+            invalid_percentiles,
+            "percentiles must be ordered",
         )
 
         unicode_benchmark = base / "unicode-benchmark-contract"

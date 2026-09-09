@@ -91,3 +91,15 @@ retained_content = [10000, 100000, 1000000]
 execution_populations = [1, 10, 50, 100]
 columns = [40, 48, 64, 80, 96, 132, 160]
 workloads = ["ASCII", "styled", "CJK", "emoji-combining"]
+
+[result_schema]
+required = [
+  "contract_schema", "contract_version", "production_sha", "harness_sha",
+  "baseline_sha", "evidence_class", "metric", "boundary", "unit",
+  "percentile_method", "sample_count", "cohort_count", "environment_status",
+  "comparator", "p50", "p95", "p99", "ceiling_p50", "ceiling_p95",
+  "ceiling_p99"
+]
+statuses = ["PASS", "FAIL", "PLATFORM_LIMITED"]
+comparators = ["less_equal"]
+environment_statuses = ["VALID", "PLATFORM_LIMITED"]

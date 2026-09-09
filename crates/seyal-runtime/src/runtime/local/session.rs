@@ -82,7 +82,10 @@ impl Runtime {
             return;
         };
         if hello.client_capabilities
-            & !(CAP_COMMAND_BLOCKS | CAP_BLOCK_METADATA | framing::CAP_GRAPHEME_DISPLAY | framing::CAP_EXTENDED_TERMINAL_KEY)
+            & !(CAP_COMMAND_BLOCKS
+                | CAP_BLOCK_METADATA
+                | framing::CAP_GRAPHEME_DISPLAY
+                | framing::CAP_EXTENDED_TERMINAL_KEY)
             != 0
         {
             self.send_error(

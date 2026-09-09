@@ -2,7 +2,7 @@
 
 - **Issue:** #823
 - **Authority:** SPEC-006 M001 native input contract and the #823 issue acceptance gates
-- **Measured production code head:** `385b5c9`
+- **Measured production code head:** `fe70733`
 - **Recorded:** 2026-09-09
 - **Host/build boundary:** local Apple Silicon macOS host
 - **Claim status:** automated and source-build evidence only; native/manual gates remain unverified
@@ -16,7 +16,7 @@ make check
 git diff --check
 ```
 
-At exact head `beeace4`, the full `make check` passed repository/static
+At exact head `fe70733`, the full `make check` passed repository/static
 analysis, Rust and component tests, all active fuzz-smoke targets, the ARM64
 Xcode build, native Swift/AppKit/Metal shell smoke, deterministic
 renderer/input/recovery, real Runtime-to-Swift metadata acceptance, and live
@@ -56,7 +56,7 @@ wire-value exception required by SPEC-006 §21.6.
 | Fuzzing and latency evidence | **Missing** | No exact-head native key latency matrix or dedicated keyboard fuzz campaign is retained here. |
 | Native/XCUI keyboard integration | **Unverified** | Requires a clean headed macOS test lane with real key events. |
 | Manual physical keyboard/layout/IME gates | **Unverified** | Do not infer these from source tests or synthetic events. |
-| `make check` | **Automated** | Full exact-head `make check` passed at `beeace4`; separate headed/manual keyboard, workload, latency, and physical IME gates remain open. |
+| `make check` | **Automated** | Full exact-head `make check` passed at `fe70733`; separate headed/manual keyboard, workload, latency, and physical IME gates remain open. |
 
 This record is evidence for the tested boundaries and does not authorize
 merging or closing #823 while the native, manual, latency, and workload gates

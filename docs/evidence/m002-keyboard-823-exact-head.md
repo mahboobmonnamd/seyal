@@ -2,51 +2,25 @@
 
 - **Issue:** #823
 - **Authority:** SPEC-006 M001 native input contract and the #823 issue acceptance gates
-- **Measured production code head:** `e2c6213239aa7ef74c3a573bfda4c4607f2a9b62`
-- **Recorded:** 2026-09-08
+- **Measured production code head:** `beeace4`
+- **Recorded:** 2026-09-09
 - **Host/build boundary:** local Apple Silicon macOS host
 - **Claim status:** automated and source-build evidence only; native/manual gates remain unverified
 
 ## Automated evidence
 
-The exact production code head passed:
+The exact production code head passed the repository gate:
 
 ```text
-cargo fmt --all -- --check
-cargo check -p seyal-client --locked
-cargo test -p seyal-client --lib --locked        # 47 passed
-cargo test -p seyal-terminal --test m002_keyboard --locked  # 3 passed
-cargo test -p seyal-protocol --test pass7_input_resize --locked  # 8 passed
-cargo test -p seyal-runtime --lib runtime::local::ingress::tests::v2_cursor_and_keypad_modes_select_canonical_bytes --locked  # 1 passed
-python3 scripts/check-benchmark-contract.py  # Benchmark contracts passed (13 target(s)).
+make check
 git diff --check
 ```
 
-At exact head `e2c6213`, the focused commands above passed: 47 client unit
-tests, 3 M002 keyboard terminal tests, 8 protocol input/resize tests, and the
-targeted Runtime mode test. `cargo fmt --all -- --check`, the benchmark
-contract validator, and `git diff --check` also passed.
-
-The repository fuzz-smoke command reached the active targets but the retained
-`reconnect-resync-state-machine` seed failed before exercising the state
-machine because the macOS Runtime could not create its endpoint in this
-restricted environment:
-
-```text
-fuzz Runtime: Io(Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" })
-```
-
-This is an environment blocker, not a passing fuzz result. The ARM64 Xcode
-application build completed with `BUILD SUCCEEDED`. The aggregate
-`--renderer-self-test` exited 1 with only its generic failure message, and
-`--pass8-native-metadata-self-test` aborted with exit 134; neither result is
-accepted as native behavior evidence.
-
-The recorded green `make check` result belongs to the prior measured head and
-therefore provides historical repository/build evidence only. It covered fuzz
-smoke, workspace tests, Rust tests, ARM64 Swift compilation, native shell
-smoke, deterministic renderer/input/recovery self-tests, Runtime-to-Swift
-metadata, and live Candidate-D-to-Metal checks:
+At exact head `beeace4`, the full `make check` passed repository/static
+analysis, Rust and component tests, all active fuzz-smoke targets, the ARM64
+Xcode build, native Swift/AppKit/Metal shell smoke, deterministic
+renderer/input/recovery, real Runtime-to-Swift metadata acceptance, and live
+Candidate-D-to-Metal checks:
 
 ```text
 [seyal macOS test] Pass 8 real Runtime-to-Swift metadata acceptance passed.
@@ -54,11 +28,8 @@ metadata, and live Candidate-D-to-Metal checks:
 [seyal macOS test] Swift + AppKit + Metal + UI shell scaffold acceptance passed.
 ```
 
-The current exact-head ARM64 Xcode build reported `BUILD SUCCEEDED`. The
-current deterministic renderer self-test was not accepted as green because
-the aggregate `--renderer-self-test` run exited nonzero without naming a
-component. This is exact-head build and source/native smoke evidence; it does
-not substitute for the missing headed keyboard matrix or physical/manual IME
+This is exact-head repository and native-shell evidence; it does not
+substitute for the missing headed keyboard matrix or physical/manual IME
 evidence.
 
 The production input self-test covers legacy Enter/Tab/Backspace exclusions,
@@ -81,7 +52,7 @@ capability loss or bridge disconnect.
 | Fuzzing and latency evidence | **Missing** | No exact-head native key latency matrix or dedicated keyboard fuzz campaign is retained here. |
 | Native/XCUI keyboard integration | **Unverified** | Requires a clean headed macOS test lane with real key events. |
 | Manual physical keyboard/layout/IME gates | **Unverified** | Do not infer these from source tests or synthetic events. |
-| `make check` | **Prior head only** | The recorded green run predates `e2c6213`; focused exact-head checks pass, but the retained Runtime fuzz seed and current native self-tests are blocked by the environment/nonzero results above. |
+| `make check` | **Automated** | Full exact-head `make check` passed at `beeace4`; separate headed/manual keyboard, workload, latency, and physical IME gates remain open. |
 
 This record is evidence for the tested boundaries and does not authorize
 merging or closing #823 while the native, manual, latency, and workload gates

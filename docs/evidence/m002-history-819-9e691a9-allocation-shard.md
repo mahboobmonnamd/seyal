@@ -121,3 +121,21 @@ workload=emoji-combining  rss_delta_kib=339216  allocation_status=measured
 The raw validator output is retained at
 `/tmp/seyal-819-1m-10-width80-XXXXXX.log`. This remains comparative evidence
 only and does not close the remaining matrix or physical/manual gates.
+
+## Width-96 shard
+
+A fifth bounded shard completed all four workloads at 1M lines, 10
+executions and 96 columns. The per-case validator reported 4 cases passed;
+each case had 10 append observations, available RSS, measured allocation
+counters, and exact commit provenance `9e691a9`.
+
+```text
+workload=ascii            rss_delta_kib=748880  allocation_status=measured
+workload=styled           rss_delta_kib=305696  allocation_status=measured
+workload=cjk              rss_delta_kib=404576  allocation_status=measured
+workload=emoji-combining  rss_delta_kib=328384  allocation_status=measured
+```
+
+The raw validator output is retained at
+`/tmp/seyal-819-1m-10-width96-XXXXXX.log`. This remains comparative evidence
+only and does not close the remaining matrix or physical/manual gates.

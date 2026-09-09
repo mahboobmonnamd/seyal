@@ -151,6 +151,19 @@ def main() -> None:
             "percentiles must be ordered",
         )
 
+        absolute_fail = base / "m002-performance-absolute-fail"
+        shutil.copytree(invalid_percentiles, absolute_fail)
+        record = (absolute_fail / "record.toml").read_text(encoding="utf-8")
+        record = record.replace("p50 = 3\np95 = 2\np99 = 4", "p50 = 2\np95 = 4\np99 = 9")
+        (absolute_fail / "record.toml").write_text(record, encoding="utf-8")
+        result = subprocess.run(
+            ["python3", str(ROOT / "scripts/check-m002-performance-contract.py"), "--record", "record.toml"],
+            cwd=absolute_fail, env={**os.environ, ENV_ROOT: str(absolute_fail)},
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False,
+        )
+        require(result.returncode == 0 and "M002 performance result: FAIL" in result.stdout,
+                "absolute-ceiling failure was not evaluated as FAIL")
+
         unicode_benchmark = base / "unicode-benchmark-contract"
         write(
             unicode_benchmark / "crates/seyal-terminal/benches/good.rs",

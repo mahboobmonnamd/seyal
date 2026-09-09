@@ -204,6 +204,19 @@ establish product performance acceptance or replace the physical ARM64 lane.
 The raw validator output is retained at
 `/tmp/seyal-819-10k-full-samples10-XXXXXX.log`.
 
+## 100k-line lower-population cohorts
+
+The exact head completed the 100k-line cohorts for 1 and 10 executions across
+all seven widths and four workloads, using `samples=10`. The validator
+reported 56 cases passed. Every case had at least 10 append observations per
+execution, available RSS, measured allocation counters, and exact commit
+provenance `9e691a9`.
+
+This remains comparative evidence (`performance_claim=false`) and does not
+close the 50/100 execution matrix, physical ARM64 comparison, or headed
+manual history/reflow gates. The raw validator output is retained at
+`/tmp/seyal-819-100k-1-10-full-samples10-XXXXXX.log`.
+
 ## 100k-line scaling point
 
 A bounded resource shard also completed at 100k lines, 50 executions and 40

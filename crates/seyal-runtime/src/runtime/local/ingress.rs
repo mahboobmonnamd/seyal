@@ -44,6 +44,14 @@ fn csi_u(code: u32, modifiers: u16, event: Option<TerminalKeyV2Event>) -> Vec<u8
     out
 }
 
+fn kitty_keypad_code(value: u32) -> u32 {
+    match value {
+        15 => 57415, // keypad Equal
+        16 => 57414, // keypad Enter
+        value => 57399 + value,
+    }
+}
+
 fn csi_mod(code: u32, final_byte: u8, modifiers: u16) -> Vec<u8> {
     let mut out = b"\x1b[".to_vec();
     push_decimal(&mut out, code);
@@ -177,7 +185,7 @@ fn encode_terminal_key_v2(key: TerminalKeyV2, modes: ModeState) -> Result<Vec<u8
         let code = match key.kind {
             TerminalKeyV2Kind::Escape => 27,
             TerminalKeyV2Kind::Ascii => key.value,
-            TerminalKeyV2Kind::Keypad => 57399 + key.value,
+            TerminalKeyV2Kind::Keypad => kitty_keypad_code(key.value),
             TerminalKeyV2Kind::Home => 1,
             TerminalKeyV2Kind::End => 1,
             TerminalKeyV2Kind::Insert => 2,
@@ -297,7 +305,11 @@ fn encode_terminal_key_v2(key: TerminalKeyV2, modes: ModeState) -> Result<Vec<u8
         && key.kind == TerminalKeyV2Kind::Keypad
         && key.event != TerminalKeyV2Event::Press
     {
-        return Ok(csi_u(57399 + key.value, modifiers, Some(key.event)));
+        return Ok(csi_u(
+            kitty_keypad_code(key.value),
+            modifiers,
+            Some(key.event),
+        ));
     }
     if key.event == TerminalKeyV2Event::Release {
         return Ok(Vec::new());
@@ -955,6 +967,31 @@ mod tests {
             )
             .unwrap(),
             b"\x1b[57400;1:3u"
+        );
+    }
+
+    #[test]
+    fn kitty_keypad_equal_and_enter_use_their_assigned_codepoints() {
+        let base = TerminalKeyV2 {
+            attachment_id: crate::AttachmentId::from_bytes([0; 16]),
+            kind: TerminalKeyV2Kind::Keypad,
+            modifiers: TerminalKeyV2Modifiers::NONE,
+            value: 15,
+            event: TerminalKeyV2Event::Press,
+            shifted_ascii: 0,
+            action_id: 1,
+        };
+        let modes = ModeState {
+            keyboard_flags: 1,
+            ..ModeState::default()
+        };
+        assert_eq!(
+            encode_terminal_key_v2(base, modes).unwrap(),
+            b"\x1b[57415;1u"
+        );
+        assert_eq!(
+            encode_terminal_key_v2(TerminalKeyV2 { value: 16, ..base }, modes).unwrap(),
+            b"\x1b[57414;1u"
         );
     }
 

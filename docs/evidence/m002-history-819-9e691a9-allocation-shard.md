@@ -275,6 +275,26 @@ The raw validator output is retained at
 reported as observed and is not treated as an inferred or corrected value.
 This remains comparative evidence only.
 
+## Physical ARM64 100k-line, 100-execution width-48 shard
+
+The same bounded cohort was rerun under the physical Apple Silicon boundary
+(`arm64`, 24 GiB host memory) with RSS measurement available. The validator
+reported 4 cases passed; each case had 1,000 append observations, measured
+allocation counters, and exact commit provenance `9e691a9`.
+
+```text
+workload=ascii            rss_delta_kib=1968624  allocation_status=measured
+workload=styled           rss_delta_kib=0        allocation_status=measured
+workload=cjk              rss_delta_kib=238048   allocation_status=measured
+workload=emoji-combining  rss_delta_kib=0        allocation_status=measured
+```
+
+The zero RSS deltas are reported as observed and are not treated as inferred
+or corrected values. The raw validator output is retained at
+`/tmp/seyal-819-100k-100-width48-arm64-samples10-XXXXXX.log`. This is one
+physical ARM64 comparative cohort only; it does not establish the complete
+performance contract or product acceptance.
+
 ## 100k-line, 50-execution width-48 shard
 
 A bounded shard completed at 100k lines, 50 executions and 48 columns for all

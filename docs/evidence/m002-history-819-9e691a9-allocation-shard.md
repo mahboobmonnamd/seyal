@@ -275,6 +275,27 @@ The raw validator output is retained at
 reported as observed and is not treated as an inferred or corrected value.
 This remains comparative evidence only.
 
+## Physical ARM64 1M-line, one-execution width-40 cohort
+
+The bounded 1M-line cohort completed under the physical Apple Silicon boundary
+at width 40 for ASCII, styled, CJK, and emoji-combining workloads. The
+validator reported 4 cases passed; each case had 10 append observations,
+available RSS, measured allocation counters, and exact commit provenance
+`9e691a9`.
+
+```text
+workload=ascii            rss_delta_kib=106864  allocation_status=measured
+workload=styled           rss_delta_kib=1184    allocation_status=measured
+workload=cjk              rss_delta_kib=0       allocation_status=measured
+workload=emoji-combining  rss_delta_kib=75008   allocation_status=measured
+```
+
+The zero CJK RSS delta is reported as observed and is not treated as inferred
+or corrected. The raw validator output is retained at
+`/tmp/seyal-819-1m-1-width40-arm64-samples10-XXXXXX.log`. This is one
+physical ARM64 comparative cohort and does not establish the complete
+performance contract or product acceptance.
+
 ## Physical ARM64 100k-line, 100-execution width-48 shard
 
 The same bounded cohort was rerun under the physical Apple Silicon boundary

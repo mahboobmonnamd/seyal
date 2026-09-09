@@ -171,6 +171,7 @@ explicit `allocation_status=not-instrumented`:
 | 100k lines × 50 × 7 widths × 4 workloads | 28 | passed | available |
 | 100k lines × 100 × 7 widths × 4 workloads | 28 | passed | available |
 | 1M lines × 1 × 7 widths × 4 workloads | 28 | passed | unavailable in this run |
+| 1M lines × 10 × 7 widths × 4 workloads | 28 | passed | unavailable in this run |
 
 Raw output is retained in the four `m002-history-819-10k-shard-ac1f6bf.log`
 and `m002-history-819-100k-*-ac1f6bf.log` files beside this record. The 100k
@@ -178,10 +179,11 @@ population-100 shard completed all 28 cases without a crash or timeout; its
 resident history observation was approximately 3.35 GB before process-RSS
 measurement. The 1M execution-1 shard completed all 28 cases with an observed
 bounded resident-history size of approximately 33.5 MB; process RSS was
-unavailable in that run. These shards improve coverage but do not constitute
-the 336-case matrix: 1M executions 10/50/100 remain, along with physical ARM64
-acceptance, allocation instrumentation, and headed manual history/reflow
-evidence.
+unavailable in that run. The 1M execution-10 shard also completed all 28 cases,
+with bounded resident-history size approximately 335 MB and RSS unavailable.
+These shards improve coverage but do not constitute the 336-case matrix: 1M
+executions 50/100 remain, along with physical ARM64 acceptance, allocation
+instrumentation, and headed manual history/reflow evidence.
 
 The exact-head nightly libFuzzer campaign also completed successfully:
 

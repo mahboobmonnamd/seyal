@@ -475,6 +475,26 @@ The raw validator output is retained at
 are reported as observed and are not treated as inferred or corrected values.
 This remains comparative evidence only.
 
+## Physical ARM64 1M-line, ten-execution width-40 cohort
+
+The bounded 1M-line cohort completed at width 40 for all four workloads with
+10 executions and `samples=10`. The validator reported 4 cases passed; each
+case had 100 append observations, measured allocation counters, and exact
+commit provenance `9e691a9`. RSS was unavailable in this run
+(`rss_available=false`) and is not used as evidence.
+
+```text
+workload=ascii            allocation_calls=971322773   allocation_status=measured
+workload=styled           allocation_calls=1011411193  allocation_status=measured
+workload=cjk              allocation_calls=731037173   allocation_status=measured
+workload=emoji-combining  allocation_calls=951212873   allocation_status=measured
+```
+
+The raw validator output is retained at
+`/tmp/seyal-819-1m-10-width40-arm64-samples10-XXXXXX.log`. This remains
+comparative ARM64 evidence only and does not establish the complete
+performance contract or product acceptance.
+
 ## Physical ARM64 1M-line, one-execution width-48 cohort
 
 The bounded 1M-line cohort also completed at width 48 for ASCII, styled, CJK,

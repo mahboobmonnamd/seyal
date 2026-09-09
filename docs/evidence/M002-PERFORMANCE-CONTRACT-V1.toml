@@ -1,0 +1,93 @@
+schema = "seyal.m002.performance-contract"
+version = 1
+status = "proposed"
+percentile_method = "nearest-rank"
+cohorts = 5
+warmups_per_cohort = 20
+samples_per_cohort = 100
+missing_metric_values = ["unknown", "not-instrumented"]
+invalid_environment_class = "PLATFORM_LIMITED"
+
+[comparison]
+baseline_required = true
+exact_head_required = true
+raw_cohorts_required = true
+noise_policy = "retain five fresh-process cohorts; report every valid cohort; invalidate thermal, display-session, PTY-capacity, and host-change runs"
+regression_rule = "a gate fails when its accepted ceiling is exceeded or when the exact baseline comparison exceeds the named relative allowance; no best-run substitution"
+
+[evidence_classes.CI]
+establishes = ["schema", "validator", "fixture", "structural-guard"]
+cannot_establish = ["absolute-latency", "cpu", "rss", "headed-presentation"]
+
+[evidence_classes.SYNTHETIC]
+establishes = ["deterministic-component-behavior", "comparative-direction"]
+cannot_establish = ["pty", "runtime", "appkit", "metal", "key-to-photon"]
+
+[evidence_classes.NATIVE_HEADED]
+establishes = ["real-pty-runtime-client-metal-route"]
+cannot_establish = ["physical-keyboard", "display-scanout-without-instrumentation"]
+
+[evidence_classes.PHYSICAL_ARM64]
+establishes = ["controlled-apple-silicon-release-measurement"]
+cannot_establish = ["unmeasured-boundaries"]
+
+[resource_caps]
+sealed_payload_bytes = 16384
+mutable_tail_bytes = 32768
+history_per_execution_bytes = 33554432
+history_runtime_aggregate_bytes = 268435456
+cache_per_execution_bytes = 4194304
+cache_runtime_aggregate_bytes = 33554432
+
+[gates.history_active_reflow_ms]
+evidence_class = "PHYSICAL_ARM64"
+p50 = 2
+p95 = 4
+p99 = 8
+source = "SPEC-010 §18.1 / #818"
+
+[gates.history_sealed_segment_reflow_ms]
+evidence_class = "PHYSICAL_ARM64"
+p50 = 1
+p95 = 2
+p99 = 4
+source = "SPEC-010 §18.1 / #818"
+
+[gates.input_visible_proxy]
+evidence_class = "PHYSICAL_ARM64"
+status = "proposed"
+boundary = "native input admission to named visible-frame proxy"
+p50_ms = 1
+p95_ms = 5
+p99_ms = 10
+relative_regression_percent = 10
+
+[gates.pty_to_terminal_state]
+evidence_class = "NATIVE_HEADED"
+status = "proposed"
+boundary = "pty-read to canonical TerminalState mutation"
+relative_regression_percent = 10
+
+[gates.damage_to_client_cache]
+evidence_class = "NATIVE_HEADED"
+status = "proposed"
+boundary = "damage extraction to client-cache readiness"
+relative_regression_percent = 10
+
+[gates.high_output_responsiveness]
+evidence_class = "PHYSICAL_ARM64"
+status = "proposed"
+workload = "sustained high-output streaming for at least 2 seconds with input, resize, and scrolling"
+relative_regression_percent = 10
+
+[gates.resource_scaling]
+evidence_class = "PHYSICAL_ARM64"
+status = "proposed"
+populations = [1, 10, 50, 100]
+relative_regression_percent = 10
+
+[matrix]
+retained_content = [10000, 100000, 1000000]
+execution_populations = [1, 10, 50, 100]
+columns = [40, 48, 64, 80, 96, 132, 160]
+workloads = ["ASCII", "styled", "CJK", "emoji-combining"]

@@ -106,6 +106,18 @@ def main() -> None:
             "missing M002 performance contract",
         )
 
+        malformed_performance = base / "m002-performance-malformed"
+        write(
+            malformed_performance / "docs/evidence/M002-PERFORMANCE-CONTRACT-V1.md",
+            "Status: proposed contract for Issue #673\nexact production SHA\nbaseline SHA\nnearest-rank\n",
+        )
+        write(malformed_performance / "docs/evidence/M002-PERFORMANCE-CONTRACT-V1.toml", "schema = 'wrong'\nversion = 1\n")
+        run_negative(
+            ["python3", str(ROOT / "scripts/check-m002-performance-contract.py")],
+            malformed_performance,
+            "unsupported identity",
+        )
+
         unicode_benchmark = base / "unicode-benchmark-contract"
         write(
             unicode_benchmark / "crates/seyal-terminal/benches/good.rs",

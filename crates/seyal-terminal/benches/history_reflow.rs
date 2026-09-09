@@ -1,6 +1,10 @@
 use std::{env, hint::black_box, process::Command, time::Instant};
 
+use stats_alloc::{Region, StatsAlloc, INSTRUMENTED_SYSTEM};
 use seyal_terminal::TerminalState;
+
+#[global_allocator]
+static GLOBAL: &StatsAlloc<std::alloc::System> = &INSTRUMENTED_SYSTEM;
 
 const DEFAULT_LINES: &[usize] = &[100_000];
 const DEFAULT_EXECUTIONS: &[usize] = &[1];
@@ -119,6 +123,7 @@ fn measure(
     commit: &str,
 ) {
     let rss_before = process_rss_kib();
+    let allocation_region = Region::new(GLOBAL);
     let append_samples_per_execution = samples.min(lines);
     let mut append_samples = Vec::with_capacity(executions * append_samples_per_execution);
     let mut terminals = Vec::with_capacity(executions);
@@ -181,9 +186,10 @@ fn measure(
     let rss_before_value = rss_before.unwrap_or(0);
     let rss_after_value = rss_after.unwrap_or(0);
     let rss_delta = rss_after_value.saturating_sub(rss_before_value);
+    let allocation_stats = allocation_region.change();
 
     println!(
-        "[seyal history benchmark] case workload={workload} lines={lines} executions={executions} columns={columns} commit={commit} resident_history_bytes={resident_history_bytes} derived_cache_bytes={derived_cache_bytes} rss_before_kib={rss_before_value} rss_after_kib={rss_after_value} rss_delta_kib={rss_delta} rss_available={} append_observations={} append_samples_per_execution={append_samples_per_execution} append_p50_ns={} append_p95_ns={} append_p99_ns={} reflow_p50_ns={} reflow_p95_ns={} reflow_p99_ns={} search_p50_ns={} search_p95_ns={} search_p99_ns={} anchor_p50_ns={} anchor_p95_ns={} anchor_p99_ns={} resolved_anchors={resolved_anchors} allocation_calls=not-instrumented allocated_bytes=not-instrumented deallocated_bytes=not-instrumented allocation_status=not-instrumented samples={samples} percentile_method=nearest-rank performance_claim=false evidence_scope=TerminalState-comparative",
+        "[seyal history benchmark] case workload={workload} lines={lines} executions={executions} columns={columns} commit={commit} resident_history_bytes={resident_history_bytes} derived_cache_bytes={derived_cache_bytes} rss_before_kib={rss_before_value} rss_after_kib={rss_after_value} rss_delta_kib={rss_delta} rss_available={} append_observations={} append_samples_per_execution={append_samples_per_execution} append_p50_ns={} append_p95_ns={} append_p99_ns={} reflow_p50_ns={} reflow_p95_ns={} reflow_p99_ns={} search_p50_ns={} search_p95_ns={} search_p99_ns={} anchor_p50_ns={} anchor_p95_ns={} anchor_p99_ns={} resolved_anchors={resolved_anchors} allocation_calls={} allocated_bytes={} deallocated_bytes={} allocation_status=measured samples={samples} percentile_method=nearest-rank performance_claim=false evidence_scope=TerminalState-comparative",
         rss_before.is_some(),
         append_samples.len(),
         percentile(&mut append_samples, 50),
@@ -198,6 +204,9 @@ fn measure(
         percentile(&mut anchor_samples, 50),
         percentile(&mut anchor_samples, 95),
         percentile(&mut anchor_samples, 99),
+        allocation_stats.allocations,
+        allocation_stats.bytes_allocated,
+        allocation_stats.bytes_deallocated,
     );
 }
 

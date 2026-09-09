@@ -993,6 +993,36 @@ mod tests {
             encode_terminal_key_v2(TerminalKeyV2 { value: 16, ..base }, modes).unwrap(),
             b"\x1b[57414;1u"
         );
+
+        let event_modes = ModeState {
+            application_keypad: true,
+            keyboard_flags: 2,
+            ..ModeState::default()
+        };
+        assert_eq!(
+            encode_terminal_key_v2(
+                TerminalKeyV2 {
+                    value: 15,
+                    event: TerminalKeyV2Event::Repeat,
+                    ..base
+                },
+                event_modes
+            )
+            .unwrap(),
+            b"\x1b[57415;1:2u"
+        );
+        assert_eq!(
+            encode_terminal_key_v2(
+                TerminalKeyV2 {
+                    value: 16,
+                    event: TerminalKeyV2Event::Release,
+                    ..base
+                },
+                event_modes
+            )
+            .unwrap(),
+            b"\x1b[57414;1:3u"
+        );
     }
 
     #[test]

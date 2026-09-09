@@ -474,3 +474,23 @@ The raw validator output is retained at
 `/tmp/seyal-819-100k-100-width40-samples10-XXXXXX.log`. The zero RSS deltas
 are reported as observed and are not treated as inferred or corrected values.
 This remains comparative evidence only.
+
+## Physical ARM64 1M-line, one-execution width-48 cohort
+
+The bounded 1M-line cohort also completed at width 48 for ASCII, styled, CJK,
+and emoji-combining workloads. The validator reported 4 cases passed; each
+case had 10 append observations, measured allocation counters, and exact
+commit provenance `9e691a9`. RSS was unavailable in this run
+(`rss_available=false`) and is not used as evidence.
+
+```text
+workload=ascii            allocation_calls=97132289  allocation_status=measured
+workload=styled           allocation_calls=101141131 allocation_status=measured
+workload=cjk              allocation_calls=73103729  allocation_status=measured
+workload=emoji-combining  allocation_calls=95121299  allocation_status=measured
+```
+
+The raw validator output is retained at
+`/tmp/seyal-819-1m-1-width48-arm64-samples10-XXXXXX.log`. This remains
+comparative ARM64 evidence only and does not establish the complete
+performance contract or product acceptance.

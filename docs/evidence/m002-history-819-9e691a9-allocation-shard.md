@@ -255,3 +255,22 @@ performance_claim=false
 The raw validator output is retained at
 `/tmp/seyal-819-100k-100-ascii-width40-XXXXXX.log`. This is comparative
 resource evidence only and does not establish product performance acceptance.
+
+## 100k-line, 50-execution Unicode shard
+
+A bounded high-population shard completed at 100k lines, 50 executions and 40
+columns for all four workloads. The validator reported 4 cases passed; each
+case had 50 append observations, available RSS, measured allocation counters,
+and exact commit provenance `9e691a9`.
+
+```text
+workload=ascii            rss_delta_kib=1937296  allocation_status=measured
+workload=styled           rss_delta_kib=125200   allocation_status=measured
+workload=cjk              rss_delta_kib=0        allocation_status=measured
+workload=emoji-combining  rss_delta_kib=1078704  allocation_status=measured
+```
+
+The raw validator output is retained at
+`/tmp/seyal-819-100k-50-width40-samples10-XXXXXX.log`. The zero RSS delta is
+reported as observed and is not treated as an inferred or corrected value.
+This remains comparative evidence only.

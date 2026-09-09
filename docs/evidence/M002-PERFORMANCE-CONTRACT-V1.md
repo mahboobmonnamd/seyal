@@ -63,3 +63,6 @@ files. Each file records a unique `cohort` number from 1 through 5 and a
 `samples` array containing exactly 100 non-negative numeric observations. The
 validator recomputes nearest-rank p50/p95/p99 from the concatenated raw
 observations and rejects summary values that do not match.
+The result must provide a separate `baseline_raw_cohorts` directory with the
+same structure; baseline percentiles are recomputed from it as well, so a
+fabricated baseline cannot make a regression pass.

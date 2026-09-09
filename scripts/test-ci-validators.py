@@ -143,7 +143,7 @@ def main() -> None:
         shutil.copy(ROOT / "docs/evidence/M002-PERFORMANCE-CONTRACT-V1.toml", invalid_percentiles / "docs/evidence/M002-PERFORMANCE-CONTRACT-V1.toml")
         write(
             invalid_percentiles / "record.toml",
-            "contract_schema = 'seyal.m002.performance-contract'\ncontract_version = 1\nproduction_sha = '1111111111111111111111111111111111111111'\nharness_sha = '2222222222222222222222222222222222222222'\nbaseline_sha = '3333333333333333333333333333333333333333'\nbuild_mode = 'release'\nos_version = 'macOS'\ntoolchain = 'Xcode/Rust'\nhardware = 'arm64'\ndisplay = 'display'\npower_thermal_state = 'nominal'\nworkload_hash = 'hash'\ntopology = 'one'\nevidence_class = 'PHYSICAL_ARM64'\ngate = 'history_active_reflow_ms'\nmetric = 'history_active_reflow_ms'\nboundary = 'HistoryStore active reflow'\nunit = 'ms'\npercentile_method = 'nearest-rank'\nsample_count = 500\ncohort_count = 5\nenvironment_status = 'VALID'\nplatform_limit_reason = ''\ncomparator = 'less_equal'\np50 = 3\np95 = 2\np99 = 4\nbaseline_p50 = 2\nbaseline_p95 = 4\nbaseline_p99 = 8\nrelative_regression_percent = 10\nraw_log = 'raw.log'\nraw_cohorts = 'cohorts/'\n",
+            "contract_schema = 'seyal.m002.performance-contract'\ncontract_version = 1\nproduction_sha = '1111111111111111111111111111111111111111'\nharness_sha = '2222222222222222222222222222222222222222'\nbaseline_sha = '3333333333333333333333333333333333333333'\nbuild_mode = 'release'\nos_version = 'macOS'\ntoolchain = 'Xcode/Rust'\nhardware = 'arm64'\ndisplay = 'display'\npower_thermal_state = 'nominal'\nworkload_hash = 'hash'\ntopology = 'one'\nevidence_class = 'PHYSICAL_ARM64'\ngate = 'history_active_reflow_ms'\nmetric = 'history_active_reflow_ms'\nboundary = 'HistoryStore active reflow'\nunit = 'ms'\npercentile_method = 'nearest-rank'\nsample_count = 500\ncohort_count = 5\nenvironment_status = 'VALID'\nplatform_limit_reason = ''\ncomparator = 'less_equal'\np50 = 3\np95 = 2\np99 = 4\nbaseline_p50 = 2\nbaseline_p95 = 4\nbaseline_p99 = 8\nrelative_regression_percent = 10\nraw_log = 'raw.log'\nraw_cohorts = 'cohorts/'\nbaseline_raw_cohorts = 'baseline-cohorts/'\n",
         )
         write(invalid_percentiles / "raw.log", "record\n")
         (invalid_percentiles / "cohorts").mkdir()
@@ -151,6 +151,13 @@ def main() -> None:
             write(
                 invalid_percentiles / "cohorts" / f"cohort-{cohort}.toml",
                 f"cohort = {cohort}\nsamples = [{', '.join(['2'] * 100)}]\n",
+            )
+        (invalid_percentiles / "baseline-cohorts").mkdir()
+        baseline_samples = [2] * 250 + [4] * 225 + [8] * 25
+        for cohort in range(1, 6):
+            write(
+                invalid_percentiles / "baseline-cohorts" / f"cohort-{cohort}.toml",
+                f"cohort = {cohort}\nsamples = [{', '.join(map(str, baseline_samples[(cohort - 1) * 100:cohort * 100]))}]\n",
             )
         run_negative(
             ["python3", str(ROOT / "scripts/check-m002-performance-contract.py"), "--record", "record.toml"],
@@ -198,6 +205,12 @@ def main() -> None:
             write(
                 relative_fail / "cohorts" / f"cohort-{cohort}.toml",
                 f"cohort = {cohort}\nsamples = [{', '.join(map(str, relative_samples[(cohort - 1) * 100:cohort * 100]))}]\n",
+            )
+        relative_baseline_samples = [1] * 250 + [2] * 225 + [4] * 25
+        for cohort in range(1, 6):
+            write(
+                relative_fail / "baseline-cohorts" / f"cohort-{cohort}.toml",
+                f"cohort = {cohort}\nsamples = [{', '.join(map(str, relative_baseline_samples[(cohort - 1) * 100:cohort * 100]))}]\n",
             )
         result = subprocess.run(
             ["python3", str(ROOT / "scripts/check-m002-performance-contract.py"), "--record", "record.toml"],

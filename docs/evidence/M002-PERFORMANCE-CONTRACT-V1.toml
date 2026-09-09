@@ -133,11 +133,12 @@ workloads = ["ASCII", "styled", "CJK", "emoji-combining"]
 [result_schema]
 required = [
   "contract_schema", "contract_version", "production_sha", "harness_sha",
-  "baseline_sha", "evidence_class", "gate", "metric", "boundary", "unit",
+  "baseline_sha", "build_mode", "os_version", "toolchain", "hardware", "display",
+  "power_thermal_state", "workload_hash", "topology", "evidence_class", "gate", "metric", "boundary", "unit",
   "percentile_method", "sample_count", "cohort_count", "environment_status",
   "platform_limit_reason", "comparator", "p50", "p95", "p99",
   "baseline_p50", "baseline_p95", "baseline_p99", "relative_regression_percent",
-  "raw_log"
+  "raw_log", "raw_cohorts"
 ]
 statuses = ["PASS", "FAIL", "PLATFORM_LIMITED"]
 comparators = ["less_equal"]

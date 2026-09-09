@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import tomllib
 import argparse
+import re
 
 ROOT = Path(os.environ.get("SEYAL_VALIDATION_ROOT", Path(__file__).resolve().parents[1])).resolve()
 CONTRACT = ROOT / "docs/evidence/M002-PERFORMANCE-CONTRACT-V1.md"
@@ -85,10 +86,11 @@ def main() -> None:
     result_schema = schema.get("result_schema", {})
     required_result_fields = set(result_schema.get("required", []))
     expected_result_fields = {
-        "contract_schema", "contract_version", "production_sha", "harness_sha", "baseline_sha",
+        "contract_schema", "contract_version", "production_sha", "harness_sha", "baseline_sha", "build_mode",
+        "os_version", "toolchain", "hardware", "display", "power_thermal_state", "workload_hash", "topology",
         "evidence_class", "gate", "metric", "boundary", "unit", "percentile_method", "sample_count",
         "cohort_count", "environment_status", "platform_limit_reason", "comparator", "p50", "p95", "p99",
-        "baseline_p50", "baseline_p95", "baseline_p99", "relative_regression_percent", "raw_log",
+        "baseline_p50", "baseline_p95", "baseline_p99", "relative_regression_percent", "raw_log", "raw_cohorts",
     }
     if required_result_fields != expected_result_fields:
         raise SystemExit("M002 performance result schema is incomplete")
@@ -122,6 +124,8 @@ def evaluate_record(path: Path, schema: dict) -> str:
         expected = gate.get(field)
         if expected is not None and record[field] != expected:
             raise SystemExit(f"M002 performance result {field} does not match gate contract")
+    if record["metric"] != record["gate"]:
+        raise SystemExit("M002 performance result metric does not match gate")
     if record["environment_status"] not in schema["result_schema"]["environment_statuses"]:
         raise SystemExit("M002 performance result has invalid environment status")
     if record["comparator"] not in schema["result_schema"]["comparators"]:
@@ -130,9 +134,12 @@ def evaluate_record(path: Path, schema: dict) -> str:
         raise SystemExit("M002 performance result percentile method mismatch")
     if record["cohort_count"] != schema["cohorts"] or record["sample_count"] != schema["cohorts"] * schema["samples_per_cohort"]:
         raise SystemExit("M002 performance result does not satisfy the cohort policy")
-    for field in ("production_sha", "harness_sha", "baseline_sha", "raw_log"):
+    for field in ("production_sha", "harness_sha", "baseline_sha", "build_mode", "os_version", "toolchain", "hardware", "display", "power_thermal_state", "workload_hash", "topology", "raw_log", "raw_cohorts"):
         if not isinstance(record[field], str) or not record[field].strip():
             raise SystemExit(f"M002 performance result {field} must be non-empty")
+    for field in ("production_sha", "harness_sha", "baseline_sha"):
+        if not re.fullmatch(r"[0-9a-fA-F]{40}", record[field]):
+            raise SystemExit(f"M002 performance result {field} must be a full commit SHA")
     values = [record[key] for key in ("p50", "p95", "p99")]
     baseline = [record[key] for key in ("baseline_p50", "baseline_p95", "baseline_p99")]
     if any(not isinstance(value, (int, float)) or value < 0 for value in values + baseline):
@@ -152,7 +159,10 @@ def evaluate_record(path: Path, schema: dict) -> str:
         allowed = gate["relative_regression_percent"]
         if record["relative_regression_percent"] != allowed:
             raise SystemExit("M002 performance result relative allowance does not match gate contract")
-        status = "PASS" if all(value <= base * (1 + allowed / 100) for value, base in zip(values, baseline)) else "FAIL"
+        ceilings = [gate.get(key) for key in ("p50", "p95", "p99")]
+        absolute_ok = all(limit is not None and value <= limit for value, limit in zip(values, ceilings))
+        relative_ok = all(value <= base * (1 + allowed / 100) for value, base in zip(values, baseline))
+        status = "PASS" if absolute_ok and relative_ok else "FAIL"
     claimed = record.get("status")
     if claimed is not None and claimed != status:
         raise SystemExit(f"M002 performance result status mismatch: claimed {claimed}, evaluated {status}")

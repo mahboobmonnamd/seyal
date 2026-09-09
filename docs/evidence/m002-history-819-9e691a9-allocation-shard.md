@@ -197,3 +197,21 @@ The raw validator output is retained at
 `/tmp/seyal-819-100k-50-ascii-width40-XXXXXX.log`. This is comparative
 resource evidence only and does not establish the complete execution matrix
 or product performance acceptance.
+
+The corresponding bounded 100-execution point also completed for ASCII at
+100k lines and 40 columns. The per-case validator reported 1 case passed with
+100 append observations, available RSS, measured allocation counters, and
+exact commit provenance `9e691a9`:
+
+```text
+rss_delta_kib=1784016
+allocation_calls=971149114
+allocated_bytes=60760856032
+deallocated_bytes=57147326632
+allocation_status=measured
+performance_claim=false
+```
+
+The raw validator output is retained at
+`/tmp/seyal-819-100k-100-ascii-width40-XXXXXX.log`. This is comparative
+resource evidence only and does not establish product performance acceptance.

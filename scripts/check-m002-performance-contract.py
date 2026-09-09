@@ -22,6 +22,12 @@ REQUIRED_GATES = {
 }
 
 
+def nearest_rank(values: list[float], percentile: int) -> float:
+    ordered = sorted(values)
+    rank = max(1, (len(ordered) * percentile + 99) // 100)
+    return ordered[rank - 1]
+
+
 def main() -> None:
     if not CONTRACT.is_file():
         raise SystemExit(f"missing M002 performance contract: {CONTRACT.relative_to(ROOT)}")
@@ -155,6 +161,31 @@ def evaluate_record(path: Path, schema: dict) -> str:
             raise SystemExit(f"M002 performance result {field} escapes validation root")
         if not artifact.exists():
             raise SystemExit(f"M002 performance result {field} does not exist")
+    raw_cohorts = (ROOT / record["raw_cohorts"]).resolve()
+    if not raw_cohorts.is_dir():
+        raise SystemExit("M002 performance result raw_cohorts must be a directory")
+    cohort_files = sorted(raw_cohorts.glob("*.toml"))
+    raw_values: list[float] = []
+    cohort_numbers: list[int] = []
+    for cohort_file in cohort_files:
+        try:
+            cohort = tomllib.loads(cohort_file.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError) as error:
+            raise SystemExit(f"invalid M002 raw cohort {cohort_file.name}: {error}") from error
+        number = cohort.get("cohort")
+        samples = cohort.get("samples")
+        if not isinstance(number, int) or not isinstance(samples, list):
+            raise SystemExit(f"M002 raw cohort {cohort_file.name} must contain cohort and samples")
+        if len(samples) != schema["raw_cohorts"]["observations_per_file"]:
+            raise SystemExit(f"M002 raw cohort {cohort_file.name} has an invalid sample count")
+        if any(not isinstance(value, (int, float)) or value < 0 for value in samples):
+            raise SystemExit(f"M002 raw cohort {cohort_file.name} contains invalid samples")
+        cohort_numbers.append(number)
+        raw_values.extend(float(value) for value in samples)
+    if len(cohort_files) != schema["raw_cohorts"]["file_count"] or cohort_numbers != list(range(1, 6)):
+        raise SystemExit("M002 performance result raw_cohorts must contain cohorts 1 through 5 exactly")
+    if len(raw_values) != record["sample_count"]:
+        raise SystemExit("M002 raw cohort observations do not match sample_count")
     values = [record[key] for key in ("p50", "p95", "p99")]
     baseline = [record[key] for key in ("baseline_p50", "baseline_p95", "baseline_p99")]
     if any(not isinstance(value, (int, float)) or value < 0 for value in values + baseline):
@@ -163,6 +194,9 @@ def evaluate_record(path: Path, schema: dict) -> str:
         raise SystemExit("M002 performance result percentiles must be ordered p50 <= p95 <= p99")
     if not baseline[0] <= baseline[1] <= baseline[2]:
         raise SystemExit("M002 performance baseline percentiles must be ordered p50 <= p95 <= p99")
+    recomputed = [nearest_rank(raw_values, percentile) for percentile in (50, 95, 99)]
+    if any(float(actual) != expected for actual, expected in zip(values, recomputed)):
+        raise SystemExit("M002 performance summary percentiles do not match raw cohorts")
     reason = record["platform_limit_reason"]
     if record["environment_status"] == "PLATFORM_LIMITED" and (not isinstance(reason, str) or not reason.strip()):
         raise SystemExit("M002 platform-limited results require a reason")

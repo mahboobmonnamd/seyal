@@ -57,3 +57,9 @@ No ceiling is inferred from a best run. A release gate requires a recorded
 baseline SHA, accepted noise policy, valid cohorts, complete raw evidence, and
 an explicit comparison rule. Missing metrics are recorded as `unknown` or
 `not-instrumented`, never estimated or backfilled.
+
+Raw cohort evidence is a directory containing exactly five non-empty TOML
+files. Each file records a unique `cohort` number from 1 through 5 and a
+`samples` array containing exactly 100 non-negative numeric observations. The
+validator recomputes nearest-rank p50/p95/p99 from the concatenated raw
+observations and rejects summary values that do not match.

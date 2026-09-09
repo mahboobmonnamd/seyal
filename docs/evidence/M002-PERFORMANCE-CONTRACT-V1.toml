@@ -159,3 +159,9 @@ required = [
 statuses = ["PASS", "FAIL", "PLATFORM_LIMITED"]
 comparators = ["less_equal"]
 environment_statuses = ["VALID", "PLATFORM_LIMITED"]
+
+[raw_cohorts]
+format = "toml"
+file_count = 5
+observations_per_file = 100
+percentiles_recomputed = true

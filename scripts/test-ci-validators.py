@@ -147,10 +147,25 @@ def main() -> None:
         )
         write(invalid_percentiles / "raw.log", "record\n")
         (invalid_percentiles / "cohorts").mkdir()
+        for cohort in range(1, 6):
+            write(
+                invalid_percentiles / "cohorts" / f"cohort-{cohort}.toml",
+                f"cohort = {cohort}\nsamples = [{', '.join(['2'] * 100)}]\n",
+            )
         run_negative(
             ["python3", str(ROOT / "scripts/check-m002-performance-contract.py"), "--record", "record.toml"],
             invalid_percentiles,
             "percentiles must be ordered",
+        )
+
+        forged_summary = base / "m002-performance-forged-summary"
+        shutil.copytree(invalid_percentiles, forged_summary)
+        record = (forged_summary / "record.toml").read_text(encoding="utf-8")
+        record = record.replace("p50 = 3\np95 = 2\np99 = 4", "p50 = 2\np95 = 4\np99 = 8")
+        (forged_summary / "record.toml").write_text(record, encoding="utf-8")
+        run_negative(
+            ["python3", str(ROOT / "scripts/check-m002-performance-contract.py"), "--record", "record.toml"],
+            forged_summary, "summary percentiles do not match raw cohorts",
         )
 
         absolute_fail = base / "m002-performance-absolute-fail"
@@ -158,6 +173,12 @@ def main() -> None:
         record = (absolute_fail / "record.toml").read_text(encoding="utf-8")
         record = record.replace("p50 = 3\np95 = 2\np99 = 4", "p50 = 2\np95 = 4\np99 = 9")
         (absolute_fail / "record.toml").write_text(record, encoding="utf-8")
+        absolute_samples = [2] * 250 + [4] * 225 + [9] * 25
+        for cohort in range(1, 6):
+            write(
+                absolute_fail / "cohorts" / f"cohort-{cohort}.toml",
+                f"cohort = {cohort}\nsamples = [{', '.join(map(str, absolute_samples[(cohort - 1) * 100:cohort * 100]))}]\n",
+            )
         result = subprocess.run(
             ["python3", str(ROOT / "scripts/check-m002-performance-contract.py"), "--record", "record.toml"],
             cwd=absolute_fail, env={**os.environ, ENV_ROOT: str(absolute_fail)},
@@ -172,6 +193,12 @@ def main() -> None:
         record = record.replace("p50 = 3\np95 = 2\np99 = 4", "p50 = 2\np95 = 4\np99 = 8")
         record = record.replace("baseline_p50 = 2\nbaseline_p95 = 4\nbaseline_p99 = 8", "baseline_p50 = 1\nbaseline_p95 = 2\nbaseline_p99 = 4")
         (relative_fail / "record.toml").write_text(record, encoding="utf-8")
+        relative_samples = [2] * 250 + [4] * 225 + [8] * 25
+        for cohort in range(1, 6):
+            write(
+                relative_fail / "cohorts" / f"cohort-{cohort}.toml",
+                f"cohort = {cohort}\nsamples = [{', '.join(map(str, relative_samples[(cohort - 1) * 100:cohort * 100]))}]\n",
+            )
         result = subprocess.run(
             ["python3", str(ROOT / "scripts/check-m002-performance-contract.py"), "--record", "record.toml"],
             cwd=relative_fail, env={**os.environ, ENV_ROOT: str(relative_fail)},

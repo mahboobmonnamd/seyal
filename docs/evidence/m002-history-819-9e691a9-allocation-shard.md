@@ -49,3 +49,21 @@ python3 scripts/check-history-benchmark.py /tmp/seyal-819-1m-50-ascii-XXXXXX.log
 Remaining gates are recorded on #819: complete retained evidence at the
 instrumented head, accepted ARM64 comparison under #673, headed
 history/reflow verification, and independent exact-head review.
+
+## Additional bounded shard
+
+The same exact head also completed all four workloads at 1M lines, 10
+executions and 40 columns. The per-case validator reported 4 cases passed;
+all four cases had `append_observations=10`, `rss_available=true`, and
+`allocation_status=measured`.
+
+```text
+workload=ascii            rss_delta_kib=748992  allocation_calls=971276244
+workload=styled           rss_delta_kib=304384  allocation_calls=1011364484
+workload=cjk              rss_delta_kib=404736  allocation_calls=730990644
+workload=emoji-combining  rss_delta_kib=357472  allocation_calls=951165624
+```
+
+This shard is also comparative only (`performance_claim=false`) and does not
+replace the remaining widths, execution populations, physical ARM64
+comparison, or headed manual evidence.

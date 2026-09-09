@@ -145,6 +145,8 @@ def main() -> None:
             invalid_percentiles / "record.toml",
             "contract_schema = 'seyal.m002.performance-contract'\ncontract_version = 1\nproduction_sha = '1111111111111111111111111111111111111111'\nharness_sha = '2222222222222222222222222222222222222222'\nbaseline_sha = '3333333333333333333333333333333333333333'\nbuild_mode = 'release'\nos_version = 'macOS'\ntoolchain = 'Xcode/Rust'\nhardware = 'arm64'\ndisplay = 'display'\npower_thermal_state = 'nominal'\nworkload_hash = 'hash'\ntopology = 'one'\nevidence_class = 'PHYSICAL_ARM64'\ngate = 'history_active_reflow_ms'\nmetric = 'history_active_reflow_ms'\nboundary = 'HistoryStore active reflow'\nunit = 'ms'\npercentile_method = 'nearest-rank'\nsample_count = 500\ncohort_count = 5\nenvironment_status = 'VALID'\nplatform_limit_reason = ''\ncomparator = 'less_equal'\np50 = 3\np95 = 2\np99 = 4\nbaseline_p50 = 2\nbaseline_p95 = 4\nbaseline_p99 = 8\nrelative_regression_percent = 10\nraw_log = 'raw.log'\nraw_cohorts = 'cohorts/'\n",
         )
+        write(invalid_percentiles / "raw.log", "record\n")
+        (invalid_percentiles / "cohorts").mkdir()
         run_negative(
             ["python3", str(ROOT / "scripts/check-m002-performance-contract.py"), "--record", "record.toml"],
             invalid_percentiles,
@@ -163,6 +165,40 @@ def main() -> None:
         )
         require(result.returncode == 0 and "M002 performance result: FAIL" in result.stdout,
                 "absolute-ceiling failure was not evaluated as FAIL")
+
+        relative_fail = base / "m002-performance-relative-fail"
+        shutil.copytree(invalid_percentiles, relative_fail)
+        record = (relative_fail / "record.toml").read_text(encoding="utf-8")
+        record = record.replace("p50 = 3\np95 = 2\np99 = 4", "p50 = 2\np95 = 4\np99 = 8")
+        record = record.replace("baseline_p50 = 2\nbaseline_p95 = 4\nbaseline_p99 = 8", "baseline_p50 = 1\nbaseline_p95 = 2\nbaseline_p99 = 4")
+        (relative_fail / "record.toml").write_text(record, encoding="utf-8")
+        result = subprocess.run(
+            ["python3", str(ROOT / "scripts/check-m002-performance-contract.py"), "--record", "record.toml"],
+            cwd=relative_fail, env={**os.environ, ENV_ROOT: str(relative_fail)},
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False,
+        )
+        require(result.returncode == 0 and "M002 performance result: FAIL" in result.stdout,
+                "relative-regression failure was not evaluated as FAIL")
+
+        mismatch = base / "m002-performance-mismatch"
+        shutil.copytree(relative_fail, mismatch)
+        record = (mismatch / "record.toml").read_text(encoding="utf-8").replace(
+            "metric = 'history_active_reflow_ms'", "metric = 'forged_metric'")
+        (mismatch / "record.toml").write_text(record, encoding="utf-8")
+        run_negative(
+            ["python3", str(ROOT / "scripts/check-m002-performance-contract.py"), "--record", "record.toml"],
+            mismatch, "metric does not match gate",
+        )
+
+        false_provenance = base / "m002-performance-false-provenance"
+        shutil.copytree(relative_fail, false_provenance)
+        record = (false_provenance / "record.toml").read_text(encoding="utf-8").replace(
+            "raw_log = 'raw.log'", "raw_log = 'missing/raw.log'")
+        (false_provenance / "record.toml").write_text(record, encoding="utf-8")
+        run_negative(
+            ["python3", str(ROOT / "scripts/check-m002-performance-contract.py"), "--record", "record.toml"],
+            false_provenance, "raw_log does not exist",
+        )
 
         unicode_benchmark = base / "unicode-benchmark-contract"
         write(

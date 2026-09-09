@@ -88,12 +88,28 @@ boundary = "high-output input responsiveness"
 unit = "ms"
 relative_regression_percent = 10
 
-[gates.resource_scaling]
+[gates.resource_scaling_rss]
 evidence_class = "PHYSICAL_ARM64"
 status = "proposed"
 populations = [1, 10, 50, 100]
-boundary = "resource scaling across execution populations"
+boundary = "resident memory scaling across execution populations"
 unit = "bytes"
+relative_regression_percent = 10
+
+[gates.resource_scaling_fds]
+evidence_class = "PHYSICAL_ARM64"
+status = "proposed"
+populations = [1, 10, 50, 100]
+boundary = "file-descriptor scaling across execution populations"
+unit = "count"
+relative_regression_percent = 10
+
+[gates.resource_scaling_threads]
+evidence_class = "PHYSICAL_ARM64"
+status = "proposed"
+populations = [1, 10, 50, 100]
+boundary = "thread scaling across execution populations"
+unit = "count"
 relative_regression_percent = 10
 
 [gates.startup]

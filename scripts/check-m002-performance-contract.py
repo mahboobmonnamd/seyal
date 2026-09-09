@@ -6,6 +6,7 @@ from pathlib import Path
 import tomllib
 import argparse
 import re
+import subprocess
 
 ROOT = Path(os.environ.get("SEYAL_VALIDATION_ROOT", Path(__file__).resolve().parents[1])).resolve()
 CONTRACT = ROOT / "docs/evidence/M002-PERFORMANCE-CONTRACT-V1.md"
@@ -16,7 +17,8 @@ CLASSES = {"CI", "SYNTHETIC", "NATIVE_HEADED", "PHYSICAL_ARM64"}
 REQUIRED_GATES = {
     "history_active_reflow_ms", "history_sealed_segment_reflow_ms", "input_visible_proxy",
     "pty_to_terminal_state", "damage_to_client_cache", "high_output_responsiveness",
-    "resource_scaling", "startup", "idle_cpu", "renderer_prepare_submission", "teardown_recovery",
+    "resource_scaling_rss", "resource_scaling_fds", "resource_scaling_threads", "startup", "idle_cpu",
+    "renderer_prepare_submission", "teardown_recovery",
 }
 
 
@@ -140,6 +142,19 @@ def evaluate_record(path: Path, schema: dict) -> str:
     for field in ("production_sha", "harness_sha", "baseline_sha"):
         if not re.fullmatch(r"[0-9a-fA-F]{40}", record[field]):
             raise SystemExit(f"M002 performance result {field} must be a full commit SHA")
+    if (ROOT / ".git").exists():
+        current_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False,
+        ).stdout.strip()
+        if current_sha and record["production_sha"] != current_sha:
+            raise SystemExit("M002 performance result production_sha does not match validation checkout")
+    for field in ("raw_log", "raw_cohorts"):
+        artifact = (ROOT / record[field]).resolve()
+        if ROOT not in artifact.parents and artifact != ROOT:
+            raise SystemExit(f"M002 performance result {field} escapes validation root")
+        if not artifact.exists():
+            raise SystemExit(f"M002 performance result {field} does not exist")
     values = [record[key] for key in ("p50", "p95", "p99")]
     baseline = [record[key] for key in ("baseline_p50", "baseline_p95", "baseline_p99")]
     if any(not isinstance(value, (int, float)) or value < 0 for value in values + baseline):

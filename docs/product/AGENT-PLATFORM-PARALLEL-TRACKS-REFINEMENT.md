@@ -117,6 +117,16 @@ After M004, #678 remains the first M005 implementation dependency. After #678, #
 
 #839 starts once its exact #681/#841/#680 seams are accepted and implemented. It does **not** need to wait for all of M006.
 
+The live issue plan has been reconciled accordingly:
+
+- #667 records the M005 substrate and explicit provider disposition;
+- #678 owns AgentRun transition/binding writer authority;
+- #680 owns human Attention/Approval semantics and exact action binding;
+- #681 owns MemoryStore, RunWorkingSet, retention/resumability and use-time revocation;
+- #841 owns durable capability/action/effect dispatch safety;
+- #839 consumes #681/#841/#680 for the first-party harness;
+- #683 consumes #841 for later CLI/SDK/MCP/control projections.
+
 ## 4. Memory/context milestone mapping
 
 ### M005 foundation — #681

@@ -57,3 +57,21 @@ capability loss or bridge disconnect.
 This record is evidence for the tested boundaries and does not authorize
 merging or closing #823 while the native, manual, latency, and workload gates
 remain open.
+
+## Focused headed XCTest rerun
+
+After rebuilding the disposable `SeyalUITests-Runner.app` and applying the
+documented ad-hoc signatures, the exact focused headed test passed:
+
+```text
+xcodebuild ... -only-testing:SeyalUITests/SeyalShellUITests/testNativeKeyboardShortcutsSwitchWorkspaceTabsAndSidebars test-without-building
+Test Case ... testNativeKeyboardShortcutsSwitchWorkspaceTabsAndSidebars passed
+Executed 1 test, with 0 failures (12.820 seconds)
+** TEST EXECUTE SUCCEEDED **
+```
+
+The retained result bundle is
+`target/macos-ui-tests-keyboard.xcresult`. This closes only the focused
+synthetic/XCUI shortcut workflow. The full navigation/function/keypad matrix,
+physical repeat-under-load, dead-key/IME, target-TUI negotiation, dedicated
+keyboard latency/fuzz evidence, and independent review remain open.

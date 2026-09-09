@@ -173,6 +173,7 @@ explicit `allocation_status=not-instrumented`:
 | 1M lines × 1 × 7 widths × 4 workloads | 28 | passed | unavailable in this run |
 | 1M lines × 10 × 7 widths × 4 workloads | 28 | passed | unavailable in this run |
 | 1M lines × 50 × 7 widths × 4 workloads | 28 | passed | unavailable in this run |
+| 1M lines × 100 × 7 widths × 4 workloads | 28 | passed | unavailable in this run |
 
 Raw output is retained in the four `m002-history-819-10k-shard-ac1f6bf.log`
 and `m002-history-819-100k-*-ac1f6bf.log` files beside this record. The 100k
@@ -182,9 +183,12 @@ measurement. The 1M execution-1 shard completed all 28 cases with an observed
 bounded resident-history size of approximately 33.5 MB; process RSS was
 unavailable in that run. The 1M execution-10 shard also completed all 28 cases,
 with bounded resident-history size approximately 335 MB and RSS unavailable.
-These shards improve coverage but do not constitute the 336-case matrix: 1M
-execution-100 remains, along with physical ARM64 acceptance, allocation
-instrumentation, and headed manual history/reflow evidence.
+The eight retained raw logs combine to the complete 336-case selector matrix;
+`scripts/check-history-benchmark.py --require-full-matrix` passed. RSS was
+available for the 10k/100k rows but unavailable for all 1M rows. The matrix is
+comparative evidence only; physical ARM64 acceptance, allocation
+instrumentation, and headed manual history/reflow evidence remain separate
+gates.
 
 The exact-head nightly libFuzzer campaign also completed successfully:
 

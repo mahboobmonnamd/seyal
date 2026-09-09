@@ -156,3 +156,42 @@ and the case records `append_observations` plus
 append observations per execution before accepting the matrix shape. These are
 chunk append latencies, rather than repeated full-history construction times;
 the ledger still contains no physical performance claim.
+
+## Continuation evidence at exact branch head `ac1f6bf` (2026-09-09)
+
+The following bounded shards were run on the local ARM64 macOS host with the
+production benchmark and `--locked`; every row retains
+`performance_claim=false`, `evidence_scope=TerminalState-comparative`, and
+explicit `allocation_status=not-instrumented`:
+
+| Shard | Cases | Validator | RSS |
+| --- | ---: | --- | --- |
+| 10k lines × 1/10/50/100 × 7 widths × 4 workloads | 112 | passed | available |
+| 100k lines × 1/10 × 7 widths × 4 workloads | 56 | passed | available |
+| 100k lines × 50 × 7 widths × 4 workloads | 28 | passed | available |
+| 100k lines × 100 × 7 widths × 4 workloads | 28 | passed | available |
+
+Raw output is retained in the four `m002-history-819-10k-shard-ac1f6bf.log`
+and `m002-history-819-100k-*-ac1f6bf.log` files beside this record. The 100k
+population-100 shard completed all 28 cases without a crash or timeout; its
+resident history observation was approximately 3.35 GB before process-RSS
+measurement. These shards improve coverage but do not constitute the 336-case
+matrix: all 1M rows remain to be run, and physical ARM64 acceptance, allocation
+instrumentation, and headed manual history/reflow evidence remain open.
+
+The exact-head nightly libFuzzer campaign also completed successfully:
+
+```text
+cargo +nightly fuzz run parser_state_mutation fuzz/corpus/parser-state-mutation \
+  -- -max_total_time=60 -print_final_stats=1
+Done 48816 runs in 61 second(s)
+stat::number_of_executed_units: 48816
+stat::new_units_added: 1874
+peak_rss_mb: 499
+no crash or hang
+```
+
+The generated exploratory corpus was not retained; the three tracked seed
+fixtures remain unchanged. `make check` and the native macOS acceptance script
+also passed at this exact head after removing a verified stale Runtime test
+fixture process. This is evidence progress, not a merge recommendation.

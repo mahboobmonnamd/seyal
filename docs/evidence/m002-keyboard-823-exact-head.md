@@ -2,7 +2,7 @@
 
 - **Issue:** #823
 - **Authority:** SPEC-006 M001 native input contract and the #823 issue acceptance gates
-- **Measured production code head:** `beeace4`
+- **Measured production code head:** `385b5c9`
 - **Recorded:** 2026-09-09
 - **Host/build boundary:** local Apple Silicon macOS host
 - **Claim status:** automated and source-build evidence only; native/manual gates remain unverified
@@ -38,6 +38,10 @@ loading, shifted ASCII derivation from AppKit event characters, release
 metadata retention when key-up events have no characters, old-server fallback
 when `CAP_EXTENDED_TERMINAL_KEY` is absent, and dropping held V2 keys across
 capability loss or bridge disconnect.
+
+The exact-head regression test also verifies the Kitty keypad codepoint mapping
+for keypad Equal (`57415`) and keypad Enter (`57414`), including the explicit
+wire-value exception required by SPEC-006 §21.6.
 
 ## Acceptance ledger
 

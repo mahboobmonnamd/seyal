@@ -176,3 +176,24 @@ The raw validator output is retained at
 `/tmp/seyal-819-1m-10-width160-XXXXXX.log`. This remains comparative evidence
 only and does not close the remaining execution populations or physical/manual
 gates.
+
+## 100k-line scaling point
+
+A bounded resource shard also completed at 100k lines, 50 executions and 40
+columns for the ASCII workload. The per-case validator reported 1 case
+passed with 50 append observations, available RSS, measured allocation
+counters, and exact commit provenance `9e691a9`.
+
+```text
+rss_delta_kib=1861600
+allocation_calls=485574564
+allocated_bytes=30380428082
+deallocated_bytes=28573663382
+allocation_status=measured
+performance_claim=false
+```
+
+The raw validator output is retained at
+`/tmp/seyal-819-100k-50-ascii-width40-XXXXXX.log`. This is comparative
+resource evidence only and does not establish the complete execution matrix
+or product performance acceptance.

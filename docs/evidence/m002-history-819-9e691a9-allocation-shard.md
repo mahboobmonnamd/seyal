@@ -177,6 +177,20 @@ The raw validator output is retained at
 only and does not close the remaining execution populations or physical/manual
 gates.
 
+## 1M-line, one-execution cohort
+
+The exact head also completed the full 28-case width/workload cohort at 1M
+lines, 1 execution and `samples=10`. The validator reported 28 cases passed;
+each case therefore has 10 append observations, available RSS, measured
+allocation counters, and exact commit provenance `9e691a9`.
+
+This remains comparative evidence (`performance_claim=false`) and does not
+close the 10/50/100 execution populations, physical ARM64 comparison,
+headed manual history/reflow evidence, or independent review.
+
+The raw validator output is retained at
+`/tmp/seyal-819-1m-1-samples10-full-XXXXXX.log`.
+
 ## 100k-line scaling point
 
 A bounded resource shard also completed at 100k lines, 50 executions and 40

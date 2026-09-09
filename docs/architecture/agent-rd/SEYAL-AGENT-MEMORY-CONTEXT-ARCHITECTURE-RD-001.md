@@ -40,7 +40,7 @@ Workspace
 
 - `Workspace` owns product/workspace identity.
 - `WorkItem` owns the durable user goal and final accepted outcome.
-- `Attempt` owns one distinct attempt at the WorkItem.
+- `Attempt` owns one bounded try at satisfying the WorkItem.
 - `AgentRun` owns one agent/harness execution history within an Attempt.
 - `TerminalExecution` continues to own its PTY/process/terminal state where terminal execution is involved.
 - provider/harness conversation/session IDs are external references only.
@@ -92,16 +92,24 @@ The implementation ADR/spec must preserve these semantics:
 | Event | Durable outcome |
 |---|---|
 | first trusted detection of a previously unbound external agent execution | create/bind one `AgentRun`; repeated detection is idempotent against durable binding evidence |
-| GUI detach/reconnect | same `AgentRun`; presentation attachment changes only |
-| adapter channel loss while external process remains live | same `AgentRun`; observation/control capability degrades; next valid adapter uses a new binding generation |
+| GUI detach/reconnect | same `Attempt` and same `AgentRun`; presentation attachment changes only |
+| adapter channel loss while external process remains live | same `Attempt` and same `AgentRun`; observation/control capability degrades; next valid adapter uses a new binding generation |
 | stale old adapter reconnects after replacement | evidence may be marked late if safe; stale control is fenced/rejected |
-| first-party worker crash with resumable retained state and no ambiguous effect | same `AgentRun`; new worker generation may resume |
-| first-party worker/provider loss with ambiguous external effect | same `AgentRun` enters reconciliation-required; no blind retry |
-| provider continuation lost but local continuation prerequisites remain | same `AgentRun`; rebuild local context and continue |
-| provider continuation lost and required retained payload is unavailable | current run cannot claim behavioral resume; user/policy reconciliation chooses a fresh `AgentRun` or fresh `Attempt` |
-| retry from scratch while pursuing the same accepted strategy | new `AgentRun` within the same `Attempt`, linked to the failed/interrupted run |
-| materially different strategy/branch intended as a separate acceptance candidate | new `Attempt` |
-| fork | new `AgentRun` with explicit lineage; pending actions/approvals are not inherited automatically |
+| first-party worker crash with resumable retained state and no ambiguous effect | same `Attempt` and same `AgentRun`; new worker generation may resume |
+| first-party worker/provider loss with ambiguous external effect | same `Attempt` and same `AgentRun` enters reconciliation-required; no blind retry |
+| provider continuation lost but local continuation prerequisites remain | same `Attempt` and same `AgentRun`; rebuild local context and continue |
+| provider continuation lost and required retained payload is unavailable | current `AgentRun` cannot claim behavioral resume; explicit reconciliation may restore missing prerequisites and continue the same bounded try, otherwise a retry from scratch creates a new `Attempt` + new `AgentRun` |
+| retry from scratch, regardless of whether the strategy is unchanged | preserve/disposition the prior `Attempt`; create a new `Attempt` + new `AgentRun`, linked to the prior evidence |
+| materially different strategy/branch intended as a separate acceptance candidate | new `Attempt` + new `AgentRun` |
+| fork within an explicitly defined cooperative/candidate attempt | new `AgentRun` with explicit lineage; pending actions/approvals are not inherited automatically |
+| Runtime restart | recover durable identity/evidence, then independently reconcile execution liveness, binding generation, pending actions and resumability; persisted metadata never proves an old PTY/process is live, and any replacement `TerminalExecution` receives a new `ExecutionId` |
+
+A single `Attempt` may contain multiple `AgentRun`s only when the product/workflow explicitly models cooperating roles or concurrent candidates inside that bounded try. A **fresh retry is never represented merely as another AgentRun in the failed Attempt**.
+
+Two acceptance examples are mandatory:
+
+1. run R1 in Attempt A fails; the user retries the same strategy from scratch; Attempt A keeps its failed disposition/evidence and retry-budget accounting, while R2 is created in Attempt B; if R2 succeeds, both bounded tries remain measurable;
+2. a live run temporarily loses its adapter/provider continuation, safely reconnects from retained prerequisites, and continues in the same Attempt/AgentRun without consuming retry budget.
 
 Execution liveness, observation availability, behavioral resumability and work outcome are orthogonal facts and must not be collapsed into one state.
 
@@ -179,6 +187,8 @@ binding start/end/reconnect metadata
 ```
 
 External session/conversation references are resumability hints only. Losing them must not corrupt Seyal durable identity/evidence.
+
+Third-party adapters remain outside the authoritative Runtime process unless a later accepted ADR demonstrates a safer/better topology. Adapter failure must not kill or corrupt a live `TerminalExecution`.
 
 ## 4. First-party Seyal AI Agent
 
@@ -304,7 +314,7 @@ retention/policy generation
 
 Hidden model reasoning is never required.
 
-If required classes are unavailable, behavioral resume fails closed and requires a fresh safe run/attempt or explicit user reconciliation.
+If required classes are unavailable, behavioral resume fails closed and requires a fresh safe retry/new `Attempt` or explicit user reconciliation that restores enough eligible state to continue the same bounded try.
 
 ## 6. MemoryStore
 
@@ -377,6 +387,10 @@ Proposed
           +-----> Expired
 ```
 
+- `Proposed` is not normal accepted knowledge.
+- `Accepted` is eligible only while current scope/policy/evidence/revalidation predicates still permit it.
+- `Superseded`, `Revoked` and `Expired` are immediately ineligible for normal retrieval; no cleanup/index maintenance job is required to make that eligibility decision effective.
+
 Conflicts do not silently overwrite. Multiple records may coexist with explicit conflict/supersession edges until current authority/evidence resolves them.
 
 Concurrent updates use transactional version checks. Storage race protection does not imply epistemic truth.
@@ -433,6 +447,8 @@ Revoking/deleting a `MemoryRecord` must:
 7. retain only minimum policy-safe tombstone/provenance needed for consistency and re-extraction suppression.
 
 Immediately before every model/tool/provider dispatch, Seyal rechecks current policy, revocation generation and dependency eligibility. Ordinary freshness staleness may sometimes be intentionally tolerated; **security denial, privacy revocation and permission revocation never may**.
+
+The implementation spec must define the final eligibility/revocation check relative to the **irrevocable external handoff**. Revocation observed before that handoff prevents/rebuilds the dispatch. Revocation after the handoff is classified honestly as already in flight/already transmitted; Seyal must not promise that such content was preventable or retroactively retractable. This ordering must not add locking to the terminal hot path.
 
 If a queued bundle or working-set compaction depends on revoked content, Seyal rebuilds it from still-eligible sources or declares continuation unavailable. If provider continuation contains the revoked dependency, abandon that continuation and rebuild locally; if local retention is insufficient, stop/reconcile instead of sending hidden stale state.
 
@@ -597,6 +613,8 @@ index/cache metadata
 
 Repository bytes remain repository truth.
 
+`provider_transmission_log` is an audit/provenance index, not a second prompt/transcript archive: store policy-safe references/fingerprints and the minimum metadata required to explain the transmission. Do not duplicate secret-bearing prompt/tool payloads merely for logging.
+
 Derived chunks/indexes/embeddings/summaries/selection caches are content/fingerprint/version dependent and rebuildable. Secrets are excluded from persistent memory/derived storage by default unless an accepted policy explicitly permits otherwise.
 
 A dedicated vector database is not required by architecture.
@@ -655,6 +673,7 @@ Required threats/failures include:
 - provider outage/cancel/reconnect/continuation loss;
 - context build/index overload;
 - adapter/harness crash while underlying execution remains live;
+- Runtime restart with stale process/binding/action evidence;
 - GUI close being mistaken for execution/run termination.
 
 Security/privacy filters run before provider/tool dispatch and are rechecked at use time. Context/memory content never gains execution authority merely because it appears in a prompt.
@@ -697,15 +716,20 @@ Background work is bounded, cancellable, priority-aware and visibility-aware. As
 - external process alive while structured observation disappears;
 - first-party worker crash/restart;
 - provider loss with/without resumable local state;
+- fresh retry always creates a new Attempt + AgentRun and preserves prior Attempt disposition/retry accounting;
+- reconnect/resume stays in the same Attempt/AgentRun and consumes no retry budget;
+- Runtime restart reconciles persisted metadata versus actual execution/action liveness; replacement TerminalExecution gets a new ExecutionId;
 - same-run vs new-run vs new-attempt transition matrix;
 - fork lineage and non-inherited pending actions.
 
 ### Memory/context/privacy
 - MemoryRecord lifecycle/conflict/revalidation/version races;
 - `Accepted` claim-vs-truth semantics;
+- Superseded/Revoked/Expired memory becomes immediately retrieval-ineligible without waiting for cleanup;
 - Assisted-mode auto-accept eligibility and confidence-laundering negatives;
 - memory Disabled/ReadOnly/Curated/Assisted modes;
-- revocation after bundle build but before dispatch;
+- revocation after bundle build but before irrevocable provider/tool handoff prevents/rebuilds dispatch;
+- revocation after irrevocable handoff is classified as already in-flight/transmitted rather than falsely claimed preventable;
 - revocation while RunWorkingSet compaction contains memory;
 - revocation while provider continuation may contain memory;
 - same-evidence re-extraction suppression after forgetting;
@@ -823,4 +847,4 @@ This document remains proposed R&D. Before production implementation:
 5. refine #667/#678–#683/#839/#841 against those accepted authorities;
 6. only then mark individual implementation slices Ready according to dependencies.
 
-The reviewer must actively test duplicate authority, binding split-brain, revocation races, retention/resume false claims, effect ambiguity/replay, provider lock-in, cross-scope leakage and terminal-resource starvation. Green CI or prose consistency alone is not architecture proof.
+The reviewer must actively test duplicate authority, binding split-brain, retry/Attempt accounting, revocation races, retention/resume false claims, effect ambiguity/replay, provider lock-in, cross-scope leakage and terminal-resource starvation. Green CI or prose consistency alone is not architecture proof.

@@ -16,17 +16,18 @@ This directory is the canonical entry point for Seyal foundation architecture.
 10. [`ADR-009-COMMAND-BLOCKS-COMPOSER-AND-TUI.md`](ADR-009-COMMAND-BLOCKS-COMPOSER-AND-TUI.md) — **Accepted:** one command per Pane Block, one Pane composer, trusted shell integration, and same-execution TUI takeover.
 11. [`ADR-010-SCROLLBACK-HISTORY-REFLOW.md`](ADR-010-SCROLLBACK-HISTORY-REFLOW.md) — **Accepted:** M002 canonical retained-history, byte-targeted immutable segmentation, source anchors, derived reflow and asynchronous cold-history boundary; canonical text units are governed by ADR-011.
 12. [`ADR-011-UNICODE-GRAPHEME-WIDTH-IME.md`](ADR-011-UNICODE-GRAPHEME-WIDTH-IME.md) — **Accepted:** M002 Unicode/grapheme/width authority, bounded lead/continuation representation, mode-2027 compatibility, derived shaping/projection and ephemeral macOS IME ownership.
-13. [`SEYAL-RUNTIME-WORKSPACE-CONTINUITY-RD-001.md`](SEYAL-RUNTIME-WORKSPACE-CONTINUITY-RD-001.md) — focused evidence/alternatives/memory-accounting research behind ADR-007.
-14. [`SEYAL-SCROLLBACK-HISTORY-RD-001.md`](SEYAL-SCROLLBACK-HISTORY-RD-001.md) — Issue #685 comparative representation, fixture-replay, segmentation and resource evidence behind ADR-010.
-15. [`SEYAL-UNICODE-GRAPHEME-RD-001.md`](SEYAL-UNICODE-GRAPHEME-RD-001.md) — Issue #684 representation, Unicode compatibility, pathological-cluster, projection and ARM64 shaping evidence behind ADR-011.
-16. [`../milestones/MILESTONE-001.md`](../milestones/MILESTONE-001.md) — authoritative M001 implementation scope, passes, tests, security gates, benchmarks, acceptance criteria, and demo procedure.
-17. [`ui/SEYAL-UI-ARCHITECTURE-001.md`](ui/SEYAL-UI-ARCHITECTURE-001.md) — presentation architecture for Flow/Raw/TUI, history, Blocks, workspace chrome, inspectors, attention/approvals, desktop/mobile continuity, and render priority.
-17a. [`ui/SEYAL-ADAPTIVE-DEPTH-DESIGN-LANGUAGE.md`](ui/SEYAL-ADAPTIVE-DEPTH-DESIGN-LANGUAGE.md) — universal visual language.
-17b. [`ui/M001-UI-DESIGN-SYSTEM.md`](ui/M001-UI-DESIGN-SYSTEM.md) — typed token/theme/config snapshot consumed by native UI.
-18. [`SEYAL-AGENT-PLATFORM-RD-PLAN-001.md`](SEYAL-AGENT-PLATFORM-RD-PLAN-001.md) — agent-native OSS foundation research plan; consumes stable Runtime/Workspace identities and remains outside terminal hot-path ownership.
-19. [`SEYAL-WORKFLOW-EXTENSION-PLATFORM-RD-001.md`](SEYAL-WORKFLOW-EXTENSION-PLATFORM-RD-001.md) — deferred R&D direction for task-focused DevOps/agent workflows and provider/adaptor seams; no implementation is authorized before Pass 5 plus required UI foundations.
-20. [`SEYAL-APPLICATION-PROTOCOL-RD-001.md`](SEYAL-APPLICATION-PROTOCOL-RD-001.md) — deferred R&D direction for a future capability-negotiated Seyal Application Protocol/SDK derived from proven integrations rather than a premature generic "Shell API".
-21. [`source/FOUNDATION-RD-BRIEF.md`](source/FOUNDATION-RD-BRIEF.md) — source requirements that initiated the architecture pass; not an implementation specification.
+13. [`ADR-012-AGENT-RUN-IDENTITY-LIFECYCLE.md`](ADR-012-AGENT-RUN-IDENTITY-LIFECYCLE.md) — **Accepted on merge:** OSS WorkItem/Attempt/AgentRun identity, Agent Session projection, single Runtime/domain transition authority, binding fencing and retry/recovery semantics.
+14. [`SEYAL-RUNTIME-WORKSPACE-CONTINUITY-RD-001.md`](SEYAL-RUNTIME-WORKSPACE-CONTINUITY-RD-001.md) — focused evidence/alternatives/memory-accounting research behind ADR-007.
+15. [`SEYAL-SCROLLBACK-HISTORY-RD-001.md`](SEYAL-SCROLLBACK-HISTORY-RD-001.md) — Issue #685 comparative representation, fixture-replay, segmentation and resource evidence behind ADR-010.
+16. [`SEYAL-UNICODE-GRAPHEME-RD-001.md`](SEYAL-UNICODE-GRAPHEME-RD-001.md) — Issue #684 representation, Unicode compatibility, pathological-cluster, projection and ARM64 shaping evidence behind ADR-011.
+17. [`../milestones/MILESTONE-001.md`](../milestones/MILESTONE-001.md) — authoritative M001 implementation scope, passes, tests, security gates, benchmarks, acceptance criteria, and demo procedure.
+18. [`ui/SEYAL-UI-ARCHITECTURE-001.md`](ui/SEYAL-UI-ARCHITECTURE-001.md) — presentation architecture for Flow/Raw/TUI, history, Blocks, workspace chrome, inspectors, attention/approvals, desktop/mobile continuity, and render priority.
+18a. [`ui/SEYAL-ADAPTIVE-DEPTH-DESIGN-LANGUAGE.md`](ui/SEYAL-ADAPTIVE-DEPTH-DESIGN-LANGUAGE.md) — universal visual language.
+18b. [`ui/M001-UI-DESIGN-SYSTEM.md`](ui/M001-UI-DESIGN-SYSTEM.md) — typed token/theme/config snapshot consumed by native UI.
+19. [`SEYAL-AGENT-PLATFORM-RD-PLAN-001.md`](SEYAL-AGENT-PLATFORM-RD-PLAN-001.md) — agent-native OSS foundation research plan; consumes stable Runtime/Workspace identities and remains outside terminal hot-path ownership.
+20. [`SEYAL-WORKFLOW-EXTENSION-PLATFORM-RD-001.md`](SEYAL-WORKFLOW-EXTENSION-PLATFORM-RD-001.md) — deferred R&D direction for task-focused DevOps/agent workflows and provider/adaptor seams; no implementation is authorized before Pass 5 plus required UI foundations.
+21. [`SEYAL-APPLICATION-PROTOCOL-RD-001.md`](SEYAL-APPLICATION-PROTOCOL-RD-001.md) — deferred R&D direction for a future capability-negotiated Seyal Application Protocol/SDK derived from proven integrations rather than a premature generic "Shell API".
+22. [`source/FOUNDATION-RD-BRIEF.md`](source/FOUNDATION-RD-BRIEF.md) — source requirements that initiated the architecture pass; not an implementation specification.
 
 ## Authority
 
@@ -43,7 +44,8 @@ This directory is the canonical entry point for Seyal foundation architecture.
 - ADR-008 owns local terminal capability advertisement: Runtime/product composition selects the validated `TERM`/terminfo profile, the PTY layer remains policy-neutral, and M001 uses bundled `seyal-m001` without advertising unsupported capabilities.
 - ADR-010 owns the M002 retained primary-history representation, hard/soft lineage, durable source-anchor/reflow model, resident-history bounds/eviction semantics and immutable asynchronous cold-history seam. It consumes ADR-011 canonical text units and does not choose a persistence backend.
 - ADR-011 owns M002 Unicode scalar/grapheme/terminal-width semantics, mode-2027 compatibility, bounded canonical grapheme storage, wide-cell lead/continuation identity, grapheme-capable derived projection/shaping boundaries and native IME preedit ownership. It does not give CoreText/AppKit semantic terminal authority.
-- The Agent Platform R&D is subordinate to the terminal/runtime/workspace ownership architecture and must consume stable identities/capabilities without reverse ownership.
+- ADR-012 owns the OSS agent-domain identity/lifecycle boundary: WorkItem/Attempt/AgentRun semantics, Agent Session as projection, the single Runtime/domain AgentRun transition writer, binding-generation fencing, external/first-party harness coexistence, and reconnect/resume/retry/fork/recovery identity rules. It does not own memory/context or action/effect semantics.
+- The Agent Platform R&D remains supporting evidence and is subordinate to accepted ADR authority.
 - Workflow-extension and application-protocol documents are **deferred R&D only**. They do not expand M001 or authorize plugin/protocol implementation.
 - Source briefs preserve research inputs and historical requirements only.
 - Git history and pull requests preserve superseded wording; duplicate `-v2`, `-final`, `-new`, `-amendment`, or correction documents are not required.

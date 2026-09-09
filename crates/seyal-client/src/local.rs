@@ -513,6 +513,7 @@ mod tests {
             attachment_id: AttachmentId::from_bytes([2; 16]),
             role: Role::Controller,
             block_metadata_negotiated: false,
+            extended_terminal_key_supported: false,
             block_cache: BlockCache::default(),
             cache: seyal_runtime::display::empty_cache(),
             prepared: PreparedSurface::default(),

@@ -295,6 +295,26 @@ The raw validator output is retained at
 comparative evidence only and does not replace physical ARM64 comparison or
 the remaining headed and independent-review gates.
 
+## 100k-line, 100-execution width-48 shard
+
+A bounded high-population shard completed at 100k lines, 100 executions and 48
+columns for all four workloads. The validator reported 4 cases passed; each
+case had 1,000 append observations, measured allocation counters, and exact
+commit provenance `9e691a9`. RSS was unavailable for this run
+(`rss_available=false`) and is therefore not used as evidence.
+
+```text
+workload=ascii            allocation_calls=971614413   allocation_status=measured
+workload=styled           allocation_calls=1011697413  allocation_status=measured
+workload=cjk              allocation_calls=731371213   allocation_status=measured
+workload=emoji-combining  allocation_calls=951540213   allocation_status=measured
+```
+
+The raw validator output is retained at
+`/tmp/seyal-819-100k-100-width48-samples10-XXXXXX.log`. This remains
+comparative evidence only; the observed Unicode latency tails are retained as
+measurements and are not converted into an acceptance claim.
+
 ## 100k-line, 50-execution width-160 shard
 
 A bounded shard completed at 100k lines, 50 executions and 160 columns for

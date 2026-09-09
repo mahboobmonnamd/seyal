@@ -143,7 +143,7 @@ def main() -> None:
         shutil.copy(ROOT / "docs/evidence/M002-PERFORMANCE-CONTRACT-V1.toml", invalid_percentiles / "docs/evidence/M002-PERFORMANCE-CONTRACT-V1.toml")
         write(
             invalid_percentiles / "record.toml",
-            "contract_schema = 'seyal.m002.performance-contract'\ncontract_version = 1\nproduction_sha = 'prod'\nharness_sha = 'harness'\nbaseline_sha = 'base'\nevidence_class = 'PHYSICAL_ARM64'\nmetric = 'history_active_reflow_ms'\nboundary = 'active'\nunit = 'ms'\npercentile_method = 'nearest-rank'\nsample_count = 100\ncohort_count = 5\nenvironment_status = 'VALID'\ncomparator = 'less_equal'\np50 = 3\np95 = 2\np99 = 4\nceiling_p50 = 2\nceiling_p95 = 4\nceiling_p99 = 8\n",
+            "contract_schema = 'seyal.m002.performance-contract'\ncontract_version = 1\nproduction_sha = 'prod'\nharness_sha = 'harness'\nbaseline_sha = 'base'\nevidence_class = 'PHYSICAL_ARM64'\ngate = 'history_active_reflow_ms'\nmetric = 'history_active_reflow_ms'\nboundary = 'HistoryStore active reflow'\nunit = 'ms'\npercentile_method = 'nearest-rank'\nsample_count = 500\ncohort_count = 5\nenvironment_status = 'VALID'\nplatform_limit_reason = ''\ncomparator = 'less_equal'\np50 = 3\np95 = 2\np99 = 4\nbaseline_p50 = 2\nbaseline_p95 = 4\nbaseline_p99 = 8\nrelative_regression_percent = 10\nraw_log = 'raw.log'\n",
         )
         run_negative(
             ["python3", str(ROOT / "scripts/check-m002-performance-contract.py"), "--record", "record.toml"],

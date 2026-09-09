@@ -12,6 +12,11 @@ SCHEMA = ROOT / "docs/evidence/M002-PERFORMANCE-CONTRACT-V1.toml"
 
 REQUIRED = ("Status: proposed contract for Issue #673", "exact production SHA", "baseline SHA", "nearest-rank")
 CLASSES = {"CI", "SYNTHETIC", "NATIVE_HEADED", "PHYSICAL_ARM64"}
+REQUIRED_GATES = {
+    "history_active_reflow_ms", "history_sealed_segment_reflow_ms", "input_visible_proxy",
+    "pty_to_terminal_state", "damage_to_client_cache", "high_output_responsiveness",
+    "resource_scaling", "startup", "idle_cpu", "renderer_prepare_submission", "teardown_recovery",
+}
 
 
 def main() -> None:
@@ -51,9 +56,15 @@ def main() -> None:
     }
     if caps != expected_caps:
         raise SystemExit("M002 performance schema resource caps do not match #818/SPEC-010")
-    for name, gate in schema.get("gates", {}).items():
-        if gate.get("evidence_class") not in CLASSES:
-            raise SystemExit(f"M002 performance gate {name} has an invalid evidence class")
+    gates = schema.get("gates", {})
+    if set(gates) != REQUIRED_GATES:
+        raise SystemExit("M002 performance schema gate set is incomplete")
+    for name, gate in gates.items():
+        if gate.get("evidence_class") not in CLASSES or not gate.get("boundary") or not gate.get("unit"):
+            raise SystemExit(f"M002 performance gate {name} is missing boundary, unit, or evidence class")
+        if not isinstance(gate.get("relative_regression_percent"), (int, float)) or gate["relative_regression_percent"] < 0:
+            raise SystemExit(f"M002 performance gate {name} has invalid relative allowance")
+    for name, gate in gates.items():
         if gate.get("status", "accepted") == "accepted" and "source" not in gate:
             raise SystemExit(f"accepted M002 performance gate {name} is missing authority source")
     matrix = schema.get("matrix", {})
@@ -65,9 +76,9 @@ def main() -> None:
     required_result_fields = set(result_schema.get("required", []))
     expected_result_fields = {
         "contract_schema", "contract_version", "production_sha", "harness_sha", "baseline_sha",
-        "evidence_class", "metric", "boundary", "unit", "percentile_method", "sample_count",
-        "cohort_count", "environment_status", "comparator", "p50", "p95", "p99", "ceiling_p50",
-        "ceiling_p95", "ceiling_p99",
+        "evidence_class", "gate", "metric", "boundary", "unit", "percentile_method", "sample_count",
+        "cohort_count", "environment_status", "platform_limit_reason", "comparator", "p50", "p95", "p99",
+        "baseline_p50", "baseline_p95", "baseline_p99", "relative_regression_percent", "raw_log",
     }
     if required_result_fields != expected_result_fields:
         raise SystemExit("M002 performance result schema is incomplete")
@@ -92,26 +103,43 @@ def evaluate_record(path: Path, schema: dict) -> str:
         raise SystemExit("M002 performance result contract identity mismatch")
     if record["evidence_class"] not in CLASSES:
         raise SystemExit("M002 performance result has invalid evidence class")
+    gate = schema.get("gates", {}).get(record["gate"])
+    if gate is None:
+        raise SystemExit("M002 performance result names an unknown gate")
+    if gate.get("status", "accepted") != "accepted":
+        raise SystemExit("M002 performance result cannot evaluate a proposed gate")
+    for field in ("evidence_class", "boundary", "unit"):
+        expected = gate.get(field)
+        if expected is not None and record[field] != expected:
+            raise SystemExit(f"M002 performance result {field} does not match gate contract")
     if record["environment_status"] not in schema["result_schema"]["environment_statuses"]:
         raise SystemExit("M002 performance result has invalid environment status")
     if record["comparator"] not in schema["result_schema"]["comparators"]:
         raise SystemExit("M002 performance result has invalid comparator")
     if record["percentile_method"] != schema["percentile_method"]:
         raise SystemExit("M002 performance result percentile method mismatch")
-    if not isinstance(record["sample_count"], int) or record["sample_count"] <= 0:
-        raise SystemExit("M002 performance result sample_count must be a positive integer")
-    if not isinstance(record["cohort_count"], int) or record["cohort_count"] <= 0:
-        raise SystemExit("M002 performance result cohort_count must be a positive integer")
+    if record["cohort_count"] != schema["cohorts"] or record["sample_count"] != schema["cohorts"] * schema["samples_per_cohort"]:
+        raise SystemExit("M002 performance result does not satisfy the cohort policy")
     values = [record[key] for key in ("p50", "p95", "p99")]
-    ceilings = [record[key] for key in ("ceiling_p50", "ceiling_p95", "ceiling_p99")]
-    if any(not isinstance(value, (int, float)) or value < 0 for value in values + ceilings):
-        raise SystemExit("M002 performance result percentiles and ceilings must be non-negative numbers")
+    baseline = [record[key] for key in ("baseline_p50", "baseline_p95", "baseline_p99")]
+    if any(not isinstance(value, (int, float)) or value < 0 for value in values + baseline):
+        raise SystemExit("M002 performance result percentiles and baselines must be non-negative numbers")
     if not values[0] <= values[1] <= values[2]:
         raise SystemExit("M002 performance result percentiles must be ordered p50 <= p95 <= p99")
+    if not baseline[0] <= baseline[1] <= baseline[2]:
+        raise SystemExit("M002 performance baseline percentiles must be ordered p50 <= p95 <= p99")
+    reason = record["platform_limit_reason"]
+    if record["environment_status"] == "PLATFORM_LIMITED" and not isinstance(reason, str):
+        raise SystemExit("M002 platform-limited results require a reason")
+    if record["environment_status"] == "VALID" and reason:
+        raise SystemExit("valid M002 performance results cannot carry a platform-limit reason")
     if record["environment_status"] == "PLATFORM_LIMITED":
         status = "PLATFORM_LIMITED"
     else:
-        status = "PASS" if all(value <= ceiling for value, ceiling in zip(values, ceilings)) else "FAIL"
+        allowed = gate["relative_regression_percent"]
+        if record["relative_regression_percent"] != allowed:
+            raise SystemExit("M002 performance result relative allowance does not match gate contract")
+        status = "PASS" if all(value <= base * (1 + allowed / 100) for value, base in zip(values, baseline)) else "FAIL"
     claimed = record.get("status")
     if claimed is not None and claimed != status:
         raise SystemExit(f"M002 performance result status mismatch: claimed {claimed}, evaluated {status}")

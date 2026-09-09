@@ -48,8 +48,8 @@ History-specific required matrix dimensions remain 10k/100k/1M retained
 content, 1/10/50/100 executions, widths 40/48/64/80/96/132/160, and
 ASCII/styled/CJK/emoji-combining workloads. #819's 16 KiB sealed payload,
 32 KiB mutable tail, 32 MiB per-execution history, 256 MiB aggregate history,
-4 MiB per-execution cache, and 32 MiB aggregate cache are floors from #818;
-this contract may tighten them but MUST NOT weaken them.
+4 MiB per-execution cache, and 32 MiB aggregate cache are hard ceilings from
+#818; this contract may tighten them but MUST NOT weaken them.
 
 ## Decision rule
 

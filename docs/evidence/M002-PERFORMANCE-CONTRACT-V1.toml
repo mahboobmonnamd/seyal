@@ -41,49 +41,87 @@ cache_runtime_aggregate_bytes = 33554432
 
 [gates.history_active_reflow_ms]
 evidence_class = "PHYSICAL_ARM64"
+boundary = "HistoryStore active reflow"
+unit = "ms"
 p50 = 2
 p95 = 4
 p99 = 8
+relative_regression_percent = 10
 source = "SPEC-010 §18.1 / #818"
 
 [gates.history_sealed_segment_reflow_ms]
 evidence_class = "PHYSICAL_ARM64"
+boundary = "HistoryStore sealed-segment lazy reflow"
+unit = "ms"
 p50 = 1
 p95 = 2
 p99 = 4
+relative_regression_percent = 10
 source = "SPEC-010 §18.1 / #818"
 
 [gates.input_visible_proxy]
 evidence_class = "PHYSICAL_ARM64"
 status = "proposed"
 boundary = "native input admission to named visible-frame proxy"
-p50_ms = 1
-p95_ms = 5
-p99_ms = 10
+unit = "ms"
 relative_regression_percent = 10
 
 [gates.pty_to_terminal_state]
 evidence_class = "NATIVE_HEADED"
 status = "proposed"
 boundary = "pty-read to canonical TerminalState mutation"
+unit = "ms"
 relative_regression_percent = 10
 
 [gates.damage_to_client_cache]
 evidence_class = "NATIVE_HEADED"
 status = "proposed"
 boundary = "damage extraction to client-cache readiness"
+unit = "ms"
 relative_regression_percent = 10
 
 [gates.high_output_responsiveness]
 evidence_class = "PHYSICAL_ARM64"
 status = "proposed"
 workload = "sustained high-output streaming for at least 2 seconds with input, resize, and scrolling"
+boundary = "high-output input responsiveness"
+unit = "ms"
 relative_regression_percent = 10
 
 [gates.resource_scaling]
 evidence_class = "PHYSICAL_ARM64"
 status = "proposed"
 populations = [1, 10, 50, 100]
+boundary = "resource scaling across execution populations"
+unit = "bytes"
+relative_regression_percent = 10
+
+[gates.startup]
+evidence_class = "NATIVE_HEADED"
+status = "proposed"
+boundary = "process launch to first usable terminal state"
+unit = "ms"
+relative_regression_percent = 10
+
+[gates.idle_cpu]
+evidence_class = "PHYSICAL_ARM64"
+status = "proposed"
+boundary = "idle terminal CPU consumption"
+unit = "percent"
+relative_regression_percent = 10
+
+[gates.renderer_prepare_submission]
+evidence_class = "NATIVE_HEADED"
+status = "proposed"
+boundary = "renderer preparation through Metal submission"
+unit = "ms"
+relative_regression_percent = 10
+
+[gates.teardown_recovery]
+evidence_class = "NATIVE_HEADED"
+status = "proposed"
+boundary = "execution teardown and recovery"
+unit = "ms"
 relative_regression_percent = 10
 
 [matrix]
@@ -95,10 +133,11 @@ workloads = ["ASCII", "styled", "CJK", "emoji-combining"]
 [result_schema]
 required = [
   "contract_schema", "contract_version", "production_sha", "harness_sha",
-  "baseline_sha", "evidence_class", "metric", "boundary", "unit",
+  "baseline_sha", "evidence_class", "gate", "metric", "boundary", "unit",
   "percentile_method", "sample_count", "cohort_count", "environment_status",
-  "comparator", "p50", "p95", "p99", "ceiling_p50", "ceiling_p95",
-  "ceiling_p99"
+  "platform_limit_reason", "comparator", "p50", "p95", "p99",
+  "baseline_p50", "baseline_p95", "baseline_p99", "relative_regression_percent",
+  "raw_log"
 ]
 statuses = ["PASS", "FAIL", "PLATFORM_LIMITED"]
 comparators = ["less_equal"]

@@ -42,9 +42,19 @@ def main() -> None:
         raise SystemExit("M002 performance schema has invalid cohort policy")
     if set(schema.get("missing_metric_values", [])) != {"unknown", "not-instrumented"}:
         raise SystemExit("M002 performance schema must preserve unknown and not-instrumented metrics")
+    comparison = schema.get("comparison", {})
+    if any(comparison.get(key) is not True for key in ("baseline_required", "exact_head_required", "raw_cohorts_required")):
+        raise SystemExit("M002 performance comparison policy is incomplete")
+    if not isinstance(comparison.get("noise_policy"), str) or not comparison["noise_policy"].strip():
+        raise SystemExit("M002 performance noise policy is missing")
+    if not isinstance(comparison.get("regression_rule"), str) or not comparison["regression_rule"].strip():
+        raise SystemExit("M002 performance regression rule is missing")
     classes = set(schema.get("evidence_classes", {}))
     if classes != CLASSES:
         raise SystemExit(f"M002 performance schema evidence classes mismatch: {sorted(classes)}")
+    for name, evidence_class in schema["evidence_classes"].items():
+        if not evidence_class.get("establishes") or not evidence_class.get("cannot_establish"):
+            raise SystemExit(f"M002 evidence class {name} has incomplete semantics")
     caps = schema.get("resource_caps", {})
     expected_caps = {
         "sealed_payload_bytes": 16384,
@@ -120,6 +130,9 @@ def evaluate_record(path: Path, schema: dict) -> str:
         raise SystemExit("M002 performance result percentile method mismatch")
     if record["cohort_count"] != schema["cohorts"] or record["sample_count"] != schema["cohorts"] * schema["samples_per_cohort"]:
         raise SystemExit("M002 performance result does not satisfy the cohort policy")
+    for field in ("production_sha", "harness_sha", "baseline_sha", "raw_log"):
+        if not isinstance(record[field], str) or not record[field].strip():
+            raise SystemExit(f"M002 performance result {field} must be non-empty")
     values = [record[key] for key in ("p50", "p95", "p99")]
     baseline = [record[key] for key in ("baseline_p50", "baseline_p95", "baseline_p99")]
     if any(not isinstance(value, (int, float)) or value < 0 for value in values + baseline):
@@ -129,7 +142,7 @@ def evaluate_record(path: Path, schema: dict) -> str:
     if not baseline[0] <= baseline[1] <= baseline[2]:
         raise SystemExit("M002 performance baseline percentiles must be ordered p50 <= p95 <= p99")
     reason = record["platform_limit_reason"]
-    if record["environment_status"] == "PLATFORM_LIMITED" and not isinstance(reason, str):
+    if record["environment_status"] == "PLATFORM_LIMITED" and (not isinstance(reason, str) or not reason.strip()):
         raise SystemExit("M002 platform-limited results require a reason")
     if record["environment_status"] == "VALID" and reason:
         raise SystemExit("valid M002 performance results cannot carry a platform-limit reason")

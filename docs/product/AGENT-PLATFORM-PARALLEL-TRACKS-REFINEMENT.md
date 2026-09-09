@@ -207,7 +207,7 @@ Additional direct/BYOK/local first-party model providers
 
 The durable `ModelProvider` seam remains provider-neutral. Before implementation it must pass a synthetic materially different provider conformance fixture so the neutrality is demonstrated rather than asserted.
 
-Existing broad no-account/local wording in #667/#681 must be refined to mean the local agent substrate continues functioning without a first-party model provider; it does not require a local first-party model adapter at initial #839 launch.
+Existing broad no-account/local wording in #667/#681 is refined to mean the local agent substrate continues functioning without a first-party model provider; it does not require a local first-party model adapter at initial #839 launch.
 
 Universal Agent Sessions remain able to observe external agents regardless of which model/provider those tools use internally.
 
@@ -245,16 +245,28 @@ Do not validate only zero-agent or enabled-idle overhead. Production gates must 
 
 All remain cold/background relative to terminal I/O and must prove no material PTY/VT/render regression under accepted budgets.
 
-## 11. Architecture promotion gate
+## 11. Review reconciliation state
 
-#838 must pass independent architecture review before these decisions become accepted authority.
+The independent #840 review identified four blocking contracts. The proposal now explicitly addresses them:
 
-Before implementation:
+1. **B1 memory forgetting/revocation:** use-time revalidation before dispatch; revocation invalidates queued bundles, RunWorkingSet compactions, provider continuation eligibility, indexes and caches; stale privacy/security dependencies cannot be intentionally retained.
+2. **B2 durable tool/effect recovery:** #841 owns one reusable action/effect lifecycle with single dispatch fencing, exact approval binding, `effect_unknown` reconciliation and no blind retry of ambiguous non-replayable effects.
+3. **B3 AgentRun mutation/recovery ownership:** #678 owns the single durable transition writer, binding generations/fencing and same-Run/new-Run/new-Attempt recovery matrix.
+4. **B4 retention-dependent continuation:** identity survival, historical explainability and behavioral resumability are distinct; missing retained prerequisites make behavioral resume explicitly unavailable.
 
-1. reconcile all blocking review findings on the exact PR head;
-2. promote ownership/lifecycle/memory/context/action/provider decisions through dedicated ADR/spec PRs where required;
-3. refine #667/#678–#683/#839/#841 against those authorities;
-4. run development-readiness independently per implementation issue;
-5. mark only dependency-complete production slices Ready.
+The review's important non-blocking findings are also reflected: accepted memory is not automatically truth, observed/upstream-requestable/Seyal-enforced capabilities are distinct, provider neutrality requires a synthetic alternate-provider fixture, isolation is broader than worktrees, and performance includes active/failure load.
+
+## 12. Architecture promotion gate
+
+#838 must pass **re-review of the reconciled exact PR head** before these decisions become accepted authority.
+
+Before production implementation:
+
+1. re-run independent `pr-review` on the reconciled #840 head;
+2. resolve any remaining blocking findings;
+3. promote ownership/lifecycle/memory/context/action/provider decisions through dedicated ADR/spec PRs where required;
+4. refine #667/#678–#683/#839/#841 against those accepted authorities;
+5. run development-readiness independently per implementation issue;
+6. mark only dependency-complete production slices Ready.
 
 M002 production scope remains unchanged by this refinement.

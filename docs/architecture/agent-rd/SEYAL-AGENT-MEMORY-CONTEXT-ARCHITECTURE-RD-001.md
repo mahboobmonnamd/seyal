@@ -773,6 +773,8 @@ After #678, #679/#680/#681 can proceed in parallel where their exact dependencie
 
 Baseline worktree-scoped memory/context correctness belongs in M005/#681. M006 extends it across workflow nodes; it does not introduce the first safe worktree boundary.
 
+The live roadmap issues have been aligned with this proposed split: #667 records the provider disposition and M005 substrate; #678 owns AgentRun transition/binding authority; #680 owns human approval semantics while #841 owns durable consumption/dispatch; #681 owns MemoryStore/RunWorkingSet/revocation; #839 consumes #681/#841; #683 consumes #841 for later projections.
+
 ## 18. Explicit provider product disposition
 
 The product decision for the first implementation is:
@@ -791,7 +793,7 @@ Additional direct/BYOK/local first-party model providers
   remain future roadmap capability, not an M005 launch requirement
 ```
 
-Existing #667/#681 no-account/local wording must be interpreted/refined to preserve no-account local substrate functionality while not requiring a local model provider for the first-party harness at M005 launch. This decision must be promoted through the accepted ADR/spec/roadmap process before #839 becomes Ready.
+Existing #667/#681 no-account/local wording is refined to preserve no-account local substrate functionality while not requiring a local model provider for the first-party harness at M005 launch. This decision must still be promoted through the accepted ADR/spec/roadmap process before #839 becomes Ready.
 
 ## 19. Decisions intentionally left to implementation ADR/spec detail
 

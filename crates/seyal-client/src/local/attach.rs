@@ -330,6 +330,7 @@ impl LocalDisplayClient {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn finish_attach_with_deadline(
         mut stream: UnixStream,
         execution_id: ExecutionId,

@@ -58,13 +58,25 @@ AgentRun authority
       |
       +-- first-party harness?      -> SeyalAgentHarness
       |
-      +-- TerminalExecution refs
+      +-- execution refs
       +-- artifacts / attention / evaluations
 ```
 
 Do **not** introduce a separate durable `AgentSession` state machine competing with `AgentRun`.
 
 An externally started CLI agent detected inside a Seyal terminal may create/bind an `AgentRun` with an explicit origin such as `external_detected`. The external harness's own session identifier remains metadata, not Seyal identity.
+
+### 2.3 Agent execution ownership and GUI detach
+
+The GUI must not own continued agent work.
+
+- an external CLI agent inside a `TerminalExecution` survives GUI detach exactly according to the terminal/runtime persistence contract;
+- a first-party API-driven Seyal agent uses a supervised non-terminal `Execution`/agent worker owned by the durable runtime/execution layer, not by an AppKit/Swift view controller;
+- tool commands that require a terminal create/reference normal Runtime-owned `TerminalExecution` objects rather than giving the harness its own PTY implementation;
+- adapter/UI detach may stop observation temporarily but must not fabricate AgentRun termination when the underlying execution remains live;
+- reconnect rebinds projections/adapters to existing durable identities.
+
+The precise worker/process topology remains a later ADR decision, but GUI lifetime may not become agent lifetime authority.
 
 ## 3. Universal external Agent Sessions
 
@@ -110,7 +122,22 @@ EnumerateTools
 
 Unsupported capability is an explicit state, not an error and not guessed from terminal text.
 
-### 3.3 Failure containment
+### 3.3 External harness binding
+
+An adapter binding records at least:
+
+```text
+adapter identity/version
+external harness kind/version
+external session/conversation reference?
+observed vs Seyal-started ownership mode
+capability snapshot + generation
+binding start/end/reconnect metadata
+```
+
+External session/conversation references are resumability hints only. They never replace `AgentRunId`, and losing them must not corrupt Seyal's durable work/evidence model.
+
+### 3.4 Failure containment
 
 - adapter crash/restart must not kill a live TerminalExecution;
 - stale/out-of-order adapter events are rejected or reconciled through AgentRun event ordering rules;
@@ -157,7 +184,20 @@ Deterministic context retrieval, memory correctness, privacy filtering and evalu
 
 This preserves the option to add other providers later as adapters without committing Seyal to supporting them in the first release.
 
-## 5. Data planes: evidence, memory, context, cache and transcript
+### 4.2 Provider continuation is an optimization, not authority
+
+Some providers support server-side conversation/response continuation identifiers. Seyal may use them for efficiency, but stores them only as external references.
+
+Seyal must retain enough local AgentRun/run-working evidence to:
+
+- explain what was sent and received;
+- rebuild the next required context when provider continuation is unavailable;
+- avoid making provider-side hidden history the only copy of critical work state;
+- migrate/resume through another provider adapter in the future without migrating durable Seyal identities.
+
+A provider continuation reference may improve cache/resume behavior; it never becomes `AgentRun` or memory authority.
+
+## 5. Data planes and context horizons
 
 These are intentionally separate.
 
@@ -165,12 +205,49 @@ These are intentionally separate.
 |---|---:|---|---|
 | project/source truth | external/durable | highest according to source policy | code, ADRs, specs, instructions, git state |
 | AgentRun event evidence | durable | factual execution evidence | lifecycle, artifacts, tool/evaluation provenance |
+| RunWorkingSet | reconstructable/durability-policy dependent | current-run working evidence only | short-term conversation/tool state and compaction |
 | MemoryStore | durable | scoped semantic knowledge, never automatic source truth | reusable decisions/facts/patterns/preferences |
-| ContextBundle | immutable per build, usually ephemeral | request-specific assembled input | what one agent/model turn receives |
+| ContextBundle | immutable per build, usually ephemeral | request-specific assembled input | what one model/harness turn receives |
 | derived caches/indexes | disposable | none | performance/retrieval acceleration |
 | raw provider transcript | retention-policy dependent | conversation evidence only | display/debug/resume where supported |
 
 A transcript is **not memory**. A cache is **not memory**. A summary is **not source truth**. A ContextBundle is **not durable knowledge authority**.
+
+### 5.1 Three context horizons
+
+Seyal distinguishes:
+
+```text
+Turn context
+  = immutable ContextBundle for one request/turn
+
+Run working context
+  = bounded recent AgentRun messages/tool results/artifact refs + derived compaction
+    needed to continue the current AgentRun
+
+Long-term memory
+  = accepted reusable MemoryRecords that may be retrieved across eligible runs/scopes
+```
+
+This avoids two common failure modes: treating the entire transcript as permanent memory, or relying on provider-side conversation state as the only short-term working context.
+
+### 5.2 RunWorkingSet
+
+`RunWorkingSet` is a derived/reconstructable view over AgentRun evidence and eligible transcript retention, not a new durable authority.
+
+It may contain:
+
+```text
+recent user/agent messages
+recent tool requests/results
+current plan/task-list/checkpoint metadata
+selected artifact references
+provider continuation reference?
+derived compacted summaries with source event ranges
+working-set fingerprint/version
+```
+
+Compaction summaries always retain source event/message ranges and model/config fingerprints. They can be discarded/rebuilt without losing authoritative AgentRun events/artifacts.
 
 ## 6. MemoryStore
 
@@ -198,6 +275,7 @@ MemoryRecord {
   supersedes[]
   conflicts_with[]
   source_fingerprints[]
+  record_version
   schema_version
 }
 ```
@@ -230,6 +308,8 @@ WorkItem/Attempt
 
 Cross-scope reads require explicit policy. Worktree-local facts must never silently leak into sibling worktrees merely because file paths match.
 
+User-local records are not implicitly injected into every project; project eligibility is policy-scoped and inspectable.
+
 Team/organization synchronized memory is a later consumer of the OSS seam and must not be required for local correctness.
 
 ### 6.3 Lifecycle
@@ -247,10 +327,12 @@ Proposed
 - `Proposed`: candidate extracted or explicitly suggested; not eligible as accepted knowledge unless policy allows proposed-memory retrieval for inspection.
 - `Accepted`: eligible for retrieval within scope/policy.
 - `Superseded`: retained for provenance but not selected as current knowledge by default.
-- `Revoked`: explicitly withdrawn/deleted from normal retrieval.
+- `Revoked`: explicitly withdrawn from normal retrieval.
 - `Expired`: validity window elapsed; requires revalidation before normal use.
 
 Conflicts do not silently overwrite. Multiple records can coexist with explicit conflict/supersession edges until authority/evidence resolves them.
+
+Concurrent updates use transactional version checks so two agents cannot silently overwrite each other's accepted memory state.
 
 ### 6.4 Memory modes
 
@@ -272,6 +354,8 @@ Assisted
 ```
 
 No mode permits opaque provider-side hidden memory to become Seyal authority.
+
+Normative project decisions, security/policy rules, permission expansions, destructive procedures and other high-impact knowledge may **not** be auto-accepted solely from model output. Their authority must come from an accepted source or an explicit typed human/product action.
 
 ### 6.5 Memory write pipeline
 
@@ -303,12 +387,14 @@ Deleting/revoking a MemoryRecord must:
 
 Deleting memory does not pretend to erase an independent source artifact, git commit or separately retained AgentRun evidence. Those have their own retention authority.
 
+Seyal also cannot claim that local deletion retroactively removes content already transmitted to an external model/tool provider. Every provider transmission must have inspectable provenance, and provider-side deletion/retention controls are applied only when the provider exposes a trustworthy supported mechanism.
+
 ## 7. Context Engine
 
 The Local Context Engine builds request-specific context from current truth and eligible durable knowledge.
 
 ```text
-Task + AgentRun + capability/policy + context budget
+Task + AgentRun + RunWorkingSet + capability/policy + context budget
         |
         v
 Sources
@@ -330,6 +416,7 @@ Sources
 - authoritative project instructions, ADRs and specs;
 - git/worktree/branch/diff state;
 - local symbol/LSP/index metadata where enabled;
+- current RunWorkingSet;
 - retained AgentRun events/artifacts explicitly eligible for context;
 - accepted MemoryRecords;
 - user-pinned context;
@@ -345,6 +432,7 @@ ContextBundle {
   WorkItemId / AttemptId / AgentRunId
   ordered_items[]
   source_fingerprints[]
+  working_set_fingerprint
   memory_ids[]
   policy_version
   builder_version
@@ -371,10 +459,11 @@ Recommended ordering logic:
 3. current source/worktree truth;
 4. exact task/path/symbol references;
 5. accepted scoped memory with valid evidence;
-6. lexical/task/worktree relevance;
-7. optional semantic rerank;
-8. diversity/deduplication;
-9. token-budget selection.
+6. current RunWorkingSet and recent typed run evidence;
+7. lexical/task/worktree relevance;
+8. optional semantic rerank;
+9. diversity/deduplication;
+10. token-budget selection.
 
 Memory that conflicts with current source truth is marked conflicted/stale and excluded or surfaced with explicit warning according to policy.
 
@@ -388,6 +477,7 @@ It records enough to answer:
 - why was another excluded?
 - which policy/freshness rule applied?
 - which memory record contributed?
+- which working-set summary/event range contributed?
 - what was dropped for budget?
 
 Secret-denied candidates retain only policy-safe identifiers/reasons.
@@ -403,7 +493,7 @@ current task + user request
 current execution/worktree state
 retrieved source context
 eligible memory
-recent run/tool evidence
+bounded RunWorkingSet / recent run-tool evidence
 reserved tool/model response headroom
 ```
 
@@ -421,15 +511,20 @@ Logical tables/namespaces should remain separate for:
 
 ```text
 agent_events
+agent_transcript_metadata?   # only under explicit retention policy
 memory_records
 memory_edges
 context_source_metadata
+working_set_compactions
 selection_traces
+provider_transmission_log
 index_metadata
 cache_metadata
 ```
 
 Repository bytes remain repository truth; do not create an authoritative duplicate source database.
+
+Sensitive storage uses the M004 security/key-storage contract; secrets are excluded from persistent memory/derived storage by default unless an explicit accepted policy says otherwise.
 
 ### 9.2 Derived storage
 
@@ -439,7 +534,7 @@ Content-addressed blobs/indexes may hold:
 - lexical indexes;
 - symbol metadata;
 - optional embeddings;
-- derived summaries;
+- derived summaries/working-set compactions;
 - context-selection caches;
 - prompt-bundle cache entries.
 
@@ -520,6 +615,8 @@ or cooperating child AgentRuns where explicitly configured.
 
 Independent writers default to isolated worktrees. Shared-writer mode is deliberate, observable and conflict-detected. Memory/context scope never silently crosses worktrees.
 
+Concurrent memory proposals/updates are transactionally versioned and retain conflict/provenance edges; one agent cannot silently rewrite another agent's accepted memory.
+
 A code/workflow checkpoint never claims to rewind a live PTY/process or external side effect.
 
 ## 14. Security and failure model
@@ -534,14 +631,19 @@ Required threats/failures include:
 - cross-workspace/worktree memory leakage;
 - stale memory overriding current truth;
 - memory deletion leaving retrievable derived indexes;
+- previously transmitted provider content being mistaken for locally erasable state;
 - poisoned embeddings/summaries/selection caches;
 - capability escalation through tools/MCP/skills;
 - approval replay;
 - provider outage/cancel/reconnect;
+- provider continuation loss;
 - context build/index overload;
-- adapter/harness crash while TerminalExecution remains live.
+- adapter/harness crash while the underlying execution remains live;
+- GUI close being mistaken for AgentRun/execution termination.
 
 Security policy and provenance filters run before provider transmission. Context/memory content never receives execution authority merely because it appears in a prompt.
+
+Provider transmission records must be privacy-aware: store references/fingerprints and required audit metadata without creating a second secret-bearing prompt archive.
 
 ## 15. Performance isolation
 
@@ -560,28 +662,34 @@ Required budgets/measurements include:
 - zero-agent idle CPU/RSS;
 - many detected external-agent sessions idle overhead;
 - event ingest/replay cost;
+- RunWorkingSet rebuild/compaction cost;
 - memory lookup/write/invalidation latency;
 - large-project context retrieval/build latency;
 - cache/index disk and RSS bounds;
 - provider-stream processing overhead;
 - proof of no terminal latency/throughput regression with agent subsystem disabled and enabled-idle.
 
-Background indexing/extraction is bounded, cancellable, priority-aware and visibility-aware.
+Background indexing/extraction/compaction is bounded, cancellable, priority-aware and visibility-aware.
 
 ## 16. Tests and evaluation required before production
 
 ### Functional/state tests
 - AgentRun/session projection lifecycle;
+- external adapter binding/ownership/reconnect semantics;
 - adapter capability negotiation and unsupported states;
 - external adapter crash/reconnect/stale events;
-- MemoryRecord lifecycle/supersession/conflict/revalidation;
+- first-party worker survives GUI detach according to accepted execution-lifetime contract;
+- provider continuation loss falls back to Seyal working evidence without identity loss;
+- RunWorkingSet reconstruction/compaction lineage;
+- MemoryRecord lifecycle/supersession/conflict/revalidation/version races;
 - memory Disabled/ReadOnly/Curated/Assisted modes;
+- high-impact memory cannot auto-accept from model output;
 - deletion/derived-cache invalidation;
 - worktree/workspace isolation;
 - deterministic ContextBundle fingerprints;
-- stale source/memory detection;
+- stale source/memory/working-context detection;
 - authority precedence;
-- provider adapter swap conformance;
+- provider adapter swap conformance at core boundaries;
 - OpenAI adapter failure/cancel/usage handling;
 - permissions/approval replay/expiry.
 
@@ -591,10 +699,12 @@ Background indexing/extraction is bounded, cancellable, priority-aware and visib
 - path/symlink/submodule boundaries;
 - malicious adapter/MCP frames;
 - cross-scope leakage;
-- forged evidence/memory proposals.
+- forged evidence/memory proposals;
+- provider-transmission metadata cannot reconstruct excluded secrets;
+- local delete semantics never falsely claim provider-side erasure.
 
 ### Evaluation corpus
-Measure context retrieval precision/recall, authoritative-source inclusion, stale-item rate, memory retrieval usefulness/false-positive rate, task success, retries, latency, tokens and cost. Model-assisted enhancement must beat the deterministic baseline on the same corpus/budget before becoming required.
+Measure context retrieval precision/recall, authoritative-source inclusion, stale-item rate, memory retrieval usefulness/false-positive rate, compaction information retention, task success, retries, latency, tokens and cost. Model-assisted enhancement must beat the deterministic baseline on the same corpus/budget before becoming required.
 
 ## 17. Roadmap boundary
 
@@ -613,13 +723,26 @@ M002 terminal compatibility
   -> M005 agent-native local substrate
        #678 identity/event authority first
        then #679 / #680 / #681 can proceed in parallel when exact dependencies are satisfied
-       plus a first-party Seyal AI Agent harness work package after #838 architecture acceptance
+       plus the first-party Seyal AI Agent harness package (#839) after #838 architecture acceptance
   -> M006 workflows + multi-agent + coding/DevOps surfaces
 ```
 
-The first-party harness work package is currently a roadmap gap and must be materialized explicitly before M005 implementation begins; it must not be hidden inside #679 external adapters or #681 context/evaluation.
+The first-party harness work package is a previously missing roadmap owner and must not be hidden inside #679 external adapters or #681 context/evaluation.
 
-## 18. Promotion gate
+## 18. Existing provider-scope conflict that must be resolved explicitly
+
+Current agent-platform roadmap/R&D language includes no-account/BYOK/local-provider operation. The product decision to ship the **first-party Seyal AI Agent initially with OpenAI only** narrows that earlier expectation.
+
+This refinement resolves the architectural risk by keeping core provider contracts neutral, but it does **not** silently rewrite the existing product requirement.
+
+Before M005 readiness, product/ADR review must choose one of these explicit dispositions:
+
+1. OpenAI is the first shipped provider for the first-party agent, while local/BYOK provider support remains a later accepted roadmap requirement; or
+2. M005 exit criteria continue to require at least one account-free/local model path for the first-party agent.
+
+External Agent Sessions and deterministic local context/memory remain usable independently of that choice.
+
+## 19. Promotion gate
 
 This document is deliberately **not** final architecture authority.
 
@@ -627,9 +750,10 @@ Before implementation:
 
 1. independent high-capability architecture review of #838 and this document;
 2. reconcile all blocking findings;
-3. promote stable decisions into accepted ADR(s) covering ownership/lifecycle/storage/provider/permission boundaries;
-4. create behavior specs for AgentAdapter/AgentRun projection, MemoryRecord and ContextBundle/SelectionTrace;
-5. refine #678–#683 and the missing first-party harness implementation package against those accepted specs;
-6. only then mark implementation slices Ready according to roadmap dependencies.
+3. explicitly resolve the provider-scope conflict in §18;
+4. promote stable decisions into accepted ADR(s) covering ownership/lifecycle/storage/provider/permission boundaries;
+5. create behavior specs for AgentAdapter/AgentRun projection, RunWorkingSet, MemoryRecord and ContextBundle/SelectionTrace;
+6. refine #678–#683 and #839 against those accepted specs;
+7. only then mark implementation slices Ready according to roadmap dependencies.
 
 The independent reviewer must actively try to find duplicate authority, hidden provider lock-in, memory/context conflation, privacy/deletion gaps, replay/side-effect mistakes, multi-agent isolation gaps and terminal hot-path coupling rather than merely checking prose consistency.

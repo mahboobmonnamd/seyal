@@ -1,7 +1,7 @@
 use std::{env, hint::black_box, process::Command, time::Instant};
 
-use stats_alloc::{Region, StatsAlloc, INSTRUMENTED_SYSTEM};
 use seyal_terminal::TerminalState;
+use stats_alloc::{Region, StatsAlloc, INSTRUMENTED_SYSTEM};
 
 #[global_allocator]
 static GLOBAL: &StatsAlloc<std::alloc::System> = &INSTRUMENTED_SYSTEM;

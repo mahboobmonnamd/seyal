@@ -15,6 +15,9 @@ The performance-contract branch was **rebased onto current `origin/master`** and
 Linux-only contract validators were re-run. A PLATFORM_LIMITED retention
 negative/positive fixture pair was added so platform-limited records cannot
 pass without a reason and are retained as `PLATFORM_LIMITED` when reasoned.
+A proposed-gate evaluation negative was added so records cannot claim results
+against gates still marked `status = "proposed"` (for example
+`input_visible_proxy`).
 
 This does **not** claim any release performance gate passed, and does **not**
 clear the native Runtime-attach / headed smoke NO-GO.

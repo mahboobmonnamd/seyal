@@ -277,6 +277,26 @@ def main() -> None:
             "platform-limited result with reason was not retained as PLATFORM_LIMITED",
         )
 
+        proposed_gate = base / "m002-performance-proposed-gate"
+        shutil.copytree(invalid_percentiles, proposed_gate)
+        record = (proposed_gate / "record.toml").read_text(encoding="utf-8")
+        record = record.replace("p50 = 3\np95 = 2\np99 = 4", "p50 = 2\np95 = 4\np99 = 8")
+        record = record.replace(
+            "evidence_class = 'PHYSICAL_ARM64'\ngate = 'history_active_reflow_ms'\nmetric = 'history_active_reflow_ms'\nboundary = 'HistoryStore active reflow'\nunit = 'ms'",
+            "evidence_class = 'PHYSICAL_ARM64'\ngate = 'input_visible_proxy'\nmetric = 'input_visible_proxy'\nboundary = 'native input admission to named visible-frame proxy'\nunit = 'ms'",
+        )
+        (proposed_gate / "record.toml").write_text(record, encoding="utf-8")
+        for cohort in range(1, 6):
+            write(
+                proposed_gate / "cohorts" / f"cohort-{cohort}.toml",
+                f"cohort = {cohort}\nsamples = [{', '.join(['2'] * 50 + ['4'] * 45 + ['8'] * 5)}]\n",
+            )
+        run_negative(
+            ["python3", str(ROOT / "scripts/check-m002-performance-contract.py"), "--record", "record.toml"],
+            proposed_gate,
+            "cannot evaluate a proposed gate",
+        )
+
         unicode_benchmark = base / "unicode-benchmark-contract"
         write(
             unicode_benchmark / "crates/seyal-terminal/benches/good.rs",

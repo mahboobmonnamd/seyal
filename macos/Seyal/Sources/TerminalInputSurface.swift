@@ -366,6 +366,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
   private let inputPolicy: SeyalInputPolicy
   private var nextKeyboardActionID: UInt32 = 1
   private var heldKeyboardKinds: [UInt16: TerminalNativeKeyV2] = [:]
+  private static let maxHeldKeyboardKinds = 256
 
   convenience init(frame frameRect: NSRect) {
     self.init(frame: frameRect, paneID: "unbound")
@@ -506,11 +507,17 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
       modifierFlags: event.modifierFlags,
       optionAsAlt: inputPolicy.optionAsAlt
     ) {
+      if heldKeyboardKinds[event.keyCode] == nil {
+        guard heldKeyboardKinds.count < Self.maxHeldKeyboardKinds else {
+          nativeFailure = .clientBackpressure
+          refreshFailurePresentation()
+          return
+        }
+        heldKeyboardKinds[event.keyCode] = key
+      }
       let actionID = nextKeyboardActionID
       guard actionID != 0 else { return }
       nextKeyboardActionID &+= 1
-      guard heldKeyboardKinds.count < 256 else { return }
-      heldKeyboardKinds[event.keyCode] = key
       terminalSubmitKeyV2(
         kind: key.kind, modifiers: key.modifiers, value: key.value,
         event: event.isARepeat ? 2 : 1, shiftedASCII: key.shiftedASCII, actionID: actionID
@@ -963,6 +970,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
       && composedSubstringSelfTest()
       && semanticKeyMatrixSelfTest()
       && keyReleaseMetadataSelfTest()
+      && heldKeyboardCapacitySelfTest()
       && capabilityLossDropsHeldKeyReleaseSelfTest()
   }
 
@@ -1158,6 +1166,17 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
       )?.shiftedASCII == 65
       && SeyalUIConfiguration.load(tomlText: "[input]\noption_as_alt = true").inputPolicy.optionAsAlt
       && !SeyalUIConfiguration.load(tomlText: "[input]\noption_as_alt = false").inputPolicy.optionAsAlt
+  }
+
+  private static func heldKeyboardCapacitySelfTest() -> Bool {
+    var held: [UInt16: TerminalNativeKeyV2] = [:]
+    for index in 0..<maxHeldKeyboardKinds {
+      held[UInt16(index)] = TerminalNativeKeyV2(
+        kind: 17, modifiers: 0, value: 0x61, shiftedASCII: 0)
+    }
+    let trackedRepeatAllowed = held[0] != nil && held.count >= maxHeldKeyboardKinds
+    let newPressRejected = held.count >= maxHeldKeyboardKinds && held[300] == nil
+    return trackedRepeatAllowed && newPressRejected
   }
 
   private static func keyReleaseMetadataSelfTest() -> Bool {

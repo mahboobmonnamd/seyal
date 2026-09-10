@@ -95,6 +95,9 @@ pub(crate) fn valid_terminal_key_request(kind: TerminalKeyKind, scalar: u32) -> 
 pub(crate) enum OutboundKind {
     Input,
     TerminalKey,
+    TerminalKeyV2 {
+        action_id: u32,
+    },
     Resize {
         request_id: u64,
         geometry: GridGeometry,
@@ -312,7 +315,7 @@ impl LocalDisplayClient {
         if action_id == 0 {
             return Err(ClientError::Protocol);
         }
-        if action_id <= self.last_sent_v2_action_id {
+        if action_id <= self.last_admitted_v2_action_id {
             return Err(ClientError::Protocol);
         }
         let payload = TerminalKeyV2 {
@@ -326,11 +329,11 @@ impl LocalDisplayClient {
         }
         .encode();
         let frame = encode_frame(MessageType::TerminalKeyV2, &payload);
-        if let Err(error) = self.admit_frame(frame, OutboundKind::TerminalKey) {
+        if let Err(error) = self.admit_frame(frame, OutboundKind::TerminalKeyV2 { action_id }) {
             self.input_failure = Some(InputAdmissionFailure::ClientBackpressure);
             return Err(error);
         }
-        self.last_sent_v2_action_id = action_id;
+        self.last_admitted_v2_action_id = action_id;
         self.input_failure = None;
         self.flush_control_write()
     }
@@ -339,26 +342,33 @@ impl LocalDisplayClient {
         &mut self,
         error: ErrorMessage,
     ) -> Result<Option<InputAdmissionFailure>, ClientError> {
-        if error.error_code == ErrorCode::Backpressure as u16
-            && error.offending_message_type == MessageType::TerminalKeyV2 as u16
-        {
-            return self.classify_v2_backpressure(error.detail_code);
+        if error.offending_message_type == MessageType::TerminalKeyV2 as u16 {
+            return self.classify_v2_error(error);
         }
         classify_server_error(error)
     }
 
-    fn classify_v2_backpressure(
+    fn classify_v2_error(
         &mut self,
-        action_id: u32,
+        error: ErrorMessage,
     ) -> Result<Option<InputAdmissionFailure>, ClientError> {
-        if action_id == 0 {
-            return Err(ClientError::Server(ErrorCode::Backpressure));
+        let (disposition, highest) = crate::v2_error::classify_v2_incoming_error(
+            error.error_code,
+            error.detail_code,
+            self.last_sent_v2_action_id,
+            self.highest_v2_error_id,
+        );
+        self.highest_v2_error_id = highest;
+        match disposition {
+            crate::v2_error::V2IncomingDisposition::ClientBackpressure => {
+                Ok(Some(InputAdmissionFailure::ClientBackpressure))
+            }
+            crate::v2_error::V2IncomingDisposition::LostController => {
+                Ok(Some(InputAdmissionFailure::LostController))
+            }
+            crate::v2_error::V2IncomingDisposition::Protocol => Err(ClientError::Protocol),
+            crate::v2_error::V2IncomingDisposition::Fatal(code) => Err(ClientError::Server(code)),
         }
-        if action_id > self.last_sent_v2_action_id || action_id <= self.highest_v2_error_id {
-            return Err(ClientError::Protocol);
-        }
-        self.highest_v2_error_id = action_id;
-        Ok(Some(InputAdmissionFailure::ClientBackpressure))
     }
 
     pub fn set_desired_geometry(&mut self, geometry: GridGeometry) -> Result<(), ClientError> {
@@ -414,7 +424,10 @@ impl LocalDisplayClient {
         kind: OutboundKind,
     ) -> Result<(), ClientError> {
         #[cfg(feature = "benchmark-instrumentation")]
-        let benchmark_input = matches!(kind, OutboundKind::Input | OutboundKind::TerminalKey);
+        let benchmark_input = matches!(
+            kind,
+            OutboundKind::Input | OutboundKind::TerminalKey | OutboundKind::TerminalKeyV2 { .. }
+        );
         let next = self
             .outbound_wire_bytes
             .checked_add(bytes.len())
@@ -482,14 +495,23 @@ impl LocalDisplayClient {
             self.set_resize_phase(request_id, phase)?;
         }
         if completed {
+            let completed_v2 = match self.outbound.front().map(|pending| pending.kind) {
+                Some(OutboundKind::TerminalKeyV2 { action_id }) => Some(action_id),
+                _ => None,
+            };
             #[cfg(feature = "benchmark-instrumentation")]
             let completed_input = self.outbound.front().is_some_and(|pending| {
                 matches!(
                     pending.kind,
-                    OutboundKind::Input | OutboundKind::TerminalKey
+                    OutboundKind::Input
+                        | OutboundKind::TerminalKey
+                        | OutboundKind::TerminalKeyV2 { .. }
                 )
             });
             self.outbound.pop_front();
+            if let Some(action_id) = completed_v2 {
+                self.last_sent_v2_action_id = action_id;
+            }
             #[cfg(feature = "benchmark-instrumentation")]
             if completed_input {
                 crate::pass7_benchmark::mark_pass7_client_socket_complete(self.outbound_wire_bytes);

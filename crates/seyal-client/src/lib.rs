@@ -7,6 +7,9 @@
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod block_cache;
 
+#[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
+mod v2_error;
+
 // Keep the existing internal import path mechanically stable while severing the
 // production dependency on the Runtime crate. `seyal_runtime` below is only an
 // alias for the authority-neutral protocol/value crate; integration tests still

@@ -497,6 +497,7 @@ impl LocalDisplayClient {
             history_ranges: HashMap::new(),
             history_requests: HashMap::new(),
             next_history_request_id: 1,
+            last_admitted_v2_action_id: 0,
             last_sent_v2_action_id: 0,
             highest_v2_error_id: 0,
         })

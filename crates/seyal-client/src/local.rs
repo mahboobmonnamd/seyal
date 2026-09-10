@@ -117,6 +117,9 @@ pub struct LocalDisplayClient {
     pub(crate) history_requests: HashMap<u64, (u64, u64, u64)>,
     pub(crate) next_history_request_id: u64,
     /// Connection-local SPEC-006 §21.5 sent/highest-error bounds. Zero means none.
+    /// `last_admitted` is the highest V2 ID accepted into the outbound FIFO.
+    /// `last_sent` advances only after that frame is fully written to the socket.
+    pub(crate) last_admitted_v2_action_id: u32,
     pub(crate) last_sent_v2_action_id: u32,
     pub(crate) highest_v2_error_id: u32,
 }
@@ -501,8 +504,8 @@ pub(crate) fn validate_composer_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use seyal_runtime::local_ipc::framing::{ErrorCode, ErrorMessage, MessageType};
     use seyal_runtime::pass8::CAP_BLOCK_METADATA;
-    use seyal_runtime::local_ipc::framing::ErrorMessage;
     use std::io::{Read, Write};
 
     fn test_client(stream: UnixStream) -> LocalDisplayClient {
@@ -553,6 +556,7 @@ mod tests {
             history_ranges: HashMap::new(),
             history_requests: HashMap::new(),
             next_history_request_id: 1,
+            last_admitted_v2_action_id: 0,
             last_sent_v2_action_id: 0,
             highest_v2_error_id: 0,
         }
@@ -720,65 +724,170 @@ mod tests {
         assert!(client.outbound.is_empty());
     }
 
+    fn type29(error_code: ErrorCode, detail_code: u32) -> ErrorMessage {
+        ErrorMessage {
+            error_code: error_code as u16,
+            offending_message_type: MessageType::TerminalKeyV2 as u16,
+            detail_code,
+        }
+    }
+
+    fn submit_v2(client: &mut LocalDisplayClient, action_id: u32) -> Result<(), ClientError> {
+        client.submit_terminal_key_v2(
+            TerminalKeyV2Kind::ArrowUp,
+            TerminalKeyV2Modifiers::NONE,
+            0,
+            TerminalKeyV2Event::Press,
+            0,
+            action_id,
+        )
+    }
+
     #[test]
     fn v2_backpressure_uses_sent_and_highest_error_bounds() {
         let (client_stream, _server_stream) = UnixStream::pair().expect("socket pair");
         let mut client = test_client(client_stream);
         client.extended_terminal_key_supported = true;
-        client
-            .submit_terminal_key_v2(
-                TerminalKeyV2Kind::ArrowUp,
-                TerminalKeyV2Modifiers::NONE,
-                0,
-                TerminalKeyV2Event::Press,
-                0,
-                7,
-            )
-            .expect("in-range V2 send");
+        submit_v2(&mut client, 7).expect("in-range V2 send");
+        assert_eq!(client.last_admitted_v2_action_id, 7);
         assert_eq!(client.last_sent_v2_action_id, 7);
 
-        let in_range = ErrorMessage {
-            error_code: ErrorCode::Backpressure as u16,
-            offending_message_type: MessageType::TerminalKeyV2 as u16,
-            detail_code: 7,
-        };
         assert_eq!(
-            client.classify_incoming_error(in_range).unwrap(),
+            client
+                .classify_incoming_error(type29(ErrorCode::Backpressure, 7))
+                .unwrap(),
             Some(InputAdmissionFailure::ClientBackpressure)
         );
         assert_eq!(client.highest_v2_error_id, 7);
 
         assert_eq!(
-            client.classify_incoming_error(ErrorMessage {
-                error_code: ErrorCode::Backpressure as u16,
-                offending_message_type: MessageType::TerminalKeyV2 as u16,
-                detail_code: 7,
-            }),
+            client.classify_incoming_error(type29(ErrorCode::Backpressure, 7)),
             Err(ClientError::Protocol)
         );
         assert_eq!(
-            client.classify_incoming_error(ErrorMessage {
-                error_code: ErrorCode::Backpressure as u16,
-                offending_message_type: MessageType::TerminalKeyV2 as u16,
-                detail_code: 3,
-            }),
+            client.classify_incoming_error(type29(ErrorCode::Backpressure, 3)),
             Err(ClientError::Protocol)
         );
         assert_eq!(
-            client.classify_incoming_error(ErrorMessage {
-                error_code: ErrorCode::Backpressure as u16,
-                offending_message_type: MessageType::TerminalKeyV2 as u16,
-                detail_code: 9,
-            }),
+            client.classify_incoming_error(type29(ErrorCode::Backpressure, 9)),
             Err(ClientError::Protocol)
         );
         assert_eq!(
-            client.classify_incoming_error(ErrorMessage {
-                error_code: ErrorCode::Backpressure as u16,
-                offending_message_type: MessageType::TerminalKeyV2 as u16,
-                detail_code: 0,
-            }),
-            Err(ClientError::Server(ErrorCode::Backpressure))
+            client.classify_incoming_error(type29(ErrorCode::Backpressure, 0)),
+            Err(ClientError::Protocol)
+        );
+    }
+
+    #[test]
+    fn v2_type29_authorization_and_encoding_keep_the_connection() {
+        let (client_stream, _server_stream) = UnixStream::pair().expect("socket pair");
+        let mut client = test_client(client_stream);
+        client.extended_terminal_key_supported = true;
+        submit_v2(&mut client, 4).expect("send 4");
+        submit_v2(&mut client, 5).expect("send 5");
+        submit_v2(&mut client, 6).expect("send 6");
+        submit_v2(&mut client, 8).expect("send 8");
+
+        assert_eq!(
+            client
+                .classify_incoming_error(type29(ErrorCode::PermissionDenied, 4))
+                .unwrap(),
+            Some(InputAdmissionFailure::LostController)
+        );
+        assert_eq!(
+            client
+                .classify_incoming_error(type29(ErrorCode::StaleIdentity, 5))
+                .unwrap(),
+            Some(InputAdmissionFailure::LostController)
+        );
+        assert_eq!(
+            client
+                .classify_incoming_error(type29(ErrorCode::InvalidExecution, 6))
+                .unwrap(),
+            Some(InputAdmissionFailure::LostController)
+        );
+        assert_eq!(
+            client
+                .classify_incoming_error(type29(ErrorCode::MalformedPayload, 8))
+                .unwrap(),
+            Some(InputAdmissionFailure::ClientBackpressure)
+        );
+        assert_eq!(client.highest_v2_error_id, 8);
+
+        assert_eq!(
+            client.classify_incoming_error(type29(ErrorCode::PermissionDenied, 4)),
+            Err(ClientError::Protocol)
+        );
+        assert_eq!(
+            client.classify_incoming_error(type29(ErrorCode::PermissionDenied, 9)),
+            Err(ClientError::Protocol)
+        );
+        assert_eq!(
+            client.classify_incoming_error(type29(ErrorCode::PermissionDenied, 0)),
+            Err(ClientError::Protocol)
+        );
+        assert_eq!(
+            client.classify_incoming_error(type29(ErrorCode::MalformedPayload, 0)),
+            Err(ClientError::Server(ErrorCode::MalformedPayload))
+        );
+    }
+
+    #[test]
+    fn v2_sent_bound_advances_only_after_wire_complete() {
+        let (client_stream, mut server_stream) = UnixStream::pair().expect("socket pair");
+        client_stream
+            .set_nonblocking(true)
+            .expect("nonblocking client");
+        server_stream
+            .set_nonblocking(true)
+            .expect("nonblocking server");
+        let mut client = test_client(client_stream);
+        client.extended_terminal_key_supported = true;
+
+        let chunk = "x".repeat(8192);
+        for _ in 0..64 {
+            match client.submit_committed_text(&chunk) {
+                Ok(()) => {
+                    if !client.outbound.is_empty() {
+                        break;
+                    }
+                }
+                Err(ClientError::ClientBackpressure) => break,
+                Err(error) => panic!("fill: {error:?}"),
+            }
+        }
+        assert!(
+            !client.outbound.is_empty(),
+            "an unread peer must leave FIFO bytes after a blocked flush"
+        );
+
+        submit_v2(&mut client, 7).expect("V2 admits ahead of a blocked flush");
+        assert_eq!(client.last_admitted_v2_action_id, 7);
+        assert_eq!(
+            client.last_sent_v2_action_id, 0,
+            "WouldBlock/partial writes must not advance the sent high-water"
+        );
+        assert_eq!(
+            client.classify_incoming_error(type29(ErrorCode::Backpressure, 7)),
+            Err(ClientError::Protocol)
+        );
+
+        let mut drain = [0u8; 65_536];
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while client.wants_write() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "flush did not complete after the peer drained"
+            );
+            let _ = server_stream.read(&mut drain);
+            client.flush_control_write().expect("flush after drain");
+        }
+        assert_eq!(client.last_sent_v2_action_id, 7);
+        assert_eq!(
+            client
+                .classify_incoming_error(type29(ErrorCode::Backpressure, 7))
+                .unwrap(),
+            Some(InputAdmissionFailure::ClientBackpressure)
         );
     }
 }

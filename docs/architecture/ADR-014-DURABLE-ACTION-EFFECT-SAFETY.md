@@ -148,7 +148,14 @@ Prepared
    |               +--> Succeeded
    |               +--> FailedKnown
    |               +--> EffectUnknown
+   |               |       |
+   |               |       +-- reconciliation --> Succeeded
+   |               |       +-- reconciliation --> FailedKnown
    |               +--> CancelledAfterDispatch
+   |                       |
+   |                       +-- reconciliation --> Succeeded
+   |                       +-- reconciliation --> FailedKnown
+   |                       +-- reconciliation --> EffectUnknown
    |
    +--> CancelledBeforeDispatch
 
@@ -156,12 +163,12 @@ Authorized
    +--> CancelledBeforeDispatch
 ```
 
-The names may be represented as states plus orthogonal metadata in implementation, but these externally meaningful facts must remain distinguishable.
+The names may be represented as states plus orthogonal metadata in implementation, but these externally meaningful facts must remain distinguishable. Reconciliation transitions require authoritative post-hoc evidence under §13 and preserve the prior `EffectUnknown`/cancellation evidence in the audit history; reconciliation does not erase that ambiguity or cancellation was previously observed.
 
 Meanings:
 
 - `Prepared`: immutable intent is durably recorded; no dispatch authorization is currently consumable.
-- `Authorized`: exact policy/human authorization is valid for this immutable intent, and any required single-use approval is durably bound/consumed according to the downstream ordering spec.
+- `Authorized`: exact policy/human authorization is durably bound and eligible for this immutable intent, but any required single-use approval has not yet been consumed for dispatch.
 - `Dispatching`: Seyal has durably crossed the point after which absence of a local success record cannot prove that no external effect occurred.
 - `Succeeded`: authoritative typed evidence says the intended operation completed and the result is durably recorded.
 - `FailedKnown`: authoritative typed evidence says the operation failed with a known non-success outcome for which effect semantics are sufficiently known.
@@ -176,14 +183,15 @@ A UI may expose friendlier labels, but it cannot collapse `EffectUnknown` into o
 The downstream action specification must preserve this ordering model:
 
 1. normalize and durably persist `ActionIntent`;
-2. validate current AgentRun binding authority, resource identity/version, policy generation and required authorization;
-3. durably establish the current action authorization/dispatch ownership and consume any exact single-use approval according to the transactional local-store contract;
-4. durably enter `Dispatching` **before** invoking the external/resource executor;
-5. invoke the executor with the stable `ActionId` plus the current dispatch generation/fencing material;
-6. accept a typed result only from the valid executor/dispatch generation;
-7. durably commit `Succeeded`, `FailedKnown`, `EffectUnknown` or the appropriate cancellation/reconciliation outcome.
+2. obtain and durably bind any required exact authorization so the Action may enter `Authorized` without consuming the approval for dispatch;
+3. immediately before dispatch, perform one safety-critical local transaction that revalidates the complete §10 precondition set, acquires the current action dispatch generation/ownership, consumes any exact single-use approval, and durably transitions the Action to `Dispatching`;
+4. invoke the external/resource executor with the stable `ActionId` plus the current dispatch generation/fencing material;
+5. accept a typed result only from the valid executor/dispatch generation;
+6. durably commit `Succeeded`, `FailedKnown`, `EffectUnknown` or the appropriate cancellation/reconciliation outcome.
 
-Step 4 is intentionally conservative. A crash after local `Dispatching` is recorded but before the external operation actually starts can still require reconciliation for a non-replayable action, because persisted local state alone cannot prove the negative. Safety is preferred over speculative automatic retry.
+The validation, approval consumption, dispatch-ownership acquisition and durable `Dispatching` transition in step 3 are one atomic local safety boundary. No implementation may expose an intermediate committed state in which an approval is consumed for dispatch while `Dispatching`/current dispatch ownership was not durably established, or vice versa. §10 describes the preconditions of this same transaction; it is not a second approval-consumption pass and must not create a time-of-check/time-of-use window.
+
+The `Dispatching` transition is intentionally conservative. A crash after local `Dispatching` is recorded but before the external operation actually starts can still require reconciliation for a non-replayable action, because persisted local state alone cannot prove the negative. Safety is preferred over speculative automatic retry.
 
 Likewise, if an external effect happens and the local result commit fails, recovery sees an unresolved dispatched action rather than "no result therefore retry".
 
@@ -249,7 +257,7 @@ If the guarantee is absent, expired, unsupported or unverifiable, the system fal
 
 Authorization is not a one-time snapshot that can be consumed after its assumptions changed.
 
-Immediately before crossing the dispatch boundary, Seyal revalidates at least:
+As the precondition of the single local dispatch transaction in §6 step 3, Seyal revalidates at least:
 
 - the Action is still current and not already terminal;
 - requesting AgentRun/worker control is current under ADR-012;
@@ -258,6 +266,8 @@ Immediately before crossing the dispatch boundary, Seyal revalidates at least:
 - relevant policy generation remains current;
 - exact approval is present, unexpired and not previously consumed where required;
 - privacy/security eligibility required by ADR-013 still permits the action payload/context.
+
+Only if that full precondition set succeeds may the same transaction consume the approval, acquire dispatch ownership/generation and durably enter `Dispatching`. There is no second approval check/consumption after the transaction and no permitted gap in which those validated assumptions may change before the durable dispatch boundary is recorded.
 
 If a material precondition changed, Seyal does not silently widen or refresh the old authorization. It requires a new policy decision and, when user approval was required, a fresh exact approval.
 
@@ -283,10 +293,12 @@ The downstream specification must make these cases deterministic:
 |---|---|
 | before durable `ActionIntent` | no durable Action exists; nothing may be claimed or replayed |
 | after `Prepared`, before authorization | same Action may be reconsidered; no dispatch occurred through this authority |
-| after authorization, before durable `Dispatching` | no external dispatch may be inferred; downstream local transaction rules decide whether the exact authorization remains consumable |
+| after `Authorized`, before the atomic §6 step-3 transaction commits `Dispatching` | no external dispatch may be inferred through this authority; recovery invalidates the prior consumable authorization and requires fresh authorization before this Action may dispatch |
 | after durable `Dispatching`, before executor invocation | conservative ambiguity for non-replayable operations unless authoritative executor evidence proves not dispatched |
 | during executor call / timeout / channel loss | reconcile; no blind retry |
 | effect occurred, result persistence failed | unresolved `Dispatching` becomes `EffectUnknown` unless executor reconciliation/idempotency contract proves outcome |
+| `EffectUnknown` later receives authoritative reconciliation evidence | transition to `Succeeded` or `FailedKnown` according to that evidence while preserving the prior ambiguity in history |
+| `CancelledAfterDispatch` later receives authoritative reconciliation evidence | transition to `Succeeded`, `FailedKnown` or `EffectUnknown` according to effect evidence; cancellation never fabricates rollback/no-effect |
 | durable `Succeeded`/`FailedKnown` committed | recovery replays state/evidence only; the external operation is not dispatched again |
 | stale dispatcher returns after replacement | result cannot overwrite current state unless accepted through the current reconciliation contract |
 | local persistence becomes repeatedly unavailable | fail closed for new affected dispatches, bound retry/backoff, surface degraded state; unrelated PTY/VT/render progress continues |
@@ -305,7 +317,7 @@ A result cannot be accepted solely because:
 - a stale adapter sends a late event;
 - the target resource now happens to look like the desired state.
 
-State inspection may be part of reconciliation, but it must be explicitly identified as post-hoc reconciliation evidence rather than retroactively fabricated execution evidence.
+State inspection may be part of reconciliation, but it must be explicitly identified as post-hoc reconciliation evidence rather than retroactively fabricated execution evidence. Only authoritative reconciliation evidence may resolve `EffectUnknown` or `CancelledAfterDispatch` into the known outcomes defined in §5/§12.
 
 ### 14. Action payload retention follows context/privacy authority
 
@@ -413,6 +425,8 @@ Rejected. After dispatch, cancellation cannot erase already-observed external ef
 The implementation specification/tests must cover at least:
 
 - approval replay, duplication, expiry and widening attempts;
+- atomic validation/approval-consumption/dispatch-transition behavior with no TOCTOU or half-committed consumption state;
+- crash after `Authorized` but before `Dispatching`, proving fresh authorization is required before recovery can dispatch;
 - changed resource version/arguments/policy between approval and dispatch;
 - stale AgentRun worker attempting to dispatch;
 - two dispatch generations racing the same Action;
@@ -420,6 +434,7 @@ The implementation specification/tests must cover at least:
 - crash at every durable ordering boundary;
 - executor timeout/channel loss;
 - effect succeeds then result persistence fails;
+- `EffectUnknown` and `CancelledAfterDispatch` reconciliation exit transitions with authoritative and forged evidence;
 - process dies before external effect versus after effect;
 - idempotency key supported, unsupported, expired and falsely claimed;
 - cancellation before dispatch and cancellation during/after effect;

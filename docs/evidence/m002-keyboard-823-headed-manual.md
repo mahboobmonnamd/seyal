@@ -13,7 +13,10 @@
 
 A self-hosted macOS worker (`Mahboob's MacBook Pro (2)`,
 `workerId=b1146e6c-9dea-5584-a5ef-152e2391887e`) was connected and idle. This
-cloud-agent process is not running on that worker. Physical keyboard, IME
+cloud-agent process is not running on that worker. A computer-use subagent
+(`bc-4f1dc836-34bf-5c39-9fb6-9c136c3d3366`) also landed on Linux
+(`privateWorkerId=null`) and recorded the same six-step
+`ENVIRONMENT_UNSUPPORTED` ledger. Physical keyboard, IME
 source, keypad, and Metal pixels are not available here. No Debug
 `Seyal.app` was launched from this host, and no checklist step is PASS.
 

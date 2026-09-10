@@ -240,6 +240,43 @@ def main() -> None:
             false_provenance, "raw_log does not exist",
         )
 
+        platform_limited_missing_reason = base / "m002-performance-platform-limited-missing-reason"
+        shutil.copytree(invalid_percentiles, platform_limited_missing_reason)
+        record = (platform_limited_missing_reason / "record.toml").read_text(encoding="utf-8")
+        record = record.replace("p50 = 3\np95 = 2\np99 = 4", "p50 = 2\np95 = 4\np99 = 8")
+        record = record.replace(
+            "environment_status = 'VALID'\nplatform_limit_reason = ''",
+            "environment_status = 'PLATFORM_LIMITED'\nplatform_limit_reason = ''",
+        )
+        (platform_limited_missing_reason / "record.toml").write_text(record, encoding="utf-8")
+        for cohort in range(1, 6):
+            write(
+                platform_limited_missing_reason / "cohorts" / f"cohort-{cohort}.toml",
+                f"cohort = {cohort}\nsamples = [{', '.join(['2'] * 50 + ['4'] * 45 + ['8'] * 5)}]\n",
+            )
+        run_negative(
+            ["python3", str(ROOT / "scripts/check-m002-performance-contract.py"), "--record", "record.toml"],
+            platform_limited_missing_reason,
+            "platform-limited results require a reason",
+        )
+
+        platform_limited_ok = base / "m002-performance-platform-limited-ok"
+        shutil.copytree(platform_limited_missing_reason, platform_limited_ok)
+        record = (platform_limited_ok / "record.toml").read_text(encoding="utf-8").replace(
+            "platform_limit_reason = ''",
+            "platform_limit_reason = 'host PTY capacity exhausted at population 100'",
+        )
+        (platform_limited_ok / "record.toml").write_text(record, encoding="utf-8")
+        result = subprocess.run(
+            ["python3", str(ROOT / "scripts/check-m002-performance-contract.py"), "--record", "record.toml"],
+            cwd=platform_limited_ok, env={**os.environ, ENV_ROOT: str(platform_limited_ok)},
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False,
+        )
+        require(
+            result.returncode == 0 and "M002 performance result: PLATFORM_LIMITED" in result.stdout,
+            "platform-limited result with reason was not retained as PLATFORM_LIMITED",
+        )
+
         unicode_benchmark = base / "unicode-benchmark-contract"
         write(
             unicode_benchmark / "crates/seyal-terminal/benches/good.rs",

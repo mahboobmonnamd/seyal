@@ -1,30 +1,49 @@
-# M002 #823 independent keyboard-architecture review
+# Independent M002 #823 keyboard review
 
-- **Review target:** `issue/823` at `c341f845ac9735defa6db972aec19e86ad7823cf`
+- **Review target:** `issue/823` at `f24e2a4d1de57f6d0b1af4d69ecbdb6be06630b4`
+- **Expected head:** matched (`f24e2a4`)
 - **Comparison base:** `origin/master` at `9b8408506ee2137c4b0cb20b4b2b2a92549649ab`
-- **Authority reviewed:** `docs/specs/SPEC-006-M001-NATIVE-INPUT-RESIZE.md` §21, #823 acceptance/Done gates, `AGENTS.md`, and `docs/engineering/ISSUE-PROTOCOL.md`
-- **Scope:** independent source and evidence review; no production changes and no headed macOS execution
-- **Review date:** 2026-09-10 UTC
+- **Authority:** `AGENTS.md`; `docs/specs/SPEC-006-M001-NATIVE-INPUT-RESIZE.md` §21, especially §§21.3, 21.5–21.7; and the #823 completion gates
+- **Review scope:** independent source/evidence review only. No production code was modified.
+- **Date:** 2026-09-10 UTC
 
 ## Verdict
 
-**NO-GO for merge. A closing PR is not allowed.**
+**NO-GO. `Closes #823` is not allowed.**
 
-The candidate preserves the important ownership boundary in source: Runtime
-reads canonical `TerminalState` modes after Controller authorization, V2 has
-fixed structural validation and capability gating, and the native surface does
-not translate Command into a terminal modifier. Those positive properties do
-not close the issue.
+`f24e2a4` corrects the narrow type-29 backpressure classification and installs
+the V2 capability/action-ID-zero admission guards. It does not fully satisfy
+the required client-side V2 error-correlation contract, and the mandatory
+headed/manual/target-TUI/latency evidence remains absent. The latter is
+independently sufficient to block a closing PR.
 
-There is a P1 V2 rejection-handling defect, and the acceptance-required headed,
-manual, target-TUI, and native-latency evidence is still absent. SPEC-006
-§21.7 explicitly says source fixtures cannot replace named native evidence and
-that manual IME/physical-layout evidence remains blocked until observed.
+This review does not claim M002 or #823 is complete.
 
-`c341f845` itself adds only the two evidence documents after production head
-`9848add7`. This review applies to the exact requested branch head; it does
-not treat the earlier full-check result at `fe70733` as an exact-head native
-validation of the later keypad and documentation changes.
+## Exact-tree and evidence provenance
+
+The review was pinned to the candidate SHA above, and `git diff --check
+origin/master...f24e2a4` passes. During review the branch advanced to
+docs-only commit `b05bae2cd6dc03c9f6d25b3fb57bdc68a902c999`, which contains
+the exact-head-ledger edit and headed-manual record. That later commit is
+outside the requested candidate review and is not attributed to `f24e2a4`;
+I read it as supplied evidence only.
+
+The headed-manual record is candid: every manual row is
+`ENVIRONMENT_UNSUPPORTED` on this Linux host, no `Seyal.app` was launched,
+and no physical keyboard, keypad, IME input source, or Metal display was
+available. That status is not a passing result and cannot discharge a §21.7
+native gate.
+
+## Prior source findings
+
+| Previous finding | Disposition at `f24e2a4` | Basis |
+| --- | --- | --- |
+| P1: type-29 Runtime backpressure was treated as fatal rather than a recoverable input-admission refusal | **Narrow defect resolved in source; final P1 resolution rejected** | `classify_server_error` now recognizes `Backpressure` for `TerminalKeyV2` only when `detail_code != 0`, matching the Runtime's capacity rejection in `handle_terminal_key_v2`, which echoes its nonzero action ID. However, the required client sent/highest-error ID validation remains absent; see P1 below. |
+| P2: V2 could be submitted through the client/FFI when extended-key capability was not negotiated | **Resolved in source** | `LocalDisplayClient::submit_terminal_key_v2` now rejects an absent `extended_terminal_key_supported` flag with `UnsupportedInteractiveCapability` before frame encoding. The FFI entry point funnels through that method, and `action_id == 0` is also rejected before encoding. FFI error mapping returns unsupported as `-12`. |
+
+The new P2 guard is correctly located at the common client admission boundary,
+not only in the Swift caller. Its newly added Rust tests are macOS-gated with
+the entire `local` module, so they did not execute on this Linux review host.
 
 ## Findings
 
@@ -32,128 +51,145 @@ validation of the later keypad and documentation changes.
 
 None found in the reviewed source.
 
-### P1 — V2 backpressure breaks the required recoverable-admission contract
+### P1 — client accepts an arbitrary correlated V2 backpressure error
 
-`Runtime::handle_terminal_key_v2` sends a normal, action-ID-correlated
-`ErrorCode::Backpressure` for a full input ingress
-(`crates/seyal-runtime/src/runtime/local/ingress.rs`, `handle_terminal_key_v2`).
-This is the specified ordinary rejection path: it must admit no bytes while
-leaving later authorized actions independent.
+SPEC-006 §21.5 requires the client to retain connection-local sent/highest-error
+action-ID bounds, without an unbounded pending-action map. An Error whose
+action ID is outside the sent range, or is duplicate/non-monotonic relative to
+prior V2 errors, is a protocol failure.
 
-The client does not recognize that response as recoverable. Its
-`classify_server_error` only accepts `Backpressure` when the offending message
-is `Input` (16) or legacy `TerminalKey` (17), not `TerminalKeyV2` (29)
-(`crates/seyal-client/src/local/input_resize.rs`). Consequently a valid V2
-capacity rejection becomes `Err(ClientError::Server(Backpressure))` during
-client polling, rather than the existing non-fatal retryable input-failure
-state. The V2 action ID is also not range/monotonicity-correlated on the client
-as required by SPEC-006 §21.5.
+`LocalDisplayClient` has no sent-V2 or highest-V2-error field. Its only
+incoming handling calls `classify_server_error`; the new branch accepts every
+`Backpressure` Error with message type 29 and **any nonzero** `detail_code` as
+`InputAdmissionFailure::ClientBackpressure`. It neither verifies that the ID
+was sent by this connection nor rejects a duplicate/stale error.
 
-This is a functional and recovery-contract violation under ordinary bounded
-pressure, not merely missing test coverage. Add a focused client/runtime
-fixture that fills ingress, asserts type-29 backpressure preserves the
-connection and later FIFO work, and validates the echoed action-ID bounds.
+Runtime-side monotonic admission (`handle_terminal_key_v2`) does not replace
+the receiver-side requirement: it constrains incoming client frames, while
+the client must validate the Error it receives. Thus the narrow previous
+backpressure-classification defect is fixed, but the prior review's stated
+V2 action-ID-correlation requirement remains unsatisfied. A fabricated or
+stale type-29 backpressure Error is silently converted to a retryable failure
+instead of terminating as a protocol violation.
 
-### P1 — mandatory completion evidence remains absent
+Before another final review, the client needs bounded sent/highest-error
+tracking and focused cases for in-range accepted errors, out-of-range errors,
+duplicate errors, and non-monotonic errors. A real client/Runtime
+queue-saturation test must also show that an in-range correlated type-29
+Backpressure keeps the attachment usable and preserves later FIFO work.
 
-The exact-head ledger itself records all of the following as open:
+### P1 — mandatory native, workload, and performance evidence is still open
 
-- native/XCUI full keyboard integration;
-- physical keyboard/layout, dead-key and IME observation;
-- Command-shortcut non-leak observation beyond the focused synthetic shortcut
-  test;
-- actual target-TUI/Neovim flags-3 negotiation;
-- repeat/release under high terminal output;
-- Apple Silicon native-key-to-Runtime and key-to-PTY latency/resource matrix.
+§21.7 says source fixtures cannot replace native evidence. The supplied
+evidence ledger and headed record leave these completion gates open:
 
-The 45-second protocol fuzz run is honestly labelled `ci-smoke`, not the
-documented longer campaign. The prior focused XCUI shortcut test covers one
-host-routing workflow only; it does not supply the native key matrix, physical
-layout, composition, or performance gates. These are explicit #823 acceptance
-and SPEC-006 §21.7 requirements, so their absence blocks merge even if every
-source finding were fixed.
+- full native/XCUI keyboard matrix, including keypad and repeat/release;
+- physical keyboard/layout coverage, Option policy both values, dead keys,
+  IME mark/commit/cancel, candidate navigation, and Command non-leak;
+- real Neovim flags-3 negotiation and its documented semantic cases;
+- held repeat/release under high terminal output;
+- Release ARM64 baseline/candidate comparison: three independent runs of at
+  least 1,000 accepted actions each, native-key→Runtime and key→PTY
+  p50/p95/p99/max, plus CPU/RSS/queue high-water and rejected/deferred counts;
+- exact-head native build/test/check evidence after `f24e2a4`.
 
-### P2 — V2 capability negotiation is enforced by the native caller, not the client admission API
+The retained 45-second Pass-7 fuzz campaign is explicitly only `ci-smoke`,
+not the required longer campaign. The prior full `make check` was at
+`fe70733`, an ancestor before later keypad changes and before `f24e2a4`; it is
+not exact-head validation of this candidate.
 
-`InteractiveMetalSurfaceView` checks `terminalSupportsKeyV2()` before creating
-a V2 key. However, the exported FFI function and
-`LocalDisplayClient::submit_terminal_key_v2` do not reject a call when
-`extended_terminal_key_supported` is false
-(`crates/seyal-client/src/ffi/input.rs` and
-`crates/seyal-client/src/local/input_resize.rs`).
+`ENVIRONMENT_UNSUPPORTED` correctly records why the Linux agent could not run
+the headed checks, but it leaves every required headed/manual result
+unverified. It is therefore a P1 completion blocker, as requested.
 
-Thus another native/client call path can queue a type-29 frame to an older
-server despite the stored negotiated capability being false. That violates the
-§21.5 old-server rule that the new client use only M001 input and report richer
-actions as unsupported; it can instead provoke a peer protocol failure. Guard
-V2 at the client admission boundary, return an explicit unsupported result,
-and test it independently of the Swift classifier.
+### P2
 
-### P3 — bounded held-key overflow is silent and repeat behavior is not represented at capacity
+No remaining P2 finding in the reviewed capability-admission path. The prior
+P2 is resolved in source as described above. The lack of an executed macOS FFI
+test is an evidence gap, not a second path around the central guard.
 
-At `heldKeyboardKinds.count >= 256`, `keyDown` returns after consuming a new
-action ID but neither submits the key nor sets the native visible failure state
-(`macos/Seyal/Sources/TerminalInputSurface.swift`). It also takes this branch
-for a repeat of an already tracked key while the map is full. SPEC-006 §21.3
-requires visible rejection of a new tracked press and requires repeat/release
-coverage. This is bounded and fail-closed, so it is not an input-injection
-finding, but it remains an availability/UX defect.
+### P3 — held-key capacity rejects silently and drops a tracked repeat
 
-### P3 — finite encoder, V2 authorization, and malformed-field coverage is substantially thinner than the specified matrix
+In `InteractiveMetalSurfaceView.keyDown`, after allocating an action ID, the
+code returns at `heldKeyboardKinds.count < 256` failure without setting
+`nativeFailure` or using the visible input-failure presentation. This violates
+§21.3's requirement that a new tracked press overflowing the 256-key bound be
+rejected visibly.
 
-The reviewed tests exercise representative V2 encoder paths and wire
-round-trips, but they do not enumerate all V2 kinds × flags 0/1/2/3 ×
-press/repeat/release × modifier combinations as SPEC-006 §21.6 requires.
-The standalone protocol test has eight cases and the terminal keyboard test
-has three. The retained fuzz harness invokes `TerminalKeyV2::decode`, but no
-40-byte V2 seed is retained. The evidence also identifies thinner dedicated
-V2 observer/stale/detach IPC coverage. This is not a demonstrated bypass—the
-shared `authorize_mutation` path is fail-closed—but it is insufficient
-evidence for the required security and compatibility matrix.
+The same check runs before replacing/using an existing entry, so a repeat for
+an already tracked key is also dropped when the map is full. That is not the
+specified "new tracked press" overflow behavior and leaves repeat behavior
+unrepresented at capacity. It is bounded and emits no terminal bytes, so this
+is an availability/UX P3 rather than an input-injection P0/P1.
 
-## Reviewed admission-path assessment
+### P3 — encoder, wire/admission, and fuzz coverage does not meet §21.6/§21.7
 
-- **Runtime ingress and canonical modes:** positive. Both V1 and V2 authorize
-  the connection/attachment before reading `TerminalState::modes()` and encode
-  immediately before submitting immutable bytes to the existing bounded input
-  ingress. This avoids Swift mode authority and write-time re-encoding.
-- **Protocol V2:** fixed 40-byte decoding, reserved/version checks, allowed
-  modifier bits, value validation, nonzero monotonic IDs, and Runtime
-  capability gating are present. The P1/P2 findings are in client-side
-  rejection/capability handling, not a Runtime authorization bypass.
-- **Observer/stale rejection:** positive in source. The shared
-  `AttachmentRegistry::authorize_mutation` requires the originating connection
-  and Controller role; observer, detached, and stolen attachment identities
-  are rejected before terminal-mode lookup or queue mutation.
-- **IME and preedit:** source routing is plausibly fail-closed. Marked text is
-  retained in the bounded composition document; commit goes through one Input
-  submission, and focus/teardown failure clears composition. This is not a
-  substitute for the missing real AppKit IME/dead-key evidence.
-- **Command non-leak:** source checks Command before V2/semantic/text
-  classification, V2 wire modifiers allow only Shift/Alt/Control, and there
-  is no Command-to-Super mapping. The focused synthetic shortcut result is
-  useful but does not discharge the headed/manual gate.
+The terminal test target has three tests and the protocol target has two V2
+tests. They do not enumerate all V2 kinds × keyboard flags 0/1/2/3 ×
+press/repeat/release × accepted modifier combinations, classifying every
+result as exact bytes, successful no-byte, or explicit unsupported as §21.6
+requires. Printable ASCII base and valid/invalid shifted-field coverage is
+also not exhaustively demonstrated.
 
-## Verification performed by this reviewer
+The Pass-7 fuzz target calls `TerminalKeyV2::decode`, but the committed corpus
+contains V1 and truncated-key seeds only; there is no retained 40-byte valid
+V2 seed. The evidence itself also notes thinner V2 observer/stale/detach
+coverage. The shared Runtime authorization path is fail-closed in source, but
+that does not replace the required adverse-case fixtures.
 
-On the Linux review host:
+## Positive source observations
+
+- Runtime validates V2 structure, bilateral capability, and per-connection
+  monotonic action IDs before Controller authorization, canonical-mode lookup,
+  encoding, and queue mutation.
+- `handle_terminal_key_v2` sends a capacity rejection as
+  `Backpressure`, message type 29, with the action ID in `detail_code`, which
+  is the correct Runtime-side correlation shape.
+- Runtime reads canonical `TerminalState` modes at admission and enqueues the
+  resulting immutable bytes. Swift does not become a mode/escape-sequence
+  authority.
+- The client-side V2 capability guard and zero-ID guard happen before frame
+  encoding; old peers are not sent an unnegotiated type-29 frame through this
+  API.
+- The native Command routing and typed V2 modifier surface remain fail-closed
+  in source, but this does not substitute for headed observation.
+
+## Verification performed on this Linux host
 
 ```text
-git diff --check origin/master...HEAD                         PASS
-cargo test -p seyal-protocol --test pass7_input_resize --locked  8 passed
-cargo test -p seyal-terminal --test m002_keyboard --locked       3 passed
+git rev-parse HEAD                                           f24e2a4d1de57f6d0b1af4d69ecbdb6be06630b4
+git rev-parse origin/master                                  9b8408506ee2137c4b0cb20b4b2b2a92549649ab
+git diff --check origin/master...f24e2a4                     PASS
+cargo test -p seyal-protocol --test pass7_input_resize \
+  --locked terminal_key_v2                                   PASS (2)
+cargo test -p seyal-terminal --test m002_keyboard --locked  PASS (3)
 ```
 
-`cargo test -p seyal-runtime --test pass7_local_ipc --locked`
-compiled but ran zero tests on this host because the Runtime local-IPC suite
-is macOS-gated. It supplies no headed/native evidence here. No performance,
-Apple Silicon, physical keyboard, IME, or display claim is made by this
+`seyal-client::local` and its FFI are compiled only on macOS
+(`crates/seyal-client/src/lib.rs`). Consequently the two new f24 client tests
+and the input-error classifier test ran **0 tests** here, and the macOS-gated
+Runtime local-IPC V2 fixture also ran **0 tests**. No passing macOS, headed,
+physical-keyboard, IME, target-TUI, or latency result is claimed by this
 review.
+
+## Evidence-gate disposition
+
+| §21.7 gate | Disposition |
+| --- | --- |
+| Modes/key bytes/negotiation | Partial automated coverage; exhaustive §21.6 matrix is missing. |
+| Modern events | Real Neovim flags-3 handshake remains unverified. |
+| Wire/security/admission/recovery | Source has positive structural/authorization checks, but client Error ID correlation and V2 adverse coverage remain incomplete. |
+| Native | Unverified: the current result is `ENVIRONMENT_UNSUPPORTED`, not PASS. |
+| Fuzz/property | Partial only: decoder coverage and a 45-second smoke campaign do not meet the required matrix/campaign. |
+| Performance | Missing native ARM64 baseline/candidate latency and resource matrix. |
+| Exact-head validation | Missing for macOS/client/native surfaces after `f24e2a4`. |
+| Independent review | This review is independent and returns NO-GO. |
 
 ## Closure disposition
 
-Do not merge this candidate and do not open or mark a PR as `Closes #823`.
-After the P1/P2/P3 fixes and all mandatory evidence gates are complete, a new
-independent exact-head review is required. A documentation-only evidence PR,
-if one is ever needed, must use a non-closing relationship and leave #823
-open.
+Do not merge this as a closing PR and do not use `Closes #823`.
+
+At minimum, correct and test the client V2 Error-ID contract and the retained
+P3 defects, then obtain the exact-head §21.7 evidence on an appropriate headed
+Apple Silicon environment. A subsequent independent exact-head review is
+required before considering closure.

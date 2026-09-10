@@ -37,3 +37,15 @@ these six steps.
 #823 remains NO-GO for a closing PR until a headed session on the exact app
 records pass/fail (or a more specific `ENVIRONMENT_UNSUPPORTED` with the exact
 missing layout) for every row above.
+
+## 2026-09-10 later computer-use abort (after `b681676`)
+
+- **Date:** 2026-09-10
+- **Host:** Linux `6.12.94+` x86_64 (`privateWorkerId=null`)
+- **Exact production code head:** `b6816764467ba7e2e0490f78f7a2744e517ec768`
+- **Exact branch head at attempt:** `a05b13c`
+
+A further computer-use subagent was launched after the V2 error-ID
+correlation commit and also ran on Linux. It stopped after `uname -a` and
+did not launch `Seyal.app`. The six-step checklist remains
+`ENVIRONMENT_UNSUPPORTED`. Raw note: `/tmp/m002-reviews/headed-macos-819-823.md`.

@@ -495,6 +495,34 @@ The raw validator output is retained at
 comparative ARM64 evidence only and does not establish the complete
 performance contract or product acceptance.
 
+## Physical ARM64 1M-line, ten-execution width-48 cohort
+
+The bounded 1M-line cohort completed at width 48 for all four workloads with
+10 executions and `samples=10` on the local Apple M5 Pro ARM64 host. The
+validator reported 4 cases passed; each case had 100 append observations,
+measured allocation counters, available RSS, and exact commit provenance
+`9e691a9`.
+
+```text
+workload=ascii            rss_delta_kib=676352  allocation_calls=971322774
+workload=styled           rss_delta_kib=304304  allocation_calls=1011411194
+workload=cjk              rss_delta_kib=145168  allocation_calls=731037174
+workload=emoji-combining  rss_delta_kib=396896  allocation_calls=951212874
+```
+
+Observed `resident_history_bytes` for ASCII was `335395440` (~10 × the
+32 MiB per-execution payload cap). Process RSS deltas are larger than the
+payload cap and are not substituted for it.
+
+```text
+python3 scripts/check-history-benchmark.py /tmp/seyal-819-1m-10-width48-arm64-samples10.log
+[seyal history benchmark contract] 4 case(s) passed.
+```
+
+This remains comparative ARM64 evidence only (`performance_claim=false`)
+and does not establish the complete performance contract, remaining
+widths/populations, headed history/reflow acceptance, or independent review.
+
 ## Physical ARM64 1M-line, one-execution width-48 cohort
 
 The bounded 1M-line cohort also completed at width 48 for ASCII, styled, CJK,
@@ -514,3 +542,28 @@ The raw validator output is retained at
 `/tmp/seyal-819-1m-1-width48-arm64-samples10-XXXXXX.log`. This remains
 comparative ARM64 evidence only and does not establish the complete
 performance contract or product acceptance.
+
+## 2026-09-10 performance interpretation (not a pass)
+
+Compared against the *proposed* #673 contract
+(`docs/evidence/M002-PERFORMANCE-CONTRACT-V1.toml` on PR #843, still
+`status = "proposed"`) and the frozen #818 / SPEC-010 payload caps:
+
+- ASCII 1M×10×48 `reflow_p50_ns=42917` (~0.043 ms) is numerically below the
+  proposed `history_active_reflow_ms` p50 of 2 ms. This is a
+  `TerminalState-comparative` harness, `samples=10`, not the contract's
+  5 cohorts × 20 warmups × 100 samples, and `performance_claim=false`.
+- ASCII `resident_history_bytes=335395440` matches ~10 × the 32 MiB
+  per-execution payload cap. That is payload-cap bounded behavior in the
+  harness, not process-RSS acceptance.
+- Process `rss_delta_kib=676352` (~660 MiB) for that ASCII row is retained
+  as observed. The proposed `resource_scaling_rss` gate is still
+  `status = "proposed"` with no accepted baseline percentiles on this
+  head, so the row is **INCONCLUSIVE**, not PASS or FAIL.
+- PR #843 is not merged. Applying its evaluator as if it were accepted
+  release policy would be a false pass.
+
+Verdict: comparative ARM64 evidence is retained. #819 performance
+acceptance remains **INCONCLUSIVE** pending an accepted #673 contract,
+contract-shaped cohorts, and independent review. No performance pass is
+claimed.

@@ -232,6 +232,7 @@ struct WrapFragment {
     line_id: LineId,
     start_offset: u32,
     unit_count: u32,
+    prefix_units: u32,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -243,25 +244,27 @@ struct WrapChain {
 
 impl WrapChain {
     fn units_before(&self, from: HistoryAnchor) -> u32 {
-        let mut total = 0u32;
-        for fragment in &self.fragments {
-            if fragment.line_id > from.line_id {
-                break;
-            }
-            if fragment.line_id < from.line_id {
-                total = total.saturating_add(fragment.unit_count);
-                continue;
-            }
-            if fragment.start_offset >= from.unit_offset {
-                break;
-            }
-            let keep = from.unit_offset.saturating_sub(fragment.start_offset);
-            total = total.saturating_add(keep.min(fragment.unit_count));
-            if fragment.start_offset.saturating_add(fragment.unit_count) > from.unit_offset {
-                break;
-            }
+        let index = match self.fragments.binary_search_by(|fragment| {
+            (fragment.line_id, fragment.start_offset).cmp(&(from.line_id, from.unit_offset))
+        }) {
+            Ok(index) => return self.fragments[index].prefix_units,
+            Err(index) => index,
+        };
+        if index == 0 {
+            return 0;
         }
-        total
+        let previous = &self.fragments[index - 1];
+        if previous.line_id == from.line_id && from.unit_offset > previous.start_offset {
+            previous.prefix_units.saturating_add(
+                from.unit_offset
+                    .saturating_sub(previous.start_offset)
+                    .min(previous.unit_count),
+            )
+        } else if previous.line_id < from.line_id {
+            previous.prefix_units.saturating_add(previous.unit_count)
+        } else {
+            0
+        }
     }
 }
 
@@ -584,10 +587,14 @@ impl HistoryStore {
             .last_mut()
             .expect("wrap chain exists after open-or-push");
         let unit_count = u32::try_from(line.units.len()).unwrap_or(u32::MAX);
+        let prefix_units = chain.fragments.last().map_or(0, |fragment| {
+            fragment.prefix_units.saturating_add(fragment.unit_count)
+        });
         chain.fragments.push(WrapFragment {
             line_id: line.line_id,
             start_offset: line.start_offset,
             unit_count,
+            prefix_units,
         });
         for unit in &line.units {
             let width = unit.width.max(1);
@@ -602,17 +609,98 @@ impl HistoryStore {
         chain.open = line.break_after == HistoryBreakAfter::SoftWrap;
     }
 
-    fn rebuild_wrap_index(&mut self) {
-        self.wrap_chains.clear();
-        let snapshot: Vec<HistoryLine> =
-            self.entries().map(HistoryLineRef::to_owned_line).collect();
-        for line in &snapshot {
-            self.extend_wrap_line(line);
+    fn trim_wrap_suffix_from(&mut self, from: HistoryAnchor) {
+        while let Some(chain) = self.wrap_chains.last() {
+            match chain.fragments.first() {
+                None => {
+                    self.wrap_chains.pop();
+                }
+                Some(first)
+                    if first.line_id > from.line_id
+                        || (first.line_id == from.line_id
+                            && first.start_offset >= from.unit_offset) =>
+                {
+                    self.wrap_chains.pop();
+                }
+                _ => break,
+            }
         }
+        let Some(chain) = self.wrap_chains.last_mut() else {
+            self.update_resident_bytes();
+            return;
+        };
+        let keep_units = chain.units_before(from);
+        let total = chain.fragments.last().map_or(0, |fragment| {
+            fragment.prefix_units.saturating_add(fragment.unit_count)
+        });
+        if keep_units >= total {
+            self.update_resident_bytes();
+            return;
+        }
+        chain.fragments.retain(|fragment| {
+            fragment.line_id < from.line_id
+                || (fragment.line_id == from.line_id && fragment.start_offset < from.unit_offset)
+        });
+        if let Some(last) = chain.fragments.last_mut()
+            && last.line_id == from.line_id
+            && last.start_offset < from.unit_offset
+        {
+            last.unit_count = from
+                .unit_offset
+                .saturating_sub(last.start_offset)
+                .min(last.unit_count);
+        }
+        trim_wrap_runs(&mut chain.runs, keep_units);
+        chain.open = true;
+        self.update_resident_bytes();
+    }
+
+    fn trim_wrap_before_retained(&mut self) {
+        let Some(first) = self.entries().next() else {
+            self.wrap_chains.clear();
+            self.update_resident_bytes();
+            return;
+        };
+        let keep = HistoryAnchor {
+            line_id: first.line_id(),
+            unit_offset: first.start_offset(),
+        };
+        while let Some(chain) = self.wrap_chains.first() {
+            match chain.fragments.last() {
+                None => {
+                    self.wrap_chains.remove(0);
+                }
+                Some(last)
+                    if last.line_id < keep.line_id
+                        || (last.line_id == keep.line_id
+                            && last.start_offset.saturating_add(last.unit_count)
+                                <= keep.unit_offset) =>
+                {
+                    self.wrap_chains.remove(0);
+                }
+                _ => break,
+            }
+        }
+        let Some(chain) = self.wrap_chains.first_mut() else {
+            self.update_resident_bytes();
+            return;
+        };
+        let drop_units = chain.units_before(keep);
+        chain.fragments.retain(|fragment| {
+            fragment.line_id > keep.line_id
+                || (fragment.line_id == keep.line_id && fragment.start_offset >= keep.unit_offset)
+        });
+        let mut prefix = 0u32;
+        for fragment in &mut chain.fragments {
+            fragment.prefix_units = prefix;
+            prefix = prefix.saturating_add(fragment.unit_count);
+        }
+        drop_prefix_wrap_runs(&mut chain.runs, drop_units);
         self.update_resident_bytes();
     }
 
     fn wrap_index_allocated_bytes(&self) -> usize {
+        const RUN: usize = size_of::<(u8, u32)>();
         self.wrap_chains
             .capacity()
             .saturating_mul(size_of::<WrapChain>())
@@ -624,11 +712,7 @@ impl HistoryStore {
                             .fragments
                             .capacity()
                             .saturating_mul(size_of::<WrapFragment>())
-                            .saturating_add(chain.runs.capacity().saturating_mul(size_of::<(
-                                u8,
-                                u32,
-                            )>(
-                            )))
+                            .saturating_add(chain.runs.capacity().saturating_mul(RUN))
                     })
                     .sum::<usize>(),
             )
@@ -656,7 +740,7 @@ impl HistoryStore {
                 }
                 self.recount_tail();
                 self.update_resident_bytes();
-                self.rebuild_wrap_index();
+                self.trim_wrap_suffix_from(from);
                 return;
             }
             self.tail.pop();
@@ -708,7 +792,7 @@ impl HistoryStore {
                 break;
             }
             for line in keep {
-                self.push_fragment(line);
+                self.push_fragment_inner(line, false);
             }
             if reached_split {
                 break;
@@ -716,7 +800,7 @@ impl HistoryStore {
         }
         self.recount_tail();
         self.update_resident_bytes();
-        self.rebuild_wrap_index();
+        self.trim_wrap_suffix_from(from);
     }
 
     fn recount_tail(&mut self) {
@@ -793,15 +877,23 @@ impl HistoryStore {
     }
 
     fn push_fragment(&mut self, line: HistoryLine) {
+        self.push_fragment_inner(line, true);
+    }
+
+    fn push_fragment_inner(&mut self, line: HistoryLine, record_wrap: bool) {
         let bytes = line.canonical_payload_len();
-        if self.tail_payload_bytes + bytes > HISTORY_SEGMENT_PAYLOAD_TARGET && !self.tail.is_empty()
+        if !self.tail.is_empty()
+            && (self.tail_payload_bytes + bytes > HISTORY_SEGMENT_PAYLOAD_TARGET
+                || self.tail_resident_bytes >= HISTORY_TAIL_PAYLOAD_LIMIT)
         {
             self.seal_tail();
         }
         self.tail_payload_bytes += bytes;
         let line_resident_bytes = line.allocated_bytes();
         let old_capacity = self.tail.capacity();
-        self.extend_wrap_line(&line);
+        if record_wrap {
+            self.extend_wrap_line(&line);
+        }
         self.tail.push(line);
         self.tail_resident_bytes = self
             .tail_resident_bytes
@@ -813,7 +905,9 @@ impl HistoryStore {
                     .saturating_mul(size_of::<HistoryLine>()),
             );
         self.update_resident_bytes();
-        if self.tail_payload_bytes >= HISTORY_SEGMENT_PAYLOAD_TARGET {
+        if self.tail_payload_bytes >= HISTORY_SEGMENT_PAYLOAD_TARGET
+            || self.tail_resident_bytes >= HISTORY_TAIL_PAYLOAD_LIMIT
+        {
             self.seal_tail();
         }
     }
@@ -908,9 +1002,16 @@ impl HistoryStore {
         self.update_resident_bytes();
         let mut evicted = false;
         while self.resident_bytes > HISTORY_PER_EXECUTION_BYTE_CAP {
+            if self.segments.is_empty() {
+                if self.tail.is_empty() {
+                    break;
+                }
+                self.seal_tail();
+                if self.segments.is_empty() {
+                    break;
+                }
+            }
             let Some(segment) = self.segments.pop_front() else {
-                // The tail is capped by source-unit fragmentation and cannot
-                // be discarded piecemeal without an explicit fragment policy.
                 break;
             };
             self.record_evicted_segment(&segment);
@@ -922,7 +1023,7 @@ impl HistoryStore {
             evicted = true;
         }
         if evicted {
-            self.rebuild_wrap_index();
+            self.trim_wrap_before_retained();
         }
     }
 
@@ -942,7 +1043,7 @@ impl HistoryStore {
             .saturating_sub(segment.resident_bytes);
         self.update_resident_bytes();
         self.eviction_generation = self.eviction_generation.wrapping_add(1);
-        self.rebuild_wrap_index();
+        self.trim_wrap_before_retained();
         before.saturating_sub(self.resident_bytes)
     }
 
@@ -1314,6 +1415,39 @@ pub struct ReflowRow {
     pub unavailable: bool,
 }
 
+fn trim_wrap_runs(runs: &mut Vec<(u8, u32)>, keep_units: u32) {
+    let mut seen = 0u32;
+    let mut keep = 0usize;
+    while keep < runs.len() {
+        let count = runs[keep].1;
+        if seen >= keep_units {
+            break;
+        }
+        if seen.saturating_add(count) > keep_units {
+            runs[keep].1 = keep_units.saturating_sub(seen);
+            keep += 1;
+            break;
+        }
+        seen = seen.saturating_add(count);
+        keep += 1;
+    }
+    runs.truncate(keep);
+}
+
+fn drop_prefix_wrap_runs(runs: &mut Vec<(u8, u32)>, drop_units: u32) {
+    let mut remaining = drop_units;
+    while remaining > 0 && !runs.is_empty() {
+        let count = runs[0].1;
+        if count <= remaining {
+            remaining = remaining.saturating_sub(count);
+            runs.remove(0);
+        } else {
+            runs[0].1 = count.saturating_sub(remaining);
+            break;
+        }
+    }
+}
+
 fn wrap_advance(used: usize, cols: usize, unit_width: u8) -> usize {
     let unit_width = usize::from(unit_width.max(1));
     let mut used = used;
@@ -1331,7 +1465,13 @@ fn wrap_advance(used: usize, cols: usize, unit_width: u8) -> usize {
     }
 }
 
-fn wrap_occupancy_run(mut used: usize, cols: usize, unit_width: u8, count: u32) -> usize {
+fn wrap_occupancy_run(
+    mut used: usize,
+    cols: usize,
+    unit_width: u8,
+    count: u32,
+    seen: &mut [Option<usize>],
+) -> usize {
     if cols == 0 {
         return 0;
     }
@@ -1339,7 +1479,7 @@ fn wrap_occupancy_run(mut used: usize, cols: usize, unit_width: u8, count: u32) 
     if remaining == 0 {
         return used.min(cols);
     }
-    let mut seen: Vec<Option<usize>> = vec![None; cols.saturating_add(1)];
+    seen.fill(None);
     while remaining > 0 {
         if used <= cols
             && let Some(remaining_then) = seen[used]
@@ -1365,12 +1505,13 @@ fn wrap_occupancy_run(mut used: usize, cols: usize, unit_width: u8, count: u32) 
 fn wrap_occupancy_runs(runs: &[(u8, u32)], cols: usize, unit_limit: u32) -> usize {
     let mut used = 0usize;
     let mut left = unit_limit;
+    let mut seen = vec![None; cols.saturating_add(1)];
     for &(width, count) in runs {
         if left == 0 {
             break;
         }
         let take = count.min(left);
-        used = wrap_occupancy_run(used, cols, width, take);
+        used = wrap_occupancy_run(used, cols, width, take, &mut seen);
         left = left.saturating_sub(take);
     }
     used.min(cols)
@@ -1634,6 +1775,7 @@ mod tests {
         let chain = store.wrap_chains.last().expect("open wrap chain");
         assert_eq!(chain.runs, [(1, 8_000)]);
         assert_eq!(chain.fragments.len(), 8_000);
+        assert_eq!(chain.fragments.last().unwrap().prefix_units, 7_999);
         let (suffix, from, start_col) = store.eager_resize_suffix(8, 6);
         assert!(
             suffix.len() <= 48,
@@ -1646,6 +1788,25 @@ mod tests {
             store.wrap_column_before(from, 8),
             wrap_occupancy(&[1; 7_952], 8)
         );
+    }
+
+    #[test]
+    fn blank_rows_seal_and_stay_inside_the_resident_cap() {
+        let mut store = HistoryStore::default();
+        for id in 0..50_000 {
+            store.append_line(HistoryLine {
+                line_id: LineId(id),
+                units: Vec::new(),
+                break_after: HistoryBreakAfter::HardBreak,
+                start_offset: 0,
+            });
+        }
+        assert!(
+            !store.segments.is_empty(),
+            "blank rows must seal instead of remaining an unbounded tail"
+        );
+        assert!(store.tail_resident_bytes <= HISTORY_TAIL_PAYLOAD_LIMIT);
+        assert!(store.resident_bytes <= HISTORY_PER_EXECUTION_BYTE_CAP);
     }
 
     #[test]

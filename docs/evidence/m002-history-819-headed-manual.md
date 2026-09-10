@@ -56,5 +56,10 @@ launched, no Metal pixels were observed, and no checklist step is PASS.
 | vim/htop alternate-screen exclusion | ENVIRONMENT_UNSUPPORTED |
 | Resize while output is arriving | ENVIRONMENT_UNSUPPORTED |
 
+A later computer-use subagent (`bc-b67b1734-5a38-5312-9d06-5cb8eb6c1dd0`)
+also ran on Linux (`privateWorkerId=null`) and recorded the same five-step
+`ENVIRONMENT_UNSUPPORTED` ledger at `/tmp/m002-819-headed-ledger.md`. It did
+not launch `Seyal.app`.
+
 The 2026-09-09 partial AX/scrollbar observation above is unchanged and still
 does not prove rendered history content. #819 remains NO-GO for a closing PR.

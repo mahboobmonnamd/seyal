@@ -12,6 +12,7 @@ pub mod display;
 mod error;
 mod ids;
 mod input;
+mod key_v2_encode;
 pub mod local_ipc;
 #[cfg(all(target_os = "macos", feature = "benchmark-instrumentation"))]
 #[doc(hidden)]

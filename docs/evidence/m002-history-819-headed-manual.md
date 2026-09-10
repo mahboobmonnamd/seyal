@@ -63,3 +63,15 @@ not launch `Seyal.app`.
 
 The 2026-09-09 partial AX/scrollbar observation above is unchanged and still
 does not prove rendered history content. #819 remains NO-GO for a closing PR.
+
+## 2026-09-10 later computer-use abort (after `2d04f6d`)
+
+- **Date:** 2026-09-10
+- **Host:** Linux `6.12.94+` x86_64 (same cloud agent; `privateWorkerId=null`)
+- **Exact production code head:** `2d04f6d0d0df1d4d83e2e291a98405b63e23b598`
+- **Exact branch head at attempt:** `4cb206a`
+
+A further computer-use subagent was launched after the source P1/P2 commit
+and also ran on Linux. It stopped after `uname -a` and did not launch
+`Seyal.app`. The five-step checklist remains `ENVIRONMENT_UNSUPPORTED`. Raw
+note: `/tmp/m002-reviews/headed-macos-819-823.md`.

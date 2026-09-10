@@ -235,6 +235,17 @@ struct WrapFragment {
     prefix_units: u32,
 }
 
+/// Cols-dependent occupancy after each RLE run (from column 0). Lets aperiodic
+/// `wrap_column_before` answer mid-chain cuts in O(log runs + cols) after one
+/// O(runs·cols) build for that width (SPEC-010 §7).
+#[derive(Clone, Debug)]
+struct WrapOccupancySpine {
+    cols: u16,
+    run_len: usize,
+    after_run: Vec<u8>,
+    units_after: Vec<u32>,
+}
+
 #[derive(Clone, Debug, Default)]
 struct WrapChain {
     fragments: Vec<WrapFragment>,
@@ -245,9 +256,15 @@ struct WrapChain {
     /// Units already dropped from the front of a compacted repeating template.
     pattern_phase: u32,
     open: bool,
+    /// Built lazily for aperiodic chains; invalidated when `runs` change.
+    spine: RefCell<Option<WrapOccupancySpine>>,
 }
 
 impl WrapChain {
+    fn invalidate_spine(&self) {
+        *self.spine.borrow_mut() = None;
+    }
+
     fn units_before(&self, from: HistoryAnchor) -> u32 {
         let index = match self.fragments.binary_search_by(|fragment| {
             (fragment.line_id, fragment.start_offset).cmp(&(from.line_id, from.unit_offset))
@@ -526,18 +543,76 @@ impl HistoryStore {
 
     /// Clone only the retained-history suffix that can affect the new
     /// viewport. Older sealed source stays in place and is not copied.
+    ///
+    /// When the cut lands inside an aperiodic SoftWrap chain, prefer extending
+    /// the suffix back to the preceding HardBreak (within an extend budget) so
+    /// `start_col` is 0 and resize does not walk retained wrap runs. If the
+    /// chain is too large to extend, fall back to cols-dependent spine occupancy.
     pub(crate) fn eager_resize_suffix(
         &self,
         cols: u16,
         visual_rows: usize,
     ) -> (Vec<HistoryLine>, Option<HistoryAnchor>, usize) {
         let budget_cells = usize::from(cols.max(1)).saturating_mul(visual_rows.max(1));
-        let mut collected = Vec::new();
+        let extend_budget = budget_cells.saturating_mul(APERIODIC_EXTEND_CELL_FACTOR);
+        let mut collected: Vec<HistoryLine> = Vec::new();
         let mut cells = 0usize;
         let mut omitted_joins = false;
-        for entry in self.reverse_entries() {
+        let mut entries = self.reverse_entries();
+        while let Some(entry) = entries.next() {
             if cells >= budget_cells {
-                omitted_joins = entry.break_after() == HistoryBreakAfter::SoftWrap;
+                if entry.break_after() != HistoryBreakAfter::SoftWrap {
+                    break;
+                }
+                let from_probe = collected.last().map(|line: &HistoryLine| HistoryAnchor {
+                    line_id: line.line_id,
+                    unit_offset: line.start_offset,
+                });
+                let aperiodic_long = from_probe
+                    .and_then(|from| self.wrap_chain_containing(from))
+                    .is_some_and(|chain| {
+                        wrap_chain_pattern(chain).is_none()
+                            && chain.runs.len() > APERIODIC_INLINE_RUN_BOUND
+                    });
+                if !aperiodic_long {
+                    omitted_joins = true;
+                    break;
+                }
+                // Extend through older SoftWrap members until HardBreak or budget.
+                let mut cur = entry;
+                let mut reached_hard_boundary = false;
+                loop {
+                    let add = cur
+                        .to_owned_line()
+                        .units
+                        .iter()
+                        .map(|unit| usize::from(unit.width.max(1)))
+                        .sum::<usize>();
+                    if cells.saturating_add(add) > extend_budget && !collected.is_empty() {
+                        omitted_joins = true;
+                        break;
+                    }
+                    collected.push(cur.to_owned_line());
+                    cells = cells.saturating_add(add);
+                    match entries.next() {
+                        None => {
+                            reached_hard_boundary = true;
+                            break;
+                        }
+                        Some(next) if next.break_after() == HistoryBreakAfter::SoftWrap => {
+                            cur = next;
+                        }
+                        Some(_) => {
+                            // Older HardBreak ends the previous paragraph; soft
+                            // chain starts at the lines already collected.
+                            reached_hard_boundary = true;
+                            break;
+                        }
+                    }
+                }
+                if reached_hard_boundary {
+                    omitted_joins = false;
+                }
                 break;
             }
             collected.push(entry.to_owned_line());
@@ -697,10 +772,12 @@ impl HistoryStore {
                 chain.runs.clear();
                 chain.pattern_len = 0;
                 chain.pattern_phase = 0;
+                chain.invalidate_spine();
             }
         } else {
             drop_suffix_wrap_runs(&mut chain.runs, total.saturating_sub(keep_units));
             note_pattern_after_suffix_trim(chain);
+            chain.invalidate_spine();
         }
         chain.open = true;
     }
@@ -757,10 +834,12 @@ impl HistoryStore {
             } else {
                 chain.pattern_phase = chain.pattern_phase.saturating_add(drop_units);
             }
+            chain.invalidate_spine();
         } else {
             let period_units = wrap_pattern_period_units(chain);
             drop_prefix_wrap_runs(&mut chain.runs, drop_units);
             note_pattern_after_prefix_trim(chain, drop_units, period_units);
+            chain.invalidate_spine();
         }
     }
 
@@ -792,11 +871,18 @@ impl HistoryStore {
                 self.wrap_chains
                     .iter()
                     .map(|chain| {
+                        let spine_bytes = chain.spine.borrow().as_ref().map_or(0, |spine| {
+                            spine
+                                .after_run
+                                .capacity()
+                                .saturating_add(spine.units_after.capacity().saturating_mul(4))
+                        });
                         chain
                             .fragments
                             .capacity()
                             .saturating_mul(size_of::<WrapFragment>())
                             .saturating_add(chain.runs.capacity().saturating_mul(RUN))
+                            .saturating_add(spine_bytes)
                     })
                     .sum::<usize>(),
             )
@@ -1499,6 +1585,11 @@ pub struct ReflowRow {
 }
 
 const WRAP_PATTERN_MAX: usize = 8;
+/// Aperiodic SoftWrap chains above this run count prefer HardBreak extension
+/// (or spine occupancy) instead of a linear mid-chain run walk on resize.
+const APERIODIC_INLINE_RUN_BOUND: usize = 64;
+/// Max cells cloned when extending an aperiodic SoftWrap cut back to HardBreak.
+const APERIODIC_EXTEND_CELL_FACTOR: usize = 8;
 
 fn wrap_pattern_period_units(chain: &WrapChain) -> u32 {
     let Some(pattern) = wrap_chain_pattern(chain) else {
@@ -1530,6 +1621,7 @@ fn wrap_runs_unit_sum(runs: &[(u8, u32)]) -> u32 {
 fn compact_repeating_wrap_runs(chain: &mut WrapChain) {
     let k = chain.pattern_len as usize;
     if chain.pattern_len >= 2 && chain.runs.len() > k {
+        chain.invalidate_spine();
         chain.runs.truncate(k);
         chain.runs.shrink_to_fit();
     }
@@ -1602,6 +1694,7 @@ fn append_compacted_wrap_runs(chain: &mut WrapChain, units: &[HistoryUnit], pref
         match wrap_pattern_width_at(&chain.runs, unit_index) {
             Some(expected) if expected == width => {}
             _ => {
+                chain.invalidate_spine();
                 chain.runs = wrap_pattern_slice(
                     &chain.runs,
                     chain.pattern_phase,
@@ -1647,13 +1740,92 @@ fn wrap_occupancy_indexed(chain: &WrapChain, cols: usize, units: u32) -> usize {
     if let Some(pattern) = wrap_chain_pattern(chain) {
         wrap_occupancy_repeating_from(pattern, chain.pattern_phase, cols, units)
     } else {
-        wrap_occupancy_for_runs(&chain.runs, cols, units)
+        wrap_occupancy_aperiodic(chain, cols, units)
     }
+}
+
+fn wrap_occupancy_aperiodic(chain: &WrapChain, cols: usize, units: u32) -> usize {
+    if cols == 0 || units == 0 || chain.runs.is_empty() {
+        return 0;
+    }
+    if chain.runs.len() <= APERIODIC_INLINE_RUN_BOUND {
+        return wrap_occupancy_for_runs(&chain.runs, cols, units);
+    }
+    let cols_u16 = u16::try_from(cols).unwrap_or(u16::MAX);
+    ensure_aperiodic_spine(chain, cols_u16);
+    let spine = chain.spine.borrow();
+    let Some(spine) = spine.as_ref() else {
+        return wrap_occupancy_for_runs(&chain.runs, cols, units);
+    };
+    spine_occupancy(spine, &chain.runs, cols, units)
+}
+
+fn ensure_aperiodic_spine(chain: &WrapChain, cols: u16) {
+    {
+        let spine = chain.spine.borrow();
+        if let Some(existing) = spine.as_ref()
+            && existing.cols == cols
+            && existing.run_len == chain.runs.len()
+        {
+            return;
+        }
+    }
+    let width = usize::from(cols);
+    let mut after_run = Vec::with_capacity(chain.runs.len());
+    let mut units_after = Vec::with_capacity(chain.runs.len());
+    let mut used = 0usize;
+    let mut total_units = 0u32;
+    let mut seen = vec![None; width.saturating_add(1)];
+    for &(unit_width, count) in &chain.runs {
+        used = wrap_occupancy_run(used, width, unit_width, count, &mut seen);
+        total_units = total_units.saturating_add(count);
+        after_run.push(u8::try_from(used.min(width)).unwrap_or(u8::MAX));
+        units_after.push(total_units);
+    }
+    *chain.spine.borrow_mut() = Some(WrapOccupancySpine {
+        cols,
+        run_len: chain.runs.len(),
+        after_run,
+        units_after,
+    });
+}
+
+fn spine_occupancy(
+    spine: &WrapOccupancySpine,
+    runs: &[(u8, u32)],
+    cols: usize,
+    unit_limit: u32,
+) -> usize {
+    if unit_limit == 0 || cols == 0 {
+        return 0;
+    }
+    let fully = spine
+        .units_after
+        .partition_point(|&units| units <= unit_limit);
+    let (mut used, consumed) = if fully == 0 {
+        (0usize, 0u32)
+    } else {
+        (
+            usize::from(spine.after_run[fully - 1]),
+            spine.units_after[fully - 1],
+        )
+    };
+    if consumed >= unit_limit {
+        return used.min(cols);
+    }
+    if fully < runs.len() {
+        let (width, count) = runs[fully];
+        let take = count.min(unit_limit.saturating_sub(consumed));
+        let mut seen = vec![None; cols.saturating_add(1)];
+        used = wrap_occupancy_run(used, cols, width, take, &mut seen);
+    }
+    used.min(cols)
 }
 
 /// Incremental period-k detection for k in 2..=WRAP_PATTERN_MAX.
 /// Must not walk retained runs (SPEC-010 §7).
 fn note_appended_wrap_run(chain: &mut WrapChain, pushed_new: bool) {
+    chain.invalidate_spine();
     let n = chain.runs.len();
     if n <= 1 {
         chain.pattern_len = n as u32;
@@ -2646,6 +2818,7 @@ mod tests {
             let chain = store.wrap_chains.back().expect("open wrap chain");
             assert_eq!(chain.pattern_len, 0);
             assert!(chain.runs.len() > WRAP_PATTERN_MAX);
+            assert!(chain.runs.len() > APERIODIC_INLINE_RUN_BOUND);
         }
         let (suffix, from, start_col) = store.eager_resize_suffix(8, 6);
         assert!(suffix.len() < 256);
@@ -2657,5 +2830,57 @@ mod tests {
             .unwrap_or(0) as usize;
         assert_eq!(start_col, wrap_occupancy(&widths[..prefix_units], 8));
         assert_eq!(store.wrap_column_before(Some(from), 8), start_col);
+        // Spine must answer a second query without depending on a fresh linear walk.
+        assert_eq!(store.wrap_column_before(Some(from), 8), start_col);
+        {
+            let chain = store.wrap_chains.back().expect("open wrap chain");
+            let spine = chain.spine.borrow();
+            assert!(
+                spine
+                    .as_ref()
+                    .is_some_and(|spine| spine.cols == 8 && spine.run_len == chain.runs.len()),
+                "aperiodic mid-chain cuts must retain a cols-dependent occupancy spine"
+            );
+        }
+    }
+
+    #[test]
+    fn eager_resize_extends_aperiodic_soft_wrap_to_hard_break_when_budget_allows() {
+        let mut store = HistoryStore::default();
+        store.append_line(ascii_line(0, "hard-prefix", HistoryBreakAfter::HardBreak));
+        // Truly aperiodic run stream (no period ≤ WRAP_PATTERN_MAX), but cell
+        // count fits the extend budget so resize can snap to HardBreak.
+        for id in 1..50u64 {
+            let ones = u8::try_from((id % 9) + 1).unwrap();
+            let mut line = vec![1u8; usize::from(ones)];
+            line.push(2);
+            store.append_line(width_line(id, &line, HistoryBreakAfter::SoftWrap));
+        }
+        {
+            let chain = store.wrap_chains.back().expect("open wrap chain");
+            assert_eq!(chain.pattern_len, 0);
+            assert!(chain.runs.len() > APERIODIC_INLINE_RUN_BOUND);
+            let soft_cells: usize = chain
+                .runs
+                .iter()
+                .map(|(width, count)| usize::from(*width) * (*count as usize))
+                .sum();
+            assert!(
+                soft_cells
+                    <= usize::from(8u16)
+                        .saturating_mul(6)
+                        .saturating_mul(APERIODIC_EXTEND_CELL_FACTOR),
+                "fixture must fit extend budget; soft_cells={soft_cells}"
+            );
+        }
+        let (suffix, from, start_col) = store.eager_resize_suffix(8, 6);
+        assert_eq!(
+            start_col, 0,
+            "extend-to-HardBreak must clear mid-chain start_col"
+        );
+        let from = from.expect("suffix");
+        assert_eq!(from.line_id, LineId(1));
+        assert!(suffix.iter().any(|line| line.line_id == LineId(1)));
+        assert!(!suffix.iter().any(|line| line.line_id == LineId(0)));
     }
 }

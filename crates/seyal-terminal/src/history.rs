@@ -364,6 +364,13 @@ impl<'a> HistoryLineRef<'a> {
         }
     }
 
+    fn unit_len(self) -> u32 {
+        match self {
+            Self::Sealed(_, line) => line.unit_len,
+            Self::Tail(line) => u32::try_from(line.units.len()).unwrap_or(u32::MAX),
+        }
+    }
+
     fn units(self) -> HistoryUnits<'a> {
         match self {
             Self::Sealed(segment, line) => {
@@ -561,7 +568,8 @@ impl HistoryStore {
 
     /// Display column at `from` for a new width. Repeating mixed-width
     /// patterns use a closed-form occupancy path; suffix trims do not scan
-    /// retained fragments.
+    /// retained fragments. If the derived wrap index was dropped, occupancy is
+    /// rebuilt from the current SoftWrap chain only (SPEC-010 §9.1).
     pub(crate) fn wrap_column_before(&self, from: Option<HistoryAnchor>, cols: u16) -> usize {
         let Some(from) = from else {
             return 0;
@@ -570,15 +578,15 @@ impl HistoryStore {
         if width == 0 {
             return 0;
         }
-        let Some(chain) = self.wrap_chain_containing(from) else {
-            return 0;
-        };
-        let units = chain.units_before(from);
-        if chain.pattern_len == 2 && chain.runs.len() >= 2 {
-            wrap_occupancy_repeating_from(&chain.runs[..2], chain.pattern_phase, width, units)
-        } else {
-            wrap_occupancy_runs(&chain.runs, width, units)
+        if let Some(chain) = self.wrap_chain_containing(from) {
+            let units = chain.units_before(from);
+            return if chain.pattern_len == 2 && chain.runs.len() >= 2 {
+                wrap_occupancy_repeating_from(&chain.runs[..2], chain.pattern_phase, width, units)
+            } else {
+                wrap_occupancy_runs(&chain.runs, width, units)
+            };
         }
+        wrap_occupancy_from_canonical(self, from, width)
     }
 
     fn wrap_chain_containing(&self, from: HistoryAnchor) -> Option<&WrapChain> {
@@ -1775,6 +1783,71 @@ fn wrap_occupancy_run(
     used.min(cols)
 }
 
+fn line_wholly_after(entry: HistoryLineRef<'_>, from: HistoryAnchor) -> bool {
+    entry.line_id() > from.line_id
+        || (entry.line_id() == from.line_id && entry.start_offset() >= from.unit_offset)
+}
+
+fn line_wholly_before(entry: HistoryLineRef<'_>, from: HistoryAnchor) -> bool {
+    let end = entry.start_offset().saturating_add(entry.unit_len());
+    entry.line_id() < from.line_id || (entry.line_id() == from.line_id && end <= from.unit_offset)
+}
+
+/// Occupancy of the SoftWrap chain containing `from` when the derived wrap
+/// index is absent. Walks only that chain, not all retained history.
+fn wrap_occupancy_from_canonical(store: &HistoryStore, from: HistoryAnchor, cols: usize) -> usize {
+    let mut fragments_rev: Vec<Vec<(u8, u32)>> = Vec::new();
+    let mut saw_soft = false;
+    for entry in store.reverse_entries() {
+        if line_wholly_after(entry, from) {
+            continue;
+        }
+        if !fragments_rev.is_empty()
+            && entry.break_after() == HistoryBreakAfter::HardBreak
+            && line_wholly_before(entry, from)
+        {
+            break;
+        }
+        if entry.break_after() == HistoryBreakAfter::SoftWrap {
+            saw_soft = true;
+        }
+        let mut fragment_runs: Vec<(u8, u32)> = Vec::new();
+        let mut offset = entry.start_offset();
+        for unit in entry.units() {
+            if entry.line_id() == from.line_id && offset >= from.unit_offset {
+                break;
+            }
+            let width = unit.width().max(1);
+            if let Some((last_width, count)) = fragment_runs.last_mut()
+                && *last_width == width
+            {
+                *count = count.saturating_add(1);
+            } else {
+                fragment_runs.push((width, 1));
+            }
+            offset = offset.saturating_add(1);
+        }
+        fragments_rev.push(fragment_runs);
+    }
+    if !saw_soft {
+        return 0;
+    }
+    let mut runs: Vec<(u8, u32)> = Vec::new();
+    for fragment in fragments_rev.into_iter().rev() {
+        for (width, count) in fragment {
+            if let Some((last_width, last_count)) = runs.last_mut()
+                && *last_width == width
+            {
+                *last_count = last_count.saturating_add(count);
+            } else {
+                runs.push((width, count));
+            }
+        }
+    }
+    let units = wrap_runs_unit_sum(&runs);
+    wrap_occupancy_runs(&runs, cols, units)
+}
+
 fn wrap_occupancy_runs(runs: &[(u8, u32)], cols: usize, unit_limit: u32) -> usize {
     let mut used = 0usize;
     let mut left = unit_limit;
@@ -2387,7 +2460,7 @@ mod tests {
         assert_eq!(store.wrap_index_allocated_bytes(), 0);
         assert_eq!(store.derived_cache_bytes(), 0);
         assert_eq!(store.resident_bytes(), resident);
-        assert_eq!(store.wrap_column_before(Some(from), 8), 0);
+        assert_eq!(store.wrap_column_before(Some(from), 8), 1);
         assert!(matches!(
             store.resolve_anchor(HistoryAnchor {
                 line_id: LineId(0),

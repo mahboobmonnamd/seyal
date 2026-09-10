@@ -242,6 +242,8 @@ struct WrapChain {
     /// Repeating RLE prefix length used for occupancy. `2` means alternating
     /// width runs; occupancy then ignores the stored run tail.
     pattern_len: u32,
+    /// Units already dropped from the front of a compacted period-2 template.
+    pattern_phase: u32,
     open: bool,
 }
 
@@ -486,8 +488,10 @@ impl HistoryStore {
         )
     }
 
-    pub(crate) fn drop_derived_cache(&self) {
-        self.reflow_cache.borrow_mut().take();
+    pub(crate) fn drop_derived_cache(&mut self) {
+        self.reflow_cache.get_mut().take();
+        self.wrap_chains.clear();
+        self.wrap_chains.shrink_to_fit();
     }
 
     pub(crate) fn eviction_generation(&self) -> u64 {
@@ -571,7 +575,7 @@ impl HistoryStore {
         };
         let units = chain.units_before(from);
         if chain.pattern_len == 2 && chain.runs.len() >= 2 {
-            wrap_occupancy_repeating(&chain.runs[..2], width, units)
+            wrap_occupancy_repeating_from(&chain.runs[..2], chain.pattern_phase, width, units)
         } else {
             wrap_occupancy_runs(&chain.runs, width, units)
         }
@@ -619,18 +623,25 @@ impl HistoryStore {
             unit_count,
             prefix_units,
         });
-        for unit in &line.units {
-            let width = unit.width.max(1);
-            let pushed_new = if let Some((last_width, count)) = chain.runs.last_mut()
-                && *last_width == width
-            {
-                *count = count.saturating_add(1);
-                false
-            } else {
-                chain.runs.push((width, 1));
-                true
-            };
-            note_appended_wrap_run(chain, pushed_new);
+        let run_units = wrap_runs_unit_sum(&chain.runs);
+        let compacted = chain.pattern_len == 2 && chain.runs.len() == 2 && run_units < prefix_units;
+        if compacted {
+            append_compacted_wrap_runs(chain, &line.units, prefix_units);
+        } else {
+            for unit in &line.units {
+                let width = unit.width.max(1);
+                let pushed_new = if let Some((last_width, count)) = chain.runs.last_mut()
+                    && *last_width == width
+                {
+                    *count = count.saturating_add(1);
+                    false
+                } else {
+                    chain.runs.push((width, 1));
+                    true
+                };
+                note_appended_wrap_run(chain, pushed_new);
+            }
+            compact_period_two_wrap_runs(chain);
         }
         chain.open = line.break_after == HistoryBreakAfter::SoftWrap;
         self.enforce_wrap_index_cap();
@@ -676,8 +687,18 @@ impl HistoryStore {
                 .saturating_sub(last.start_offset)
                 .min(last.unit_count);
         }
-        drop_suffix_wrap_runs(&mut chain.runs, total.saturating_sub(keep_units));
-        note_pattern_after_suffix_trim(chain);
+        let run_units = wrap_runs_unit_sum(&chain.runs);
+        let compacted = chain.pattern_len == 2 && chain.runs.len() <= 2 && total > run_units;
+        if compacted {
+            if keep_units == 0 {
+                chain.runs.clear();
+                chain.pattern_len = 0;
+                chain.pattern_phase = 0;
+            }
+        } else {
+            drop_suffix_wrap_runs(&mut chain.runs, total.saturating_sub(keep_units));
+            note_pattern_after_suffix_trim(chain);
+        }
         chain.open = true;
     }
 
@@ -722,12 +743,29 @@ impl HistoryStore {
             fragment.prefix_units = prefix;
             prefix = prefix.saturating_add(fragment.unit_count);
         }
-        let period_units = wrap_pattern_period_units(chain);
-        drop_prefix_wrap_runs(&mut chain.runs, drop_units);
-        note_pattern_after_prefix_trim(chain, drop_units, period_units);
+        let run_units = wrap_runs_unit_sum(&chain.runs);
+        let compacted = chain.pattern_len == 2
+            && chain.runs.len() <= 2
+            && drop_units.saturating_add(prefix) > run_units;
+        if compacted {
+            if prefix == 0 {
+                chain.runs.clear();
+                chain.pattern_len = 0;
+                chain.pattern_phase = 0;
+            } else {
+                chain.pattern_phase = chain.pattern_phase.saturating_add(drop_units);
+            }
+        } else {
+            let period_units = wrap_pattern_period_units(chain);
+            drop_prefix_wrap_runs(&mut chain.runs, drop_units);
+            note_pattern_after_prefix_trim(chain, drop_units, period_units);
+        }
     }
 
     fn enforce_wrap_index_cap(&mut self) {
+        for chain in &mut self.wrap_chains {
+            compact_period_two_wrap_runs(chain);
+        }
         while self.wrap_index_allocated_bytes() > HISTORY_PER_EXECUTION_DERIVED_INDEX_CAP
             && self.wrap_chains.len() > 1
         {
@@ -736,6 +774,10 @@ impl HistoryStore {
                 break;
             }
             self.wrap_chains.pop_front();
+        }
+        if self.wrap_index_allocated_bytes() > HISTORY_PER_EXECUTION_DERIVED_INDEX_CAP {
+            self.wrap_chains.clear();
+            self.wrap_chains.shrink_to_fit();
         }
     }
 
@@ -1462,6 +1504,127 @@ fn wrap_pattern_period_units(chain: &WrapChain) -> u32 {
     }
 }
 
+fn wrap_runs_unit_sum(runs: &[(u8, u32)]) -> u32 {
+    runs.iter()
+        .map(|(_, count)| *count)
+        .fold(0u32, u32::saturating_add)
+}
+
+fn compact_period_two_wrap_runs(chain: &mut WrapChain) {
+    if chain.pattern_len == 2 && chain.runs.len() > 2 {
+        chain.runs.truncate(2);
+        chain.runs.shrink_to_fit();
+    }
+}
+
+fn wrap_pattern_width_at(pattern: &[(u8, u32)], mut index: u32) -> Option<u8> {
+    let period = wrap_runs_unit_sum(pattern);
+    if period == 0 {
+        return None;
+    }
+    index %= period;
+    for &(width, count) in pattern {
+        if index < count {
+            return Some(width);
+        }
+        index = index.saturating_sub(count);
+    }
+    None
+}
+
+fn wrap_pattern_slice(pattern: &[(u8, u32)], start: u32, count: u32) -> Vec<(u8, u32)> {
+    let period = wrap_runs_unit_sum(pattern);
+    if period == 0 || count == 0 {
+        return Vec::new();
+    }
+    let mut offset = start % period;
+    let mut remaining = count;
+    let mut runs: Vec<(u8, u32)> = Vec::new();
+    while remaining > 0 {
+        let before = remaining;
+        let mut idx = 0u32;
+        for &(width, run_count) in pattern {
+            if remaining == 0 {
+                break;
+            }
+            let run_end = idx.saturating_add(run_count);
+            if offset >= run_end {
+                idx = run_end;
+                continue;
+            }
+            let skip = offset.saturating_sub(idx);
+            let take = run_count.saturating_sub(skip).min(remaining);
+            if take > 0 {
+                if let Some((last_width, last_count)) = runs.last_mut()
+                    && *last_width == width
+                {
+                    *last_count = last_count.saturating_add(take);
+                } else {
+                    runs.push((width, take));
+                }
+                remaining = remaining.saturating_sub(take);
+                offset = 0;
+            }
+            idx = run_end;
+        }
+        if remaining == before {
+            break;
+        }
+    }
+    runs
+}
+
+fn append_compacted_wrap_runs(chain: &mut WrapChain, units: &[HistoryUnit], prefix_units: u32) {
+    for (index, unit) in units.iter().enumerate() {
+        let width = unit.width.max(1);
+        let unit_index = chain
+            .pattern_phase
+            .saturating_add(prefix_units)
+            .saturating_add(index as u32);
+        match wrap_pattern_width_at(&chain.runs, unit_index) {
+            Some(expected) if expected == width => {}
+            _ => {
+                chain.runs = wrap_pattern_slice(
+                    &chain.runs,
+                    chain.pattern_phase,
+                    prefix_units.saturating_add(index as u32),
+                );
+                chain.pattern_phase = 0;
+                chain.pattern_len = 0;
+                for unit in &units[index..] {
+                    let width = unit.width.max(1);
+                    if let Some((last_width, count)) = chain.runs.last_mut()
+                        && *last_width == width
+                    {
+                        *count = count.saturating_add(1);
+                    } else {
+                        chain.runs.push((width, 1));
+                    }
+                }
+                return;
+            }
+        }
+    }
+}
+
+fn wrap_occupancy_repeating_from(
+    pattern: &[(u8, u32)],
+    phase: u32,
+    cols: usize,
+    units: u32,
+) -> usize {
+    let period = wrap_runs_unit_sum(pattern);
+    if period == 0 {
+        return 0;
+    }
+    let phase = phase % period;
+    if phase == 0 {
+        return wrap_occupancy_repeating(pattern, cols, units);
+    }
+    let rotated = wrap_pattern_slice(pattern, phase, period);
+    wrap_occupancy_repeating(&rotated, cols, units)
+}
+
 /// Incremental period-2 detection. Must not walk retained runs (SPEC-010 §7).
 fn note_appended_wrap_run(chain: &mut WrapChain, pushed_new: bool) {
     let n = chain.runs.len();
@@ -2038,9 +2201,11 @@ mod tests {
                 start_offset: 0,
             });
         }
-        let chain = store.wrap_chains.back().expect("open wrap chain");
-        assert_eq!(chain.pattern_len, 2);
-        assert!(chain.runs.len() >= 2);
+        {
+            let chain = store.wrap_chains.back().expect("open wrap chain");
+            assert_eq!(chain.pattern_len, 2);
+            assert_eq!(chain.runs.as_slice(), &[(1, 1), (2, 1)]);
+        }
         let (suffix, from, start_col) = store.eager_resize_suffix(8, 6);
         assert!(
             suffix.len() <= 48,
@@ -2093,8 +2258,7 @@ mod tests {
         {
             let chain = store.wrap_chains.back().expect("open wrap chain");
             assert_eq!(chain.pattern_len, 2);
-            assert_eq!(chain.runs.first().copied(), Some((1, 2)));
-            assert_eq!(chain.runs.get(1).copied(), Some((2, 1)));
+            assert_eq!(chain.runs.as_slice(), &[(1, 2), (2, 1)]);
         }
         let (suffix, from, start_col) = store.eager_resize_suffix(8, 6);
         assert!(suffix.len() < 2_000);
@@ -2107,15 +2271,19 @@ mod tests {
         assert_eq!(start_col, wrap_occupancy(&widths[..prefix_units], 8));
         assert_eq!(store.wrap_column_before(Some(from), 8), start_col);
         store.truncate_from(from);
-        let kept_units = store
+        let run_units = store
             .wrap_chains
             .back()
-            .expect("trimmed wrap chain")
-            .runs
-            .iter()
-            .map(|(_, count)| usize::try_from(*count).unwrap_or(usize::MAX))
-            .sum::<usize>();
-        assert_eq!(kept_units, prefix_units);
+            .map(|chain| wrap_runs_unit_sum(&chain.runs) as usize)
+            .unwrap_or(0);
+        if run_units < prefix_units {
+            assert_eq!(
+                store.wrap_chains.back().map(|chain| chain.runs.len()),
+                Some(2)
+            );
+        } else {
+            assert_eq!(run_units, prefix_units);
+        }
         assert_eq!(store.wrap_column_before(Some(from), 8), start_col);
         for line in suffix {
             store.append_line(line);
@@ -2200,5 +2368,34 @@ mod tests {
             ),
             wrap_occupancy(&[1, 1, 2], 8)
         );
+    }
+
+    #[test]
+    fn drop_derived_cache_drops_wrap_index_without_touching_payload() {
+        let mut store = HistoryStore::default();
+        for id in 0..8_000 {
+            store.append_line(ascii_line(id, "x", HistoryBreakAfter::SoftWrap));
+        }
+        assert!(store.wrap_index_allocated_bytes() > 0);
+        let resident = store.resident_bytes();
+        let from = HistoryAnchor {
+            line_id: LineId(4_001),
+            unit_offset: 0,
+        };
+        assert_eq!(store.wrap_column_before(Some(from), 8), 1);
+        store.drop_derived_cache();
+        assert_eq!(store.wrap_index_allocated_bytes(), 0);
+        assert_eq!(store.derived_cache_bytes(), 0);
+        assert_eq!(store.resident_bytes(), resident);
+        assert_eq!(store.wrap_column_before(Some(from), 8), 0);
+        assert!(matches!(
+            store.resolve_anchor(HistoryAnchor {
+                line_id: LineId(0),
+                unit_offset: 0
+            }),
+            HistoryAnchorResolution::Resolved { .. }
+        ));
+        store.append_line(ascii_line(8_000, "y", HistoryBreakAfter::SoftWrap));
+        assert!(store.wrap_index_allocated_bytes() > 0);
     }
 }

@@ -74,7 +74,7 @@ impl TerminalExecution {
         self.terminal.primary_history_derived_cache_bytes()
     }
 
-    pub fn drop_derived_history_cache(&self) {
+    pub fn drop_derived_history_cache(&mut self) {
         self.terminal.drop_primary_history_derived_cache();
     }
 

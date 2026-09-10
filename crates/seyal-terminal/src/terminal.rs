@@ -511,8 +511,8 @@ impl TerminalState {
         self.core.primary.history().derived_cache_bytes()
     }
 
-    pub fn drop_primary_history_derived_cache(&self) {
-        self.core.primary.history().drop_derived_cache();
+    pub fn drop_primary_history_derived_cache(&mut self) {
+        self.core.primary.history_mut().drop_derived_cache();
     }
 
     pub fn primary_history_eviction_generation(&self) -> u64 {

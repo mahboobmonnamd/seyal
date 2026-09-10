@@ -72,3 +72,30 @@ fn unsupported_keyboard_controls_do_not_mutate_or_print() {
     assert_eq!(terminal.diagnostics().deferred_sequences, 1);
     assert_eq!(terminal.diagnostics().unknown_sequences, 1);
 }
+
+#[test]
+fn kitty_flag_stack_evicts_oldest_and_pop_saturates_to_zero() {
+    let mut terminal = terminal();
+    // Push 17 distinct masked values; capacity is 16 with oldest-eviction.
+    for flags in 1u8..=17 {
+        let sequence = format!("\x1b[>{flags}u");
+        terminal.feed(sequence.as_bytes()).unwrap();
+    }
+    assert_eq!(terminal.modes().keyboard_flags, 17 & 0b11);
+
+    // Pop more than the stack depth saturates to empty / flags zero.
+    terminal.feed(b"\x1b[<65535u").unwrap();
+    assert_eq!(terminal.modes().keyboard_flags, 0);
+
+    // After eviction, the oldest push (1) is gone; popping once restores 16&0b11.
+    for flags in 1u8..=17 {
+        let sequence = format!("\x1b[>{flags}u");
+        terminal.feed(sequence.as_bytes()).unwrap();
+    }
+    terminal.feed(b"\x1b[<1u").unwrap();
+    assert_eq!(terminal.modes().keyboard_flags, 16 & 0b11);
+
+    // Set on an empty stack creates a restoreable base entry.
+    terminal.feed(b"\x1b[<65535u\x1b[=2;1u\x1b[>1u\x1b[<1u").unwrap();
+    assert_eq!(terminal.modes().keyboard_flags, 2);
+}

@@ -273,8 +273,10 @@ pub(crate) fn encode_terminal_key_v2(key: TerminalKeyV2, modes: ModeState) -> Re
             TerminalKeyV2Kind::PageUp => csi_mod(5, b'~', modifiers),
             TerminalKeyV2Kind::PageDown => csi_mod(6, b'~', modifiers),
             TerminalKeyV2Kind::Function => {
-                if key.value <= 4 {
+                if key.value <= 4 && key.value != 3 {
                     csi_mod(1, b'P' + key.value as u8 - 1, modifiers)
+                } else if key.value == 3 {
+                    csi_mod(13, b'~', modifiers)
                 } else {
                     csi_mod(
                         match key.value {
@@ -853,6 +855,71 @@ mod tests {
             )
             .unwrap(),
             b"\x1b"
+        );
+    }
+
+    #[test]
+    fn modified_f3_press_uses_tilde_csi_instead_of_cursor_report() {
+        let f3 = TerminalKeyV2 {
+            attachment_id: crate::AttachmentId::from_bytes([0; 16]),
+            kind: TerminalKeyV2Kind::Function,
+            modifiers: TerminalKeyV2Modifiers::SHIFT,
+            value: 3,
+            event: TerminalKeyV2Event::Press,
+            shifted_ascii: 0,
+            action_id: 1,
+        };
+        assert_eq!(
+            encode_terminal_key_v2(f3, ModeState::default()).unwrap(),
+            b"\x1b[13;2~"
+        );
+        assert_eq!(
+            encode_terminal_key_v2(
+                f3,
+                ModeState {
+                    keyboard_flags: 2,
+                    ..ModeState::default()
+                }
+            )
+            .unwrap(),
+            b"\x1b[13;2~"
+        );
+        let control_f3 = TerminalKeyV2 {
+            modifiers: TerminalKeyV2Modifiers::CONTROL,
+            ..f3
+        };
+        assert_eq!(
+            encode_terminal_key_v2(control_f3, ModeState::default()).unwrap(),
+            b"\x1b[13;5~"
+        );
+        let unmodified = TerminalKeyV2 {
+            modifiers: TerminalKeyV2Modifiers::NONE,
+            ..f3
+        };
+        assert_eq!(
+            encode_terminal_key_v2(unmodified, ModeState::default()).unwrap(),
+            b"\x1bOR"
+        );
+        assert_eq!(
+            encode_terminal_key_v2(
+                unmodified,
+                ModeState {
+                    keyboard_flags: 1,
+                    ..ModeState::default()
+                }
+            )
+            .unwrap(),
+            b"\x1b[13;1~"
+        );
+        let shift_f1 = TerminalKeyV2 {
+            kind: TerminalKeyV2Kind::Function,
+            modifiers: TerminalKeyV2Modifiers::SHIFT,
+            value: 1,
+            ..f3
+        };
+        assert_eq!(
+            encode_terminal_key_v2(shift_f1, ModeState::default()).unwrap(),
+            b"\x1b[1;2P"
         );
     }
 }

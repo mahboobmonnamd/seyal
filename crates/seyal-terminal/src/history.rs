@@ -1748,16 +1748,14 @@ fn wrap_occupancy_aperiodic(chain: &WrapChain, cols: usize, units: u32) -> usize
     if cols == 0 || units == 0 || chain.runs.is_empty() {
         return 0;
     }
-    if chain.runs.len() <= APERIODIC_INLINE_RUN_BOUND {
-        return wrap_occupancy_for_runs(&chain.runs, cols, units);
+    if chain.runs.len() > APERIODIC_INLINE_RUN_BOUND {
+        let cols_u16 = u16::try_from(cols).unwrap_or(u16::MAX);
+        ensure_aperiodic_spine(chain, cols_u16);
+        if let Some(spine) = chain.spine.borrow().as_ref() {
+            return spine_occupancy(spine, &chain.runs, cols, units);
+        }
     }
-    let cols_u16 = u16::try_from(cols).unwrap_or(u16::MAX);
-    ensure_aperiodic_spine(chain, cols_u16);
-    let spine = chain.spine.borrow();
-    let Some(spine) = spine.as_ref() else {
-        return wrap_occupancy_for_runs(&chain.runs, cols, units);
-    };
-    spine_occupancy(spine, &chain.runs, cols, units)
+    wrap_occupancy_for_runs(&chain.runs, cols, units)
 }
 
 fn ensure_aperiodic_spine(chain: &WrapChain, cols: u16) {
@@ -2059,6 +2057,8 @@ fn wrap_occupancy_from_canonical(store: &HistoryStore, from: HistoryAnchor, cols
         }
     }
     let units = wrap_runs_unit_sum(&runs);
+    // Same closed-form / ephemeral-spine path as the indexed miss-free case so
+    // dropping the derived wrap index cannot reintroduce a linear run walk.
     wrap_occupancy_for_runs(&runs, cols, units)
 }
 
@@ -2094,9 +2094,36 @@ fn wrap_repeating_period(runs: &[(u8, u32)]) -> Option<usize> {
 fn wrap_occupancy_for_runs(runs: &[(u8, u32)], cols: usize, unit_limit: u32) -> usize {
     if let Some(k) = wrap_repeating_period(runs) {
         wrap_occupancy_repeating(&runs[..k], cols, unit_limit)
+    } else if runs.len() > APERIODIC_INLINE_RUN_BOUND {
+        wrap_occupancy_with_ephemeral_spine(runs, cols, unit_limit)
     } else {
         wrap_occupancy_runs(runs, cols, unit_limit)
     }
+}
+
+fn wrap_occupancy_with_ephemeral_spine(runs: &[(u8, u32)], cols: usize, unit_limit: u32) -> usize {
+    if cols == 0 || unit_limit == 0 || runs.is_empty() {
+        return 0;
+    }
+    let cols_u16 = u16::try_from(cols).unwrap_or(u16::MAX);
+    let mut after_run = Vec::with_capacity(runs.len());
+    let mut units_after = Vec::with_capacity(runs.len());
+    let mut used = 0usize;
+    let mut total_units = 0u32;
+    let mut seen = vec![None; cols.saturating_add(1)];
+    for &(unit_width, count) in runs {
+        used = wrap_occupancy_run(used, cols, unit_width, count, &mut seen);
+        total_units = total_units.saturating_add(count);
+        after_run.push(u8::try_from(used.min(cols)).unwrap_or(u8::MAX));
+        units_after.push(total_units);
+    }
+    let spine = WrapOccupancySpine {
+        cols: cols_u16,
+        run_len: runs.len(),
+        after_run,
+        units_after,
+    };
+    spine_occupancy(&spine, runs, cols, unit_limit)
 }
 
 fn wrap_occupancy_runs(runs: &[(u8, u32)], cols: usize, unit_limit: u32) -> usize {
@@ -2842,6 +2869,9 @@ mod tests {
                 "aperiodic mid-chain cuts must retain a cols-dependent occupancy spine"
             );
         }
+        // Miss path after derived-cache drop must stay exact (ephemeral spine).
+        store.drop_derived_cache();
+        assert_eq!(store.wrap_column_before(Some(from), 8), start_col);
     }
 
     #[test]

@@ -110,53 +110,26 @@ impl Runtime {
         // VT already caps at max_lines. A full window means more in-range
         // retained rows may remain — report Truncated so clients can continue.
         let hit_line_cap = max_lines > 0 && rows.len() == max_lines;
-        let mut sidecar = Vec::new();
-        let mut packed_rows = Vec::new();
-        let mut pack_truncated = false;
-        for (line_id, cells) in rows {
-            let mut wire_cells = Vec::with_capacity(cells.len());
-            let sidecar_at = sidecar.len();
-            for cell in cells {
-                let style_flags = (u16::from(cell.style.bold))
-                    | (u16::from(cell.style.underline) << 1)
-                    | (u16::from(cell.style.inverse) << 2);
-                let packed = if cell.continuation {
-                    framing::HistoryCell {
-                        scalar: 0,
+        let source_rows = rows.into_iter().map(|(line_id, cells)| {
+            (
+                line_id.0,
+                cells
+                    .into_iter()
+                    .map(|cell| framing::HistorySourceCell {
+                        text: cell.text,
+                        width: cell.width,
+                        continuation: cell.continuation,
                         foreground: pack_terminal_color(cell.style.fg),
                         background: pack_terminal_color(cell.style.bg),
-                        flags: style_flags,
-                        reserved: 0,
-                    }
-                } else {
-                    match framing::HistoryCell::from_text(
-                        &cell.text,
-                        pack_terminal_color(cell.style.fg),
-                        pack_terminal_color(cell.style.bg),
-                        style_flags,
-                        &mut sidecar,
-                    ) {
-                        Ok(cell) => cell,
-                        Err(_) => {
-                            sidecar.truncate(sidecar_at);
-                            pack_truncated = true;
-                            break;
-                        }
-                    }
-                };
-                wire_cells.push(packed);
-            }
-            if pack_truncated && wire_cells.is_empty() {
-                break;
-            }
-            packed_rows.push(framing::HistoryRow {
-                line_id: line_id.0,
-                cells: wire_cells,
-            });
-            if pack_truncated {
-                break;
-            }
-        }
+                        style_flags: u16::from(cell.style.bold)
+                            | (u16::from(cell.style.underline) << 1)
+                            | (u16::from(cell.style.inverse) << 2),
+                    })
+                    .collect(),
+            )
+        });
+        let (packed_rows, sidecar, pack_truncated) =
+            framing::HistoryRangeSnapshot::pack_source_rows(source_rows);
         let (encoded_rows, budget_truncated) = framing::HistoryRangeSnapshot::admit_rows(
             packed_rows,
             max_lines,

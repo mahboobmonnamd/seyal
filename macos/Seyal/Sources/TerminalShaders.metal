@@ -50,7 +50,7 @@ vertex TerminalVertexOut seyal_terminal_vertex(
     const float2 local = corners[vertex_id];
     float2 size = instance.size;
     constexpr uint wide_glyph_flag = 1u << 3;
-    if (render_mode == 1u && (instance.flags & wide_glyph_flag) != 0u) {
+    if (render_mode != 0u && (instance.flags & wide_glyph_flag) != 0u) {
         size.x *= 2.0;
     }
     const float2 pixel = instance.origin + local * size;

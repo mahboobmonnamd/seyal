@@ -82,6 +82,8 @@ typedef struct SeyalHistoryCell {
     uint32_t scalar;
     uint32_t foreground;
     uint32_t background;
+    /* bit0 bold, bit1 underline, bit2 inverse, bit3 continuation,
+       bits 4-5 terminal width, bit7 sidecar offset in reserved */
     uint16_t flags;
     uint16_t reserved;
 } SeyalHistoryCell;

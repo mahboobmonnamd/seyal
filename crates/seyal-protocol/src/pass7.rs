@@ -20,6 +20,11 @@ pub const MAX_HISTORY_RANGE_BYTES: usize = 196_608;
 /// M001 snapshot layout (`reserved == 0`, header bytes 28..32 zero).
 pub const MAX_HISTORY_SIDECAR_BYTES: usize = 65_536;
 pub const MAX_HISTORY_GRAPHEME_BYTES: usize = 8_192;
+/// `HistoryCell.flags` bit 3: this cell is a width-two continuation placeholder.
+pub const HISTORY_CELL_CONTINUATION_FLAG: u16 = 1 << 3;
+/// `HistoryCell.flags` bits 4–5: terminal cell width (1 or 2) for a lead.
+pub const HISTORY_CELL_WIDTH_SHIFT: u16 = 4;
+pub const HISTORY_CELL_WIDTH_MASK: u16 = 0b11 << 4;
 /// `HistoryCell.flags` bit 7: `reserved` is a sidecar byte offset, not zero.
 pub const HISTORY_CELL_SIDECAR_FLAG: u16 = 1 << 7;
 
@@ -319,7 +324,10 @@ impl HistoryCell {
         style_flags: u16,
         sidecar: &mut Vec<u8>,
     ) -> Result<Self, FramingError> {
-        let style_flags = style_flags & !HISTORY_CELL_SIDECAR_FLAG;
+        let style_flags = style_flags
+            & !(HISTORY_CELL_SIDECAR_FLAG
+                | HISTORY_CELL_CONTINUATION_FLAG
+                | HISTORY_CELL_WIDTH_MASK);
         if text.is_empty() {
             return Ok(Self {
                 scalar: 0,
@@ -388,6 +396,36 @@ impl HistoryCell {
         }
         Ok(Some(bytes))
     }
+
+    pub fn with_cell_metrics(mut self, width: u8, continuation: bool) -> Self {
+        self.flags &= !(HISTORY_CELL_CONTINUATION_FLAG | HISTORY_CELL_WIDTH_MASK);
+        if continuation {
+            self.flags |= HISTORY_CELL_CONTINUATION_FLAG;
+        } else {
+            let stored = width.max(1).min(3);
+            self.flags |= u16::from(stored) << HISTORY_CELL_WIDTH_SHIFT;
+        }
+        self
+    }
+
+    pub fn is_continuation(self) -> bool {
+        self.flags & HISTORY_CELL_CONTINUATION_FLAG != 0
+    }
+
+    pub fn cell_width(self) -> u8 {
+        ((self.flags & HISTORY_CELL_WIDTH_MASK) >> HISTORY_CELL_WIDTH_SHIFT) as u8
+    }
+}
+
+/// One history glyph before sidecar packing. Continuations carry no text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HistorySourceCell {
+    pub text: String,
+    pub width: u8,
+    pub continuation: bool,
+    pub foreground: u32,
+    pub background: u32,
+    pub style_flags: u16,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -438,6 +476,62 @@ impl HistoryRangeSnapshot {
             out.push(row);
         }
         (out, truncated)
+    }
+
+    /// Pack glyphs into wire cells. Sidecar overflow keeps the already-packed
+    /// prefix of the current row so a `start_unit` continuation can proceed.
+    pub fn pack_source_rows(
+        rows: impl IntoIterator<Item = (u64, Vec<HistorySourceCell>)>,
+    ) -> (Vec<HistoryRow>, Vec<u8>, bool) {
+        let mut sidecar = Vec::new();
+        let mut packed_rows = Vec::new();
+        let mut pack_truncated = false;
+        for (line_id, cells) in rows {
+            let mut wire_cells = Vec::with_capacity(cells.len());
+            for cell in cells {
+                let packed = if cell.continuation {
+                    HistoryCell {
+                        scalar: 0,
+                        foreground: cell.foreground,
+                        background: cell.background,
+                        flags: cell.style_flags
+                            & !(HISTORY_CELL_SIDECAR_FLAG
+                                | HISTORY_CELL_CONTINUATION_FLAG
+                                | HISTORY_CELL_WIDTH_MASK),
+                        reserved: 0,
+                    }
+                    .with_cell_metrics(cell.width, true)
+                } else {
+                    match HistoryCell::from_text(
+                        &cell.text,
+                        cell.foreground,
+                        cell.background,
+                        cell.style_flags,
+                        &mut sidecar,
+                    ) {
+                        Ok(packed) => packed.with_cell_metrics(cell.width, false),
+                        Err(_) => {
+                            pack_truncated = true;
+                            break;
+                        }
+                    }
+                };
+                wire_cells.push(packed);
+            }
+            if pack_truncated && wire_cells.is_empty() {
+                break;
+            }
+            if !wire_cells.is_empty() {
+                packed_rows.push(HistoryRow {
+                    line_id,
+                    cells: wire_cells,
+                });
+            }
+            if pack_truncated {
+                break;
+            }
+        }
+        (packed_rows, sidecar, pack_truncated)
     }
 
     /// Drop sidecar bytes no longer referenced after a trailing-row pop.
@@ -1067,6 +1161,56 @@ mod command_block_tests {
             HistoryRangeSnapshot::decode(&snapshot.encode()),
             Ok(snapshot)
         );
+    }
+
+    #[test]
+    fn pack_source_rows_keeps_a_sidecar_prefix_when_the_row_exceeds_the_budget() {
+        let grapheme = "\u{10000}".repeat(MAX_HISTORY_GRAPHEME_BYTES / 4);
+        assert_eq!(grapheme.len(), MAX_HISTORY_GRAPHEME_BYTES);
+        let cell = HistorySourceCell {
+            text: grapheme,
+            width: 2,
+            continuation: false,
+            foreground: 0,
+            background: 0,
+            style_flags: 0,
+        };
+        let continuation = HistorySourceCell {
+            text: String::new(),
+            width: 0,
+            continuation: true,
+            foreground: 0,
+            background: 0,
+            style_flags: 0,
+        };
+        let mut row = Vec::new();
+        for _ in 0..8 {
+            row.push(cell.clone());
+            row.push(continuation.clone());
+        }
+        let (rows, sidecar, truncated) = HistoryRangeSnapshot::pack_source_rows([(1, row)]);
+        assert!(truncated);
+        assert_eq!(rows.len(), 1);
+        let leads: Vec<_> = rows[0]
+            .cells
+            .iter()
+            .filter(|cell| !cell.is_continuation())
+            .collect();
+        assert_eq!(leads.len(), 7);
+        assert!(leads.iter().all(|cell| cell.cell_width() == 2));
+        assert!(rows[0].cells.iter().any(|cell| cell.is_continuation()));
+        HistoryRangeSnapshot {
+            request_id: 1,
+            block_id: 2,
+            revision: 1,
+            status: HistoryRangeStatus::Truncated,
+            rows: rows.clone(),
+            sidecar: sidecar.clone(),
+        }
+        .try_encode()
+        .expect("packed prefix encodes");
+        assert!(sidecar.len() <= MAX_HISTORY_SIDECAR_BYTES);
+        assert!(!leads.is_empty());
     }
 }
 

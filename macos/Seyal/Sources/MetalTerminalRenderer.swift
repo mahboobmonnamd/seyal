@@ -733,7 +733,11 @@ final class MetalTerminalRenderer: @unchecked Sendable {
                 var flags: UInt32 = 0
                 var uvRect = SIMD4<Float>(repeating: 0)
                 var atlasSlice: UInt32 = 0
-                if cell.scalar != 0 && cell.scalar != 32 || !cell.graphemeUtf8.isEmpty {
+                let continuation = cell.flags & (1 << 3) != 0
+                let width = (cell.flags >> 4) & 0b11
+                if !continuation,
+                   (cell.scalar != 0 && cell.scalar != 32) || !cell.graphemeUtf8.isEmpty
+                {
                     let entry: GlyphAtlasEntry
                     if !cell.graphemeUtf8.isEmpty,
                        let text = String(data: cell.graphemeUtf8, encoding: .utf8),
@@ -754,6 +758,9 @@ final class MetalTerminalRenderer: @unchecked Sendable {
                         )
                     }
                     flags |= instanceGlyphFlag
+                    if width == 2 {
+                        flags |= instanceWideGlyphFlag
+                    }
                     uvRect = entry.uvRect
                     atlasSlice = entry.slice
                 }

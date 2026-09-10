@@ -419,6 +419,10 @@ pub(crate) fn encode_terminal_key_v2(key: TerminalKeyV2, modes: ModeState) -> Re
 }
 
 #[cfg(test)]
+#[path = "key_v2_section_21_6_tests.rs"]
+mod section_21_6_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use seyal_protocol::framing::{TerminalKeyV2Event, TerminalKeyV2Kind, TerminalKeyV2Modifiers};

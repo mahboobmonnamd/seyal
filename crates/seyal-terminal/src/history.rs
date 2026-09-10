@@ -227,6 +227,44 @@ struct ReflowCache {
     rows: Vec<ReflowRow>,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct WrapFragment {
+    line_id: LineId,
+    start_offset: u32,
+    unit_count: u32,
+}
+
+#[derive(Clone, Debug, Default)]
+struct WrapChain {
+    fragments: Vec<WrapFragment>,
+    runs: Vec<(u8, u32)>,
+    open: bool,
+}
+
+impl WrapChain {
+    fn units_before(&self, from: HistoryAnchor) -> u32 {
+        let mut total = 0u32;
+        for fragment in &self.fragments {
+            if fragment.line_id > from.line_id {
+                break;
+            }
+            if fragment.line_id < from.line_id {
+                total = total.saturating_add(fragment.unit_count);
+                continue;
+            }
+            if fragment.start_offset >= from.unit_offset {
+                break;
+            }
+            let keep = from.unit_offset.saturating_sub(fragment.start_offset);
+            total = total.saturating_add(keep.min(fragment.unit_count));
+            if fragment.start_offset.saturating_add(fragment.unit_count) > from.unit_offset {
+                break;
+            }
+        }
+        total
+    }
+}
+
 #[derive(Clone, Copy)]
 enum HistoryUnitRef<'a> {
     Sealed(&'a Segment, &'a SegmentUnit),
@@ -397,6 +435,9 @@ pub(crate) struct HistoryStore {
     evicted_id_ranges: Vec<EvictedIdRange>,
     evicted_through: Option<LineId>,
     reflow_cache: RefCell<Option<ReflowCache>>,
+    /// SoftWrap-chain width runs used to answer resize carry columns in
+    /// O(runs) rather than by replaying every predecessor unit.
+    wrap_chains: Vec<WrapChain>,
 }
 
 impl HistoryStore {
@@ -447,6 +488,7 @@ impl HistoryStore {
 
     pub(crate) fn replace_payload(&mut self, lines: Vec<HistoryLine>) {
         self.reflow_cache.get_mut().take();
+        self.wrap_chains.clear();
         self.segments.clear();
         self.tail.clear();
         self.tail_payload_bytes = 0;
@@ -505,8 +547,9 @@ impl HistoryStore {
         (collected, from, start_col)
     }
 
-    /// Display column at `from` for a new width. Walks only the current
-    /// SoftWrap chain, never older hard-broken retained history.
+    /// Display column at `from` for a new width. Uses stored SoftWrap-chain
+    /// width runs so a chain that fills resident history is not replayed unit
+    /// by unit on the eager resize path.
     pub(crate) fn wrap_column_before(&self, from: Option<HistoryAnchor>, cols: u16) -> usize {
         let Some(from) = from else {
             return 0;
@@ -515,46 +558,80 @@ impl HistoryStore {
         if width == 0 {
             return 0;
         }
-        let mut newest_first: Vec<Vec<u8>> = Vec::new();
-        let mut including = false;
-        for entry in self.reverse_entries() {
-            if !including {
-                if entry.line_id() > from.line_id {
-                    continue;
-                }
-                if entry.line_id() == from.line_id {
-                    if entry.start_offset() >= from.unit_offset {
-                        continue;
-                    }
-                    let mut fragment = Vec::new();
-                    for (index, unit) in entry.units().enumerate() {
-                        let offset = entry.start_offset().saturating_add(index as u32);
-                        if offset >= from.unit_offset {
-                            break;
-                        }
-                        fragment.push(unit.width().max(1));
-                    }
-                    newest_first.push(fragment);
-                    including = true;
-                    continue;
-                }
-                including = true;
-                if entry.break_after() != HistoryBreakAfter::SoftWrap {
-                    break;
-                }
-                newest_first.push(entry.units().map(|unit| unit.width().max(1)).collect());
-                continue;
-            }
-            if entry.break_after() != HistoryBreakAfter::SoftWrap {
-                break;
-            }
-            newest_first.push(entry.units().map(|unit| unit.width().max(1)).collect());
+        let Some(chain) = self.wrap_chain_containing(from) else {
+            return 0;
+        };
+        wrap_occupancy_runs(&chain.runs, width, chain.units_before(from))
+    }
+
+    fn wrap_chain_containing(&self, from: HistoryAnchor) -> Option<&WrapChain> {
+        self.wrap_chains.iter().rev().find(|chain| {
+            chain.fragments.iter().any(|fragment| {
+                fragment.line_id < from.line_id
+                    || (fragment.line_id == from.line_id
+                        && fragment.start_offset < from.unit_offset)
+            })
+        })
+    }
+
+    fn extend_wrap_line(&mut self, line: &HistoryLine) {
+        let continue_chain = self.wrap_chains.last().is_some_and(|chain| chain.open);
+        if !continue_chain {
+            self.wrap_chains.push(WrapChain::default());
         }
-        newest_first.reverse();
-        wrap_occupancy(
-            &newest_first.into_iter().flatten().collect::<Vec<_>>(),
-            width,
-        )
+        let chain = self
+            .wrap_chains
+            .last_mut()
+            .expect("wrap chain exists after open-or-push");
+        let unit_count = u32::try_from(line.units.len()).unwrap_or(u32::MAX);
+        chain.fragments.push(WrapFragment {
+            line_id: line.line_id,
+            start_offset: line.start_offset,
+            unit_count,
+        });
+        for unit in &line.units {
+            let width = unit.width.max(1);
+            if let Some((last_width, count)) = chain.runs.last_mut()
+                && *last_width == width
+            {
+                *count = count.saturating_add(1);
+            } else {
+                chain.runs.push((width, 1));
+            }
+        }
+        chain.open = line.break_after == HistoryBreakAfter::SoftWrap;
+    }
+
+    fn rebuild_wrap_index(&mut self) {
+        self.wrap_chains.clear();
+        let snapshot: Vec<HistoryLine> =
+            self.entries().map(HistoryLineRef::to_owned_line).collect();
+        for line in &snapshot {
+            self.extend_wrap_line(line);
+        }
+        self.update_resident_bytes();
+    }
+
+    fn wrap_index_allocated_bytes(&self) -> usize {
+        self.wrap_chains
+            .capacity()
+            .saturating_mul(size_of::<WrapChain>())
+            .saturating_add(
+                self.wrap_chains
+                    .iter()
+                    .map(|chain| {
+                        chain
+                            .fragments
+                            .capacity()
+                            .saturating_mul(size_of::<WrapFragment>())
+                            .saturating_add(chain.runs.capacity().saturating_mul(size_of::<(
+                                u8,
+                                u32,
+                            )>(
+                            )))
+                    })
+                    .sum::<usize>(),
+            )
     }
 
     /// Drop source units at/after `from` without rewriting older segments.
@@ -579,6 +656,7 @@ impl HistoryStore {
                 }
                 self.recount_tail();
                 self.update_resident_bytes();
+                self.rebuild_wrap_index();
                 return;
             }
             self.tail.pop();
@@ -638,6 +716,7 @@ impl HistoryStore {
         }
         self.recount_tail();
         self.update_resident_bytes();
+        self.rebuild_wrap_index();
     }
 
     fn recount_tail(&mut self) {
@@ -722,6 +801,7 @@ impl HistoryStore {
         self.tail_payload_bytes += bytes;
         let line_resident_bytes = line.allocated_bytes();
         let old_capacity = self.tail.capacity();
+        self.extend_wrap_line(&line);
         self.tail.push(line);
         self.tail_resident_bytes = self
             .tail_resident_bytes
@@ -820,11 +900,13 @@ impl HistoryStore {
                 self.evicted_id_ranges
                     .capacity()
                     .saturating_mul(size_of::<EvictedIdRange>()),
-            );
+            )
+            .saturating_add(self.wrap_index_allocated_bytes());
     }
 
     fn evict_to_cap(&mut self) {
         self.update_resident_bytes();
+        let mut evicted = false;
         while self.resident_bytes > HISTORY_PER_EXECUTION_BYTE_CAP {
             let Some(segment) = self.segments.pop_front() else {
                 // The tail is capped by source-unit fragmentation and cannot
@@ -837,6 +919,10 @@ impl HistoryStore {
                 .saturating_sub(segment.resident_bytes);
             self.update_resident_bytes();
             self.eviction_generation = self.eviction_generation.wrapping_add(1);
+            evicted = true;
+        }
+        if evicted {
+            self.rebuild_wrap_index();
         }
     }
 
@@ -856,6 +942,7 @@ impl HistoryStore {
             .saturating_sub(segment.resident_bytes);
         self.update_resident_bytes();
         self.eviction_generation = self.eviction_generation.wrapping_add(1);
+        self.rebuild_wrap_index();
         before.saturating_sub(self.resident_bytes)
     }
 
@@ -1227,26 +1314,81 @@ pub struct ReflowRow {
     pub unavailable: bool,
 }
 
+fn wrap_advance(used: usize, cols: usize, unit_width: u8) -> usize {
+    let unit_width = usize::from(unit_width.max(1));
+    let mut used = used;
+    if used > 0 && used + unit_width > cols {
+        used = 0;
+    }
+    if unit_width > cols {
+        return 0;
+    }
+    used = used.saturating_add(unit_width);
+    if used >= cols {
+        0
+    } else {
+        used
+    }
+}
+
+fn wrap_occupancy_run(mut used: usize, cols: usize, unit_width: u8, count: u32) -> usize {
+    if cols == 0 {
+        return 0;
+    }
+    let mut remaining = count as usize;
+    if remaining == 0 {
+        return used.min(cols);
+    }
+    let mut seen: Vec<Option<usize>> = vec![None; cols.saturating_add(1)];
+    while remaining > 0 {
+        if used <= cols
+            && let Some(remaining_then) = seen[used]
+        {
+            let cycle = remaining_then.saturating_sub(remaining);
+            if cycle > 0 {
+                remaining %= cycle;
+                if remaining == 0 {
+                    return used.min(cols);
+                }
+                seen.fill(None);
+                continue;
+            }
+        } else if used <= cols {
+            seen[used] = Some(remaining);
+        }
+        used = wrap_advance(used, cols, unit_width);
+        remaining -= 1;
+    }
+    used.min(cols)
+}
+
+fn wrap_occupancy_runs(runs: &[(u8, u32)], cols: usize, unit_limit: u32) -> usize {
+    let mut used = 0usize;
+    let mut left = unit_limit;
+    for &(width, count) in runs {
+        if left == 0 {
+            break;
+        }
+        let take = count.min(left);
+        used = wrap_occupancy_run(used, cols, width, take);
+        left = left.saturating_sub(take);
+    }
+    used.min(cols)
+}
+
+#[cfg(test)]
 fn wrap_occupancy(unit_widths: &[u8], cols: usize) -> usize {
     if cols == 0 {
         return 0;
     }
-    let mut used = 0usize;
-    for &width in unit_widths {
-        let unit_width = usize::from(width.max(1));
-        if used > 0 && used + unit_width > cols {
-            used = 0;
-        }
-        if unit_width > cols {
-            used = 0;
-            continue;
-        }
-        used = used.saturating_add(unit_width);
-        if used >= cols {
-            used = 0;
-        }
-    }
-    used.min(cols)
+    wrap_occupancy_runs(
+        &unit_widths
+            .iter()
+            .map(|&width| (width.max(1), 1u32))
+            .collect::<Vec<_>>(),
+        cols,
+        u32::try_from(unit_widths.len()).unwrap_or(u32::MAX),
+    )
 }
 
 fn reflow_rows_allocated_bytes(rows: &[ReflowRow]) -> usize {
@@ -1481,6 +1623,29 @@ mod tests {
         assert_eq!(from.unwrap().line_id, LineId(8_000));
         assert_eq!(from.unwrap().unit_offset, 5);
         assert_eq!(start_col, 1);
+    }
+
+    #[test]
+    fn wrap_column_before_is_closed_form_for_a_resident_soft_wrap_chain() {
+        let mut store = HistoryStore::default();
+        for id in 0..8_000 {
+            store.append_line(ascii_line(id, "x", HistoryBreakAfter::SoftWrap));
+        }
+        let chain = store.wrap_chains.last().expect("open wrap chain");
+        assert_eq!(chain.runs, [(1, 8_000)]);
+        assert_eq!(chain.fragments.len(), 8_000);
+        let (suffix, from, start_col) = store.eager_resize_suffix(8, 6);
+        assert!(
+            suffix.len() <= 48,
+            "eager suffix cloned {} lines from a 8000-unit SoftWrap chain",
+            suffix.len()
+        );
+        assert_eq!(from.unwrap().line_id, LineId(8_000 - 48));
+        assert_eq!(start_col, 0);
+        assert_eq!(
+            store.wrap_column_before(from, 8),
+            wrap_occupancy(&[1; 7_952], 8)
+        );
     }
 
     #[test]

@@ -446,16 +446,18 @@ impl HistoryRangeSnapshot {
     /// Wire admission is the authoritative stop for `MAX_HISTORY_RANGE_BYTES` /
     /// `MAX_FRAME_PAYLOAD`. Callers must treat a `true` truncated flag as
     /// `HistoryRangeStatus::Truncated` and must not surface `CapacityExceeded`
-    /// merely because more retained history remains.
+    /// merely because more retained history remains. `sidecar_len` is reserved
+    /// in the byte budget so packed multi-scalar snapshots stay encodable.
     pub fn admit_rows(
         rows: impl IntoIterator<Item = HistoryRow>,
         max_lines: usize,
         max_cells: usize,
+        sidecar_len: usize,
     ) -> (Vec<HistoryRow>, bool) {
         let byte_limit = MAX_HISTORY_RANGE_BYTES.min(crate::framing::MAX_FRAME_PAYLOAD as usize);
         let mut truncated = false;
         let mut cell_budget = max_cells;
-        let mut used = Self::ENCODED_HEADER_LEN;
+        let mut used = Self::ENCODED_HEADER_LEN.saturating_add(sidecar_len);
         let mut out = Vec::new();
         for row in rows {
             if max_lines == 0 || out.len() >= max_lines {
@@ -476,6 +478,42 @@ impl HistoryRangeSnapshot {
             out.push(row);
         }
         (out, truncated)
+    }
+
+    /// Drop trailing lead/continuation groups from the last row until encode
+    /// can succeed, or drop empty trailing rows. Used as a safety net so a
+    /// Truncated prefix never collapses to zero leads / CapacityExceeded.
+    pub fn shrink_for_encode(&mut self) -> bool {
+        if self.try_encode().is_ok() {
+            return false;
+        }
+        let Some(last) = self.rows.last_mut() else {
+            return false;
+        };
+        if last.cells.is_empty() {
+            self.rows.pop();
+            self.trim_sidecar_to_rows();
+            self.status = HistoryRangeStatus::Truncated;
+            return true;
+        }
+        while last.cells.last().is_some_and(|cell| cell.is_continuation()) {
+            last.cells.pop();
+        }
+        if last.cells.pop().is_none() {
+            self.rows.pop();
+        } else if last.cells.is_empty() {
+            self.rows.pop();
+        }
+        self.trim_sidecar_to_rows();
+        self.status = HistoryRangeStatus::Truncated;
+        true
+    }
+
+    pub fn lead_count(rows: &[HistoryRow]) -> u32 {
+        rows.iter()
+            .flat_map(|row| row.cells.iter())
+            .filter(|cell| !cell.is_continuation())
+            .count() as u32
     }
 
     /// Pack glyphs into wire cells. Sidecar overflow keeps the already-packed
@@ -1064,6 +1102,7 @@ mod command_block_tests {
             dense,
             MAX_HISTORY_RANGE_LINES,
             MAX_HISTORY_RANGE_CELLS,
+            0,
         );
         assert!(truncated);
         assert!(admitted.len() < 200);
@@ -1098,7 +1137,7 @@ mod command_block_tests {
             }
         }
         let rows: Vec<_> = (1..=5).map(row).collect();
-        let (admitted, truncated) = HistoryRangeSnapshot::admit_rows(rows, 3, 4096);
+        let (admitted, truncated) = HistoryRangeSnapshot::admit_rows(rows, 3, 4096, 0);
         assert!(truncated);
         assert_eq!(admitted.len(), 3);
     }
@@ -1211,6 +1250,150 @@ mod command_block_tests {
         .expect("packed prefix encodes");
         assert!(sidecar.len() <= MAX_HISTORY_SIDECAR_BYTES);
         assert!(!leads.is_empty());
+    }
+
+    #[test]
+    fn truncated_sidecar_prefix_continues_with_start_unit_without_zero_progress() {
+        let grapheme = "\u{10000}".repeat(MAX_HISTORY_GRAPHEME_BYTES / 4);
+        let lead = HistorySourceCell {
+            text: grapheme,
+            width: 2,
+            continuation: false,
+            foreground: 0,
+            background: 0,
+            style_flags: 0,
+        };
+        let continuation = HistorySourceCell {
+            text: String::new(),
+            width: 0,
+            continuation: true,
+            foreground: 0,
+            background: 0,
+            style_flags: 0,
+        };
+        let mut source = Vec::new();
+        for _ in 0..8 {
+            source.push(lead.clone());
+            source.push(continuation.clone());
+        }
+
+        let (first_rows, first_sidecar, first_truncated) =
+            HistoryRangeSnapshot::pack_source_rows([(1, source.clone())]);
+        assert!(first_truncated);
+        let (first_rows, first_budget) = HistoryRangeSnapshot::admit_rows(
+            first_rows,
+            MAX_HISTORY_RANGE_LINES,
+            MAX_HISTORY_RANGE_CELLS,
+            first_sidecar.len(),
+        );
+        assert!(!first_budget || first_truncated);
+        let first_leads = HistoryRangeSnapshot::lead_count(&first_rows);
+        assert!(
+            first_leads > 0,
+            "truncated chunk must expose leads for start_unit"
+        );
+        let first = HistoryRangeSnapshot {
+            request_id: 1,
+            block_id: 2,
+            revision: 1,
+            status: HistoryRangeStatus::Truncated,
+            rows: first_rows,
+            sidecar: first_sidecar,
+        };
+        first.try_encode().expect("first truncated chunk encodes");
+
+        let skip = first_leads as usize;
+        let mut remaining = Vec::new();
+        let mut seen_leads = 0usize;
+        for cell in source {
+            if cell.continuation {
+                if seen_leads > skip {
+                    remaining.push(cell);
+                }
+                continue;
+            }
+            let include = seen_leads >= skip;
+            seen_leads += 1;
+            if include {
+                remaining.push(cell);
+            }
+        }
+        assert!(!remaining.is_empty(), "unconsumed suffix must remain");
+
+        let (second_rows, second_sidecar, second_truncated) =
+            HistoryRangeSnapshot::pack_source_rows([(1, remaining)]);
+        let (second_rows, _) = HistoryRangeSnapshot::admit_rows(
+            second_rows,
+            MAX_HISTORY_RANGE_LINES,
+            MAX_HISTORY_RANGE_CELLS,
+            second_sidecar.len(),
+        );
+        let second_leads = HistoryRangeSnapshot::lead_count(&second_rows);
+        assert!(
+            second_leads > 0,
+            "continuation chunk must not be zero-progress"
+        );
+        let second = HistoryRangeSnapshot {
+            request_id: 2,
+            block_id: 2,
+            revision: 1,
+            status: if second_truncated {
+                HistoryRangeStatus::Truncated
+            } else {
+                HistoryRangeStatus::Complete
+            },
+            rows: second_rows,
+            sidecar: second_sidecar,
+        };
+        second.try_encode().expect("continuation chunk encodes");
+        assert_eq!(first_leads + second_leads, 8);
+    }
+
+    #[test]
+    fn admit_rows_reserves_sidecar_bytes_so_packed_prefix_encodes() {
+        let grapheme = "\u{10000}".repeat(MAX_HISTORY_GRAPHEME_BYTES / 4);
+        let lead = HistorySourceCell {
+            text: grapheme,
+            width: 2,
+            continuation: false,
+            foreground: 0,
+            background: 0,
+            style_flags: 0,
+        };
+        let continuation = HistorySourceCell {
+            text: String::new(),
+            width: 0,
+            continuation: true,
+            foreground: 0,
+            background: 0,
+            style_flags: 0,
+        };
+        let mut row = Vec::new();
+        for _ in 0..8 {
+            row.push(lead.clone());
+            row.push(continuation.clone());
+        }
+        let (packed, sidecar, truncated) = HistoryRangeSnapshot::pack_source_rows([(1, row)]);
+        assert!(truncated);
+        assert!(!sidecar.is_empty());
+        let (admitted, _) = HistoryRangeSnapshot::admit_rows(
+            packed,
+            MAX_HISTORY_RANGE_LINES,
+            MAX_HISTORY_RANGE_CELLS,
+            sidecar.len(),
+        );
+        assert!(!admitted.is_empty());
+        assert!(HistoryRangeSnapshot::lead_count(&admitted) > 0);
+        HistoryRangeSnapshot {
+            request_id: 1,
+            block_id: 2,
+            revision: 1,
+            status: HistoryRangeStatus::Truncated,
+            rows: admitted,
+            sidecar,
+        }
+        .try_encode()
+        .expect("sidecar-aware admit must encode");
     }
 }
 

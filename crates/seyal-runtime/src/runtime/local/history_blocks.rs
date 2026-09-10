@@ -134,6 +134,7 @@ impl Runtime {
             packed_rows,
             max_lines,
             usize::try_from(request.max_cells).unwrap_or(0),
+            sidecar.len(),
         );
         let truncated = budget_truncated || hit_line_cap || pack_truncated;
         let mut snapshot = framing::HistoryRangeSnapshot {
@@ -155,10 +156,17 @@ impl Runtime {
         let payload = loop {
             match snapshot.try_encode() {
                 Ok(payload) => break payload,
-                Err(_) if !snapshot.rows.is_empty() => {
-                    snapshot.rows.pop();
-                    snapshot.trim_sidecar_to_rows();
-                    snapshot.status = framing::HistoryRangeStatus::Truncated;
+                Err(_) if snapshot.shrink_for_encode() => {
+                    if snapshot.rows.is_empty()
+                        || framing::HistoryRangeSnapshot::lead_count(&snapshot.rows) == 0
+                    {
+                        self.send_error(
+                            token,
+                            ErrorCode::CapacityExceeded,
+                            MessageType::HistoryRangeRequest as u16,
+                        );
+                        return;
+                    }
                 }
                 Err(_) => {
                     self.send_error(

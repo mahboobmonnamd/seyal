@@ -853,7 +853,9 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
       if result == .updated {
         forceNextFrame = false
         hasPreparedState = true
-        bridgeRecoveryCoordinator.transition(to: .restoringInteraction)
+        if runtimeRecoveryState.stage != .usable {
+          bridgeRecoveryCoordinator.transition(to: .restoringInteraction)
+        }
         // Candidate-D can continue advancing while an exhausted GPU
         // display failure is latched. A successful CPU preparation must
         // not erase that asynchronous display diagnostic.
@@ -866,17 +868,18 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
         if shouldRender,
           bridge?.isConnected == true,
           hasPreparedState,
-          !presentationState.exhausted
+          !presentationState.exhausted,
+          runtimeRecoveryState.stage != .usable
         {
           // SPEC-009 §10: first-responder / accessibility / IME must be restored
           // before Usable when this surface owns the native interaction seam.
+          // After Usable, leave the first responder alone so the Flow composer
+          // can keep Enter and paste.
           guard restoreNativeInteractionAfterRendererReady() else {
             return
           }
-          if runtimeRecoveryState.stage != .usable {
-            bridgeRecoveryCoordinator.transition(to: .usable)
-            refreshRecoveryAccessibilityValue()
-          }
+          bridgeRecoveryCoordinator.transition(to: .usable)
+          refreshRecoveryAccessibilityValue()
         }
         if shouldRender,
           renderer.persistentDisplayFailure == nil,

@@ -337,6 +337,38 @@ final class SeyalShellUITests: XCTestCase {
         composer.click()
         let command = "printf M002_COMPOSER_RETURN; printf ok > \(markerURL.path)"
         composer.typeText(command)
+
+        // Exercise the production AppKit responder chain. Directly invoking
+        // NSTextView selectors in component tests does not prove that the app
+        // menu routes physical Command-A/C/V to the focused composer.
+        let pasteboard = NSPasteboard.general
+        let previousItems = pasteboard.pasteboardItems?.map { item in
+            let copy = NSPasteboardItem()
+            for type in item.types {
+                if let data = item.data(forType: type) {
+                    copy.setData(data, forType: type)
+                }
+            }
+            return copy
+        }
+        defer {
+            pasteboard.clearContents()
+            if let previousItems, !previousItems.isEmpty {
+                pasteboard.writeObjects(previousItems)
+            }
+        }
+        composer.typeKey("a", modifierFlags: [.command])
+        composer.typeKey("c", modifierFlags: [.command])
+        composer.typeKey(.delete, modifierFlags: [])
+        XCTAssertTrue(
+            wait(timeout: 2) { (composer.value as? String) == "" },
+            "Command-A followed by Delete did not clear the focused composer"
+        )
+        composer.typeKey("v", modifierFlags: [.command])
+        XCTAssertTrue(
+            wait(timeout: 2) { (composer.value as? String) == command },
+            "Command-C/V did not round-trip through the production Edit menu"
+        )
         composer.typeKey(.return, modifierFlags: [])
 
         XCTAssertTrue(

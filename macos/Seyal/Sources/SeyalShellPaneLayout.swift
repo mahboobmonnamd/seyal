@@ -160,13 +160,16 @@ extension SeyalShellView {
     )
     composerViews[paneID] = composer
     composer.isHidden = tuiPaneIDs.contains(paneID)
+    composer.setContentHuggingPriority(.required, for: .vertical)
+    composer.setContentCompressionResistancePriority(.required, for: .vertical)
     if isFocused {
       composerView = composer
     }
 
     let stack = NSStackView(views: [header, transcript, composer])
     stack.orientation = .vertical
-    stack.alignment = .leading
+    stack.alignment = .width
+    stack.distribution = .fill
     stack.spacing = 7
     stack.edgeInsets = NSEdgeInsets(top: 0, left: 7, bottom: 7, right: 7)
     stack.translatesAutoresizingMaskIntoConstraints = false
@@ -177,13 +180,7 @@ extension SeyalShellView {
       stack.trailingAnchor.constraint(equalTo: pane.trailingAnchor),
       stack.topAnchor.constraint(equalTo: pane.topAnchor),
       stack.bottomAnchor.constraint(equalTo: pane.bottomAnchor),
-      header.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
-      header.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
-      transcript.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
-      transcript.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
       transcript.heightAnchor.constraint(greaterThanOrEqualToConstant: 180),
-      composer.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
-      composer.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
     ])
     return pane
   }
@@ -195,6 +192,7 @@ extension SeyalShellView {
     }
     tuiBlocks[paneID]?.setTUITakeover(active)
     composerViews[paneID]?.isHidden = active
+    surfaces[paneID]?.claimsFirstResponderOnClick = active
   }
 
   func makePaneControlButton(

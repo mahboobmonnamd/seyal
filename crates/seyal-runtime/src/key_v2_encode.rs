@@ -94,6 +94,9 @@ pub(crate) fn encode_terminal_key_v2(key: TerminalKeyV2, modes: ModeState) -> Re
     } else {
         None
     };
+    if flags & 1 == 0 && key.kind == TerminalKeyV2Kind::Keypad && modifiers != 0 {
+        return Err(());
+    }
     if flags & 2 == 0 && key.event == TerminalKeyV2Event::Release {
         return Ok(Vec::new());
     }
@@ -242,9 +245,6 @@ pub(crate) fn encode_terminal_key_v2(key: TerminalKeyV2, modes: ModeState) -> Re
         if let Some(encoded) = encoded {
             return Ok(encoded);
         }
-    }
-    if flags & 1 == 0 && key.kind == TerminalKeyV2Kind::Keypad && modifiers != 0 {
-        return Err(());
     }
     if flags & 2 != 0
         && modes.application_keypad
@@ -593,6 +593,27 @@ mod tests {
                 ..key
             },
             modes
+        )
+        .is_err());
+        let flags_zero = ModeState::default();
+        assert!(encode_terminal_key_v2(key, flags_zero).is_err());
+        assert!(encode_terminal_key_v2(
+            TerminalKeyV2 {
+                event: TerminalKeyV2Event::Release,
+                ..key
+            },
+            flags_zero
+        )
+        .is_err());
+        assert!(encode_terminal_key_v2(
+            TerminalKeyV2 {
+                event: TerminalKeyV2Event::Release,
+                ..key
+            },
+            ModeState {
+                application_keypad: true,
+                ..ModeState::default()
+            }
         )
         .is_err());
     }

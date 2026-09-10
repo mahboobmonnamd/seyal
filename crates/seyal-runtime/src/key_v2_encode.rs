@@ -243,6 +243,9 @@ pub(crate) fn encode_terminal_key_v2(key: TerminalKeyV2, modes: ModeState) -> Re
             return Ok(encoded);
         }
     }
+    if flags & 1 == 0 && key.kind == TerminalKeyV2Kind::Keypad && modifiers != 0 {
+        return Err(());
+    }
     if flags & 2 != 0
         && modes.application_keypad
         && key.kind == TerminalKeyV2Kind::Keypad
@@ -290,7 +293,13 @@ pub(crate) fn encode_terminal_key_v2(key: TerminalKeyV2, modes: ModeState) -> Re
                 }
             }
             TerminalKeyV2Kind::Keypad => return Err(()),
-            TerminalKeyV2Kind::Escape if modifiers & 2 != 0 => vec![0x1b, 0x1b],
+            TerminalKeyV2Kind::Escape => {
+                if modifiers & 2 != 0 {
+                    vec![0x1b, 0x1b]
+                } else {
+                    vec![0x1b]
+                }
+            }
             _ => return Err(()),
         };
         return Ok(modified);
@@ -554,6 +563,41 @@ mod tests {
     }
 
     #[test]
+    fn modified_application_keypad_without_flag_one_is_unsupported_for_every_event() {
+        let key = TerminalKeyV2 {
+            attachment_id: crate::AttachmentId::from_bytes([0; 16]),
+            kind: TerminalKeyV2Kind::Keypad,
+            modifiers: TerminalKeyV2Modifiers::CONTROL,
+            value: 16,
+            event: TerminalKeyV2Event::Press,
+            shifted_ascii: 0,
+            action_id: 1,
+        };
+        let modes = ModeState {
+            application_keypad: true,
+            keyboard_flags: 2,
+            ..ModeState::default()
+        };
+        assert!(encode_terminal_key_v2(key, modes).is_err());
+        assert!(encode_terminal_key_v2(
+            TerminalKeyV2 {
+                event: TerminalKeyV2Event::Repeat,
+                ..key
+            },
+            modes
+        )
+        .is_err());
+        assert!(encode_terminal_key_v2(
+            TerminalKeyV2 {
+                event: TerminalKeyV2Event::Release,
+                ..key
+            },
+            modes
+        )
+        .is_err());
+    }
+
+    #[test]
     fn kitty_keypad_equal_and_enter_use_their_assigned_codepoints() {
         let base = TerminalKeyV2 {
             attachment_id: crate::AttachmentId::from_bytes([0; 16]),
@@ -757,6 +801,37 @@ mod tests {
         assert_eq!(
             encode_terminal_key_v2(alt_control_backspace, ModeState::default()).unwrap(),
             b"\x1b\x08"
+        );
+        let shift_escape = TerminalKeyV2 {
+            modifiers: TerminalKeyV2Modifiers::SHIFT,
+            ..base
+        };
+        assert_eq!(
+            encode_terminal_key_v2(shift_escape, ModeState::default()).unwrap(),
+            b"\x1b"
+        );
+        let control_escape = TerminalKeyV2 {
+            modifiers: TerminalKeyV2Modifiers::CONTROL,
+            ..base
+        };
+        assert_eq!(
+            encode_terminal_key_v2(control_escape, ModeState::default()).unwrap(),
+            b"\x1b"
+        );
+        let shift_control_escape = TerminalKeyV2 {
+            modifiers: TerminalKeyV2Modifiers::from_bits_for_ffi(0b101).unwrap(),
+            ..base
+        };
+        assert_eq!(
+            encode_terminal_key_v2(
+                shift_control_escape,
+                ModeState {
+                    keyboard_flags: 2,
+                    ..ModeState::default()
+                }
+            )
+            .unwrap(),
+            b"\x1b"
         );
     }
 }

@@ -188,7 +188,9 @@ pub(crate) fn classify_server_error(
 ) -> Result<Option<InputAdmissionFailure>, ClientError> {
     if error.error_code == ErrorCode::Backpressure as u16
         && (error.offending_message_type == MessageType::Input as u16
-            || error.offending_message_type == MessageType::TerminalKey as u16)
+            || error.offending_message_type == MessageType::TerminalKey as u16
+            || (error.offending_message_type == MessageType::TerminalKeyV2 as u16
+                && error.detail_code != 0))
     {
         return Ok(Some(InputAdmissionFailure::ClientBackpressure));
     }
@@ -306,6 +308,12 @@ impl LocalDisplayClient {
         action_id: u32,
     ) -> Result<(), ClientError> {
         self.require_controller()?;
+        if !self.extended_terminal_key_supported {
+            return Err(ClientError::UnsupportedInteractiveCapability);
+        }
+        if action_id == 0 {
+            return Err(ClientError::Protocol);
+        }
         let payload = TerminalKeyV2 {
             attachment_id: self.attachment_id,
             kind,
@@ -880,6 +888,23 @@ mod tests {
         assert_eq!(
             classify_server_error(key_error).unwrap(),
             Some(InputAdmissionFailure::ClientBackpressure)
+        );
+        let key_v2_error = ErrorMessage {
+            error_code: ErrorCode::Backpressure as u16,
+            offending_message_type: MessageType::TerminalKeyV2 as u16,
+            detail_code: 7,
+        };
+        assert_eq!(
+            classify_server_error(key_v2_error).unwrap(),
+            Some(InputAdmissionFailure::ClientBackpressure)
+        );
+        assert_eq!(
+            classify_server_error(ErrorMessage {
+                error_code: ErrorCode::Backpressure as u16,
+                offending_message_type: MessageType::TerminalKeyV2 as u16,
+                detail_code: 0,
+            }),
+            Err(ClientError::Server(ErrorCode::Backpressure))
         );
         assert_eq!(
             classify_server_error(ErrorMessage {

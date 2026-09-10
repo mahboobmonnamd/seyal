@@ -16,7 +16,8 @@ use seyal_runtime::{
     local_ipc::framing::{
         encode_frame, BlockTimeline, ComposerResult, ComposerResultCode, ErrorCode, FrameHeader,
         HistoryRangeRequest, HistoryRangeSnapshot, Lifecycle, MessageType, ResizeResult, Role,
-        HEADER_LEN, MAX_FRAME_PAYLOAD,
+        TerminalKeyV2Event, TerminalKeyV2Kind, TerminalKeyV2Modifiers, HEADER_LEN,
+        MAX_FRAME_PAYLOAD,
     },
     pass8::{BlockLifecycle, BlockState, BLOCK_STATE_MESSAGE_TYPE},
     AttachmentId, ExecutionId,
@@ -674,5 +675,42 @@ mod tests {
             fallback & seyal_runtime::local_ipc::framing::CAP_COMMAND_BLOCKS,
             0
         );
+    }
+
+    #[test]
+    fn v2_key_is_rejected_when_extended_capability_was_not_negotiated() {
+        let (client_stream, _server_stream) = UnixStream::pair().expect("socket pair");
+        let mut client = test_client(client_stream);
+        let error = client
+            .submit_terminal_key_v2(
+                TerminalKeyV2Kind::ArrowUp,
+                TerminalKeyV2Modifiers::NONE,
+                0,
+                TerminalKeyV2Event::Press,
+                0,
+                1,
+            )
+            .expect_err("old-server clients must not encode TerminalKeyV2");
+        assert_eq!(error, ClientError::UnsupportedInteractiveCapability);
+        assert!(client.outbound.is_empty());
+    }
+
+    #[test]
+    fn v2_key_zero_action_id_is_rejected_before_encoding() {
+        let (client_stream, _server_stream) = UnixStream::pair().expect("socket pair");
+        let mut client = test_client(client_stream);
+        client.extended_terminal_key_supported = true;
+        let error = client
+            .submit_terminal_key_v2(
+                TerminalKeyV2Kind::ArrowUp,
+                TerminalKeyV2Modifiers::NONE,
+                0,
+                TerminalKeyV2Event::Press,
+                0,
+                0,
+            )
+            .expect_err("action_id 0 is not a correlated V2 action");
+        assert_eq!(error, ClientError::Protocol);
+        assert!(client.outbound.is_empty());
     }
 }

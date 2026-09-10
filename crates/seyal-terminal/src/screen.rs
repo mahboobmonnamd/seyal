@@ -2,7 +2,7 @@ use crate::{
     cursor::Cursor,
     damage::Mutation,
     grapheme_store::GraphemeStore,
-    history::{HistoryBreakAfter, HistoryLine, HistoryLineRef, HistoryStore},
+    history::{HistoryBreakAfter, HistoryLine, HistoryLineRef, HistoryStore, HistoryUnit},
     line::LineIdAllocator,
     Cell, CellRole, Color, CursorState, LineId, Style, TerminalError,
 };
@@ -211,6 +211,11 @@ impl Screen {
         &self.history
     }
 
+    #[cfg(test)]
+    pub(crate) fn source_break_len(&self) -> usize {
+        self.source_breaks.len()
+    }
+
     pub(crate) fn history_mut(&mut self) -> &mut HistoryStore {
         &mut self.history
     }
@@ -262,6 +267,8 @@ impl Screen {
         let mut next_breaks = vec![Some(HistoryBreakAfter::HardBreak); usize::from(rows)];
         let mut next_line_ids = vec![None; usize::from(rows)];
         let mut history_additions = Vec::new();
+        let mut pending_history_cells = Vec::new();
+        let mut replace_history = false;
         let mut next_source_breaks = HashMap::new();
         let mut mapped_cursor = None;
         if self.retain_history && (cols != old_cols || rows < old_rows) {
@@ -354,7 +361,21 @@ impl Screen {
                     .copied()
                     .unwrap_or(HistoryBreakAfter::HardBreak);
             }
-            for line in &source_lines {
+            let mut history_units = HashMap::<crate::HistoryAnchor, HistoryUnit>::new();
+            let mut combined: Vec<HistoryLine> = Vec::new();
+            for entry in self.history.entries() {
+                let line = entry.to_owned_line();
+                for (index, unit) in line.units.iter().enumerate() {
+                    let anchor = crate::HistoryAnchor {
+                        line_id: line.line_id,
+                        unit_offset: line.start_offset.saturating_add(index as u32),
+                    };
+                    history_units.entry(anchor).or_insert_with(|| unit.clone());
+                }
+                combined.push(line);
+            }
+            combined.extend(source_lines);
+            for line in &combined {
                 source.append_line(line.clone());
             }
             let reflowed = source.reflow(cols, usize::MAX);
@@ -374,22 +395,40 @@ impl Screen {
                     })
                 })
             });
-            history_additions = history_prefix(&source_lines, retained_until);
+            history_additions = history_prefix(&combined, retained_until);
+            replace_history = true;
             for (row, projection) in reflowed.iter().skip(active_first).enumerate() {
                 let start = row * usize::from(cols);
                 let mut col = 0usize;
                 for anchor in &projection.anchors {
-                    let Some(cell) = source_cells.get(anchor).copied() else {
+                    let width;
+                    if let Some(cell) = source_cells.get(anchor).copied() {
+                        width = usize::from(cell.width.max(1));
+                        if col + width > usize::from(cols) {
+                            break;
+                        }
+                        next[start + col] = cell;
+                        next_anchors[start + col] = Some(*anchor);
+                        if width == 2 {
+                            next[start + col + 1] = Cell::continuation();
+                        }
+                    } else if let Some(unit) = history_units.get(anchor) {
+                        width = usize::from(unit.width.max(1));
+                        if col + width > usize::from(cols) {
+                            break;
+                        }
+                        let first = std::str::from_utf8(&unit.utf8)
+                            .ok()
+                            .and_then(|text| text.chars().next())
+                            .unwrap_or('\u{FFFD}');
+                        next[start + col] = Cell::lead_inline(first, unit.width.max(1), unit.style);
+                        next_anchors[start + col] = Some(*anchor);
+                        pending_history_cells.push((start + col, unit.clone()));
+                        if width == 2 {
+                            next[start + col + 1] = Cell::continuation();
+                        }
+                    } else {
                         continue;
-                    };
-                    let width = usize::from(cell.width.max(1));
-                    if col + width > usize::from(cols) {
-                        break;
-                    }
-                    next[start + col] = cell;
-                    next_anchors[start + col] = Some(*anchor);
-                    if width == 2 {
-                        next[start + col + 1] = Cell::continuation();
                     }
                     col += width;
                 }
@@ -511,6 +550,8 @@ impl Screen {
             row_breaks: next_breaks,
             source_breaks: next_source_breaks,
             history_additions,
+            pending_history_cells,
+            replace_history,
             cursor,
             saved_cursor,
             unchanged: false,
@@ -527,8 +568,22 @@ impl Screen {
             return Mutation::none();
         }
         let rows = prepared.rows;
-        for line in prepared.history_additions {
-            self.history.append_line(line);
+        let mut prepared = prepared;
+        for (index, unit) in prepared.pending_history_cells.drain(..) {
+            let first = std::str::from_utf8(&unit.utf8)
+                .ok()
+                .and_then(|text| text.chars().next())
+                .unwrap_or('\u{FFFD}');
+            let admit = store.insert_replacing(&unit.utf8, None);
+            prepared.cells[index] =
+                Cell::lead_from_admit(first, unit.width.max(1), unit.style, admit);
+        }
+        if prepared.replace_history {
+            self.history.replace_payload(prepared.history_additions);
+        } else {
+            for line in prepared.history_additions {
+                self.history.append_line(line);
+            }
         }
         let retained_store_ids = prepared
             .cells
@@ -1365,12 +1420,10 @@ impl Screen {
             }
         }
         if fragments.is_empty() {
-            self.history.append_row(
-                self.line_ids[row],
-                fallback_break,
-                &self.cells[start..end],
-                store,
-            );
+            let line_id = self.line_ids[row];
+            self.history
+                .append_row(line_id, fallback_break, &self.cells[start..end], store);
+            self.source_breaks.remove(&line_id);
             return;
         }
         let mut last_fragment = HashMap::new();
@@ -1385,6 +1438,7 @@ impl Screen {
                 .unwrap_or(fallback_break);
         }
         for fragment in fragments {
+            self.source_breaks.remove(&fragment.line_id);
             self.history.append_line(fragment);
         }
     }
@@ -1400,6 +1454,8 @@ pub(crate) struct PreparedScreen {
     row_breaks: Vec<Option<HistoryBreakAfter>>,
     source_breaks: HashMap<LineId, HistoryBreakAfter>,
     history_additions: Vec<HistoryLine>,
+    pending_history_cells: Vec<(usize, HistoryUnit)>,
+    replace_history: bool,
     cursor: Cursor,
     saved_cursor: Option<SavedCursor>,
     unchanged: bool,
@@ -1416,6 +1472,8 @@ impl PreparedScreen {
             row_breaks: Vec::new(),
             source_breaks: HashMap::new(),
             history_additions: Vec::new(),
+            pending_history_cells: Vec::new(),
+            replace_history: false,
             cursor: Cursor::default(),
             saved_cursor: None,
             unchanged: true,

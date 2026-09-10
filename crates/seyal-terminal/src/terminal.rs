@@ -15,7 +15,8 @@ use crate::{
     screen::{PreparedScreen, Screen},
     width::{grapheme_terminal_width, AmbiguousWidthPolicy},
     Cell, CellRole, CursorState, Damage, HistoryAnchor, HistoryAnchorResolution, HistoryMatch,
-    HistoryRangeError, HistoryUnitView, LineId, ModeState, ReflowRow, TerminalError,
+    HistoryRangeError, HistoryUnitView, HistoryWireCell, LineId, ModeState, ReflowRow,
+    TerminalError,
 };
 use std::collections::VecDeque;
 
@@ -231,6 +232,11 @@ impl TerminalState {
     }
 
     #[cfg(test)]
+    pub fn primary_source_break_count(&self) -> usize {
+        self.core.primary.source_break_len()
+    }
+
+    #[cfg(test)]
     fn primary_row_break_after(&self, row: u16) -> Option<crate::HistoryBreakAfter> {
         self.core.primary.row_break_after(row)
     }
@@ -269,9 +275,7 @@ impl TerminalState {
             if id > end {
                 break;
             }
-            let cells = entry
-                .legacy_cells()
-                .ok_or(HistoryRangeError::Unrepresentable)?;
+            let cells = entry.presentation_cells();
             if let Some((last_id, last_cells)) = lines.last_mut()
                 && *last_id == id
             {
@@ -296,21 +300,109 @@ impl TerminalState {
             let Some(cells) = self.core.primary.cell_row(row) else {
                 continue;
             };
-            for cell in cells {
-                if cell.role != CellRole::Lead || cell.overflow {
-                    continue;
-                }
-                if self
-                    .core
-                    .grapheme_store
-                    .get(cell.store_id)
-                    .and_then(|bytes| std::str::from_utf8(bytes).ok())
-                    .is_some_and(|text| text.chars().nth(1).is_some())
-                {
-                    return Err(HistoryRangeError::Unrepresentable);
+            lines.push((id, cells.to_vec()));
+            if lines.len() >= max_lines {
+                break;
+            }
+        }
+        Ok(lines)
+    }
+
+    /// History rows for the Pass-7 snapshot wire, including full grapheme
+    /// UTF-8. Continuation placeholders carry empty text.
+    pub fn primary_history_wire_range(
+        &self,
+        start: LineId,
+        end: LineId,
+        max_lines: usize,
+    ) -> Result<Vec<(LineId, Vec<HistoryWireCell>)>, HistoryRangeError> {
+        if max_lines == 0 || end < start {
+            return Ok(Vec::new());
+        }
+        if self
+            .core
+            .primary
+            .history()
+            .range_intersects_evicted(start, end)
+        {
+            return Err(HistoryRangeError::Stale);
+        }
+        let mut lines: Vec<(LineId, Vec<HistoryWireCell>)> = Vec::new();
+        for entry in self.core.primary.history_entries() {
+            let id = entry.line_id();
+            if id < start {
+                continue;
+            }
+            if id > end {
+                break;
+            }
+            let cells = entry.wire_cells();
+            if let Some((last_id, last_cells)) = lines.last_mut()
+                && *last_id == id
+            {
+                last_cells.extend(cells);
+            } else {
+                lines.push((id, cells));
+                if lines.len() >= max_lines {
+                    return Ok(lines);
                 }
             }
-            lines.push((id, cells.to_vec()));
+        }
+        for row in 0..self.core.primary.rows() {
+            let Some(id) = self.core.primary.line_id(row) else {
+                continue;
+            };
+            if id < start || id > end {
+                continue;
+            }
+            if lines.iter().any(|(existing, _)| *existing == id) {
+                continue;
+            }
+            let Some(cells) = self.core.primary.cell_row(row) else {
+                continue;
+            };
+            let content_end = cells
+                .iter()
+                .rposition(|cell| cell.role != CellRole::Empty)
+                .map_or(0, |index| index + 1);
+            let mut wire = Vec::new();
+            for cell in &cells[..content_end] {
+                match cell.role {
+                    CellRole::Continuation => {
+                        wire.push(HistoryWireCell {
+                            text: String::new(),
+                            width: 0,
+                            style: cell.style,
+                            continuation: true,
+                        });
+                    }
+                    CellRole::Empty => {
+                        wire.push(HistoryWireCell {
+                            text: " ".into(),
+                            width: 1,
+                            style: cell.style,
+                            continuation: false,
+                        });
+                    }
+                    CellRole::Lead => {
+                        let text = if cell.overflow {
+                            "\u{FFFD}".to_owned()
+                        } else {
+                            self.core.grapheme_store.get(cell.store_id).map_or_else(
+                                || cell.character.to_string(),
+                                |bytes| String::from_utf8_lossy(bytes).into_owned(),
+                            )
+                        };
+                        wire.push(HistoryWireCell {
+                            text,
+                            width: cell.width.max(1),
+                            style: cell.style,
+                            continuation: false,
+                        });
+                    }
+                }
+            }
+            lines.push((id, wire));
             if lines.len() >= max_lines {
                 break;
             }
@@ -1493,8 +1585,7 @@ mod tests {
                     entry.line_id(),
                     entry.break_after(),
                     entry
-                        .legacy_cells()
-                        .unwrap()
+                        .presentation_cells()
                         .iter()
                         .map(|cell| cell.character)
                         .collect::<String>(),
@@ -1574,6 +1665,19 @@ mod tests {
             .unwrap();
         assert_eq!(terminal.primary_history_resident_bytes(), before);
         assert!(terminal.primary_history_eviction_generation() == 0);
+    }
+
+    #[test]
+    fn source_breaks_stay_bounded_to_active_lines_after_long_output() {
+        let mut terminal = TerminalState::new(8, 2).unwrap();
+        for i in 0..200 {
+            terminal.feed(format!("line-{i}\r\n").as_bytes()).unwrap();
+        }
+        assert!(
+            terminal.primary_source_break_count() <= 4,
+            "source_breaks leaked retained lineage metadata: {}",
+            terminal.primary_source_break_count()
+        );
     }
 
     #[test]

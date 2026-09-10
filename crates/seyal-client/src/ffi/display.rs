@@ -5,7 +5,7 @@ use crate::LocalDisplayClient;
 use super::{
     error_code, with_active_client, with_active_client_mut, SeyalBlockRecord, SeyalComposerResult,
     SeyalExecutionBlockMetadata, SeyalHistoryCell, SeyalHistoryRange, SeyalHistoryRow,
-    SeyalPreparedFrame,
+    SeyalHistorySidecar, SeyalPreparedFrame,
 };
 
 #[unsafe(no_mangle)]
@@ -122,6 +122,27 @@ pub extern "C" fn seyal_bridge_history_range_row_for(
         }
     })
     .unwrap_or_else(SeyalHistoryRow::empty)
+}
+
+/// Returns the snapshot sidecar for a previously peeked history range. The
+/// pointer remains valid until poll, disconnect, or consume, matching row
+/// pointers. `len == 0` means every cell is inline.
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_history_range_sidecar_for(
+    block_id: u64,
+    request_id: u64,
+) -> SeyalHistorySidecar {
+    with_active_client(|client| {
+        let Some(range) = client.history_range_for(block_id, request_id) else {
+            return SeyalHistorySidecar::empty();
+        };
+        SeyalHistorySidecar {
+            bytes: range.sidecar.as_ptr(),
+            len: range.sidecar.len() as u32,
+            reserved: 0,
+        }
+    })
+    .unwrap_or_else(SeyalHistorySidecar::empty)
 }
 
 /// Consumes a previously peeked response after its rows have been copied by

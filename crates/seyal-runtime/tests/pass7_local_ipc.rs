@@ -17,7 +17,7 @@ use seyal_runtime::{
         HistoryRangeRequest, HistoryRangeSnapshot, HistoryRangeStatus, InputRef, MessageType,
         ResizeRequest, ResizeResult, ResizeResultCode, Role, ServerHello, TerminalKey,
         TerminalKeyKind, TerminalKeyModifiers, CAP_CORRELATED_RESIZE, CAP_SEMANTIC_TERMINAL_KEY,
-        HEADER_LEN,
+        HEADER_LEN, HISTORY_CELL_SIDECAR_FLAG,
     },
     AttachmentId, LocalIpcMode, Runtime, RuntimeConfig,
 };
@@ -229,7 +229,7 @@ impl Harness {
 }
 
 #[test]
-fn history_range_unrepresentable_payload_fails_closed_over_runtime_wire() {
+fn history_range_combining_grapheme_round_trips_over_runtime_wire() {
     let (mut harness, execution_id) = Harness::new_with(
         CommandSpec::new("/bin/cat"),
         config(),
@@ -277,16 +277,33 @@ fn history_range_unrepresentable_payload_fails_closed_over_runtime_wire() {
     loop {
         let (kind, payload) = harness.frame();
         match MessageType::from_u16(kind) {
-            Some(MessageType::Error) => {
-                let error = ErrorMessage::decode(&payload).expect("error");
-                assert_eq!(error.error_code, ErrorCode::DisplayUnavailable as u16);
+            Some(MessageType::HistoryRangeSnapshot) => {
+                let snapshot = HistoryRangeSnapshot::decode(&payload).expect("snapshot");
+                assert_eq!(snapshot.request_id, 41);
+                assert_eq!(snapshot.block_id, 7);
+                let cell = snapshot
+                    .rows
+                    .iter()
+                    .flat_map(|row| &row.cells)
+                    .find(|cell| {
+                        cell.sidecar_utf8(&snapshot.sidecar)
+                            .ok()
+                            .flatten()
+                            .is_some_and(|text| text == "e\u{301}".as_bytes())
+                    })
+                    .expect("combining grapheme on history wire");
                 assert_eq!(
-                    error.offending_message_type,
-                    MessageType::HistoryRangeRequest as u16
+                    cell.flags & HISTORY_CELL_SIDECAR_FLAG,
+                    HISTORY_CELL_SIDECAR_FLAG
                 );
                 break;
             }
-            Some(MessageType::DisplaySnapshot | MessageType::DisplayDelta) => continue,
+            Some(MessageType::DisplaySnapshot | MessageType::DisplayDelta | MessageType::Error) => {
+                if MessageType::from_u16(kind) == Some(MessageType::Error) {
+                    panic!("history combining grapheme became DisplayUnavailable");
+                }
+                continue;
+            }
             other => panic!("unexpected history response: {other:?}"),
         }
     }

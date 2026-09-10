@@ -59,6 +59,21 @@ struct NativeHistoryRange: Equatable {
     let foreground: UInt32
     let background: UInt32
     let flags: UInt16
+    let graphemeUtf8: Data
+
+    init(
+      scalar: UInt32,
+      foreground: UInt32,
+      background: UInt32,
+      flags: UInt16,
+      graphemeUtf8: Data = Data()
+    ) {
+      self.scalar = scalar
+      self.foreground = foreground
+      self.background = background
+      self.flags = flags
+      self.graphemeUtf8 = graphemeUtf8
+    }
   }
 
   let startLine: UInt64
@@ -67,6 +82,19 @@ struct NativeHistoryRange: Equatable {
   let requestID: UInt64
   let revision: UInt64
   let rows: [[Cell]]
+}
+
+private let historyCellSidecarFlag: UInt16 = 1 << 7
+
+private func historyGraphemeUtf8(cell: SeyalHistoryCell, sidecar: Data) -> Data {
+  guard cell.flags & historyCellSidecarFlag != 0 else { return Data() }
+  let offset = Int(cell.reserved)
+  guard offset + 2 <= sidecar.count else { return Data() }
+  let length = Int(sidecar[offset]) | (Int(sidecar[offset + 1]) << 8)
+  let start = offset + 2
+  let end = start + length
+  guard length > 0, end <= sidecar.count else { return Data() }
+  return sidecar.subdata(in: start..<end)
 }
 
 struct NativeComposerResult: Equatable {
@@ -822,6 +850,13 @@ final class RustDisplayBridge {
         historyRevisions[requestKey]?.revision != metadata.revision
           || historyRevisions[requestKey]?.requestID != metadata.request_id
       else { continue }
+      let sidecar = seyal_bridge_history_range_sidecar_for(metadata.block_id, metadata.request_id)
+      let sidecarData: Data
+      if sidecar.len > 0, let bytes = sidecar.bytes {
+        sidecarData = Data(bytes: bytes, count: Int(sidecar.len))
+      } else {
+        sidecarData = Data()
+      }
       let rows = (0..<Int(metadata.row_count)).compactMap { index -> [NativeHistoryRange.Cell]? in
         let row = seyal_bridge_history_range_row_for(
           metadata.block_id,
@@ -834,7 +869,8 @@ final class RustDisplayBridge {
             scalar: $0.scalar,
             foreground: $0.foreground,
             background: $0.background,
-            flags: $0.flags
+            flags: $0.flags,
+            graphemeUtf8: historyGraphemeUtf8(cell: $0, sidecar: sidecarData)
           )
         }
       }

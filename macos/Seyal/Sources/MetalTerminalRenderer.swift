@@ -733,13 +733,26 @@ final class MetalTerminalRenderer: @unchecked Sendable {
                 var flags: UInt32 = 0
                 var uvRect = SIMD4<Float>(repeating: 0)
                 var atlasSlice: UInt32 = 0
-                if cell.scalar != 0 && cell.scalar != 32 {
-                    let entry = try glyphAtlas.lookup(
-                        scalar: cell.scalar,
-                        bold: cell.flags & 1 != 0,
-                        backingScale: max(backingScale, 1),
-                        cellMetrics: metrics
-                    )
+                if cell.scalar != 0 && cell.scalar != 32 || !cell.graphemeUtf8.isEmpty {
+                    let entry: GlyphAtlasEntry
+                    if !cell.graphemeUtf8.isEmpty,
+                       let text = String(data: cell.graphemeUtf8, encoding: .utf8),
+                       !text.isEmpty
+                    {
+                        entry = try glyphAtlas.lookupGrapheme(
+                            text: text,
+                            bold: cell.flags & 1 != 0,
+                            backingScale: max(backingScale, 1),
+                            cellMetrics: metrics
+                        )
+                    } else {
+                        entry = try glyphAtlas.lookup(
+                            scalar: cell.scalar,
+                            bold: cell.flags & 1 != 0,
+                            backingScale: max(backingScale, 1),
+                            cellMetrics: metrics
+                        )
+                    }
                     flags |= instanceGlyphFlag
                     uvRect = entry.uvRect
                     atlasSlice = entry.slice

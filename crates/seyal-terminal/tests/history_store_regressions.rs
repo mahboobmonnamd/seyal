@@ -398,3 +398,56 @@ fn narrowing_alternate_screen_discards_a_wide_unit_atomically() {
         .cell(19, 0)
         .is_some_and(|cell| cell.role != CellRole::Lead));
 }
+
+#[test]
+fn primary_history_range_retains_combining_grapheme_rows() {
+    let mut terminal = TerminalState::new(8, 1).expect("terminal");
+    terminal
+        .feed("e\u{301}x\r\n".as_bytes())
+        .expect("combining history");
+    let rows = terminal
+        .primary_history_range(LineId(1), LineId(u64::MAX), 8)
+        .expect("representable");
+    assert!(!rows.is_empty());
+    let units = terminal.primary_history_units_range(LineId(1), LineId(u64::MAX), 8);
+    assert!(units.iter().any(|unit| unit.text == "e\u{301}"));
+    let wire = terminal
+        .primary_history_wire_range(LineId(1), LineId(u64::MAX), 8)
+        .expect("wire");
+    assert!(wire
+        .iter()
+        .flat_map(|(_, cells)| cells)
+        .any(|cell| cell.text == "e\u{301}"));
+}
+
+#[test]
+fn resize_reflows_soft_wrap_across_retained_and_active_boundary() {
+    let mut terminal = TerminalState::new(4, 2).expect("terminal");
+    terminal
+        .feed(b"abcdefghij")
+        .expect("soft wrap into history");
+    let before = terminal
+        .primary_history_units_range(LineId(1), LineId(u64::MAX), 64)
+        .iter()
+        .map(|unit| unit.text.as_str())
+        .collect::<String>();
+    assert_eq!(before, "abcdefghij");
+    terminal.resize(10, 2).expect("widen across boundary");
+    let after = terminal
+        .primary_history_units_range(LineId(1), LineId(u64::MAX), 64)
+        .iter()
+        .map(|unit| unit.text.as_str())
+        .collect::<String>();
+    assert_eq!(
+        after, "abcdefghij",
+        "resize duplicated or dropped source text"
+    );
+    terminal.resize(3, 2).expect("narrow");
+    terminal.resize(8, 2).expect("restore");
+    let restored = terminal
+        .primary_history_units_range(LineId(1), LineId(u64::MAX), 64)
+        .iter()
+        .map(|unit| unit.text.as_str())
+        .collect::<String>();
+    assert_eq!(restored, "abcdefghij");
+}

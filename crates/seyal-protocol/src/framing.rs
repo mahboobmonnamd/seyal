@@ -11,8 +11,9 @@ pub use crate::pass7::{
     ComposerResult, ComposerResultCode, ComposerStatus, HistoryCell, HistoryRangeRequest,
     HistoryRangeSnapshot, HistoryRangeStatus, HistoryRow, ResizeRequest, ResizeResult,
     ResizeResultCode, TerminalKey, TerminalKeyKind, TerminalKeyModifiers, CAP_CORRELATED_RESIZE,
-    CAP_SEMANTIC_TERMINAL_KEY, MAX_HISTORY_RANGE_BYTES, MAX_HISTORY_RANGE_CELLS,
-    MAX_HISTORY_RANGE_LINES,
+    CAP_SEMANTIC_TERMINAL_KEY, HISTORY_CELL_SIDECAR_FLAG, MAX_HISTORY_GRAPHEME_BYTES,
+    MAX_HISTORY_RANGE_BYTES, MAX_HISTORY_RANGE_CELLS, MAX_HISTORY_RANGE_LINES,
+    MAX_HISTORY_SIDECAR_BYTES,
 };
 
 pub const MAGIC: [u8; 8] = *b"SEYALIPC";

@@ -16,6 +16,12 @@ pub const MAX_COMMAND_BLOCK_RECORDS: usize = 128;
 pub const MAX_HISTORY_RANGE_LINES: usize = 512;
 pub const MAX_HISTORY_RANGE_CELLS: usize = 131_072;
 pub const MAX_HISTORY_RANGE_BYTES: usize = 196_608;
+/// Chunk-local UTF-8 sidecar for multi-scalar history cells. Zero keeps the
+/// M001 snapshot layout (`reserved == 0`, header bytes 28..32 zero).
+pub const MAX_HISTORY_SIDECAR_BYTES: usize = 65_536;
+pub const MAX_HISTORY_GRAPHEME_BYTES: usize = 8_192;
+/// `HistoryCell.flags` bit 7: `reserved` is a sidecar byte offset, not zero.
+pub const HISTORY_CELL_SIDECAR_FLAG: u16 = 1 << 7;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -284,6 +290,10 @@ impl HistoryRow {
 ///
 /// Layout matches `SeyalHistoryCell` in `macos/Seyal/Sources/SeyalBridge.h`
 /// (`reserved` is an explicit ABI field, not accidental padding).
+///
+/// Single-scalar leads keep `reserved == 0`. Multi-scalar/combining payloads
+/// set [`HISTORY_CELL_SIDECAR_FLAG`] and store a length-prefixed UTF-8 record
+/// in the snapshot sidecar; `reserved` is the byte offset of that record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(C)]
 pub struct HistoryCell {
@@ -294,6 +304,87 @@ pub struct HistoryCell {
     pub reserved: u16,
 }
 
+impl HistoryCell {
+    /// Pack one presented history glyph. Single-scalar text stays inline so
+    /// snapshots without combining/ZWJ units remain byte-identical to M001.
+    pub fn from_text(
+        text: &str,
+        foreground: u32,
+        background: u32,
+        style_flags: u16,
+        sidecar: &mut Vec<u8>,
+    ) -> Result<Self, FramingError> {
+        let style_flags = style_flags & !HISTORY_CELL_SIDECAR_FLAG;
+        if text.is_empty() {
+            return Ok(Self {
+                scalar: 0,
+                foreground,
+                background,
+                flags: style_flags,
+                reserved: 0,
+            });
+        }
+        let mut scalars = text.chars();
+        let scalar = scalars.next().ok_or(FramingError::MalformedPayload)?;
+        let multi = scalars.next().is_some() || text.len() != scalar.len_utf8();
+        if !multi {
+            return Ok(Self {
+                scalar: scalar as u32,
+                foreground,
+                background,
+                flags: style_flags,
+                reserved: 0,
+            });
+        }
+        let utf8 = text.as_bytes();
+        if utf8.len() > MAX_HISTORY_GRAPHEME_BYTES
+            || sidecar.len().saturating_add(2).saturating_add(utf8.len())
+                > MAX_HISTORY_SIDECAR_BYTES
+            || sidecar.len() > u16::MAX as usize
+        {
+            return Err(FramingError::OversizedPayload);
+        }
+        let reserved = sidecar.len() as u16;
+        sidecar.extend_from_slice(&(utf8.len() as u16).to_le_bytes());
+        sidecar.extend_from_slice(utf8);
+        Ok(Self {
+            scalar: scalar as u32,
+            foreground,
+            background,
+            flags: style_flags | HISTORY_CELL_SIDECAR_FLAG,
+            reserved,
+        })
+    }
+
+    pub fn sidecar_utf8<'a>(&self, sidecar: &'a [u8]) -> Result<Option<&'a [u8]>, FramingError> {
+        if self.flags & HISTORY_CELL_SIDECAR_FLAG == 0 {
+            if self.reserved != 0 {
+                return Err(FramingError::MalformedPayload);
+            }
+            return Ok(None);
+        }
+        let start = usize::from(self.reserved);
+        let len_end = start.checked_add(2).ok_or(FramingError::MalformedPayload)?;
+        if len_end > sidecar.len() {
+            return Err(FramingError::MalformedPayload);
+        }
+        let len = u16::from_le_bytes(sidecar[start..len_end].try_into().unwrap()) as usize;
+        if len == 0 || len > MAX_HISTORY_GRAPHEME_BYTES {
+            return Err(FramingError::MalformedPayload);
+        }
+        let end = len_end
+            .checked_add(len)
+            .ok_or(FramingError::MalformedPayload)?;
+        let bytes = sidecar
+            .get(len_end..end)
+            .ok_or(FramingError::MalformedPayload)?;
+        if std::str::from_utf8(bytes).is_err() {
+            return Err(FramingError::MalformedPayload);
+        }
+        Ok(Some(bytes))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HistoryRangeSnapshot {
     pub request_id: u64,
@@ -301,6 +392,7 @@ pub struct HistoryRangeSnapshot {
     pub revision: u64,
     pub status: HistoryRangeStatus,
     pub rows: Vec<HistoryRow>,
+    pub sidecar: Vec<u8>,
 }
 
 impl HistoryRangeSnapshot {
@@ -343,20 +435,43 @@ impl HistoryRangeSnapshot {
         (out, truncated)
     }
 
+    /// Drop sidecar bytes no longer referenced after a trailing-row pop.
+    pub fn trim_sidecar_to_rows(&mut self) {
+        let mut end = 0usize;
+        for cell in self.rows.iter().flat_map(|row| &row.cells) {
+            if cell.flags & HISTORY_CELL_SIDECAR_FLAG == 0 {
+                continue;
+            }
+            let start = usize::from(cell.reserved);
+            if start + 2 > self.sidecar.len() {
+                continue;
+            }
+            let len =
+                u16::from_le_bytes(self.sidecar[start..start + 2].try_into().unwrap()) as usize;
+            end = end.max(start.saturating_add(2).saturating_add(len));
+        }
+        self.sidecar.truncate(end);
+    }
+
     pub fn try_encode(&self) -> Result<Vec<u8>, FramingError> {
         if self.rows.len() > MAX_HISTORY_RANGE_LINES
             || self.rows.iter().map(|row| row.cells.len()).sum::<usize>() > MAX_HISTORY_RANGE_CELLS
+            || self.sidecar.len() > MAX_HISTORY_SIDECAR_BYTES
         {
             return Err(FramingError::OversizedPayload);
         }
-        let mut out = Vec::with_capacity(Self::ENCODED_HEADER_LEN);
+        for cell in self.rows.iter().flat_map(|row| &row.cells) {
+            cell.sidecar_utf8(&self.sidecar)?;
+        }
+        let mut out =
+            Vec::with_capacity(Self::ENCODED_HEADER_LEN.saturating_add(self.sidecar.len()));
         out.extend_from_slice(&self.request_id.to_le_bytes());
         out.extend_from_slice(&self.block_id.to_le_bytes());
         out.extend_from_slice(&self.revision.to_le_bytes());
         out.push(self.status as u8);
         out.push(0);
         out.extend_from_slice(&(self.rows.len() as u16).to_le_bytes());
-        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&(self.sidecar.len() as u32).to_le_bytes());
         for row in &self.rows {
             if row.line_id == 0 || row.cells.len() > u32::MAX as usize {
                 return Err(FramingError::MalformedPayload);
@@ -371,11 +486,18 @@ impl HistoryRangeSnapshot {
                 out.extend_from_slice(&cell.flags.to_le_bytes());
                 out.extend_from_slice(&cell.reserved.to_le_bytes());
             }
-            if out.len() > crate::framing::MAX_FRAME_PAYLOAD as usize
-                || out.len() > MAX_HISTORY_RANGE_BYTES
+            if out.len().saturating_add(self.sidecar.len())
+                > crate::framing::MAX_FRAME_PAYLOAD as usize
+                || out.len().saturating_add(self.sidecar.len()) > MAX_HISTORY_RANGE_BYTES
             {
                 return Err(FramingError::OversizedPayload);
             }
+        }
+        out.extend_from_slice(&self.sidecar);
+        if out.len() > crate::framing::MAX_FRAME_PAYLOAD as usize
+            || out.len() > MAX_HISTORY_RANGE_BYTES
+        {
+            return Err(FramingError::OversizedPayload);
         }
         Ok(out)
     }
@@ -390,8 +512,19 @@ impl HistoryRangeSnapshot {
         {
             return Err(FramingError::OversizedPayload);
         }
-        if bytes.len() < Self::ENCODED_HEADER_LEN || bytes[25] != 0 || bytes[28..32] != [0; 4] {
+        if bytes.len() < Self::ENCODED_HEADER_LEN || bytes[25] != 0 {
             return Err(FramingError::MalformedPayload);
+        }
+        let sidecar_len = u32::from_le_bytes(bytes[28..32].try_into().unwrap()) as usize;
+        if sidecar_len > MAX_HISTORY_SIDECAR_BYTES {
+            return Err(FramingError::OversizedPayload);
+        }
+        let row_bytes_end = bytes
+            .len()
+            .checked_sub(sidecar_len)
+            .ok_or(FramingError::MalformedPayload)?;
+        if row_bytes_end < Self::ENCODED_HEADER_LEN {
+            return Err(FramingError::TruncatedPayload);
         }
         let status = match bytes[24] {
             0 => HistoryRangeStatus::Complete,
@@ -411,7 +544,7 @@ impl HistoryRangeSnapshot {
             let end = offset
                 .checked_add(16)
                 .ok_or(FramingError::MalformedPayload)?;
-            if end > bytes.len() {
+            if end > row_bytes_end {
                 return Err(FramingError::TruncatedPayload);
             }
             let line_id = u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
@@ -432,7 +565,7 @@ impl HistoryRangeSnapshot {
             let cells_end = end
                 .checked_add(bytes_len)
                 .ok_or(FramingError::OversizedPayload)?;
-            if cells_end > bytes.len() {
+            if cells_end > row_bytes_end {
                 return Err(FramingError::TruncatedPayload);
             }
             let (cell_chunks, remainder) = bytes[end..cells_end].as_chunks::<16>();
@@ -442,35 +575,40 @@ impl HistoryRangeSnapshot {
             let values = cell_chunks
                 .iter()
                 .map(|chunk| {
-                    let reserved = u16::from_le_bytes(chunk[14..16].try_into().unwrap());
-                    if reserved != 0 {
-                        return Err(FramingError::MalformedPayload);
-                    }
                     Ok(HistoryCell {
                         scalar: u32::from_le_bytes(chunk[..4].try_into().unwrap()),
                         foreground: u32::from_le_bytes(chunk[4..8].try_into().unwrap()),
                         background: u32::from_le_bytes(chunk[8..12].try_into().unwrap()),
                         flags: u16::from_le_bytes(chunk[12..14].try_into().unwrap()),
-                        reserved,
+                        reserved: u16::from_le_bytes(chunk[14..16].try_into().unwrap()),
                     })
                 })
-                .collect::<Result<Vec<_>, _>>()?;
+                .collect::<Result<Vec<_>, FramingError>>()?;
             rows.push(HistoryRow {
                 line_id,
                 cells: values,
             });
             offset = cells_end;
         }
-        if offset != bytes.len() {
+        let sidecar_end = offset
+            .checked_add(sidecar_len)
+            .ok_or(FramingError::MalformedPayload)?;
+        if offset != row_bytes_end || sidecar_end != bytes.len() {
             return Err(FramingError::ExactLengthMismatch);
         }
-        Ok(Self {
+        let sidecar = bytes[offset..sidecar_end].to_vec();
+        let snapshot = Self {
             request_id: u64::from_le_bytes(bytes[..8].try_into().unwrap()),
             block_id: u64::from_le_bytes(bytes[8..16].try_into().unwrap()),
             revision: u64::from_le_bytes(bytes[16..24].try_into().unwrap()),
             status,
             rows,
-        })
+            sidecar,
+        };
+        for cell in snapshot.rows.iter().flat_map(|row| &row.cells) {
+            cell.sidecar_utf8(&snapshot.sidecar)?;
+        }
+        Ok(snapshot)
     }
 }
 
@@ -758,6 +896,7 @@ mod command_block_tests {
                     ],
                 },
             ],
+            sidecar: Vec::new(),
         };
         assert_eq!(
             HistoryRangeSnapshot::decode(&snapshot.encode()),
@@ -781,6 +920,7 @@ mod command_block_tests {
                     MAX_HISTORY_RANGE_CELLS + 1
                 ],
             }],
+            sidecar: Vec::new(),
         };
         assert_eq!(too_many.try_encode(), Err(FramingError::OversizedPayload));
     }
@@ -813,6 +953,7 @@ mod command_block_tests {
             revision: 3,
             status: HistoryRangeStatus::Complete,
             rows: dense.clone(),
+            sidecar: Vec::new(),
         };
         assert_eq!(
             without_wire.try_encode(),
@@ -833,6 +974,7 @@ mod command_block_tests {
             revision: 3,
             status: HistoryRangeStatus::Truncated,
             rows: admitted,
+            sidecar: Vec::new(),
         };
         let encoded = snapshot
             .try_encode()
@@ -878,14 +1020,46 @@ mod command_block_tests {
                     reserved: 0,
                 }],
             }],
+            sidecar: Vec::new(),
         };
         let mut encoded = snapshot.encode();
         // scalar(4)+fg(4)+bg(4)+flags(2)+reserved(2) — flip reserved.
+        // Sidecar is empty, so reserved sits at the last two payload bytes.
         let reserved_at = encoded.len() - 2;
         encoded[reserved_at] = 1;
         assert_eq!(
             HistoryRangeSnapshot::decode(&encoded),
             Err(FramingError::MalformedPayload)
+        );
+    }
+
+    #[test]
+    fn history_snapshot_round_trips_combining_grapheme_sidecar() {
+        let mut sidecar = Vec::new();
+        let cell =
+            HistoryCell::from_text("e\u{301}", 0, 0, 0, &mut sidecar).expect("combining cell");
+        assert_eq!(
+            cell.flags & HISTORY_CELL_SIDECAR_FLAG,
+            HISTORY_CELL_SIDECAR_FLAG
+        );
+        assert_eq!(
+            cell.sidecar_utf8(&sidecar).expect("sidecar"),
+            Some("e\u{301}".as_bytes())
+        );
+        let snapshot = HistoryRangeSnapshot {
+            request_id: 11,
+            block_id: 2,
+            revision: 4,
+            status: HistoryRangeStatus::Complete,
+            rows: vec![HistoryRow {
+                line_id: 1,
+                cells: vec![cell],
+            }],
+            sidecar,
+        };
+        assert_eq!(
+            HistoryRangeSnapshot::decode(&snapshot.encode()),
+            Ok(snapshot)
         );
     }
 }

@@ -96,6 +96,12 @@ typedef struct SeyalHistoryRange {
     uint32_t reserved;
 } SeyalHistoryRange;
 
+typedef struct SeyalHistorySidecar {
+    const uint8_t *bytes;
+    uint32_t len;
+    uint32_t reserved;
+} SeyalHistorySidecar;
+
 typedef struct SeyalComposerResult {
     uint64_t request_id;
     uint64_t block_id;
@@ -185,6 +191,7 @@ int32_t seyal_bridge_request_history_range(
 uint64_t seyal_bridge_next_history_request_id(void);
 SeyalHistoryRange seyal_bridge_history_range_peek_for(uint64_t block_id, uint64_t request_id);
 SeyalHistoryRow seyal_bridge_history_range_row_for(uint64_t block_id, uint64_t request_id, uint32_t index);
+SeyalHistorySidecar seyal_bridge_history_range_sidecar_for(uint64_t block_id, uint64_t request_id);
 uint8_t seyal_bridge_history_range_consume(uint64_t block_id, uint64_t request_id);
 SeyalComposerResult seyal_bridge_composer_result(void);
 SeyalRecoveryResult seyal_bridge_last_recovery_result(void);

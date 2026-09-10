@@ -18,6 +18,7 @@ pub const HISTORY_RUNTIME_AGGREGATE_BYTE_CAP: usize = 256 * 1024 * 1024;
 pub const HISTORY_PER_EXECUTION_DERIVED_INDEX_CAP: usize = 4 * 1024 * 1024;
 pub const HISTORY_RUNTIME_DERIVED_INDEX_CAP: usize = 32 * 1024 * 1024;
 pub const HISTORY_SELECTION_UNIT_CAP: usize = 64 * 1024;
+pub const MAX_EVICTED_ID_RANGES: usize = 1_024;
 
 static NEXT_SEGMENT_AGE: AtomicU64 = AtomicU64::new(1);
 
@@ -67,6 +68,15 @@ pub struct HistoryUnitView {
     pub style: Style,
 }
 
+/// Physical history-wire cell. Continuation placeholders carry no text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HistoryWireCell {
+    pub text: String,
+    pub width: u8,
+    pub style: Style,
+    pub continuation: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct HistoryUnit {
     pub utf8: Vec<u8>,
@@ -75,8 +85,8 @@ pub(crate) struct HistoryUnit {
 }
 
 impl HistoryUnit {
-    fn encoded_len(&self) -> usize {
-        size_of::<SegmentUnit>().saturating_add(self.utf8.len())
+    fn canonical_payload_len(&self) -> usize {
+        self.utf8.len()
     }
 
     fn allocated_bytes(&self) -> usize {
@@ -139,13 +149,11 @@ impl HistoryLine {
         }
     }
 
-    fn payload_len(&self) -> usize {
-        size_of::<SegmentLine>().saturating_add(
-            self.units
-                .iter()
-                .map(HistoryUnit::encoded_len)
-                .sum::<usize>(),
-        )
+    fn canonical_payload_len(&self) -> usize {
+        self.units
+            .iter()
+            .map(HistoryUnit::canonical_payload_len)
+            .sum()
     }
 
     fn allocated_bytes(&self) -> usize {
@@ -267,18 +275,12 @@ impl<'a> HistoryUnitRef<'a> {
             .unwrap_or('\u{FFFD}')
     }
 
-    fn legacy_cell(self) -> Option<Cell> {
-        let text = std::str::from_utf8(self.utf8()).ok()?;
-        let mut scalars = text.chars();
-        let scalar = scalars.next()?;
-        if scalars.next().is_some() {
-            return None;
-        }
-        Some(Cell::lead_inline(scalar, self.width().max(1), self.style()))
+    fn presentation_cell(self) -> Cell {
+        Cell::lead_inline(self.first_scalar(), self.width().max(1), self.style())
     }
 
     fn reflow_cell(self) -> Cell {
-        Cell::lead_inline(self.first_scalar(), self.width().max(1), self.style())
+        self.presentation_cell()
     }
 }
 
@@ -318,15 +320,52 @@ impl<'a> HistoryLineRef<'a> {
         }
     }
 
-    pub(crate) fn legacy_cells(self) -> Option<Vec<Cell>> {
+    pub(crate) fn presentation_cells(self) -> Vec<Cell> {
         let mut cells = Vec::new();
         for unit in self.units() {
-            cells.push(unit.legacy_cell()?);
+            cells.push(unit.presentation_cell());
             if unit.width() >= 2 {
                 cells.push(Cell::continuation());
             }
         }
-        Some(cells)
+        cells
+    }
+
+    pub(crate) fn to_owned_line(self) -> HistoryLine {
+        HistoryLine {
+            line_id: self.line_id(),
+            break_after: self.break_after(),
+            start_offset: self.start_offset(),
+            units: self
+                .units()
+                .map(|unit| HistoryUnit {
+                    utf8: unit.utf8().to_vec(),
+                    width: unit.width(),
+                    style: unit.style(),
+                })
+                .collect(),
+        }
+    }
+
+    pub(crate) fn wire_cells(self) -> Vec<HistoryWireCell> {
+        let mut cells = Vec::new();
+        for unit in self.units() {
+            cells.push(HistoryWireCell {
+                text: String::from_utf8_lossy(unit.utf8()).into_owned(),
+                width: unit.width(),
+                style: unit.style(),
+                continuation: false,
+            });
+            if unit.width() >= 2 {
+                cells.push(HistoryWireCell {
+                    text: String::new(),
+                    width: 0,
+                    style: unit.style(),
+                    continuation: true,
+                });
+            }
+        }
+        cells
     }
 }
 
@@ -344,6 +383,7 @@ pub(crate) struct HistoryStore {
     // absorbed into an unavailable range. The Vec allocation is included in
     // resident_bytes, so this metadata participates in the same hard cap.
     evicted_id_ranges: Vec<EvictedIdRange>,
+    evicted_through: Option<LineId>,
     reflow_cache: RefCell<Option<ReflowCache>>,
 }
 
@@ -365,16 +405,10 @@ impl HistoryStore {
     }
 
     pub(crate) fn derived_cache_bytes(&self) -> usize {
-        self.reflow_cache.borrow().as_ref().map_or(0, |cache| {
-            cache
-                .rows
-                .iter()
-                .map(|row| {
-                    row.cells.len() * size_of::<Cell>()
-                        + row.anchors.len() * size_of::<HistoryAnchor>()
-                })
-                .sum()
-        })
+        self.reflow_cache
+            .borrow()
+            .as_ref()
+            .map_or(0, |cache| reflow_rows_allocated_bytes(&cache.rows))
     }
 
     pub(crate) fn drop_derived_cache(&self) {
@@ -383,6 +417,19 @@ impl HistoryStore {
 
     pub(crate) fn eviction_generation(&self) -> u64 {
         self.eviction_generation
+    }
+
+    pub(crate) fn replace_payload(&mut self, lines: Vec<HistoryLine>) {
+        self.reflow_cache.get_mut().take();
+        self.segments.clear();
+        self.tail.clear();
+        self.tail_payload_bytes = 0;
+        self.tail_resident_bytes = 0;
+        self.segments_resident_bytes = 0;
+        self.update_resident_bytes();
+        for line in lines {
+            self.append_line(line);
+        }
     }
 
     pub(crate) fn append_row(
@@ -397,17 +444,17 @@ impl HistoryStore {
 
     pub(crate) fn append_line(&mut self, line: HistoryLine) {
         self.reflow_cache.get_mut().take();
-        let bytes = line.payload_len();
+        let bytes = line.canonical_payload_len();
         // A source line can be arbitrarily long. Fragmenting at unit boundaries
         // keeps the tail bounded while preserving its LineId and break lineage.
         if bytes > HISTORY_SEGMENT_PAYLOAD_TARGET {
             let mut fragment = Vec::new();
-            let mut fragment_bytes = size_of::<SegmentLine>();
+            let mut fragment_bytes = 0usize;
             let mut source_offset = line.start_offset;
             let line_id = line.line_id;
             let final_break = line.break_after;
             for unit in line.units {
-                let unit_bytes = unit.encoded_len();
+                let unit_bytes = unit.canonical_payload_len();
                 if !fragment.is_empty()
                     && fragment_bytes + unit_bytes > HISTORY_SEGMENT_PAYLOAD_TARGET
                 {
@@ -418,7 +465,7 @@ impl HistoryStore {
                         break_after: HistoryBreakAfter::SoftWrap,
                         start_offset: fragment_start,
                     });
-                    fragment_bytes = size_of::<SegmentLine>();
+                    fragment_bytes = 0;
                 }
                 fragment_bytes += unit_bytes;
                 fragment.push(unit);
@@ -441,7 +488,7 @@ impl HistoryStore {
     }
 
     fn push_fragment(&mut self, line: HistoryLine) {
-        let bytes = line.payload_len();
+        let bytes = line.canonical_payload_len();
         if self.tail_payload_bytes + bytes > HISTORY_SEGMENT_PAYLOAD_TARGET && !self.tail.is_empty()
         {
             self.seal_tail();
@@ -607,9 +654,34 @@ impl HistoryStore {
                 });
             }
         }
+        self.compact_evicted_id_ranges();
+    }
+
+    #[cfg(test)]
+    fn record_evicted_range_for_test(&mut self, first: u64, last: u64) {
+        self.evicted_id_ranges.push(EvictedIdRange {
+            first: LineId(first),
+            last: LineId(last),
+        });
+        self.compact_evicted_id_ranges();
+    }
+
+    fn compact_evicted_id_ranges(&mut self) {
+        while self.evicted_id_ranges.len() > MAX_EVICTED_ID_RANGES {
+            let oldest = self.evicted_id_ranges.remove(0);
+            self.evicted_through = Some(match self.evicted_through {
+                Some(current) => current.max(oldest.last),
+                None => oldest.last,
+            });
+        }
     }
 
     pub(crate) fn range_intersects_evicted(&self, start: LineId, end: LineId) -> bool {
+        if let Some(through) = self.evicted_through
+            && start <= through
+        {
+            return true;
+        }
         let index = self
             .evicted_id_ranges
             .partition_point(|range| range.last < start);
@@ -619,6 +691,11 @@ impl HistoryStore {
     }
 
     fn line_was_evicted(&self, line_id: LineId) -> bool {
+        if let Some(through) = self.evicted_through
+            && line_id <= through
+        {
+            return true;
+        }
         let index = self
             .evicted_id_ranges
             .partition_point(|range| range.last < line_id);
@@ -669,13 +746,7 @@ impl HistoryStore {
             return cache.rows.clone();
         }
         let rows = self.reflow_uncached(cols, max_rows);
-        let estimated = rows
-            .iter()
-            .map(|row| {
-                row.cells.len() * std::mem::size_of::<Cell>()
-                    + row.anchors.len() * std::mem::size_of::<HistoryAnchor>()
-            })
-            .sum::<usize>();
+        let estimated = reflow_rows_allocated_bytes(&rows);
         if estimated <= HISTORY_PER_EXECUTION_DERIVED_INDEX_CAP {
             *self.reflow_cache.borrow_mut() = Some(ReflowCache {
                 columns: cols,
@@ -900,6 +971,25 @@ pub struct ReflowRow {
     pub unavailable: bool,
 }
 
+fn reflow_rows_allocated_bytes(rows: &[ReflowRow]) -> usize {
+    size_of::<Vec<ReflowRow>>()
+        .saturating_add(rows.len().saturating_mul(size_of::<ReflowRow>()))
+        .saturating_add(
+            rows.iter()
+                .map(|row| {
+                    row.cells
+                        .capacity()
+                        .saturating_mul(size_of::<Cell>())
+                        .saturating_add(
+                            row.anchors
+                                .capacity()
+                                .saturating_mul(size_of::<HistoryAnchor>()),
+                        )
+                })
+                .sum::<usize>(),
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -923,10 +1013,20 @@ mod tests {
     #[test]
     fn seals_by_payload_bytes_and_reflows_soft_chain() {
         let mut store = HistoryStore::default();
-        for id in 0..2_000 {
+        for id in 0..4_000 {
             store.append_line(ascii_line(id, "abcdefghij", HistoryBreakAfter::SoftWrap));
         }
-        assert!(store.segments.len() >= 2);
+        assert!(
+            store.segments.len() >= 2,
+            "canonical UTF-8 payload should exceed {} bytes twice: segments={} payload={}",
+            HISTORY_SEGMENT_PAYLOAD_TARGET,
+            store.segments.len(),
+            store
+                .segments
+                .iter()
+                .map(|s| s.payload.len())
+                .sum::<usize>()
+        );
         assert!(store.tail_payload_bytes <= HISTORY_SEGMENT_PAYLOAD_TARGET);
         assert!(store.resident_bytes > 0);
 
@@ -961,18 +1061,22 @@ mod tests {
         let before = store.resident_bytes();
         let removed = store.evict_oldest_segment();
         assert!(removed > 0);
-        assert!(removed <= HISTORY_SEGMENT_PAYLOAD_TARGET);
         assert_eq!(before - removed, store.resident_bytes());
     }
 
     #[test]
     fn sealed_segments_use_exact_contiguous_payload_and_offset_metadata() {
         let mut store = HistoryStore::default();
-        for id in 0..2_000 {
+        for id in 0..4_000 {
             store.append_line(ascii_line(id, "abcdefghij", HistoryBreakAfter::HardBreak));
         }
 
-        assert!(store.segments.len() >= 2);
+        assert!(
+            store.segments.len() >= 2,
+            "canonical UTF-8 payload should exceed {} bytes twice: segments={}",
+            HISTORY_SEGMENT_PAYLOAD_TARGET,
+            store.segments.len()
+        );
         for segment in &store.segments {
             let exact_content_bytes = segment
                 .lines
@@ -980,7 +1084,7 @@ mod tests {
                 .saturating_mul(size_of::<SegmentLine>())
                 .saturating_add(segment.units.len().saturating_mul(size_of::<SegmentUnit>()))
                 .saturating_add(segment.payload.len());
-            assert!(exact_content_bytes <= HISTORY_SEGMENT_PAYLOAD_TARGET);
+            assert!(segment.payload.len() <= HISTORY_SEGMENT_PAYLOAD_TARGET);
             assert_eq!(segment.resident_bytes, exact_content_bytes);
 
             let mut next_unit = 0usize;
@@ -1040,5 +1144,19 @@ mod tests {
             store.resolve_anchor(anchor),
             HistoryAnchorResolution::Resolved { .. }
         ));
+    }
+
+    #[test]
+    fn evicted_id_metadata_is_capped_without_coarsening_later_live_ids() {
+        let mut store = HistoryStore::default();
+        for i in 0..(MAX_EVICTED_ID_RANGES + 8) {
+            let first = (i as u64) * 10 + 1;
+            store.record_evicted_range_for_test(first, first);
+        }
+        assert!(store.evicted_id_ranges.len() <= MAX_EVICTED_ID_RANGES);
+        // Folded watermark covers the oldest compacted identity, not a later
+        // never-evicted primary identity sitting in an alternate-screen gap.
+        assert!(!store.line_was_evicted(LineId(MAX_EVICTED_ID_RANGES as u64 * 10 + 50)));
+        assert!(store.range_intersects_evicted(LineId(1), LineId(1)));
     }
 }

@@ -68,7 +68,7 @@ impl Runtime {
         };
         let max_lines = usize::from(request.max_lines);
         let revision = entry.execution.terminal().damage_generation();
-        let rows = match entry.execution.terminal().primary_history_range(
+        let rows = match entry.execution.terminal().primary_history_wire_range(
             LineId(request.start_line),
             LineId(request.end_line),
             max_lines,
@@ -89,6 +89,7 @@ impl Runtime {
                     revision,
                     status: framing::HistoryRangeStatus::Stale,
                     rows: Vec::new(),
+                    sidecar: Vec::new(),
                 };
                 let Ok(payload) = snapshot.try_encode() else {
                     self.send_error(
@@ -108,31 +109,59 @@ impl Runtime {
         // VT already caps at max_lines. A full window means more in-range
         // retained rows may remain — report Truncated so clients can continue.
         let hit_line_cap = max_lines > 0 && rows.len() == max_lines;
-        let mapped = rows
-            .into_iter()
-            .map(|(line_id, cells)| framing::HistoryRow {
-                line_id: line_id.0,
-                cells: cells
-                    .into_iter()
-                    .map(|cell| framing::HistoryCell {
-                        scalar: cell.character as u32,
+        let mut sidecar = Vec::new();
+        let mut packed_rows = Vec::new();
+        let mut pack_truncated = false;
+        for (line_id, cells) in rows {
+            let mut wire_cells = Vec::with_capacity(cells.len());
+            let sidecar_at = sidecar.len();
+            for cell in cells {
+                let style_flags = (u16::from(cell.style.bold))
+                    | (u16::from(cell.style.underline) << 1)
+                    | (u16::from(cell.style.inverse) << 2);
+                let packed = if cell.continuation {
+                    framing::HistoryCell {
+                        scalar: 0,
                         foreground: pack_terminal_color(cell.style.fg),
                         background: pack_terminal_color(cell.style.bg),
-                        flags: (u16::from(cell.style.bold))
-                            | (u16::from(cell.style.underline) << 1)
-                            | (u16::from(cell.style.inverse) << 2),
+                        flags: style_flags,
                         reserved: 0,
-                    })
-                    .collect(),
+                    }
+                } else {
+                    match framing::HistoryCell::from_text(
+                        &cell.text,
+                        pack_terminal_color(cell.style.fg),
+                        pack_terminal_color(cell.style.bg),
+                        style_flags,
+                        &mut sidecar,
+                    ) {
+                        Ok(cell) => cell,
+                        Err(_) => {
+                            sidecar.truncate(sidecar_at);
+                            pack_truncated = true;
+                            break;
+                        }
+                    }
+                };
+                wire_cells.push(packed);
+            }
+            if pack_truncated && wire_cells.is_empty() {
+                break;
+            }
+            packed_rows.push(framing::HistoryRow {
+                line_id: line_id.0,
+                cells: wire_cells,
             });
+            if pack_truncated {
+                break;
+            }
+        }
         let (encoded_rows, budget_truncated) = framing::HistoryRangeSnapshot::admit_rows(
-            mapped,
+            packed_rows,
             max_lines,
             usize::try_from(request.max_cells).unwrap_or(0),
         );
-        // Truncation is budget-driven only. Never infer Truncated from sparse
-        // LineId numeric distance (alt-screen identity burn makes spans large).
-        let truncated = budget_truncated || hit_line_cap;
+        let truncated = budget_truncated || hit_line_cap || pack_truncated;
         let mut snapshot = framing::HistoryRangeSnapshot {
             request_id: request.request_id,
             block_id: request.block_id,
@@ -143,7 +172,9 @@ impl Runtime {
                 framing::HistoryRangeStatus::Complete
             },
             rows: encoded_rows,
+            sidecar,
         };
+        snapshot.trim_sidecar_to_rows();
         // Wire admission should make encode succeed. If an invariant still
         // breaks, shrink to a Truncated prefix rather than CapacityExceeded
         // (which the GUI treated as a fatal attachment tear-down).
@@ -152,6 +183,7 @@ impl Runtime {
                 Ok(payload) => break payload,
                 Err(_) if !snapshot.rows.is_empty() => {
                     snapshot.rows.pop();
+                    snapshot.trim_sidecar_to_rows();
                     snapshot.status = framing::HistoryRangeStatus::Truncated;
                 }
                 Err(_) => {

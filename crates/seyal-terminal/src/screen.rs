@@ -269,10 +269,10 @@ impl Screen {
         let mut history_additions = Vec::new();
         let mut pending_history_cells = Vec::new();
         let mut replace_history = false;
+        let mut replace_from = None;
         let mut next_source_breaks = HashMap::new();
         let mut mapped_cursor = None;
         if self.retain_history && (cols != old_cols || rows < old_rows) {
-            let mut source = HistoryStore::default();
             let last_content_row = (0..old_rows)
                 .rev()
                 .find(|row| {
@@ -362,9 +362,11 @@ impl Screen {
                     .unwrap_or(HistoryBreakAfter::HardBreak);
             }
             let mut history_units = HashMap::<crate::HistoryAnchor, HistoryUnit>::new();
-            let mut combined: Vec<HistoryLine> = Vec::new();
-            for entry in self.history.entries() {
-                let line = entry.to_owned_line();
+            let budget = HistoryStore::eager_resize_row_budget(rows);
+            let (mut combined, suffix_from, start_col) =
+                self.history.eager_resize_suffix(cols, budget);
+            replace_from = suffix_from;
+            for line in &combined {
                 for (index, unit) in line.units.iter().enumerate() {
                     let anchor = crate::HistoryAnchor {
                         line_id: line.line_id,
@@ -372,13 +374,13 @@ impl Screen {
                     };
                     history_units.entry(anchor).or_insert_with(|| unit.clone());
                 }
-                combined.push(line);
             }
             combined.extend(source_lines);
+            let mut source = HistoryStore::default();
             for line in &combined {
                 source.append_line(line.clone());
             }
-            let reflowed = source.reflow(cols, usize::MAX);
+            let reflowed = source.reflow_from(cols, usize::MAX, start_col);
             let first = reflowed.len().saturating_sub(usize::from(rows));
             let active_first = reflowed
                 .iter()
@@ -552,6 +554,7 @@ impl Screen {
             history_additions,
             pending_history_cells,
             replace_history,
+            replace_from,
             cursor,
             saved_cursor,
             unchanged: false,
@@ -578,7 +581,12 @@ impl Screen {
             prepared.cells[index] =
                 Cell::lead_from_admit(first, unit.width.max(1), unit.style, admit);
         }
-        if prepared.replace_history {
+        if let Some(from) = prepared.replace_from {
+            self.history.truncate_from(from);
+            for line in prepared.history_additions {
+                self.history.append_line(line);
+            }
+        } else if prepared.replace_history {
             self.history.replace_payload(prepared.history_additions);
         } else {
             for line in prepared.history_additions {
@@ -1456,6 +1464,7 @@ pub(crate) struct PreparedScreen {
     history_additions: Vec<HistoryLine>,
     pending_history_cells: Vec<(usize, HistoryUnit)>,
     replace_history: bool,
+    replace_from: Option<crate::HistoryAnchor>,
     cursor: Cursor,
     saved_cursor: Option<SavedCursor>,
     unchanged: bool,
@@ -1474,6 +1483,7 @@ impl PreparedScreen {
             history_additions: Vec::new(),
             pending_history_cells: Vec::new(),
             replace_history: false,
+            replace_from: None,
             cursor: Cursor::default(),
             saved_cursor: None,
             unchanged: true,

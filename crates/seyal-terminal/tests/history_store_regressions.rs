@@ -412,12 +412,36 @@ fn primary_history_range_retains_combining_grapheme_rows() {
     let units = terminal.primary_history_units_range(LineId(1), LineId(u64::MAX), 8);
     assert!(units.iter().any(|unit| unit.text == "e\u{301}"));
     let wire = terminal
-        .primary_history_wire_range(LineId(1), LineId(u64::MAX), 8)
+        .primary_history_wire_range(LineId(1), LineId(u64::MAX), 8, 0)
         .expect("wire");
     assert!(wire
         .iter()
         .flat_map(|(_, cells)| cells)
         .any(|cell| cell.text == "e\u{301}"));
+}
+
+#[test]
+fn history_wire_skip_leads_returns_the_unconsumed_suffix() {
+    let mut terminal = TerminalState::new(8, 1).expect("terminal");
+    terminal.feed(b"abcdef\r\n").expect("feed");
+    let all = terminal
+        .primary_history_wire_range(LineId(1), LineId(u64::MAX), 8, 0)
+        .expect("all");
+    let skipped = terminal
+        .primary_history_wire_range(LineId(1), LineId(u64::MAX), 8, 2)
+        .expect("skip 2");
+    let all_leads: Vec<&str> = all
+        .iter()
+        .flat_map(|(_, cells)| cells.iter().filter(|cell| !cell.continuation))
+        .map(|cell| cell.text.as_str())
+        .collect();
+    let skipped_leads: Vec<&str> = skipped
+        .iter()
+        .flat_map(|(_, cells)| cells.iter().filter(|cell| !cell.continuation))
+        .map(|cell| cell.text.as_str())
+        .collect();
+    assert!(all_leads.len() > 2, "need a prefix to skip: {all_leads:?}");
+    assert_eq!(skipped_leads, all_leads[2..]);
 }
 
 #[test]
@@ -450,4 +474,18 @@ fn resize_reflows_soft_wrap_across_retained_and_active_boundary() {
         .map(|unit| unit.text.as_str())
         .collect::<String>();
     assert_eq!(restored, "abcdefghij");
+}
+
+#[test]
+fn resize_keeps_early_hard_broken_history_without_rewriting_it() {
+    let mut terminal = TerminalState::new(8, 2).expect("terminal");
+    terminal.feed(b"early\r\n").expect("first line");
+    for i in 0..400 {
+        let row = format!("row{i:03}\r\n");
+        terminal.feed(row.as_bytes()).expect("fill");
+    }
+    terminal.resize(12, 2).expect("widen");
+    terminal.resize(6, 2).expect("narrow");
+    let matches = terminal.primary_history_search("early", 1);
+    assert_eq!(matches.len(), 1);
 }

@@ -82,7 +82,7 @@ pub extern "C" fn seyal_bridge_history_range_peek_for(
                 request_id: range.request_id,
                 revision: range.revision,
                 row_count: 0,
-                reserved: 0,
+                reserved: range.status as u32,
             };
         };
         let last = range.rows.last().map_or(first.line_id, |row| row.line_id);
@@ -93,7 +93,7 @@ pub extern "C" fn seyal_bridge_history_range_peek_for(
             request_id: range.request_id,
             revision: range.revision,
             row_count: range.rows.len() as u32,
-            reserved: 0,
+            reserved: range.status as u32,
         }
     })
     .unwrap_or_else(SeyalHistoryRange::empty)
@@ -254,9 +254,12 @@ pub extern "C" fn seyal_bridge_request_history_range(
     end_line: u64,
     max_lines: u16,
     max_cells: u32,
+    start_unit: u32,
 ) -> i32 {
     with_active_client_mut(|client| {
-        client.request_history_range(block_id, start_line, end_line, max_lines, max_cells)
+        client.request_history_range(
+            block_id, start_line, end_line, max_lines, max_cells, start_unit,
+        )
     })
     .map_or(-1, |result| result.map_or_else(error_code, |_| 0))
 }

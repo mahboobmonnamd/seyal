@@ -186,7 +186,8 @@ int32_t seyal_bridge_request_history_range(
     uint64_t start_line,
     uint64_t end_line,
     uint16_t max_lines,
-    uint32_t max_cells
+    uint32_t max_cells,
+    uint32_t start_unit
 );
 uint64_t seyal_bridge_next_history_request_id(void);
 SeyalHistoryRange seyal_bridge_history_range_peek_for(uint64_t block_id, uint64_t request_id);

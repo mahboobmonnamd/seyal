@@ -315,6 +315,7 @@ impl TerminalState {
         start: LineId,
         end: LineId,
         max_lines: usize,
+        skip_leads: u32,
     ) -> Result<Vec<(LineId, Vec<HistoryWireCell>)>, HistoryRangeError> {
         if max_lines == 0 || end < start {
             return Ok(Vec::new());
@@ -327,6 +328,7 @@ impl TerminalState {
         {
             return Err(HistoryRangeError::Stale);
         }
+        let mut skip = skip_leads;
         let mut lines: Vec<(LineId, Vec<HistoryWireCell>)> = Vec::new();
         for entry in self.core.primary.history_entries() {
             let id = entry.line_id();
@@ -336,14 +338,17 @@ impl TerminalState {
             if id > end {
                 break;
             }
-            let cells = entry.wire_cells();
+            let cells = skip_wire_leads(entry.wire_cells(), &mut skip);
+            if cells.is_empty() {
+                continue;
+            }
             if let Some((last_id, last_cells)) = lines.last_mut()
                 && *last_id == id
             {
                 last_cells.extend(cells);
             } else {
                 lines.push((id, cells));
-                if lines.len() >= max_lines {
+                if skip == 0 && lines.len() >= max_lines {
                     return Ok(lines);
                 }
             }
@@ -402,8 +407,13 @@ impl TerminalState {
                     }
                 }
             }
-            lines.push((id, wire));
-            if lines.len() >= max_lines {
+            lines.push((id, skip_wire_leads(wire, &mut skip)));
+            if let Some((_, cells)) = lines.last()
+                && cells.is_empty()
+            {
+                lines.pop();
+            }
+            if skip == 0 && lines.len() >= max_lines {
                 break;
             }
         }
@@ -1440,6 +1450,25 @@ fn param_one(params: &[u16], index: usize) -> u16 {
 
 fn param_zero(params: &[u16], index: usize) -> u16 {
     params.get(index).copied().unwrap_or(0)
+}
+
+fn skip_wire_leads(cells: Vec<HistoryWireCell>, skip: &mut u32) -> Vec<HistoryWireCell> {
+    if *skip == 0 {
+        return cells;
+    }
+    let mut index = 0usize;
+    while index < cells.len() && *skip > 0 {
+        if cells[index].continuation {
+            index += 1;
+            continue;
+        }
+        *skip = skip.saturating_sub(1);
+        index += 1;
+        while index < cells.len() && cells[index].continuation {
+            index += 1;
+        }
+    }
+    cells[index..].to_vec()
 }
 
 #[cfg(test)]

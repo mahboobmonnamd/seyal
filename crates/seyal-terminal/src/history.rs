@@ -169,6 +169,18 @@ impl HistoryLine {
     }
 }
 
+fn line_entirely_before(line: &HistoryLine, from: HistoryAnchor) -> bool {
+    if line.line_id < from.line_id {
+        return true;
+    }
+    if line.line_id > from.line_id {
+        return false;
+    }
+    line.start_offset
+        .saturating_add(u32::try_from(line.units.len()).unwrap_or(u32::MAX))
+        <= from.unit_offset
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SegmentLine {
     line_id: LineId,
@@ -430,6 +442,211 @@ impl HistoryStore {
         for line in lines {
             self.append_line(line);
         }
+    }
+
+    /// Active surface plus two screenfuls of slack (SPEC-010 §7).
+    pub(crate) fn eager_resize_row_budget(rows: u16) -> usize {
+        usize::from(rows).saturating_mul(3).max(1)
+    }
+
+    /// Clone only the retained-history suffix that can affect the new
+    /// viewport. Older sealed source stays in place and is not copied.
+    pub(crate) fn eager_resize_suffix(
+        &self,
+        cols: u16,
+        visual_rows: usize,
+    ) -> (Vec<HistoryLine>, Option<HistoryAnchor>, usize) {
+        let budget_cells = usize::from(cols.max(1)).saturating_mul(visual_rows.max(1));
+        let mut collected = Vec::new();
+        let mut cells = 0usize;
+        let mut omitted_joins = false;
+        for entry in self.tail.iter().rev().map(HistoryLineRef::Tail).chain(
+            self.segments.iter().rev().flat_map(|segment| {
+                segment
+                    .lines
+                    .iter()
+                    .rev()
+                    .map(move |line| HistoryLineRef::Sealed(segment, line))
+            }),
+        ) {
+            if cells >= budget_cells {
+                omitted_joins = entry.break_after() == HistoryBreakAfter::SoftWrap;
+                break;
+            }
+            collected.push(entry.to_owned_line());
+            cells = cells.saturating_add(
+                collected
+                    .last()
+                    .map(|line| {
+                        line.units
+                            .iter()
+                            .map(|unit| usize::from(unit.width.max(1)))
+                            .sum()
+                    })
+                    .unwrap_or(0),
+            );
+        }
+        collected.reverse();
+        let from = collected.first().map(|line| HistoryAnchor {
+            line_id: line.line_id,
+            unit_offset: line.start_offset,
+        });
+        let start_col = if omitted_joins {
+            self.wrap_column_before(from, cols)
+        } else {
+            0
+        };
+        (collected, from, start_col)
+    }
+
+    /// Display column at `from` for a new width, without cloning prefix units.
+    pub(crate) fn wrap_column_before(&self, from: Option<HistoryAnchor>, cols: u16) -> usize {
+        let Some(from) = from else {
+            return 0;
+        };
+        let width = usize::from(cols);
+        if width == 0 {
+            return 0;
+        }
+        let mut used = 0usize;
+        let mut previous_break = None;
+        for line in self.entries() {
+            if line.line_id() > from.line_id {
+                break;
+            }
+            if line.line_id() == from.line_id && line.start_offset() >= from.unit_offset {
+                break;
+            }
+            let joins = previous_break == Some(HistoryBreakAfter::SoftWrap);
+            if !joins {
+                used = 0;
+            }
+            for (unit_index, unit) in line.units().enumerate() {
+                let offset = line.start_offset().saturating_add(unit_index as u32);
+                if line.line_id() == from.line_id && offset >= from.unit_offset {
+                    return used.min(width);
+                }
+                let unit_width = usize::from(unit.width().max(1));
+                if used > 0 && used + unit_width > width {
+                    used = 0;
+                }
+                if unit_width > width {
+                    used = 0;
+                    continue;
+                }
+                used = used.saturating_add(unit_width);
+                if used >= width {
+                    used = 0;
+                }
+            }
+            previous_break = Some(line.break_after());
+            if line.break_after() == HistoryBreakAfter::HardBreak {
+                used = 0;
+                previous_break = None;
+            }
+        }
+        used.min(width)
+    }
+
+    /// Drop source units at/after `from` without rewriting older segments.
+    pub(crate) fn truncate_from(&mut self, from: HistoryAnchor) {
+        self.reflow_cache.get_mut().take();
+        while let Some(last) = self.tail.last() {
+            if line_entirely_before(last, from) {
+                break;
+            }
+            if last.line_id == from.line_id && last.start_offset < from.unit_offset {
+                let keep = from
+                    .unit_offset
+                    .saturating_sub(last.start_offset)
+                    .try_into()
+                    .unwrap_or(usize::MAX)
+                    .min(last.units.len());
+                if keep == 0 {
+                    self.tail.pop();
+                } else if let Some(last) = self.tail.last_mut() {
+                    last.units.truncate(keep);
+                    last.break_after = HistoryBreakAfter::SoftWrap;
+                }
+                self.recount_tail();
+                self.update_resident_bytes();
+                return;
+            }
+            self.tail.pop();
+        }
+        self.recount_tail();
+        loop {
+            let Some(segment) = self.segments.back() else {
+                break;
+            };
+            let Some(last_line) = segment.lines.last() else {
+                self.segments.pop_back();
+                continue;
+            };
+            let last_end = last_line.start_offset.saturating_add(last_line.unit_len);
+            if last_line.line_id < from.line_id
+                || (last_line.line_id == from.line_id && last_end <= from.unit_offset)
+            {
+                break;
+            }
+            let segment = self.segments.pop_back().expect("back existed");
+            self.segments_resident_bytes = self
+                .segments_resident_bytes
+                .saturating_sub(segment.resident_bytes);
+            let mut keep = Vec::new();
+            let mut reached_split = false;
+            for line in segment.lines.iter() {
+                let owned = HistoryLineRef::Sealed(&segment, line).to_owned_line();
+                if line_entirely_before(&owned, from) {
+                    keep.push(owned);
+                    continue;
+                }
+                if owned.line_id == from.line_id && owned.start_offset < from.unit_offset {
+                    let count = from
+                        .unit_offset
+                        .saturating_sub(owned.start_offset)
+                        .try_into()
+                        .unwrap_or(usize::MAX)
+                        .min(owned.units.len());
+                    if count > 0 {
+                        keep.push(HistoryLine {
+                            line_id: owned.line_id,
+                            units: owned.units[..count].to_vec(),
+                            break_after: HistoryBreakAfter::SoftWrap,
+                            start_offset: owned.start_offset,
+                        });
+                    }
+                }
+                reached_split = true;
+                break;
+            }
+            for line in keep {
+                self.push_fragment(line);
+            }
+            if reached_split {
+                break;
+            }
+        }
+        self.recount_tail();
+        self.update_resident_bytes();
+    }
+
+    fn recount_tail(&mut self) {
+        self.tail_payload_bytes = self
+            .tail
+            .iter()
+            .map(HistoryLine::canonical_payload_len)
+            .sum();
+        self.tail_resident_bytes = self
+            .tail
+            .iter()
+            .map(HistoryLine::allocated_bytes)
+            .sum::<usize>()
+            .saturating_add(
+                self.tail
+                    .capacity()
+                    .saturating_mul(size_of::<HistoryLine>()),
+            );
     }
 
     pub(crate) fn append_row(
@@ -738,50 +955,77 @@ impl HistoryStore {
     }
 
     pub(crate) fn reflow(&self, cols: u16, max_rows: usize) -> Vec<ReflowRow> {
+        self.reflow_from(cols, max_rows, 0)
+    }
+
+    pub(crate) fn reflow_from(
+        &self,
+        cols: u16,
+        max_rows: usize,
+        start_col: usize,
+    ) -> Vec<ReflowRow> {
         let generation = self.eviction_generation;
-        if let Some(cache) = self.reflow_cache.borrow().as_ref()
-            && (cache.columns, cache.max_rows, cache.eviction_generation)
-                == (cols, max_rows, generation)
-        {
-            return cache.rows.clone();
+        if start_col == 0 {
+            if let Some(cache) = self.reflow_cache.borrow().as_ref()
+                && (cache.columns, cache.max_rows, cache.eviction_generation)
+                    == (cols, max_rows, generation)
+            {
+                return cache.rows.clone();
+            }
         }
-        let rows = self.reflow_uncached(cols, max_rows);
-        let estimated = reflow_rows_allocated_bytes(&rows);
-        if estimated <= HISTORY_PER_EXECUTION_DERIVED_INDEX_CAP {
-            *self.reflow_cache.borrow_mut() = Some(ReflowCache {
-                columns: cols,
-                max_rows,
-                eviction_generation: generation,
-                rows: rows.clone(),
-            });
+        let rows = self.reflow_uncached_from(cols, max_rows, start_col);
+        if start_col == 0 {
+            let estimated = reflow_rows_allocated_bytes(&rows);
+            if estimated <= HISTORY_PER_EXECUTION_DERIVED_INDEX_CAP {
+                *self.reflow_cache.borrow_mut() = Some(ReflowCache {
+                    columns: cols,
+                    max_rows,
+                    eviction_generation: generation,
+                    rows: rows.clone(),
+                });
+            }
         }
         rows
     }
 
     pub(crate) fn reflow_uncached(&self, cols: u16, max_rows: usize) -> Vec<ReflowRow> {
+        self.reflow_uncached_from(cols, max_rows, 0)
+    }
+
+    pub(crate) fn reflow_uncached_from(
+        &self,
+        cols: u16,
+        max_rows: usize,
+        start_col: usize,
+    ) -> Vec<ReflowRow> {
         if cols == 0 || max_rows == 0 {
             return Vec::new();
         }
         let width = usize::from(cols);
         let mut rows = Vec::new();
         let mut current = ReflowRow::default();
+        let mut used = start_col.min(width);
         let mut previous_break = None;
         for line in self.entries() {
             let joins = previous_break == Some(HistoryBreakAfter::SoftWrap);
             if !joins && !current.cells.is_empty() {
                 rows.push(std::mem::take(&mut current));
+                used = 0;
                 if rows.len() >= max_rows {
                     break;
                 }
             }
             for (unit_index, unit) in line.units().enumerate() {
                 let unit_width = usize::from(unit.width().max(1));
-                if !current.cells.is_empty() && current.cells.len() + unit_width > width {
-                    current.break_after = Some(HistoryBreakAfter::SoftWrap);
-                    rows.push(std::mem::take(&mut current));
-                    if rows.len() >= max_rows {
-                        return rows;
+                if used > 0 && used + unit_width > width {
+                    if !current.cells.is_empty() {
+                        current.break_after = Some(HistoryBreakAfter::SoftWrap);
+                        rows.push(std::mem::take(&mut current));
+                        if rows.len() >= max_rows {
+                            return rows;
+                        }
                     }
+                    used = 0;
                 }
                 let anchor = HistoryAnchor {
                     line_id: line.line_id(),
@@ -802,6 +1046,7 @@ impl HistoryStore {
                         break_after: Some(HistoryBreakAfter::SoftWrap),
                         unavailable: true,
                     });
+                    used = 0;
                     if rows.len() >= max_rows {
                         return rows;
                     }
@@ -813,6 +1058,7 @@ impl HistoryStore {
                 if unit_width == 2 {
                     current.cells.push(Cell::continuation());
                 }
+                used = used.saturating_add(unit_width);
             }
             previous_break = Some(line.break_after());
             if line.break_after() == HistoryBreakAfter::HardBreak {
@@ -828,6 +1074,7 @@ impl HistoryStore {
                     current.break_after = Some(HistoryBreakAfter::HardBreak);
                     rows.push(std::mem::take(&mut current));
                 }
+                used = 0;
                 if rows.len() >= max_rows {
                     break;
                 }
@@ -1158,5 +1405,30 @@ mod tests {
         // never-evicted primary identity sitting in an alternate-screen gap.
         assert!(!store.line_was_evicted(LineId(MAX_EVICTED_ID_RANGES as u64 * 10 + 50)));
         assert!(store.range_intersects_evicted(LineId(1), LineId(1)));
+    }
+
+    #[test]
+    fn eager_resize_suffix_is_bounded_for_hard_broken_history() {
+        let mut store = HistoryStore::default();
+        for id in 0..8_000 {
+            store.append_line(ascii_line(id, "x", HistoryBreakAfter::HardBreak));
+        }
+        let (suffix, from, start_col) = store.eager_resize_suffix(8, 6);
+        assert!(
+            suffix.len() <= 48,
+            "eager suffix cloned {} lines from 8000 hard-broken rows",
+            suffix.len()
+        );
+        assert!(suffix.len() < 8_000);
+        assert_eq!(start_col, 0);
+        assert!(from.expect("suffix").line_id.0 > 0);
+        store.truncate_from(from.unwrap());
+        assert!(matches!(
+            store.resolve_anchor(HistoryAnchor {
+                line_id: LineId(0),
+                unit_offset: 0
+            }),
+            HistoryAnchorResolution::Resolved { .. }
+        ));
     }
 }

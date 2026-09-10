@@ -203,6 +203,9 @@ pub struct HistoryRangeRequest {
     pub end_line: u64,
     pub max_lines: u16,
     pub max_cells: u32,
+    /// Lead cells to skip from the start of the line range. Zero is the
+    /// M001-compatible beginning of the first in-range line.
+    pub start_unit: u32,
 }
 
 impl HistoryRangeRequest {
@@ -218,7 +221,7 @@ impl HistoryRangeRequest {
         out.extend_from_slice(&self.max_lines.to_le_bytes());
         out.extend_from_slice(&[0; 2]);
         out.extend_from_slice(&self.max_cells.to_le_bytes());
-        out.extend_from_slice(&[0; 4]);
+        out.extend_from_slice(&self.start_unit.to_le_bytes());
         out.extend_from_slice(&[0; 4]);
         out
     }
@@ -230,7 +233,7 @@ impl HistoryRangeRequest {
         let start_line = u64::from_le_bytes(bytes[32..40].try_into().unwrap());
         let end_line = u64::from_le_bytes(bytes[40..48].try_into().unwrap());
         if bytes[50..52] != [0; 2]
-            || bytes[56..64] != [0; 8]
+            || bytes[60..64] != [0; 4]
             || request_id == 0
             || block_id == 0
             || start_line == 0
@@ -240,6 +243,7 @@ impl HistoryRangeRequest {
         }
         let max_lines = u16::from_le_bytes(bytes[48..50].try_into().unwrap());
         let max_cells = u32::from_le_bytes(bytes[52..56].try_into().unwrap());
+        let start_unit = u32::from_le_bytes(bytes[56..60].try_into().unwrap());
         if max_lines == 0
             || usize::from(max_lines) > MAX_HISTORY_RANGE_LINES
             || max_cells == 0
@@ -255,6 +259,7 @@ impl HistoryRangeRequest {
             end_line,
             max_lines,
             max_cells,
+            start_unit,
         })
     }
 }
@@ -845,6 +850,7 @@ mod command_block_tests {
             end_line: 8,
             max_lines: 32,
             max_cells: 4096,
+            start_unit: 12,
         };
         assert_eq!(HistoryRangeRequest::decode(&request.encode()), Ok(request));
         let mut reversed = request.encode();

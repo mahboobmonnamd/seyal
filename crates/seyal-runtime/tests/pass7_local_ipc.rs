@@ -270,6 +270,7 @@ fn history_range_combining_grapheme_round_trips_over_runtime_wire() {
             end_line: u64::MAX,
             max_lines: 32,
             max_cells: 2_560,
+            start_unit: 0,
         }
         .encode(),
     );
@@ -353,6 +354,7 @@ fn evicted_history_range_reports_stale_over_runtime_wire() {
             end_line: 1,
             max_lines: 1,
             max_cells: 512,
+            start_unit: 0,
         }
         .encode(),
     );
@@ -642,6 +644,7 @@ fn history_range_over_wire_budget_returns_truncated_not_capacity_error() {
             end_line: u64::MAX,
             max_lines: 512,
             max_cells: 131_072,
+            start_unit: 0,
         }
         .encode(),
     );

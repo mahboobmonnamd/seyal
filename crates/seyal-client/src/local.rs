@@ -196,6 +196,7 @@ impl LocalDisplayClient {
         end_line: u64,
         max_lines: u16,
         max_cells: u32,
+        start_unit: u32,
     ) -> Result<(), ClientError> {
         self.require_controller()?;
         if block_id == 0 || start_line == 0 || end_line < start_line {
@@ -211,6 +212,7 @@ impl LocalDisplayClient {
             end_line,
             max_lines,
             max_cells,
+            start_unit,
         }
         .encode();
         let frame = encode_frame(MessageType::HistoryRangeRequest, &payload);

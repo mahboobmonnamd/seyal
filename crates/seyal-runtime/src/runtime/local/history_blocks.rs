@@ -72,6 +72,7 @@ impl Runtime {
             LineId(request.start_line),
             LineId(request.end_line),
             max_lines,
+            request.start_unit,
         ) {
             Ok(rows) => rows,
             Err(HistoryRangeError::Unrepresentable) => {

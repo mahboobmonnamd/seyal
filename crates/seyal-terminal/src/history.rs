@@ -571,7 +571,7 @@ impl HistoryStore {
         };
         let units = chain.units_before(from);
         if chain.pattern_len == 2 && chain.runs.len() >= 2 {
-            wrap_occupancy_repeating(&[(chain.runs[0].0, 1), (chain.runs[1].0, 1)], width, units)
+            wrap_occupancy_repeating(&chain.runs[..2], width, units)
         } else {
             wrap_occupancy_runs(&chain.runs, width, units)
         }
@@ -1584,35 +1584,52 @@ fn wrap_occupancy_runs(runs: &[(u8, u32)], cols: usize, unit_limit: u32) -> usiz
 }
 
 fn wrap_occupancy_repeating(pattern: &[(u8, u32)], cols: usize, unit_limit: u32) -> usize {
-    let mut widths = Vec::new();
-    for &(width, count) in pattern {
-        widths.extend(std::iter::repeat(width.max(1)).take(count as usize));
-    }
-    if cols == 0 || widths.is_empty() || unit_limit == 0 {
+    let pattern_units = pattern
+        .iter()
+        .map(|(_, count)| *count)
+        .fold(0u32, u32::saturating_add);
+    if cols == 0 || pattern_units == 0 || unit_limit == 0 {
         return 0;
     }
-    let period = widths.len();
     let mut used = 0usize;
-    let mut remaining = unit_limit as usize;
-    let mut phase = 0usize;
-    let mut seen: Vec<Option<usize>> = vec![None; cols.saturating_add(1).saturating_mul(period)];
+    let mut remaining = unit_limit;
+    let mut seen: Vec<Option<u32>> = vec![None; cols.saturating_add(1)];
+    let mut scratch: Vec<Option<usize>> = vec![None; cols.saturating_add(1)];
     while remaining > 0 {
-        let key = used.saturating_mul(period).saturating_add(phase);
-        if let Some(remaining_then) = seen[key] {
+        if used <= cols
+            && let Some(remaining_then) = seen[used]
+        {
             let cycle = remaining_then.saturating_sub(remaining);
             if cycle > 0 {
                 remaining %= cycle;
                 seen.fill(None);
                 continue;
             }
+        } else if used <= cols {
+            seen[used] = Some(remaining);
         }
-        seen[key] = Some(remaining);
-        used = wrap_advance(used, cols, widths[phase]);
-        remaining -= 1;
-        phase += 1;
-        if phase == period {
-            phase = 0;
+        let take = remaining.min(pattern_units);
+        used = wrap_occupancy_pattern_once(used, pattern, cols, take, &mut scratch);
+        remaining = remaining.saturating_sub(take);
+    }
+    used.min(cols)
+}
+
+fn wrap_occupancy_pattern_once(
+    mut used: usize,
+    pattern: &[(u8, u32)],
+    cols: usize,
+    unit_limit: u32,
+    seen: &mut [Option<usize>],
+) -> usize {
+    let mut left = unit_limit;
+    for &(width, count) in pattern {
+        if left == 0 {
+            break;
         }
+        let take = count.min(left);
+        used = wrap_occupancy_run(used, cols, width, take, seen);
+        left = left.saturating_sub(take);
     }
     used.min(cols)
 }
@@ -1998,5 +2015,50 @@ mod tests {
             }),
             HistoryAnchorResolution::Resolved { .. }
         ));
+    }
+
+    #[test]
+    fn wrap_column_before_preserves_period_two_run_counts() {
+        let mut store = HistoryStore::default();
+        let mut widths = Vec::new();
+        for id in 0..2_000 {
+            widths.extend_from_slice(&[1, 1, 2]);
+            store.append_line(HistoryLine {
+                line_id: LineId(id),
+                units: vec![
+                    HistoryUnit {
+                        utf8: vec![b'a'],
+                        width: 1,
+                        style: Style::default(),
+                    },
+                    HistoryUnit {
+                        utf8: vec![b'b'],
+                        width: 1,
+                        style: Style::default(),
+                    },
+                    HistoryUnit {
+                        utf8: vec![b'c'],
+                        width: 2,
+                        style: Style::default(),
+                    },
+                ],
+                break_after: HistoryBreakAfter::SoftWrap,
+                start_offset: 0,
+            });
+        }
+        let chain = store.wrap_chains.back().expect("open wrap chain");
+        assert_eq!(chain.pattern_len, 2);
+        assert_eq!(chain.runs.first().copied(), Some((1, 2)));
+        assert_eq!(chain.runs.get(1).copied(), Some((2, 1)));
+        let (suffix, from, start_col) = store.eager_resize_suffix(8, 6);
+        assert!(suffix.len() < 2_000);
+        let from = from.expect("suffix cut");
+        let prefix_units = store
+            .wrap_chains
+            .back()
+            .map(|chain| chain.units_before(from))
+            .unwrap_or(0) as usize;
+        assert_eq!(start_col, wrap_occupancy(&widths[..prefix_units], 8));
+        assert_eq!(store.wrap_column_before(Some(from), 8), start_col);
     }
 }

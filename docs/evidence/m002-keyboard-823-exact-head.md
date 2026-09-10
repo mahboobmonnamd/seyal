@@ -2,7 +2,8 @@
 
 - **Issue:** #823
 - **Authority:** SPEC-006 M001 native input contract and the #823 issue acceptance gates
-- **Measured production code head:** `9848add7b03c8d402b55164cd27f9008a3df052e` (this record's docs commit sits after that production SHA)
+- **Measured production code head:** `9848add7b03c8d402b55164cd27f9008a3df052e`
+- **Later client-admission fix:** `f24e2a4` (TerminalKeyV2 backpressure + capability/action_id guards; macOS-only client tests not executed on this Linux host)
 - **Recorded:** 2026-09-10
 - **Host/build boundary:** Linux x86_64 cloud agent (`uname -srm`: `Linux 6.12.94+ x86_64`) plus previously retained Apple Silicon headed notes
 - **Claim status:** automated, source-build, security-review, and bounded fuzz evidence; native/manual gates remain unverified; `performance_claim=false`
@@ -116,7 +117,7 @@ See `docs/evidence/m002-keyboard-823-security-review.md`. Verdict: **PASS** for 
 | Fuzzing | **Partial (ci-smoke)** | Registry smoke 9/9 active targets; 45s `pass7_protocol_decode` campaign 12_992_053 execs, 0 crashes. Not a 600s nightly. |
 | Key latency | **PLATFORM_LIMITED / Missing native** | Linux Release harness printed `PLATFORM_LIMITED`; no ARM64 native-key→PTY matrix. `performance_claim=false`. |
 | Native/XCUI keyboard integration | **Unverified** | Requires a clean headed macOS test lane with real key events. Prior focused shortcut XCUI at `fe70733` does not close the full matrix. |
-| Manual physical keyboard/layout/IME gates | **Unverified** | Do not infer these from source tests or synthetic events. |
+| Manual physical keyboard/layout/IME gates | **ENVIRONMENT_UNSUPPORTED** | See `docs/evidence/m002-keyboard-823-headed-manual.md`. Linux cloud agent; no HID/IME/keypad. |
 | Independent security review | **Automated source review** | `docs/evidence/m002-keyboard-823-security-review.md` at `9848add`. Not a substitute for headed evidence. |
 | `make check` | **Automated (prior)** | Full exact-head `make check` passed at `fe70733`; this Linux pass did not re-run the native macOS packaging lane. |
 | Closing PR | **Not allowed** | Headed/manual/latency/target-TUI gates remain open. |

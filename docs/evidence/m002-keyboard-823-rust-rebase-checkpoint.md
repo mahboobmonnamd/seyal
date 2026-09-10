@@ -26,6 +26,8 @@ this tip before merge.
 - Protocol wire/security framing negatives for `TerminalKeyV2` (SPEC-006 §21.7):
   lengths 0–39 and 41+, unknown kind/event/version/modifier bits, reserved pads,
   bad scalars/values, zero `action_id`, and dispatcher exact-length rejection.
+- Kitty flag stack: 17-push oldest-eviction, saturating pop, and set-on-empty base
+  restore (`m002_keyboard`).
 
 ## Focused Rust verification
 
@@ -35,6 +37,9 @@ cargo test -p seyal-runtime --locked --lib -- key_v2
 
 cargo test -p seyal-protocol --locked --test pass7_input_resize
 # 10 passed (includes V2 wire/security framing negatives)
+
+cargo test -p seyal-terminal --locked --test m002_keyboard
+# 5 passed (modes + flag-stack eviction)
 
 cargo test -p seyal-client --locked --lib -- v2_error
 # 3 passed

@@ -188,9 +188,7 @@ pub(crate) fn classify_server_error(
 ) -> Result<Option<InputAdmissionFailure>, ClientError> {
     if error.error_code == ErrorCode::Backpressure as u16
         && (error.offending_message_type == MessageType::Input as u16
-            || error.offending_message_type == MessageType::TerminalKey as u16
-            || (error.offending_message_type == MessageType::TerminalKeyV2 as u16
-                && error.detail_code != 0))
+            || error.offending_message_type == MessageType::TerminalKey as u16)
     {
         return Ok(Some(InputAdmissionFailure::ClientBackpressure));
     }
@@ -314,6 +312,9 @@ impl LocalDisplayClient {
         if action_id == 0 {
             return Err(ClientError::Protocol);
         }
+        if action_id <= self.last_sent_v2_action_id {
+            return Err(ClientError::Protocol);
+        }
         let payload = TerminalKeyV2 {
             attachment_id: self.attachment_id,
             kind,
@@ -329,8 +330,35 @@ impl LocalDisplayClient {
             self.input_failure = Some(InputAdmissionFailure::ClientBackpressure);
             return Err(error);
         }
+        self.last_sent_v2_action_id = action_id;
         self.input_failure = None;
         self.flush_control_write()
+    }
+
+    pub(crate) fn classify_incoming_error(
+        &mut self,
+        error: ErrorMessage,
+    ) -> Result<Option<InputAdmissionFailure>, ClientError> {
+        if error.error_code == ErrorCode::Backpressure as u16
+            && error.offending_message_type == MessageType::TerminalKeyV2 as u16
+        {
+            return self.classify_v2_backpressure(error.detail_code);
+        }
+        classify_server_error(error)
+    }
+
+    fn classify_v2_backpressure(
+        &mut self,
+        action_id: u32,
+    ) -> Result<Option<InputAdmissionFailure>, ClientError> {
+        if action_id == 0 {
+            return Err(ClientError::Server(ErrorCode::Backpressure));
+        }
+        if action_id > self.last_sent_v2_action_id || action_id <= self.highest_v2_error_id {
+            return Err(ClientError::Protocol);
+        }
+        self.highest_v2_error_id = action_id;
+        Ok(Some(InputAdmissionFailure::ClientBackpressure))
     }
 
     pub fn set_desired_geometry(&mut self, geometry: GridGeometry) -> Result<(), ClientError> {
@@ -888,23 +916,6 @@ mod tests {
         assert_eq!(
             classify_server_error(key_error).unwrap(),
             Some(InputAdmissionFailure::ClientBackpressure)
-        );
-        let key_v2_error = ErrorMessage {
-            error_code: ErrorCode::Backpressure as u16,
-            offending_message_type: MessageType::TerminalKeyV2 as u16,
-            detail_code: 7,
-        };
-        assert_eq!(
-            classify_server_error(key_v2_error).unwrap(),
-            Some(InputAdmissionFailure::ClientBackpressure)
-        );
-        assert_eq!(
-            classify_server_error(ErrorMessage {
-                error_code: ErrorCode::Backpressure as u16,
-                offending_message_type: MessageType::TerminalKeyV2 as u16,
-                detail_code: 0,
-            }),
-            Err(ClientError::Server(ErrorCode::Backpressure))
         );
         assert_eq!(
             classify_server_error(ErrorMessage {

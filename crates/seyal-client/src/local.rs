@@ -116,6 +116,9 @@ pub struct LocalDisplayClient {
     pub(crate) history_ranges: HashMap<(u64, u64), HistoryRangeSnapshot>,
     pub(crate) history_requests: HashMap<u64, (u64, u64, u64)>,
     pub(crate) next_history_request_id: u64,
+    /// Connection-local SPEC-006 §21.5 sent/highest-error bounds. Zero means none.
+    pub(crate) last_sent_v2_action_id: u32,
+    pub(crate) highest_v2_error_id: u32,
 }
 
 impl LocalDisplayClient {
@@ -385,7 +388,7 @@ impl LocalDisplayClient {
                         // bounded, retryable failure without dropping later
                         // FIFO work. Other Error frames retain their fatal
                         // protocol/authority semantics.
-                        if let Some(failure) = input_resize::classify_server_error(error)? {
+                        if let Some(failure) = self.classify_incoming_error(error)? {
                             self.input_failure = Some(failure);
                         }
                     }
@@ -499,6 +502,7 @@ pub(crate) fn validate_composer_result(
 mod tests {
     use super::*;
     use seyal_runtime::pass8::CAP_BLOCK_METADATA;
+    use seyal_runtime::local_ipc::framing::ErrorMessage;
     use std::io::{Read, Write};
 
     fn test_client(stream: UnixStream) -> LocalDisplayClient {
@@ -549,6 +553,8 @@ mod tests {
             history_ranges: HashMap::new(),
             history_requests: HashMap::new(),
             next_history_request_id: 1,
+            last_sent_v2_action_id: 0,
+            highest_v2_error_id: 0,
         }
     }
 
@@ -712,5 +718,67 @@ mod tests {
             .expect_err("action_id 0 is not a correlated V2 action");
         assert_eq!(error, ClientError::Protocol);
         assert!(client.outbound.is_empty());
+    }
+
+    #[test]
+    fn v2_backpressure_uses_sent_and_highest_error_bounds() {
+        let (client_stream, _server_stream) = UnixStream::pair().expect("socket pair");
+        let mut client = test_client(client_stream);
+        client.extended_terminal_key_supported = true;
+        client
+            .submit_terminal_key_v2(
+                TerminalKeyV2Kind::ArrowUp,
+                TerminalKeyV2Modifiers::NONE,
+                0,
+                TerminalKeyV2Event::Press,
+                0,
+                7,
+            )
+            .expect("in-range V2 send");
+        assert_eq!(client.last_sent_v2_action_id, 7);
+
+        let in_range = ErrorMessage {
+            error_code: ErrorCode::Backpressure as u16,
+            offending_message_type: MessageType::TerminalKeyV2 as u16,
+            detail_code: 7,
+        };
+        assert_eq!(
+            client.classify_incoming_error(in_range).unwrap(),
+            Some(InputAdmissionFailure::ClientBackpressure)
+        );
+        assert_eq!(client.highest_v2_error_id, 7);
+
+        assert_eq!(
+            client.classify_incoming_error(ErrorMessage {
+                error_code: ErrorCode::Backpressure as u16,
+                offending_message_type: MessageType::TerminalKeyV2 as u16,
+                detail_code: 7,
+            }),
+            Err(ClientError::Protocol)
+        );
+        assert_eq!(
+            client.classify_incoming_error(ErrorMessage {
+                error_code: ErrorCode::Backpressure as u16,
+                offending_message_type: MessageType::TerminalKeyV2 as u16,
+                detail_code: 3,
+            }),
+            Err(ClientError::Protocol)
+        );
+        assert_eq!(
+            client.classify_incoming_error(ErrorMessage {
+                error_code: ErrorCode::Backpressure as u16,
+                offending_message_type: MessageType::TerminalKeyV2 as u16,
+                detail_code: 9,
+            }),
+            Err(ClientError::Protocol)
+        );
+        assert_eq!(
+            client.classify_incoming_error(ErrorMessage {
+                error_code: ErrorCode::Backpressure as u16,
+                offending_message_type: MessageType::TerminalKeyV2 as u16,
+                detail_code: 0,
+            }),
+            Err(ClientError::Server(ErrorCode::Backpressure))
+        );
     }
 }

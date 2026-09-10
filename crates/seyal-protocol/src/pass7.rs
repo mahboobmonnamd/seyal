@@ -1169,7 +1169,7 @@ impl TerminalKeyV2 {
         Ok(value)
     }
 
-    fn validate(&self) -> Result<(), FramingError> {
+    pub fn validate(&self) -> Result<(), FramingError> {
         if self.action_id == 0 {
             return Err(FramingError::MalformedPayload);
         }

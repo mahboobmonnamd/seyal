@@ -464,7 +464,7 @@ fn encode_terminal_key_v2(key: TerminalKeyV2, modes: ModeState) -> Result<Vec<u8
 }
 
 impl Runtime {
-    fn fatal_terminal_key_v2(&mut self, token: u64) {
+    pub(super) fn fatal_terminal_key_v2(&mut self, token: u64) {
         self.send_error(
             token,
             ErrorCode::MalformedPayload,
@@ -1082,6 +1082,70 @@ mod tests {
         assert_eq!(
             encode_terminal_key_v2(key, ModeState::default()).unwrap(),
             b"\x1b@"
+        );
+    }
+
+    #[test]
+    fn v2_escape_and_modified_enter_tab_backspace_use_specified_bytes() {
+        let base = TerminalKeyV2 {
+            attachment_id: crate::AttachmentId::from_bytes([0; 16]),
+            kind: TerminalKeyV2Kind::Escape,
+            modifiers: TerminalKeyV2Modifiers::NONE,
+            value: 0,
+            event: TerminalKeyV2Event::Press,
+            shifted_ascii: 0,
+            action_id: 1,
+        };
+        assert_eq!(
+            encode_terminal_key_v2(base, ModeState::default()).unwrap(),
+            b"\x1b"
+        );
+        assert_eq!(
+            encode_terminal_key_v2(
+                base,
+                ModeState {
+                    keyboard_flags: 1,
+                    ..ModeState::default()
+                }
+            )
+            .unwrap(),
+            b"\x1b[27;1u"
+        );
+        let shift_tab = TerminalKeyV2 {
+            kind: TerminalKeyV2Kind::Tab,
+            modifiers: TerminalKeyV2Modifiers::SHIFT,
+            ..base
+        };
+        assert_eq!(
+            encode_terminal_key_v2(shift_tab, ModeState::default()).unwrap(),
+            b"\x1b[Z"
+        );
+        let alt_enter = TerminalKeyV2 {
+            kind: TerminalKeyV2Kind::Enter,
+            modifiers: TerminalKeyV2Modifiers::ALT,
+            ..base
+        };
+        assert_eq!(
+            encode_terminal_key_v2(alt_enter, ModeState::default()).unwrap(),
+            b"\x1b\r"
+        );
+        let control_enter = TerminalKeyV2 {
+            kind: TerminalKeyV2Kind::Enter,
+            modifiers: TerminalKeyV2Modifiers::CONTROL,
+            ..base
+        };
+        assert_eq!(
+            encode_terminal_key_v2(control_enter, ModeState::default()).unwrap(),
+            [0x0d]
+        );
+        let control_backspace = TerminalKeyV2 {
+            kind: TerminalKeyV2Kind::Backspace,
+            modifiers: TerminalKeyV2Modifiers::CONTROL,
+            ..base
+        };
+        assert_eq!(
+            encode_terminal_key_v2(control_backspace, ModeState::default()).unwrap(),
+            [0x08]
         );
     }
 }

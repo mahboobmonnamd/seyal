@@ -505,6 +505,15 @@ impl TerminalCore {
             3 => self.modes.keyboard_flags & !flags,
             _ => return false,
         } & KEYBOARD_FLAGS_MASK;
+        {
+            let (_current, stack, len) = self.current_keyboard_state_mut();
+            if *len == 0 {
+                stack[0] = next;
+                *len = 1;
+            } else {
+                stack[*len - 1] = next;
+            }
+        }
         self.modes.keyboard_flags = next;
         self.sync_keyboard_flags();
         true

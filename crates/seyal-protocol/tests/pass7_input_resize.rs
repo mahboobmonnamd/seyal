@@ -124,6 +124,16 @@ fn terminal_key_v2_rejects_reserved_and_invalid_ascii() {
         TerminalKeyV2::decode(&invalid),
         Err(FramingError::MalformedPayload)
     );
+    let function = TerminalKeyV2 {
+        kind: TerminalKeyV2Kind::Function,
+        modifiers: TerminalKeyV2Modifiers::NONE,
+        value: 13,
+        event: TerminalKeyV2Event::Press,
+        shifted_ascii: 0,
+        action_id: 1,
+        attachment_id: attachment_id(),
+    };
+    assert_eq!(function.validate(), Err(FramingError::MalformedPayload));
 }
 
 #[test]

@@ -314,6 +314,33 @@ fn unnegotiated_v2_key_closes_connection_after_bounded_error() {
     harness.wait_for_close();
 }
 
+fn sample_v2_key() -> TerminalKeyV2 {
+    TerminalKeyV2 {
+        attachment_id: AttachmentId::from_bytes([0; 16]),
+        kind: TerminalKeyV2Kind::ArrowUp,
+        modifiers: TerminalKeyV2Modifiers::NONE,
+        value: 0,
+        event: TerminalKeyV2Event::Press,
+        shifted_ascii: 0,
+        action_id: 1,
+    }
+}
+
+#[test]
+fn type_29_before_hello_closes_connection_after_bounded_error() {
+    let (mut harness, _execution_id) = Harness::new(CommandSpec::new("/bin/cat"));
+    harness.send(MessageType::TerminalKeyV2, &sample_v2_key().encode());
+    harness.wait_for_close();
+}
+
+#[test]
+fn type_29_after_hello_before_attach_closes_connection_after_bounded_error() {
+    let (mut harness, _execution_id) = Harness::new(CommandSpec::new("/bin/cat"));
+    harness.hello_with_capabilities(CAP_EXTENDED_TERMINAL_KEY);
+    harness.send(MessageType::TerminalKeyV2, &sample_v2_key().encode());
+    harness.wait_for_close();
+}
+
 #[test]
 fn v2_rejection_echoes_action_id_and_duplicate_id_is_fatal() {
     let (mut harness, execution_id) = Harness::new(CommandSpec::new("/bin/cat"));

@@ -318,7 +318,7 @@ impl LocalDisplayClient {
         if action_id <= self.last_admitted_v2_action_id {
             return Err(ClientError::Protocol);
         }
-        let payload = TerminalKeyV2 {
+        let key = TerminalKeyV2 {
             attachment_id: self.attachment_id,
             kind,
             modifiers,
@@ -326,8 +326,11 @@ impl LocalDisplayClient {
             event,
             shifted_ascii,
             action_id,
+        };
+        if key.validate().is_err() {
+            return Err(ClientError::Protocol);
         }
-        .encode();
+        let payload = key.encode();
         let frame = encode_frame(MessageType::TerminalKeyV2, &payload);
         if let Err(error) = self.admit_frame(frame, OutboundKind::TerminalKeyV2 { action_id }) {
             self.input_failure = Some(InputAdmissionFailure::ClientBackpressure);

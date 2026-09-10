@@ -52,6 +52,18 @@ fn kitty_flags_are_masked_bounded_and_screen_local() {
 }
 
 #[test]
+fn kitty_set_creates_a_base_stack_entry_restored_by_pop() {
+    let mut terminal = terminal();
+    terminal.feed(b"\x1b[=3;1u\x1b[>1u\x1b[<1u").unwrap();
+    assert_eq!(terminal.modes().keyboard_flags, 3);
+    terminal.feed(b"\x1b[?u").unwrap();
+    assert_eq!(
+        terminal.take_protocol_reply().unwrap().as_bytes(),
+        b"\x1b[?3u"
+    );
+}
+
+#[test]
 fn unsupported_keyboard_controls_do_not_mutate_or_print() {
     let mut terminal = terminal();
     terminal.feed(b"\x1b[=1;0uX\x1bcY").unwrap();

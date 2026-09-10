@@ -228,25 +228,33 @@ private enum TerminalNativeKeyClassifier {
     optionAsAlt: Bool
   ) -> TerminalNativeKeyV2? {
     let flags = modifierFlags.intersection(.deviceIndependentFlagsMask)
-    var modifiers: UInt16 = 0
-    if flags.contains(.shift) { modifiers |= 1 }
-    if flags.contains(.option) && (optionAsAlt || specialKey != nil) { modifiers |= 2 }
-    if flags.contains(.control) { modifiers |= 4 }
-    let kind: UInt16
-    let value: UInt32
     let functionKeys: [UInt16: UInt32] = [122: 1, 120: 2, 99: 3, 118: 4, 96: 5, 97: 6, 98: 7, 100: 8, 101: 9, 109: 10, 103: 11, 111: 12]
     if let function = functionKeys[keyCode] {
-      return TerminalNativeKeyV2(kind: 15, modifiers: modifiers, value: function, shiftedASCII: 0)
+      return assembleV2(
+        kind: 15, value: function, semantic: true, flags: flags, optionAsAlt: optionAsAlt,
+        characters: characters)
     }
     if flags.contains(.numericPad) {
       let keypad: [UInt16: UInt32] = [82: 0, 83: 1, 84: 2, 85: 3, 86: 4, 87: 5, 88: 6, 89: 7, 91: 8, 92: 9, 65: 10, 75: 11, 67: 12, 78: 13, 69: 14, 81: 15, 76: 16]
       if let value = keypad[keyCode] {
-        return TerminalNativeKeyV2(kind: 16, modifiers: modifiers, value: value, shiftedASCII: 0)
+        return assembleV2(
+          kind: 16, value: value, semantic: true, flags: flags, optionAsAlt: optionAsAlt,
+          characters: characters)
       }
     }
+    let kind: UInt16
+    let value: UInt32
+    var semantic = specialKey != nil
     switch specialKey {
-    // These retain the M001 legacy path, including AppKit text/IME routing.
-    case .carriageReturn, .newline, .enter, .tab, .backspace: return nil
+    case .carriageReturn, .newline, .enter:
+      kind = 1
+      value = 0
+    case .tab, .backTab:
+      kind = 2
+      value = 0
+    case .backspace:
+      kind = 3
+      value = 0
     case .upArrow: kind = 5; value = 0
     case .downArrow: kind = 6; value = 0
     case .rightArrow: kind = 7; value = 0
@@ -258,12 +266,40 @@ private enum TerminalNativeKeyClassifier {
     case .pageUp: kind = 13; value = 0
     case .pageDown: kind = 14; value = 0
     default:
-      guard let chars = charactersIgnoringModifiers, chars.unicodeScalars.count == 1,
-        let scalar = chars.unicodeScalars.first?.value, (0x20...0x7e).contains(scalar),
-        modifiers & 6 != 0
-      else { return nil }
-      kind = 17; value = scalar >= 0x41 && scalar <= 0x5a ? scalar + 0x20 : scalar
+        if charactersIgnoringModifiers == "\u{1b}" {
+          kind = 4
+          value = 0
+          semantic = true
+      } else {
+        guard let chars = charactersIgnoringModifiers, chars.unicodeScalars.count == 1,
+          let scalar = chars.unicodeScalars.first?.value, (0x20...0x7e).contains(scalar)
+        else { return nil }
+        var preview: UInt16 = 0
+        if flags.contains(.option) && optionAsAlt { preview |= 2 }
+        if flags.contains(.control) { preview |= 4 }
+        guard preview & 6 != 0 else { return nil }
+        kind = 17
+        value = scalar >= 0x41 && scalar <= 0x5a ? scalar + 0x20 : scalar
+        semantic = false
+      }
     }
+    return assembleV2(
+      kind: kind, value: value, semantic: semantic, flags: flags, optionAsAlt: optionAsAlt,
+      characters: characters)
+  }
+
+  private static func assembleV2(
+    kind: UInt16,
+    value: UInt32,
+    semantic: Bool,
+    flags: NSEvent.ModifierFlags,
+    optionAsAlt: Bool,
+    characters: String?
+  ) -> TerminalNativeKeyV2? {
+    var modifiers: UInt16 = 0
+    if flags.contains(.shift) { modifiers |= 1 }
+    if flags.contains(.option) && (optionAsAlt || semantic) { modifiers |= 2 }
+    if flags.contains(.control) { modifiers |= 4 }
     let shiftedASCII: UInt32
     if kind == 17, flags.contains(.shift) {
       guard let chars = characters, chars.unicodeScalars.count == 1,
@@ -515,9 +551,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
         }
         heldKeyboardKinds[event.keyCode] = key
       }
-      let actionID = nextKeyboardActionID
-      guard actionID != 0 else { return }
-      nextKeyboardActionID &+= 1
+      guard let actionID = takeNextKeyboardActionID() else { return }
       terminalSubmitKeyV2(
         kind: key.kind, modifiers: key.modifiers, value: key.value,
         event: event.isARepeat ? 2 : 1, shiftedASCII: key.shiftedASCII, actionID: actionID
@@ -560,9 +594,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
       keyCode: event.keyCode,
       v2Supported: terminalSupportsKeyV2()
     ) else { return }
-    let actionID = nextKeyboardActionID
-    guard actionID != 0 else { return }
-    nextKeyboardActionID &+= 1
+    guard let actionID = takeNextKeyboardActionID() else { return }
     terminalSubmitKeyV2(
       kind: key.kind, modifiers: key.modifiers, value: key.value,
       event: 3, shiftedASCII: key.shiftedASCII, actionID: actionID
@@ -602,6 +634,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
     super.terminalBridgeStatusDidChange()
     if !terminalBridgeIsConnected {
       heldKeyboardKinds.removeAll(keepingCapacity: true)
+      nextKeyboardActionID = 1
     }
     if terminalBridgeIsConnected, nativeFailure == .disconnected {
       nativeFailure = nil
@@ -816,6 +849,22 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
     }
     refreshFailurePresentation()
     return result
+  }
+
+  private func takeNextKeyboardActionID() -> UInt32? {
+    guard let actionID = Self.v2ActionIDBeforeExhaustion(nextKeyboardActionID) else {
+      nativeFailure = .disconnected
+      refreshFailurePresentation()
+      terminalStopForProtocolRecovery()
+      return nil
+    }
+    nextKeyboardActionID &+= 1
+    return actionID
+  }
+
+  /// SPEC-006 §21.5: stop admission before wrapping or replaying action IDs.
+  static func v2ActionIDBeforeExhaustion(_ next: UInt32) -> UInt32? {
+    (next == 0 || next == .max) ? nil : next
   }
 
   private func submitSemanticKey(_ key: TerminalKeyIntent, scalar: UInt32) {
@@ -1154,7 +1203,26 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
         keyCode: 36, specialKey: .enter, charactersIgnoringModifiers: nil,
         characters: nil,
         modifierFlags: [], optionAsAlt: false
-      ) == nil
+      )?.kind == 1
+      && TerminalNativeKeyClassifier.v2(
+        keyCode: 48, specialKey: .tab, charactersIgnoringModifiers: nil,
+        characters: nil, modifierFlags: [.shift], optionAsAlt: false
+      ).map { $0.kind == 2 && $0.modifiers == 1 } == true
+      && TerminalNativeKeyClassifier.v2(
+        keyCode: 53, specialKey: nil, charactersIgnoringModifiers: "\u{1b}",
+        characters: nil, modifierFlags: [], optionAsAlt: false
+      )?.kind == 4
+      && TerminalNativeKeyClassifier.v2(
+        keyCode: 36, specialKey: .enter, charactersIgnoringModifiers: nil,
+        characters: nil, modifierFlags: [.control], optionAsAlt: false
+      ).map { $0.kind == 1 && $0.modifiers == 4 } == true
+      && TerminalNativeKeyClassifier.v2(
+        keyCode: 51, specialKey: .backspace, charactersIgnoringModifiers: nil,
+        characters: nil, modifierFlags: [.control], optionAsAlt: false
+      ).map { $0.kind == 3 && $0.modifiers == 4 } == true
+      && InteractiveMetalSurfaceView.v2ActionIDBeforeExhaustion(1) == 1
+      && InteractiveMetalSurfaceView.v2ActionIDBeforeExhaustion(0) == nil
+      && InteractiveMetalSurfaceView.v2ActionIDBeforeExhaustion(.max) == nil
       && TerminalNativeKeyClassifier.v2(
         keyCode: 0, specialKey: nil, charactersIgnoringModifiers: "a",
         characters: "a",

@@ -45,7 +45,13 @@ impl Runtime {
                     | MessageType::HistoryRangeRequest
             );
         if !pass7_attached && current_state.validate_incoming(kind).is_err() {
-            self.send_error(token, ErrorCode::InvalidState, message_type);
+            if kind == MessageType::TerminalKeyV2 {
+                // SPEC-006 §21.5: unnegotiated / pre-attachment type-29 is
+                // connection-fatal after at most one bounded generic error.
+                self.fatal_terminal_key_v2(token);
+            } else {
+                self.send_error(token, ErrorCode::InvalidState, message_type);
+            }
             return;
         }
         match kind {

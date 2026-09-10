@@ -23,12 +23,18 @@ this tip before merge.
 - Each row is classified as exact bytes, successful no-byte, or unsupported.
 - A pinned FNV-1a digest guards silent table drift.
 - SPEC prose examples and kind-17 invalid shifted-field negatives are covered.
+- Protocol wire/security framing negatives for `TerminalKeyV2` (SPEC-006 §21.7):
+  lengths 0–39 and 41+, unknown kind/event/version/modifier bits, reserved pads,
+  bad scalars/values, zero `action_id`, and dispatcher exact-length rejection.
 
 ## Focused Rust verification
 
 ```text
 cargo test -p seyal-runtime --locked --lib -- key_v2
 # 13 passed (10 prior + 3 §21.6)
+
+cargo test -p seyal-protocol --locked --test pass7_input_resize
+# 10 passed (includes V2 wire/security framing negatives)
 
 cargo test -p seyal-client --locked --lib -- v2_error
 # 3 passed
@@ -38,7 +44,7 @@ cargo test -p seyal-client --locked --lib -- v2_error
 
 - [ ] Independent re-review GO on this exact head
 - [ ] Headed keyboard / XCUI / target-TUI on macOS (exclusive Runtime)
-- [ ] Wire/security/admission-recovery native evidence
+- [ ] Runtime local-IPC admission cases (`pass7_local_ipc` is `cfg(macos)`)
 - [ ] Fuzz campaigns beyond the committed matrix
 - [ ] Broad latency / physical perf → #673/#824 (C-gates)
 

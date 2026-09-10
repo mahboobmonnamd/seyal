@@ -137,6 +137,189 @@ fn terminal_key_v2_rejects_reserved_and_invalid_ascii() {
 }
 
 #[test]
+fn terminal_key_v2_wire_security_rejects_length_field_and_value_negatives() {
+    let key = TerminalKeyV2 {
+        attachment_id: attachment_id(),
+        kind: TerminalKeyV2Kind::ArrowUp,
+        modifiers: TerminalKeyV2Modifiers::CONTROL,
+        value: 0,
+        event: TerminalKeyV2Event::Press,
+        shifted_ascii: 0,
+        action_id: 7,
+    };
+    let good = key.encode();
+    assert_eq!(good.len(), 40);
+    assert_eq!(TerminalKeyV2::decode(&good), Ok(key));
+
+    // SPEC-006 §21.7 wire/security: lengths 0–39 and 41+.
+    for len in 0usize..=39 {
+        assert_eq!(
+            TerminalKeyV2::decode(&vec![0u8; len]),
+            Err(FramingError::ExactLengthMismatch),
+            "short payload len={len} must be ExactLengthMismatch"
+        );
+    }
+    for len in [41usize, 64, 128, 256] {
+        let mut long = good.clone();
+        long.resize(len, 0);
+        assert_eq!(
+            TerminalKeyV2::decode(&long),
+            Err(FramingError::ExactLengthMismatch),
+            "long payload len={len} must be ExactLengthMismatch"
+        );
+    }
+
+    // Unknown kind / event / version / modifier bits / reserved pads.
+    let mut unknown_kind = good.clone();
+    unknown_kind[16..18].copy_from_slice(&18u16.to_le_bytes());
+    assert_eq!(
+        TerminalKeyV2::decode(&unknown_kind),
+        Err(FramingError::MalformedPayload)
+    );
+
+    let mut unknown_event = good.clone();
+    unknown_event[24] = 4;
+    assert_eq!(
+        TerminalKeyV2::decode(&unknown_event),
+        Err(FramingError::MalformedPayload)
+    );
+    unknown_event[24] = 0;
+    assert_eq!(
+        TerminalKeyV2::decode(&unknown_event),
+        Err(FramingError::MalformedPayload)
+    );
+
+    let mut bad_version = good.clone();
+    bad_version[26..28].copy_from_slice(&1u16.to_le_bytes());
+    assert_eq!(
+        TerminalKeyV2::decode(&bad_version),
+        Err(FramingError::MalformedPayload)
+    );
+    bad_version[26..28].copy_from_slice(&3u16.to_le_bytes());
+    assert_eq!(
+        TerminalKeyV2::decode(&bad_version),
+        Err(FramingError::MalformedPayload)
+    );
+
+    let mut lock_bit = good.clone();
+    lock_bit[18..20].copy_from_slice(&0b1000u16.to_le_bytes());
+    assert_eq!(
+        TerminalKeyV2::decode(&lock_bit),
+        Err(FramingError::MalformedPayload)
+    );
+    let mut command_bit = good.clone();
+    command_bit[18..20].copy_from_slice(&0b1_0000u16.to_le_bytes());
+    assert_eq!(
+        TerminalKeyV2::decode(&command_bit),
+        Err(FramingError::MalformedPayload)
+    );
+
+    let mut reserved_mid = good.clone();
+    reserved_mid[25] = 0xff;
+    assert_eq!(
+        TerminalKeyV2::decode(&reserved_mid),
+        Err(FramingError::MalformedPayload)
+    );
+    let mut reserved_tail = good.clone();
+    reserved_tail[36..40].copy_from_slice(&1u32.to_le_bytes());
+    assert_eq!(
+        TerminalKeyV2::decode(&reserved_tail),
+        Err(FramingError::MalformedPayload)
+    );
+
+    // Bad scalars / values and zero action_id.
+    let mut nonzero_value = good.clone();
+    nonzero_value[20..24].copy_from_slice(&1u32.to_le_bytes());
+    assert_eq!(
+        TerminalKeyV2::decode(&nonzero_value),
+        Err(FramingError::MalformedPayload)
+    );
+    let mut shifted_on_nav = good.clone();
+    shifted_on_nav[28..32].copy_from_slice(&(b'A' as u32).to_le_bytes());
+    assert_eq!(
+        TerminalKeyV2::decode(&shifted_on_nav),
+        Err(FramingError::MalformedPayload)
+    );
+    let mut zero_action = good.clone();
+    zero_action[32..36].copy_from_slice(&0u32.to_le_bytes());
+    assert_eq!(
+        TerminalKeyV2::decode(&zero_action),
+        Err(FramingError::MalformedPayload)
+    );
+
+    // Bad keypad / function values (built on a valid 40-byte skeleton).
+    let mut keypad = good.clone();
+    keypad[16..18].copy_from_slice(&(TerminalKeyV2Kind::Keypad as u16).to_le_bytes());
+    keypad[18..20].copy_from_slice(&0u16.to_le_bytes());
+    keypad[20..24].copy_from_slice(&17u32.to_le_bytes());
+    assert_eq!(
+        TerminalKeyV2::decode(&keypad),
+        Err(FramingError::MalformedPayload)
+    );
+
+    let mut function = good.clone();
+    function[16..18].copy_from_slice(&(TerminalKeyV2Kind::Function as u16).to_le_bytes());
+    function[18..20].copy_from_slice(&0u16.to_le_bytes());
+    function[20..24].copy_from_slice(&0u32.to_le_bytes());
+    assert_eq!(
+        TerminalKeyV2::decode(&function),
+        Err(FramingError::MalformedPayload)
+    );
+    function[20..24].copy_from_slice(&13u32.to_le_bytes());
+    assert_eq!(
+        TerminalKeyV2::decode(&function),
+        Err(FramingError::MalformedPayload)
+    );
+
+    // Frame dispatcher must also reject wrong-length type-29 payloads.
+    let header_short = FrameHeader::new(MessageType::TerminalKeyV2 as u16, 39);
+    assert_eq!(
+        decode_message(&header_short, &good[..39]),
+        Err(FramingError::ExactLengthMismatch)
+    );
+    let header_long = FrameHeader::new(MessageType::TerminalKeyV2 as u16, 41);
+    let mut long = good.clone();
+    long.push(0);
+    assert_eq!(
+        decode_message(&header_long, &long),
+        Err(FramingError::ExactLengthMismatch)
+    );
+    let header_ok = FrameHeader::new(MessageType::TerminalKeyV2 as u16, 40);
+    assert_eq!(
+        decode_message(&header_ok, &good).unwrap(),
+        Message::TerminalKeyV2(key)
+    );
+}
+
+#[test]
+fn terminal_key_v2_wire_layout_fields_are_little_endian_and_ordered() {
+    let key = TerminalKeyV2 {
+        attachment_id: attachment_id(),
+        kind: TerminalKeyV2Kind::Function,
+        modifiers: TerminalKeyV2Modifiers::ALT_CONTROL,
+        value: 3,
+        event: TerminalKeyV2Event::Release,
+        shifted_ascii: 0,
+        action_id: 0x0102_0304,
+    };
+    let encoded = key.encode();
+    assert_eq!(&encoded[0..16], &attachment_id().to_bytes());
+    assert_eq!(u16::from_le_bytes(encoded[16..18].try_into().unwrap()), 15);
+    assert_eq!(u16::from_le_bytes(encoded[18..20].try_into().unwrap()), 0b110);
+    assert_eq!(u32::from_le_bytes(encoded[20..24].try_into().unwrap()), 3);
+    assert_eq!(encoded[24], 3);
+    assert_eq!(encoded[25], 0);
+    assert_eq!(u16::from_le_bytes(encoded[26..28].try_into().unwrap()), 2);
+    assert_eq!(u32::from_le_bytes(encoded[28..32].try_into().unwrap()), 0);
+    assert_eq!(
+        u32::from_le_bytes(encoded[32..36].try_into().unwrap()),
+        0x0102_0304
+    );
+    assert_eq!(u32::from_le_bytes(encoded[36..40].try_into().unwrap()), 0);
+    assert_eq!(TerminalKeyV2::decode(&encoded), Ok(key));
+}
+
+#[test]
 fn resize_request_wire_layout_is_exact_and_validates_identity_and_geometry() {
     let request = ResizeRequest {
         attachment_id: attachment_id(),

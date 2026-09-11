@@ -64,7 +64,7 @@ NSEvent / AppKit text-input callbacks on the active direct-terminal presentation
 → shell/application
 ```
 
-Flow composer submission may use the same authorized Runtime/PT​​Y path for a committed structured command, but it is not a hidden `NSTextInputClient` terminal surface and does not gain arbitrary character-level terminal semantics merely because the same renderer exists.
+Flow composer submission may use the same authorized Runtime/PTY path for a committed structured command, but it is not a hidden `NSTextInputClient` terminal surface and does not gain arbitrary character-level terminal semantics merely because the same renderer exists.
 
 The required resize path is:
 

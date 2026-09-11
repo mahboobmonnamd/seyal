@@ -1,7 +1,7 @@
 # Seyal UI Architecture — Foundation Direction
 
 **Document:** SEYAL-UI-ARCHITECTURE-001  
-**Date:** 2026-08-23  
+**Date:** 2026-08-23; presentation-mode clarification 2026-09-11  
 **Status:** Foundation UI architecture  
 **Authority:** Subordinate to [`../SEYAL-ARCH-FOUNDATION-RD-001.md`](../SEYAL-ARCH-FOUNDATION-RD-001.md)
 
@@ -38,6 +38,10 @@ Global layer
 
 ## 2. Presentation modes
 
+For one terminal Pane, Flow, Raw and Live TUI are **mutually exclusive user-visible presentations** of the same `TerminalExecution`. One canonical terminal authority does not imply one permanently visible/focusable conventional terminal viewport.
+
+A Pane may reuse one Metal compositor/renderer across modes for efficiency, but implementation reuse must not make Raw/TUI pixels or direct terminal input leak through Flow.
+
 ### 2.1 Flow mode
 
 Flow mode presents normal shell activity as structured Blocks while preserving the underlying canonical terminal execution.
@@ -53,20 +57,23 @@ A Block may visually contain:
 - artifacts/diffs/links;
 - lightweight actions.
 
-Flow mode does not imply a terminal grid per Block.
+Flow mode does not imply a terminal grid or renderer per Block. A Pane-owned compositor may draw terminal-derived output into visible Block regions, but in Flow there is no independent full-Pane raw terminal viewport behind or beside the transcript. Empty Flow canvas is Seyal UI, not a click-through terminal input surface.
+
+If character-level terminal semantics cannot safely be represented by the structured Flow contract, the Pane transitions to Raw before arbitrary direct terminal input is routed.
 
 ### 2.2 Raw mode
 
-Raw mode presents the execution as a conventional terminal viewport over canonical terminal state.
+Raw mode presents the execution as a conventional full-Pane terminal viewport over canonical terminal state.
 
 Use raw mode when:
 
 - shell integration is absent or unreliable;
+- arbitrary character-level terminal semantics are required outside the supported Flow contract;
 - the user explicitly chooses it;
 - terminal semantics are more important than structured presentation;
 - debugging terminal behavior.
 
-Flow and Raw are views of the same `ExecutionId`.
+Flow and Raw are views of the same `ExecutionId`, but they are not simultaneously visible/interactive layers. Entering Raw yields Flow interaction; leaving Raw re-evaluates whether Flow is currently safe.
 
 ### 2.3 Live TUI mode
 
@@ -80,7 +87,9 @@ same alternate grid
 → different presentation
 ```
 
-No Block wrapper may intercept mouse, cursor, keyboard, focus, resize or screen semantics required by the TUI.
+No Block wrapper may intercept mouse, cursor, keyboard, focus, resize or screen semantics required by the TUI. Flow/Raw presentation yields for the takeover; on exit, current eligibility determines whether the Pane returns to Flow or Raw.
+
+Same-execution continuity does not require one AppKit terminal view object to remain permanently installed underneath all modes.
 
 ---
 
@@ -354,24 +363,26 @@ On macOS, the product must support first-class:
 - input method changes;
 - multiple windows/spaces/fullscreen behavior.
 
-Accessibility must be designed into the Metal-backed terminal surface; it is not a reason to replace the terminal renderer with a text view.
+Accessibility must be designed into Metal-backed terminal presentation; it is not a reason to replace the terminal renderer with a text view. In Flow, accessibility should expose Block/composer structure without also exposing a competing hidden full-Pane raw-terminal focus target.
 
 ---
 
 ## 14. UI architecture invariants
 
 1. Presentation never becomes PTY/VT authority.
-2. Flow, Raw and TUI are views of one terminal execution.
-3. A Block never implies another terminal engine.
-4. Pane does not imply PTY.
-5. Attention state is global and structured.
-6. Typed approvals may be handled without tab navigation.
-7. Arbitrary raw terminal prompts are never silently converted into trusted actions.
-8. Mobile attaches to existing Runtime authority.
-9. Slow clients/animations/inspectors cannot stall the terminal.
-10. GPU resources scale with visible content.
-11. UI layout persistence and execution persistence remain separate.
-12. Futuristic presentation is allowed only inside terminal correctness/performance budgets.
+2. Flow, Raw and TUI are mutually exclusive user-visible views of one terminal execution.
+3. Canonical terminal-state authority does not imply a permanently visible/focusable raw terminal viewport in Flow.
+4. A Block never implies another terminal engine or independent terminal renderer authority.
+5. Pane does not imply PTY.
+6. Attention state is global and structured.
+7. Typed approvals may be handled without tab navigation.
+8. Arbitrary raw terminal prompts are never silently converted into trusted actions.
+9. Mobile attaches to existing Runtime authority.
+10. Slow clients/animations/inspectors cannot stall the terminal.
+11. GPU resources scale with visible content.
+12. UI layout persistence and execution persistence remain separate.
+13. Futuristic presentation is allowed only inside terminal correctness/performance budgets.
+14. If Flow cannot safely preserve required character-level input semantics, switch the Pane to Raw instead of passing input through a hidden terminal surface.
 
 ---
 
@@ -384,10 +395,11 @@ UI design should proceed alongside terminal milestones, not after the entire eng
 - native macOS window;
 - one terminal pane;
 - one real Block identity;
-- Metal surface;
-- raw/Flow-compatible layout seam;
+- Metal rendering;
+- explicit raw/Flow-compatible presentation seam;
 - focus/input/accessibility skeleton;
-- no fake terminal cards.
+- no fake terminal cards;
+- no coexisting raw terminal viewport behind Flow.
 
 ### Next UI proof
 

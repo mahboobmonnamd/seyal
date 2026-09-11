@@ -183,6 +183,89 @@ final class SeyalShellUITests: XCTestCase {
         app.typeKey(.return, modifierFlags: [])
     }
 
+    /// Attaches a headed PNG for human review. This is not a palette/theme
+    /// assertion: the production Metal surface currently clears to a hard-coded
+    /// dark default (`MetalTerminalRenderer`) even when AppKit chrome is light.
+    /// Matching the active theme is outside #819 HistoryStore scope.
+    @MainActor
+    private func attachHeadedPNG(_ element: XCUIElement, name: String) {
+        let attachment = XCTAttachment(
+            data: element.screenshot().pngRepresentation,
+            uniformTypeIdentifier: "public.png"
+        )
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    @MainActor
+    private func productionHistoryURLs() -> (runtime: URL, appBinary: URL) {
+        var repoRoot = URL(fileURLWithPath: #filePath)
+        for _ in 0..<5 { repoRoot.deleteLastPathComponent() }
+        return (
+            repoRoot.appendingPathComponent("target/debug/seyal-runtime"),
+            repoRoot.appendingPathComponent(
+                "target/macos-ui-tests/Build/Products/Debug/Seyal.app/Contents/MacOS/Seyal"
+            )
+        )
+    }
+
+    @MainActor
+    private func startExternalZshRuntime() throws -> Process {
+        let urls = productionHistoryURLs()
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: urls.runtime.path))
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: urls.appBinary.path))
+        let runtime = Process()
+        runtime.executableURL = urls.runtime
+        runtime.arguments = ["/bin/zsh"]
+        runtime.standardOutput = Pipe()
+        runtime.standardError = Pipe()
+        try runtime.run()
+        try waitForExternalRuntimeAttachable(appBinaryURL: urls.appBinary, runtime: runtime)
+        return runtime
+    }
+
+    @MainActor
+    private func collapseChromeForReflow() {
+        for identifier in ["toggle-left-sidebar", "toggle-inspector"] {
+            let button = app.buttons[identifier]
+            if button.waitForExistence(timeout: 2), button.isHittable {
+                button.click()
+            }
+        }
+    }
+
+    @MainActor
+    private func resizeSeyalWindow(width: CGFloat, height: CGFloat? = nil) {
+        let window = app.windows["Seyal"]
+        XCTAssertTrue(window.waitForExistence(timeout: 5))
+        let old = window.frame
+        let targetHeight = height ?? max(old.height, 520)
+        let start = window.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 1))
+        let destination = window.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: width, dy: targetHeight))
+        start.press(forDuration: 0.1, thenDragTo: destination)
+        XCTAssertTrue(
+            wait(timeout: 5) {
+                abs(window.frame.width - old.width) > 8
+                    || abs(window.frame.height - old.height) > 8
+            },
+            "window geometry did not change after resize drag; was \(old), now \(window.frame)"
+        )
+    }
+
+    @MainActor
+    private func waitForVisibleCommandBlock() -> XCUIElement {
+        let blocks = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier CONTAINS '.block.'")
+        )
+        XCTAssertTrue(
+            wait(timeout: 8) { blocks.count > 0 },
+            "production command did not create a visible Block"
+        )
+        return blocks.element(boundBy: max(0, blocks.count - 1))
+    }
+
     @MainActor
 
     func testPass8NativeMetadataSelfTestUsesRealRuntimeAndAppBundle() throws {
@@ -337,10 +420,44 @@ final class SeyalShellUITests: XCTestCase {
         composer.click()
         let command = "printf M002_COMPOSER_RETURN; printf ok > \(markerURL.path)"
         composer.typeText(command)
+
+        // Exercise the production AppKit responder chain. Directly invoking
+        // NSTextView selectors in component tests does not prove that the app
+        // menu routes physical Command-A/C/V to the focused composer.
+        let pasteboard = NSPasteboard.general
+        let previousItems = pasteboard.pasteboardItems?.map { item in
+            let copy = NSPasteboardItem()
+            for type in item.types {
+                if let data = item.data(forType: type) {
+                    copy.setData(data, forType: type)
+                }
+            }
+            return copy
+        }
+        defer {
+            pasteboard.clearContents()
+            if let previousItems, !previousItems.isEmpty {
+                pasteboard.writeObjects(previousItems)
+            }
+        }
+        composer.typeKey("a", modifierFlags: [.command])
+        composer.typeKey("c", modifierFlags: [.command])
+        composer.typeKey(.delete, modifierFlags: [])
+        XCTAssertTrue(
+            wait(timeout: 2) { (composer.value as? String) == "" },
+            "Command-A followed by Delete did not clear the focused composer"
+        )
+        composer.typeKey("v", modifierFlags: [.command])
+        XCTAssertTrue(
+            wait(timeout: 2) { (composer.value as? String) == command },
+            "Command-C/V did not round-trip through the production Edit menu"
+        )
         composer.typeKey(.return, modifierFlags: [])
 
         XCTAssertTrue(
-            wait(timeout: 5) { FileManager.default.fileExists(atPath: markerURL.path) },
+            wait(timeout: 5) {
+                (try? String(contentsOf: markerURL, encoding: .utf8)) == "ok"
+            },
             "Return submission did not reach the Runtime-owned PTY shell"
         )
         XCTAssertEqual(try String(contentsOf: markerURL, encoding: .utf8), "ok")
@@ -1021,5 +1138,207 @@ final class SeyalShellUITests: XCTestCase {
         let inspectorTab = app.staticTexts["inspector.tab-name"]
         XCTAssertTrue(inspectorTab.waitForExistence(timeout: 2))
         XCTAssertEqual(inspectorTab.label, "Agent Development")
+    }
+
+    @MainActor
+    func testProductionScrollbackKeepsOlderHistoryReadable() throws {
+        app.terminate()
+        terminateOrphanedRuntimes()
+        let runtime = try startExternalZshRuntime()
+        defer {
+            if runtime.isRunning { runtime.terminate() }
+            runtime.waitUntilExit()
+        }
+
+        let surface = launchProductionApp()
+        let baseline = surface.screenshot().pngRepresentation
+        submitProductionShellCommand(
+            "for i in $(seq 1 250); do printf 'history-%03d\\n' \"$i\"; done",
+            surface: surface
+        )
+        let block = waitForVisibleCommandBlock()
+        XCTAssertTrue(
+            wait(timeout: 8) {
+                self.recoveryFields(surface)?["connection"] == "usable"
+                    && surface.screenshot().pngRepresentation != baseline
+            },
+            "numbered history did not render on the production Metal surface"
+        )
+        // Pixel inequality only proves the drawable changed. It does not
+        // require the surface to match the light AppKit canvas; default
+        // terminal cells remain the hard-coded dark Metal palette.
+
+        let transcript = app.scrollViews["transcript.pane-local"]
+        XCTAssertTrue(transcript.waitForExistence(timeout: 5))
+        let beforeBlockMinY = block.frame.minY
+        let beforeBar = transcript.scrollBars.firstMatch.exists
+            ? transcript.scrollBars.firstMatch.value as? String
+            : nil
+        transcript.scroll(byDeltaX: 0, deltaY: 600)
+        XCTAssertTrue(
+            wait(timeout: 3) {
+                block.frame.minY != beforeBlockMinY
+                    || (
+                        transcript.scrollBars.firstMatch.exists
+                            && (transcript.scrollBars.firstMatch.value as? String) != beforeBar
+                    )
+            },
+            "transcript did not scroll older history into view"
+        )
+        XCTAssertEqual(recoveryFields(surface)?["connection"], "usable")
+        attachHeadedPNG(surface, name: "m002-819-headed-scrollback")
+    }
+
+    @MainActor
+    func testProductionResizeReflowsAsciiCjkEmojiLine() throws {
+        app.terminate()
+        terminateOrphanedRuntimes()
+        let runtime = try startExternalZshRuntime()
+        defer {
+            if runtime.isRunning { runtime.terminate() }
+            runtime.waitUntilExit()
+        }
+
+        let surface = launchProductionApp()
+        let baseline = surface.screenshot().pngRepresentation
+        // Typed command stays ASCII; printf expands the mixed payload at the PTY.
+        submitProductionShellCommand(
+            "LC_ALL=C printf '%b' 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789xxxx\\0347\\0225\\0214\\0360\\0237\\0220\\0200e\\0314\\0201YYYYYYYYYY\\0012'",
+            surface: surface
+        )
+        _ = waitForVisibleCommandBlock()
+        XCTAssertTrue(
+            wait(timeout: 8) { surface.screenshot().pngRepresentation != baseline },
+            "mixed ASCII/CJK/emoji line did not present"
+        )
+        attachHeadedPNG(surface, name: "m002-819-headed-reflow-wide")
+
+        collapseChromeForReflow()
+        let wide = surface.frame.width
+        resizeSeyalWindow(width: 620)
+        XCTAssertTrue(
+            wait(timeout: 5) { abs(surface.frame.width - wide) > 8 },
+            "window resize did not change terminal surface width"
+        )
+        XCTAssertEqual(recoveryFields(surface)?["connection"], "usable")
+        attachHeadedPNG(surface, name: "m002-819-headed-reflow-narrow")
+
+        let narrow = surface.frame.width
+        resizeSeyalWindow(width: 1180)
+        XCTAssertTrue(
+            wait(timeout: 5) {
+                abs(surface.frame.width - narrow) > 8
+                    && self.recoveryFields(surface)?["connection"] == "usable"
+            },
+            "restored window did not widen the terminal surface"
+        )
+        attachHeadedPNG(surface, name: "m002-819-headed-reflow-restored")
+    }
+
+    @MainActor
+    func testProductionHardBreaksSurviveResizeWhileSoftWrapsRejoin() throws {
+        app.terminate()
+        terminateOrphanedRuntimes()
+        let runtime = try startExternalZshRuntime()
+        defer {
+            if runtime.isRunning { runtime.terminate() }
+            runtime.waitUntilExit()
+        }
+
+        let surface = launchProductionApp()
+        submitProductionShellCommand(
+            "printf 'HARD-A\\nHARD-B\\n'; LC_ALL=C printf '%b' 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789xxxxYYYYYYYYYY\\0012'",
+            surface: surface
+        )
+        _ = waitForVisibleCommandBlock()
+        attachHeadedPNG(surface, name: "m002-819-headed-hard-soft-initial")
+
+        collapseChromeForReflow()
+        let initialWidth = surface.frame.width
+        resizeSeyalWindow(width: 600)
+        XCTAssertTrue(
+            wait(timeout: 5) { abs(surface.frame.width - initialWidth) > 8 }
+        )
+        attachHeadedPNG(surface, name: "m002-819-headed-hard-soft-narrow")
+        let narrow = surface.frame.width
+        resizeSeyalWindow(width: 1180)
+        XCTAssertTrue(
+            wait(timeout: 5) { abs(surface.frame.width - narrow) > 8 }
+        )
+        XCTAssertEqual(recoveryFields(surface)?["connection"], "usable")
+        XCTAssertEqual(recoveryFields(surface)?["alternate-screen"], "false")
+        attachHeadedPNG(surface, name: "m002-819-headed-hard-soft-wide")
+    }
+
+    @MainActor
+    func testProductionAlternateScreenLeavesPrimaryHistoryClean() throws {
+        app.terminate()
+        terminateOrphanedRuntimes()
+        let runtime = try startExternalZshRuntime()
+        defer {
+            if runtime.isRunning { runtime.terminate() }
+            runtime.waitUntilExit()
+        }
+
+        let surface = launchProductionApp()
+        submitProductionShellCommand("printf 'PRIMARY-BEFORE\\n'", surface: surface)
+        _ = waitForVisibleCommandBlock()
+        XCTAssertEqual(recoveryFields(surface)?["alternate-screen"], "false")
+
+        focusTerminalSurface(surface)
+        app.typeText("printf '\\033[?1049hTUI-JUNK\\n'")
+        app.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(
+            wait(timeout: 5) { self.recoveryFields(surface)?["alternate-screen"] == "true" },
+            "alternate screen did not become active; \(surface.value ?? "<none>")"
+        )
+        attachHeadedPNG(surface, name: "m002-819-headed-alt-screen-active")
+
+        focusTerminalSurface(surface)
+        app.typeText("printf '\\033[?1049l'")
+        app.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(
+            wait(timeout: 5) { self.recoveryFields(surface)?["alternate-screen"] == "false" },
+            "alternate screen did not restore primary history; \(surface.value ?? "<none>")"
+        )
+        XCTAssertEqual(recoveryFields(surface)?["connection"], "usable")
+        attachHeadedPNG(surface, name: "m002-819-headed-alt-screen-restored")
+    }
+
+    @MainActor
+    func testProductionLiveResizeWhileOutputPrintsStaysCoherent() throws {
+        app.terminate()
+        terminateOrphanedRuntimes()
+        let runtime = try startExternalZshRuntime()
+        defer {
+            if runtime.isRunning { runtime.terminate() }
+            runtime.waitUntilExit()
+        }
+
+        let surface = launchProductionApp()
+        submitProductionShellCommand(
+            "for i in $(seq 1 400); do printf 'live-%03d\\n' \"$i\"; usleep 15000; done",
+            surface: surface
+        )
+        XCTAssertTrue(
+            wait(timeout: 5) { self.recoveryFields(surface)?["connection"] == "usable" }
+        )
+        collapseChromeForReflow()
+        let before = app.windows["Seyal"].frame
+        resizeSeyalWindow(width: max(560, before.width * 0.65), height: before.height)
+        XCTAssertTrue(
+            wait(timeout: 5) {
+                abs(self.app.windows["Seyal"].frame.width - before.width) > 8
+            },
+            "live resize did not change window geometry"
+        )
+        XCTAssertTrue(app.windows["Seyal"].exists)
+        XCTAssertGreaterThan(surface.frame.width, 0)
+        XCTAssertGreaterThan(surface.frame.height, 0)
+        XCTAssertTrue(
+            wait(timeout: 8) { self.recoveryFields(surface)?["connection"] == "usable" },
+            "live resize lost the production display connection"
+        )
+        attachHeadedPNG(surface, name: "m002-819-headed-live-resize")
     }
 }

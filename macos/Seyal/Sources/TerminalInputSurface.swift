@@ -290,6 +290,13 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
   /// Flow panes keep keyboard input on the composer. TUI/raw clicks still
   /// claim this surface. Default true preserves SPEC-009 probe surfaces.
   var claimsFirstResponderOnClick = true
+  /// Flow keyboard owner (Pane composer). Invoked when this surface must not
+  /// hold first responder so Return/paste stay on the composer.
+  var onPresentationKeyboardOwnerNeeded: (() -> Void)?
+  private(set) var presentation = PanePresentationSession()
+  var allowsEmptyCanvasTerminalHitTest: Bool {
+    presentation.allowsEmptyCanvasTerminalHitTest
+  }
   private var nativeFailure: NativeInputFailure?
   private let failureLayer = CATextLayer()
   /// IME activate is sticky for a given surface/window session. AppKit may
@@ -336,7 +343,53 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
     claimsFirstResponderOnClick
   }
 
+  @discardableResult
+  func applyPresentationMode(
+    _ mode: TerminalPresentationMode,
+    identity: TerminalPresentationIdentity,
+    explicit: Bool
+  ) -> Bool {
+    guard presentation.transition(to: mode, identity: identity, explicit: explicit) else {
+      return false
+    }
+    claimsFirstResponderOnClick = presentation.allowsDirectTerminalFirstResponder
+    applyRendererPresentation(presentation.rendererPlan)
+    refreshRecoveryAccessibilityValue()
+    if mode == .flow {
+      yieldKeyboardToPresentationOwnerIfNeeded()
+    }
+    return true
+  }
+
+  func bindPresentationIdentity(_ identity: TerminalPresentationIdentity) {
+    presentation.bindIdentity(identity)
+  }
+
+  func currentPresentationIdentity() -> TerminalPresentationIdentity {
+    if let executionId = terminalExecutionIdentity ?? requestedExecutionIdentity,
+      executionId != "unbound"
+    {
+      let generation = presentation.identity.ptyGeneration == 0
+        ? 1
+        : presentation.identity.ptyGeneration
+      return TerminalPresentationIdentity(executionId: executionId, ptyGeneration: generation)
+    }
+    return presentation.identity
+  }
+
+  private func yieldKeyboardToPresentationOwnerIfNeeded() {
+    if window?.firstResponder === self {
+      _ = resignFirstResponder()
+    }
+    guard !claimsFirstResponderOnClick else { return }
+    if window?.firstResponder is NSTextView {
+      return
+    }
+    onPresentationKeyboardOwnerNeeded?()
+  }
+
   override func becomeFirstResponder() -> Bool {
+    guard claimsFirstResponderOnClick else { return false }
     guard super.becomeFirstResponder() else { return false }
     inputContext?.activate()
     setAccessibilityFocused(true)
@@ -363,6 +416,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
       window.makeKey()
     }
     if !claimsFirstResponderOnClick {
+      yieldKeyboardToPresentationOwnerIfNeeded()
       return true
     }
     if let current = window.firstResponder as? NSView,

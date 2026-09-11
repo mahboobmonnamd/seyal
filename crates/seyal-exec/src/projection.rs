@@ -241,19 +241,12 @@ fn copy_rows(terminal: &TerminalState, first_row: u16, row_count: u16) -> Vec<Pr
                     inverse: cell.style.inverse,
                 },
             ));
+            let structural = role == CellRole::Empty || role == CellRole::Continuation;
             cells.push(ProjectionCell {
                 role,
-                width: if role == CellRole::Empty {
-                    0
-                } else {
-                    cell.width
-                },
-                text: if role == CellRole::Empty {
-                    Arc::from([])
-                } else {
-                    text
-                },
-                scalar: if role == CellRole::Empty { ' ' } else { scalar },
+                width: if structural { 0 } else { cell.width },
+                text: if structural { Arc::from([]) } else { text },
+                scalar: if structural { ' ' } else { scalar },
                 foreground,
                 background,
                 attributes,
@@ -350,17 +343,21 @@ mod tests {
     #[test]
     fn wide_continuation_inherits_lead_style_for_wire_contract() {
         let mut terminal = TerminalState::new(8, 2).unwrap();
-        terminal
-            .feed(b"\x1b[38;5;208m\xF0\x9F\x91\xA9\xE2\x80\x8D\xF0\x9F\x92\xBB")
-            .unwrap();
+        // Width-2 CJK with a non-default indexed foreground. VT stores the
+        // continuation as a structural slot with default style; projection
+        // must repeat the lead so v2 decode does not see InvalidCell.
+        terminal.feed("\x1b[1;38;5;208m中".as_bytes()).unwrap();
         let snapshot = snapshot(&terminal, 1);
         let lead = &snapshot.cells[0];
-        if lead.width == 2 {
-            assert_eq!(lead.foreground, ProjectionColor::Indexed(208));
-            assert_eq!(snapshot.cells[1].role, CellRole::Continuation);
-            assert_eq!(snapshot.cells[1].foreground, lead.foreground);
-            assert_eq!(snapshot.cells[1].background, lead.background);
-            assert_eq!(snapshot.cells[1].attributes, lead.attributes);
-        }
+        assert_eq!(lead.role, CellRole::Lead);
+        assert_eq!(lead.width, 2);
+        assert_eq!(lead.foreground, ProjectionColor::Indexed(208));
+        assert!(lead.attributes.bold);
+        assert_eq!(snapshot.cells[1].role, CellRole::Continuation);
+        assert_eq!(snapshot.cells[1].width, 0);
+        assert!(snapshot.cells[1].text.is_empty());
+        assert_eq!(snapshot.cells[1].foreground, lead.foreground);
+        assert_eq!(snapshot.cells[1].background, lead.background);
+        assert_eq!(snapshot.cells[1].attributes, lead.attributes);
     }
 }

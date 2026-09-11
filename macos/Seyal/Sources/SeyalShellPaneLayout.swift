@@ -180,19 +180,49 @@ extension SeyalShellView {
       stack.trailingAnchor.constraint(equalTo: pane.trailingAnchor),
       stack.topAnchor.constraint(equalTo: pane.topAnchor),
       stack.bottomAnchor.constraint(equalTo: pane.bottomAnchor),
+      // NSScrollView has no useful horizontal intrinsic size. Depending on
+      // AppKit's arranged-subview reconciliation alone can collapse the Flow
+      // transcript into a trailing strip while the composer still fills the
+      // pane. Pin it to the stack's inset content width explicitly.
+      transcript.leadingAnchor.constraint(
+        equalTo: stack.leadingAnchor,
+        constant: stack.edgeInsets.left
+      ),
+      transcript.trailingAnchor.constraint(
+        equalTo: stack.trailingAnchor,
+        constant: -stack.edgeInsets.right
+      ),
       transcript.heightAnchor.constraint(greaterThanOrEqualToConstant: 180),
     ])
     return pane
   }
   func setPaneTUI(paneID: String, active: Bool) {
-    if active {
+    applyPanePresentation(paneID: paneID, mode: active ? .tui : .flow, explicit: false)
+  }
+
+  func setPaneRaw(paneID: String) {
+    applyPanePresentation(paneID: paneID, mode: .raw, explicit: true)
+  }
+
+  func applyPanePresentation(
+    paneID: String,
+    mode: TerminalPresentationMode,
+    explicit: Bool
+  ) {
+    if mode == .tui {
       tuiPaneIDs.insert(paneID)
     } else {
       tuiPaneIDs.remove(paneID)
     }
-    tuiBlocks[paneID]?.setTUITakeover(active)
-    composerViews[paneID]?.isHidden = active
-    surfaces[paneID]?.claimsFirstResponderOnClick = active
+    tuiBlocks[paneID]?.setTUITakeover(mode == .tui)
+    composerViews[paneID]?.isHidden = mode == .tui
+    guard let surface = surfaces[paneID] else { return }
+    _ = surface.applyPresentationMode(
+      mode,
+      identity: surface.currentPresentationIdentity(),
+      explicit: explicit
+    )
+    blockStacks[paneID]?.allowsTerminalClickThrough = surface.allowsEmptyCanvasTerminalHitTest
   }
 
   func makePaneControlButton(

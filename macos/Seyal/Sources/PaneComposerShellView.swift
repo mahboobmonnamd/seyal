@@ -32,8 +32,12 @@ private final class PaneComposerTextView: NSTextView {
     /// keyDown depending on the surrounding AppKit hierarchy. Keep both paths
     /// local to the focused composer instead of installing a process-global
     /// event monitor.
-    private func submitReturnEvent(_ event: NSEvent) -> Bool {
-        guard window?.firstResponder === self else { return false }
+    ///
+    /// Do not require `firstResponder === self`. TextKit 2 / inner caret views
+    /// can be first responder while insertText still lands in this NSTextView;
+    /// that combination types into the composer and makes Enter appear dead.
+    func submitReturnEvent(_ event: NSEvent) -> Bool {
+        guard ownsKeyboard() else { return false }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let isReturn = event.keyCode == 36 || event.keyCode == 76
         guard isReturn, flags.isDisjoint(with: [.command, .option, .control]) else {
@@ -44,6 +48,15 @@ private final class PaneComposerTextView: NSTextView {
         }
         submitCurrentDraft()
         return true
+    }
+
+    func ownsKeyboard() -> Bool {
+        guard let window else { return false }
+        if window.firstResponder === self { return true }
+        if let view = window.firstResponder as? NSView {
+            return view === self || view.isDescendant(of: self)
+        }
+        return false
     }
 
     private func submitCurrentDraft() {
@@ -204,6 +217,20 @@ final class PaneComposerShellView: NSView, NSTextViewDelegate {
     override func mouseDown(with event: NSEvent) {
         focusEditor()
         super.mouseDown(with: event)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if let editor = editor as? PaneComposerTextView, editor.submitReturnEvent(event) {
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if let editor = editor as? PaneComposerTextView, editor.submitReturnEvent(event) {
+            return
+        }
+        super.keyDown(with: event)
     }
 
     func setBusy(_ busy: Bool, process: String) {

@@ -302,6 +302,7 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
       metalLayer.framebufferOnly = true
       metalLayer.maximumDrawableCount = 2
       metalLayer.presentsWithTransaction = false
+      metalLayer.isOpaque = true
       updateDrawableSize()
 
       // No dedicated GPU surface resources are retained before the view is
@@ -547,9 +548,35 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
         beginPresentationAttemptSeries()
         armMetalDisplayLink()
       }
+      refreshRecoveryAccessibilityValue()
     } catch {
       lastRenderError = error
     }
+  }
+
+  func applyRendererPresentation(_ plan: RendererPresentationPlan) {
+    renderer.setPresentationPlan(plan)
+    layer?.isOpaque = plan.drawsFullGridBackground
+    if let metalLayer = layer as? CAMetalLayer {
+      metalLayer.isOpaque = plan.drawsFullGridBackground
+    }
+  }
+
+  func inspectRendererPresentation() -> RendererPresentationInspection {
+    renderer.inspectPresentation()
+  }
+
+  func inspectFlowPaint(sampleGPU: Bool = false) -> FlowPaintInspection {
+    guard sampleGPU else {
+      return renderer.inspectFlowPaint()
+    }
+    let size = convertToBacking(bounds).size
+    let width = max(1, Int(size.width.rounded()))
+    let height = max(1, Int(size.height.rounded()))
+    guard let texture = renderer.renderOffscreenAndWait(width: width, height: height) else {
+      return renderer.inspectFlowPaint()
+    }
+    return renderer.inspectFlowPaint(from: texture)
   }
 
   func setTranscriptFrame(_ frame: NativeTranscriptFrame) {
@@ -605,10 +632,12 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
     let execution = terminalExecutionIdentity ?? "none"
     let attachment = terminalAttachmentIdentity ?? "none"
     let alternate = lastAlternateScreen == true ? "true" : "false"
+    let flowPaint = renderer.inspectFlowPaint().accessibilityToken
     setAccessibilityValue(
       "process=\(ProcessInfo.processInfo.processIdentifier) connection=\(connection) "
         + "runtime=\(runtime) execution=\(execution) "
-        + "attachment=\(attachment) alternate-screen=\(alternate)"
+        + "attachment=\(attachment) alternate-screen=\(alternate) "
+        + "flow-paint=\(flowPaint)"
     )
   }
 

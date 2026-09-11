@@ -1,31 +1,27 @@
 import AppKit
 
-/// Timeline chrome is laid over the one input surface. Empty areas must remain
-/// hit-test transparent so keyboard/mouse events continue to reach the
-/// Runtime-backed terminal; future interactive Block controls can still be
-/// returned by the normal descendant hit-test.
+/// Timeline chrome is laid over the Pane compositor. In Flow, empty areas belong
+/// to Seyal canvas and must not fall through to a raw terminal input surface.
+/// Raw/TUI may opt into click-through via `allowsTerminalClickThrough`.
 @MainActor
 final class TranscriptBlockStackView: NSStackView {
+  var allowsTerminalClickThrough = false
+
   override func hitTest(_ point: NSPoint) -> NSView? {
     guard let hit = super.hitTest(point) else { return nil }
     if hit is NSButton { return hit }
     if let field = hit as? NSTextField, field.isEditable || field.isSelectable {
       return hit
     }
-    return nil
+    if allowsTerminalClickThrough { return nil }
+    return self
   }
 }
 
-/// Holds Block chrome above the clip-hosted Metal surface. Empty document
-/// hits must fall through so the one terminal surface keeps first-responder
-/// and mouse delivery.
+/// Holds Block chrome above the clip-hosted Metal compositor. Empty document
+/// hits are Flow canvas, not a hidden terminal first-responder target.
 @MainActor
-final class TranscriptDocumentView: NSView {
-  override func hitTest(_ point: NSPoint) -> NSView? {
-    let hit = super.hitTest(point)
-    return hit === self ? nil : hit
-  }
-}
+final class TranscriptDocumentView: NSView {}
 
 @MainActor
 final class CommandBlockBodyView: NSView {
@@ -99,10 +95,9 @@ final class CommandBlockBodyView: NSView {
   }
 }
 
-/// The one scroll/document owner for a Pane's Flow transcript. The document
-/// contains the Warp-style Block cards while the one bridge-backed Metal
-/// surface remains a sibling underneath them, preserving one PTY/VT authority
-/// and one input surface across timeline updates.
+/// The one scroll/document owner for a Pane's Flow transcript. Blocks are the
+/// user-visible presentation. The Pane Metal compositor may be reused under
+/// the clip viewport but is not a Flow input/first-responder authority.
 @MainActor
 final class PaneTranscriptView: NSScrollView {
   private let paneID: String
@@ -177,6 +172,14 @@ final class PaneTranscriptView: NSScrollView {
       addSubview(terminalSurface, positioned: .below, relativeTo: contentView)
       syncMetalSurfaceFrame()
     }
+    _ = terminalSurface.applyPresentationMode(
+      .flow,
+      identity: TerminalPresentationIdentity(
+        executionId: executionIdentity ?? "unbound",
+        ptyGeneration: 1
+      ),
+      explicit: true
+    )
   }
 
   deinit {
@@ -198,10 +201,16 @@ final class PaneTranscriptView: NSScrollView {
 
   override func hitTest(_ point: NSPoint) -> NSView? {
     let hit = super.hitTest(point)
-    if hit === contentView || hit === transcriptDocument,
-      terminalSurface.superview === self
-    {
-      return terminalSurface
+    if terminalSurface.allowsEmptyCanvasTerminalHitTest {
+      if hit === contentView || hit === transcriptDocument,
+        terminalSurface.superview === self
+      {
+        return terminalSurface
+      }
+      return hit
+    }
+    if hit === terminalSurface {
+      return contentView
     }
     return hit
   }
@@ -225,6 +234,9 @@ final class PaneTranscriptView: NSScrollView {
   }
 
   func installBlockStack(_ stack: NSStackView) {
+    if let stack = stack as? TranscriptBlockStackView {
+      stack.allowsTerminalClickThrough = terminalSurface.allowsEmptyCanvasTerminalHitTest
+    }
     stack.translatesAutoresizingMaskIntoConstraints = false
     transcriptDocument.addSubview(stack)
     NSLayoutConstraint.activate([

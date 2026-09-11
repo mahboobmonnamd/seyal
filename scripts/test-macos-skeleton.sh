@@ -36,7 +36,8 @@ for required in \
   SeyalShellChrome.swift \
   SeyalShellPaneLayout.swift \
   SeyalShellTranscriptCoordinator.swift \
-  SeyalShellPreviewFactory.swift; do
+  SeyalShellPreviewFactory.swift \
+  PanePresentationContract.swift; do
   [[ -f "$SOURCES/$required" ]] || fail "missing native UI shell source: $required"
 done
 
@@ -76,8 +77,14 @@ if grep -q 'NSScrollView' "$SOURCES/BlockView.swift"; then
   fail "BlockView must not own nested output scrolling; the Pane transcript is the single normal-scroll owner"
 fi
 
-grep -q 'func makeTranscript(paneID: String) -> PaneTranscriptView' "$SOURCES/SeyalShellTranscriptCoordinator.swift" \
-  || fail "UI shell must keep Pane-owned transcript scrolling explicit"
+grep -q 'enum TerminalPresentationMode' "$SOURCES/PanePresentationContract.swift" \
+  || fail "Flow/Raw/TUI presentation contract is missing"
+grep -q 'func applyPresentationMode' "$SOURCES/TerminalInputSurface.swift" \
+  || fail "interactive Metal surface must apply the Flow/Raw/TUI presentation contract"
+grep -q 'func inspectFlowPaint' "$SOURCES/MetalTerminalRenderer.swift" \
+  || fail "Flow paint detection must inspect Metal instances/pixels, not XCUI glyph text"
+grep -q 'flow-paint=' "$SOURCES/MetalSurfaceView.swift" \
+  || fail "terminal-surface accessibility must publish flow-paint for XCUI"
 grep -q 'final class PaneTranscriptView: NSScrollView' "$SOURCES/CommandBlockBodyView.swift" \
   || fail "Pane transcript must remain the single normal-scroll owner"
 grep -q 'NSSegmentedControl' "$SOURCES/SeyalShellChrome.swift" \

@@ -21,6 +21,7 @@ pub const HISTORY_SELECTION_UNIT_CAP: usize = 64 * 1024;
 pub const MAX_EVICTED_ID_RANGES: usize = 1_024;
 const MAX_EVICTED_BITMAP_BITS: u64 = 65_536;
 const MAX_EVICTED_BITMAPS: usize = 8;
+const MAX_EVICTED_OVERFLOW_RANGES: usize = 1_024;
 
 static NEXT_SEGMENT_AGE: AtomicU64 = AtomicU64::new(1);
 
@@ -635,6 +636,11 @@ pub(crate) struct HistoryStore {
     evicted_bitmaps: Vec<EvictedBitmap>,
     /// Exact leftover runs that do not fit a bitmap window.
     evicted_overflow_ranges: Vec<EvictedIdRange>,
+    /// Set when overflow is at cap and another compacted range cannot be
+    /// stored exactly. Lookup then fail-closes that span as Unavailable.
+    evicted_index_saturated: bool,
+    evicted_saturated_from: Option<LineId>,
+    evicted_saturated_through: Option<LineId>,
     reflow_cache: RefCell<Option<ReflowCache>>,
     /// SoftWrap-chain width runs used to answer resize carry columns.
     /// Derived (§9.1), not resident source; closed hard-broken rows are omitted.
@@ -1433,9 +1439,44 @@ impl HistoryStore {
     fn compact_evicted_id_ranges(&mut self) {
         while self.evicted_id_ranges.len() > MAX_EVICTED_ID_RANGES {
             let oldest = self.evicted_id_ranges.remove(0);
-            if !self.admit_compacted_evicted_range(oldest) {
-                self.evicted_overflow_ranges.push(oldest);
+            if self.admit_compacted_evicted_range(oldest) {
+                continue;
             }
+            if self.evicted_overflow_ranges.len() < MAX_EVICTED_OVERFLOW_RANGES {
+                self.evicted_overflow_ranges.push(oldest);
+            } else {
+                self.fail_closed_evicted_range(oldest);
+            }
+        }
+    }
+
+    fn fail_closed_evicted_range(&mut self, range: EvictedIdRange) {
+        self.evicted_index_saturated = true;
+        self.evicted_saturated_from = Some(match self.evicted_saturated_from {
+            Some(from) => from.min(range.first),
+            None => range.first,
+        });
+        self.evicted_saturated_through = Some(match self.evicted_saturated_through {
+            Some(through) => through.max(range.last),
+            None => range.last,
+        });
+    }
+
+    fn saturated_contains(&self, line_id: LineId) -> bool {
+        match (self.evicted_saturated_from, self.evicted_saturated_through) {
+            (Some(from), Some(through)) if self.evicted_index_saturated => {
+                line_id >= from && line_id <= through
+            }
+            _ => false,
+        }
+    }
+
+    fn saturated_intersects(&self, start: LineId, end: LineId) -> bool {
+        match (self.evicted_saturated_from, self.evicted_saturated_through) {
+            (Some(from), Some(through)) if self.evicted_index_saturated => {
+                start <= through && end >= from
+            }
+            _ => false,
         }
     }
 
@@ -1513,6 +1554,9 @@ impl HistoryStore {
     }
 
     pub(crate) fn range_intersects_evicted(&self, start: LineId, end: LineId) -> bool {
+        if self.saturated_intersects(start, end) {
+            return true;
+        }
         if self.dense_evicted_prefix_intersects(start, end) {
             return true;
         }
@@ -1530,6 +1574,9 @@ impl HistoryStore {
     }
 
     fn line_was_evicted(&self, line_id: LineId) -> bool {
+        if self.saturated_contains(line_id) {
+            return true;
+        }
         if self.dense_evicted_prefix_contains(line_id) {
             return true;
         }
@@ -2470,18 +2517,21 @@ fn wrap_occupancy(unit_widths: &[u8], cols: usize) -> usize {
     )
 }
 
-fn reflow_rows_allocated_bytes(rows: &[ReflowRow]) -> usize {
+fn reflow_rows_allocated_bytes(rows: &Vec<ReflowRow>) -> usize {
     size_of::<Vec<ReflowRow>>()
-        .saturating_add(rows.len().saturating_mul(size_of::<ReflowRow>()))
+        .saturating_add(rows.capacity().saturating_mul(size_of::<ReflowRow>()))
         .saturating_add(
             rows.iter()
                 .map(|row| {
                     row.cells
-                        .iter()
-                        .map(|cell| {
-                            size_of::<HistoryWireCell>().saturating_add(cell.text.capacity())
-                        })
-                        .sum::<usize>()
+                        .capacity()
+                        .saturating_mul(size_of::<HistoryWireCell>())
+                        .saturating_add(
+                            row.cells
+                                .iter()
+                                .map(|cell| cell.text.capacity())
+                                .sum::<usize>(),
+                        )
                         .saturating_add(
                             row.anchors
                                 .capacity()
@@ -2680,6 +2730,63 @@ mod tests {
             HistoryAnchorResolution::Invalid
         ));
         assert!(store.range_intersects_evicted(LineId(1), LineId(1)));
+    }
+
+    #[test]
+    fn hostile_sparse_eviction_metadata_is_bounded_and_fail_closes() {
+        let mut store = HistoryStore::default();
+        let stride = MAX_EVICTED_BITMAP_BITS.saturating_add(1);
+        let extra = 32u64;
+        let total = MAX_EVICTED_ID_RANGES
+            + 1
+            + MAX_EVICTED_BITMAPS
+            + MAX_EVICTED_OVERFLOW_RANGES
+            + extra as usize;
+        for i in 0..total {
+            let id = (i as u64).saturating_mul(stride).saturating_add(1);
+            store.record_evicted_range_for_test(id, id);
+        }
+        assert!(store.evicted_id_ranges.len() <= MAX_EVICTED_ID_RANGES);
+        assert!(store.evicted_bitmaps.len() <= MAX_EVICTED_BITMAPS);
+        assert!(store.evicted_overflow_ranges.len() <= MAX_EVICTED_OVERFLOW_RANGES);
+        assert!(store.evicted_index_saturated);
+
+        let overflowed = (1 + MAX_EVICTED_BITMAPS as u64 + MAX_EVICTED_OVERFLOW_RANGES as u64)
+            .saturating_mul(stride)
+            .saturating_add(1);
+        assert!(store.line_was_evicted(LineId(overflowed)));
+        assert!(matches!(
+            store.resolve_anchor(HistoryAnchor {
+                line_id: LineId(overflowed),
+                unit_offset: 0,
+            }),
+            HistoryAnchorResolution::Unavailable
+        ));
+        assert!(!store.line_was_evicted(LineId(2)));
+        assert!(matches!(
+            store.resolve_anchor(HistoryAnchor {
+                line_id: LineId(2),
+                unit_offset: 0,
+            }),
+            HistoryAnchorResolution::Invalid
+        ));
+    }
+
+    #[test]
+    fn reflow_cache_accounting_counts_allocation_capacity() {
+        let mut rows = Vec::with_capacity(128);
+        rows.push(ReflowRow::default());
+        rows[0].cells.reserve(64);
+        rows[0].anchors.reserve(32);
+        let bytes = reflow_rows_allocated_bytes(&rows);
+        let minimum = size_of::<Vec<ReflowRow>>()
+            .saturating_add(128usize.saturating_mul(size_of::<ReflowRow>()))
+            .saturating_add(64usize.saturating_mul(size_of::<HistoryWireCell>()))
+            .saturating_add(32usize.saturating_mul(size_of::<HistoryAnchor>()));
+        assert!(
+            bytes >= minimum,
+            "derived-cache accounting undercounted allocations: {bytes} < {minimum}"
+        );
     }
 
     fn ascii_fragment(

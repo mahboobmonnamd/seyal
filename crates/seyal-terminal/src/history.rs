@@ -19,6 +19,8 @@ pub const HISTORY_PER_EXECUTION_DERIVED_INDEX_CAP: usize = 4 * 1024 * 1024;
 pub const HISTORY_RUNTIME_DERIVED_INDEX_CAP: usize = 32 * 1024 * 1024;
 pub const HISTORY_SELECTION_UNIT_CAP: usize = 64 * 1024;
 pub const MAX_EVICTED_ID_RANGES: usize = 1_024;
+const MAX_EVICTED_BITMAP_BITS: u64 = 65_536;
+const MAX_EVICTED_BITMAPS: usize = 8;
 
 static NEXT_SEGMENT_AGE: AtomicU64 = AtomicU64::new(1);
 
@@ -247,6 +249,125 @@ pub(crate) struct Segment {
 struct EvictedIdRange {
     first: LineId,
     last: LineId,
+}
+
+/// Exact sparse eviction bits for compacted ranges. Unset bits in the window
+/// stay never-allocated (`Invalid`); set bits stay `Unavailable`.
+#[derive(Clone, Debug, Default)]
+struct EvictedBitmap {
+    origin: u64,
+    len: u64,
+    words: Vec<u64>,
+}
+
+impl EvictedBitmap {
+    fn allocated_bytes(&self) -> usize {
+        size_of::<Self>().saturating_add(self.words.capacity().saturating_mul(size_of::<u64>()))
+    }
+
+    fn contains(&self, id: u64) -> bool {
+        let Some(bit) = id.checked_sub(self.origin) else {
+            return false;
+        };
+        if bit >= self.len {
+            return false;
+        }
+        let word = (bit / 64) as usize;
+        let shift = (bit % 64) as u32;
+        self.words
+            .get(word)
+            .is_some_and(|value| (*value >> shift) & 1 == 1)
+    }
+
+    fn intersects(&self, start: u64, end: u64) -> bool {
+        if self.len == 0 {
+            return false;
+        }
+        let window_last = self.origin.saturating_add(self.len.saturating_sub(1));
+        if end < self.origin || start > window_last {
+            return false;
+        }
+        let from_bit = start.max(self.origin) - self.origin;
+        let to_bit = end.min(window_last) - self.origin;
+        let mut bit = from_bit;
+        while bit <= to_bit {
+            let word_idx = (bit / 64) as usize;
+            let offset = bit % 64;
+            let Some(word) = self.words.get(word_idx).copied() else {
+                break;
+            };
+            let bits_left = 64 - offset;
+            let span = (to_bit - bit + 1).min(bits_left);
+            let mask = if span == 64 {
+                u64::MAX
+            } else {
+                (1u64 << span) - 1
+            };
+            if (word >> offset) & mask != 0 {
+                return true;
+            }
+            bit = bit.saturating_add(span);
+            if span == 0 {
+                break;
+            }
+        }
+        false
+    }
+
+    fn try_insert_range(&mut self, first: u64, last: u64) -> bool {
+        if last < first {
+            return false;
+        }
+        if self.len == 0 {
+            let span = last.saturating_sub(first).saturating_add(1);
+            if span == 0 || span > MAX_EVICTED_BITMAP_BITS {
+                return false;
+            }
+            self.origin = first;
+            self.resize_to(span);
+            self.set_range(first, last);
+            return true;
+        }
+        if first < self.origin || last < self.origin {
+            return false;
+        }
+        let current_last = self.origin.saturating_add(self.len.saturating_sub(1));
+        let new_last = current_last.max(last);
+        let span = new_last.saturating_sub(self.origin).saturating_add(1);
+        if span > MAX_EVICTED_BITMAP_BITS {
+            return false;
+        }
+        self.resize_to(span);
+        self.set_range(first, last);
+        true
+    }
+
+    fn resize_to(&mut self, span: u64) {
+        self.len = span;
+        let words = usize::try_from(span.div_ceil(64)).unwrap_or(usize::MAX);
+        if self.words.len() < words {
+            self.words.resize(words, 0);
+        }
+    }
+
+    fn set_range(&mut self, first: u64, last: u64) {
+        let mut id = first;
+        loop {
+            let bit = id - self.origin;
+            let word = (bit / 64) as usize;
+            let shift = (bit % 64) as u32;
+            if let Some(slot) = self.words.get_mut(word) {
+                *slot |= 1u64 << shift;
+            }
+            if id == last {
+                break;
+            }
+            let Some(next) = id.checked_add(1) else {
+                break;
+            };
+            id = next;
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -510,6 +631,10 @@ pub(crate) struct HistoryStore {
     /// never-allocated gap (alternate-screen LineIds).
     evicted_from: Option<LineId>,
     evicted_through: Option<LineId>,
+    /// Compacted non-adjacent eviction identities. Gaps in a window are unset.
+    evicted_bitmaps: Vec<EvictedBitmap>,
+    /// Exact leftover runs that do not fit a bitmap window.
+    evicted_overflow_ranges: Vec<EvictedIdRange>,
     reflow_cache: RefCell<Option<ReflowCache>>,
     /// SoftWrap-chain width runs used to answer resize carry columns.
     /// Derived (§9.1), not resident source; closed hard-broken rows are omitted.
@@ -1209,6 +1334,17 @@ impl HistoryStore {
                 self.evicted_id_ranges
                     .capacity()
                     .saturating_mul(size_of::<EvictedIdRange>()),
+            )
+            .saturating_add(
+                self.evicted_overflow_ranges
+                    .capacity()
+                    .saturating_mul(size_of::<EvictedIdRange>()),
+            )
+            .saturating_add(
+                self.evicted_bitmaps
+                    .iter()
+                    .map(EvictedBitmap::allocated_bytes)
+                    .sum::<usize>(),
             );
     }
 
@@ -1297,23 +1433,57 @@ impl HistoryStore {
     fn compact_evicted_id_ranges(&mut self) {
         while self.evicted_id_ranges.len() > MAX_EVICTED_ID_RANGES {
             let oldest = self.evicted_id_ranges.remove(0);
-            match (self.evicted_from, self.evicted_through) {
-                (None, None) => {
-                    self.evicted_from = Some(oldest.first);
-                    self.evicted_through = Some(oldest.last);
-                }
-                (Some(_from), Some(through))
-                    if through.0.checked_add(1) == Some(oldest.first.0) =>
-                {
-                    self.evicted_through = Some(oldest.last);
-                }
-                _ => {
-                    // Dropping a non-adjacent range forgets Unavailable for
-                    // those identities (they resolve as Invalid) rather than
-                    // filling never-allocated gaps as evicted.
-                }
+            if !self.admit_compacted_evicted_range(oldest) {
+                self.evicted_overflow_ranges.push(oldest);
             }
         }
+    }
+
+    fn admit_compacted_evicted_range(&mut self, range: EvictedIdRange) -> bool {
+        match (self.evicted_from, self.evicted_through) {
+            (None, None) => {
+                self.evicted_from = Some(range.first);
+                self.evicted_through = Some(range.last);
+                return true;
+            }
+            (Some(_from), Some(through)) if through.0.checked_add(1) == Some(range.first.0) => {
+                self.evicted_through = Some(range.last);
+                return true;
+            }
+            _ => {}
+        }
+        for bitmap in &mut self.evicted_bitmaps {
+            if bitmap.try_insert_range(range.first.0, range.last.0) {
+                return true;
+            }
+        }
+        if self.evicted_bitmaps.len() >= MAX_EVICTED_BITMAPS {
+            return false;
+        }
+        let mut bitmap = EvictedBitmap::default();
+        if bitmap.try_insert_range(range.first.0, range.last.0) {
+            self.evicted_bitmaps.push(bitmap);
+            return true;
+        }
+        let mut start = range.first.0;
+        while start <= range.last.0 && self.evicted_bitmaps.len() < MAX_EVICTED_BITMAPS {
+            let chunk_last = start
+                .saturating_add(MAX_EVICTED_BITMAP_BITS.saturating_sub(1))
+                .min(range.last.0);
+            let mut chunk = EvictedBitmap::default();
+            if !chunk.try_insert_range(start, chunk_last) {
+                break;
+            }
+            self.evicted_bitmaps.push(chunk);
+            if chunk_last == range.last.0 {
+                return true;
+            }
+            let Some(next) = chunk_last.checked_add(1) else {
+                return true;
+            };
+            start = next;
+        }
+        start > range.last.0
     }
 
     fn dense_evicted_prefix_contains(&self, line_id: LineId) -> bool {
@@ -1330,28 +1500,50 @@ impl HistoryStore {
         }
     }
 
+    fn overflow_contains(line_id: LineId, ranges: &[EvictedIdRange]) -> bool {
+        let index = ranges.partition_point(|range| range.last < line_id);
+        ranges
+            .get(index)
+            .is_some_and(|range| line_id >= range.first)
+    }
+
+    fn overflow_intersects(start: LineId, end: LineId, ranges: &[EvictedIdRange]) -> bool {
+        let index = ranges.partition_point(|range| range.last < start);
+        ranges.get(index).is_some_and(|range| range.first <= end)
+    }
+
     pub(crate) fn range_intersects_evicted(&self, start: LineId, end: LineId) -> bool {
         if self.dense_evicted_prefix_intersects(start, end) {
             return true;
         }
-        let index = self
-            .evicted_id_ranges
-            .partition_point(|range| range.last < start);
-        self.evicted_id_ranges
-            .get(index)
-            .is_some_and(|range| range.first <= end)
+        if self
+            .evicted_bitmaps
+            .iter()
+            .any(|bitmap| bitmap.intersects(start.0, end.0))
+        {
+            return true;
+        }
+        if Self::overflow_intersects(start, end, &self.evicted_overflow_ranges) {
+            return true;
+        }
+        Self::overflow_intersects(start, end, &self.evicted_id_ranges)
     }
 
     fn line_was_evicted(&self, line_id: LineId) -> bool {
         if self.dense_evicted_prefix_contains(line_id) {
             return true;
         }
-        let index = self
-            .evicted_id_ranges
-            .partition_point(|range| range.last < line_id);
-        self.evicted_id_ranges
-            .get(index)
-            .is_some_and(|range| line_id >= range.first)
+        if self
+            .evicted_bitmaps
+            .iter()
+            .any(|bitmap| bitmap.contains(line_id.0))
+        {
+            return true;
+        }
+        if Self::overflow_contains(line_id, &self.evicted_overflow_ranges) {
+            return true;
+        }
+        Self::overflow_contains(line_id, &self.evicted_id_ranges)
     }
 
     pub(crate) fn resolve_anchor(&self, anchor: HistoryAnchor) -> HistoryAnchorResolution {
@@ -2468,6 +2660,14 @@ mod tests {
         // never-evicted primary identity sitting in an alternate-screen gap.
         assert!(!store.line_was_evicted(LineId(MAX_EVICTED_ID_RANGES as u64 * 10 + 50)));
         assert!(store.line_was_evicted(LineId(1)));
+        assert!(store.line_was_evicted(LineId(11)));
+        assert!(matches!(
+            store.resolve_anchor(HistoryAnchor {
+                line_id: LineId(11),
+                unit_offset: 0,
+            }),
+            HistoryAnchorResolution::Unavailable
+        ));
         // ID 2 was never allocated/evicted; it sits in the gap after the
         // compacted [1,1] run and must not become Unavailable.
         assert!(!store.line_was_evicted(LineId(2)));

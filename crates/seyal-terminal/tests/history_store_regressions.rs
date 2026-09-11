@@ -43,11 +43,11 @@ fn primary_history_reflow_keeps_multiscalar_grapheme_payload() {
         })
         .collect();
     assert!(
-        leads.iter().any(|text| *text == "e\u{301}"),
+        leads.contains(&"e\u{301}"),
         "reflow truncated combining grapheme: {leads:?}"
     );
     assert!(
-        leads.iter().any(|text| *text == "👩\u{200d}💻"),
+        leads.contains(&"👩\u{200d}💻"),
         "reflow truncated ZWJ grapheme: {leads:?}"
     );
 }

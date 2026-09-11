@@ -20,12 +20,54 @@ REQUIRED_GATES = {
     "resource_scaling_rss", "resource_scaling_fds", "resource_scaling_threads", "startup", "idle_cpu",
     "renderer_prepare_submission", "teardown_recovery",
 }
+MISSING_METRIC_VALUES = {"unknown", "not-instrumented"}
+ACCEPTED_GATE_CEILINGS = {
+    "history_active_reflow_ms": {"p50": 2, "p95": 4, "p99": 8},
+    "history_sealed_segment_reflow_ms": {"p50": 1, "p95": 2, "p99": 4},
+}
 
 
 def nearest_rank(values: list[float], percentile: int) -> float:
     ordered = sorted(values)
     rank = max(1, (len(ordered) * percentile + 99) // 100)
     return ordered[rank - 1]
+
+
+def is_non_negative_number(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0
+
+
+def is_missing_metric(value: object) -> bool:
+    return value in MISSING_METRIC_VALUES
+
+
+def require_exact_head(production_sha: str) -> None:
+    probed = subprocess.run(
+        ["git", "rev-parse", "--is-inside-work-tree"],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if probed.returncode != 0 or probed.stdout.strip() != "true":
+        raise SystemExit(
+            "M002 performance result cannot verify exact production SHA without a git checkout"
+        )
+    current_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    ).stdout.strip()
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", current_sha):
+        raise SystemExit(
+            "M002 performance result cannot verify exact production SHA without a git checkout"
+        )
+    if production_sha != current_sha:
+        raise SystemExit("M002 performance result production_sha does not match validation checkout")
 
 
 def main() -> None:
@@ -49,7 +91,7 @@ def main() -> None:
         raise SystemExit("M002 performance schema must use nearest-rank percentiles")
     if schema.get("cohorts") != 5 or schema.get("warmups_per_cohort") != 20 or schema.get("samples_per_cohort") != 100:
         raise SystemExit("M002 performance schema has invalid cohort policy")
-    if set(schema.get("missing_metric_values", [])) != {"unknown", "not-instrumented"}:
+    if set(schema.get("missing_metric_values", [])) != MISSING_METRIC_VALUES:
         raise SystemExit("M002 performance schema must preserve unknown and not-instrumented metrics")
     comparison = schema.get("comparison", {})
     if any(comparison.get(key) is not True for key in ("baseline_required", "exact_head_required", "raw_cohorts_required")):
@@ -81,11 +123,20 @@ def main() -> None:
     for name, gate in gates.items():
         if gate.get("evidence_class") not in CLASSES or not gate.get("boundary") or not gate.get("unit"):
             raise SystemExit(f"M002 performance gate {name} is missing boundary, unit, or evidence class")
-        if not isinstance(gate.get("relative_regression_percent"), (int, float)) or gate["relative_regression_percent"] < 0:
+        if not is_non_negative_number(gate.get("relative_regression_percent")):
             raise SystemExit(f"M002 performance gate {name} has invalid relative allowance")
     for name, gate in gates.items():
         if gate.get("status", "accepted") == "accepted" and "source" not in gate:
             raise SystemExit(f"accepted M002 performance gate {name} is missing authority source")
+    for name, expected in ACCEPTED_GATE_CEILINGS.items():
+        gate = gates.get(name, {})
+        if gate.get("status", "accepted") != "accepted":
+            raise SystemExit(f"M002 performance gate {name} must remain accepted")
+        for key, ceiling in expected.items():
+            if gate.get(key) != ceiling:
+                raise SystemExit(
+                    f"accepted M002 performance gate {name} frozen ceiling {key} must remain {ceiling}"
+                )
     matrix = schema.get("matrix", {})
     if (
         matrix.get("retained_content") != [10000, 100000, 1000000]
@@ -145,8 +196,6 @@ def evaluate_record(path: Path, schema: dict) -> str:
         raise SystemExit("M002 performance result has invalid comparator")
     if record["percentile_method"] != schema["percentile_method"]:
         raise SystemExit("M002 performance result percentile method mismatch")
-    if record["cohort_count"] != schema["cohorts"] or record["sample_count"] != schema["cohorts"] * schema["samples_per_cohort"]:
-        raise SystemExit("M002 performance result does not satisfy the cohort policy")
     for field in (
         "production_sha", "harness_sha", "baseline_sha", "build_mode", "os_version", "toolchain",
         "hardware", "display", "power_thermal_state", "workload_hash", "topology",
@@ -157,19 +206,35 @@ def evaluate_record(path: Path, schema: dict) -> str:
     for field in ("production_sha", "harness_sha", "baseline_sha"):
         if not re.fullmatch(r"[0-9a-fA-F]{40}", record[field]):
             raise SystemExit(f"M002 performance result {field} must be a full commit SHA")
-    if (ROOT / ".git").exists():
-        current_sha = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True,
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False,
-        ).stdout.strip()
-        if current_sha and record["production_sha"] != current_sha:
-            raise SystemExit("M002 performance result production_sha does not match validation checkout")
+    require_exact_head(record["production_sha"])
+
+    percentile_keys = ("p50", "p95", "p99")
+    baseline_keys = ("baseline_p50", "baseline_p95", "baseline_p99")
+    missing_percentiles = [is_missing_metric(record[key]) for key in percentile_keys]
+    if any(missing_percentiles):
+        if not all(missing_percentiles) or not all(is_missing_metric(record[key]) for key in baseline_keys):
+            raise SystemExit(
+                "M002 missing metrics must use unknown or not-instrumented for every percentile and baseline"
+            )
+        if record.get("status") == "PASS":
+            raise SystemExit("missing M002 metrics cannot PASS")
+        print(
+            f"M002 performance result: FAIL metric={record['metric']} "
+            f"samples={record['sample_count']} reason=not-instrumented"
+        )
+        return "FAIL"
+
+    if record["cohort_count"] != schema["cohorts"] or record["sample_count"] != schema["cohorts"] * schema["samples_per_cohort"]:
+        raise SystemExit("M002 performance result does not satisfy the cohort policy")
     for field in ("raw_log", "raw_cohorts", "baseline_raw_cohorts"):
+        if is_missing_metric(record[field]):
+            raise SystemExit(f"M002 performance result {field} cannot be unknown when percentiles are numeric")
         artifact = (ROOT / record[field]).resolve()
         if ROOT not in artifact.parents and artifact != ROOT:
             raise SystemExit(f"M002 performance result {field} escapes validation root")
         if not artifact.exists():
             raise SystemExit(f"M002 performance result {field} does not exist")
+
     def load_raw_cohorts(field: str) -> list[float]:
         raw_cohorts = (ROOT / record[field]).resolve()
         if not raw_cohorts.is_dir():
@@ -184,11 +249,11 @@ def evaluate_record(path: Path, schema: dict) -> str:
                 raise SystemExit(f"invalid M002 raw cohort {cohort_file.name}: {error}") from error
             number = cohort.get("cohort")
             samples = cohort.get("samples")
-            if not isinstance(number, int) or not isinstance(samples, list):
+            if type(number) is not int or not isinstance(samples, list):
                 raise SystemExit(f"M002 raw cohort {cohort_file.name} must contain cohort and samples")
             if len(samples) != schema["raw_cohorts"]["observations_per_file"]:
                 raise SystemExit(f"M002 raw cohort {cohort_file.name} has an invalid sample count")
-            if any(not isinstance(value, (int, float)) or value < 0 for value in samples):
+            if any(not is_non_negative_number(value) for value in samples):
                 raise SystemExit(f"M002 raw cohort {cohort_file.name} contains invalid samples")
             cohort_numbers.append(number)
             raw_values.extend(float(value) for value in samples)
@@ -200,9 +265,9 @@ def evaluate_record(path: Path, schema: dict) -> str:
 
     raw_values = load_raw_cohorts("raw_cohorts")
     baseline_raw_values = load_raw_cohorts("baseline_raw_cohorts")
-    values = [record[key] for key in ("p50", "p95", "p99")]
-    baseline = [record[key] for key in ("baseline_p50", "baseline_p95", "baseline_p99")]
-    if any(not isinstance(value, (int, float)) or value < 0 for value in values + baseline):
+    values = [record[key] for key in percentile_keys]
+    baseline = [record[key] for key in baseline_keys]
+    if any(not is_non_negative_number(value) for value in values + baseline):
         raise SystemExit("M002 performance result percentiles and baselines must be non-negative numbers")
     if not values[0] <= values[1] <= values[2]:
         raise SystemExit("M002 performance result percentiles must be ordered p50 <= p95 <= p99")
@@ -226,7 +291,9 @@ def evaluate_record(path: Path, schema: dict) -> str:
         if record["relative_regression_percent"] != allowed:
             raise SystemExit("M002 performance result relative allowance does not match gate contract")
         ceilings = [gate.get(key) for key in ("p50", "p95", "p99")]
-        absolute_ok = all(limit is not None and value <= limit for value, limit in zip(values, ceilings))
+        if any(not is_non_negative_number(limit) for limit in ceilings):
+            raise SystemExit("M002 performance gate is missing frozen numeric ceilings")
+        absolute_ok = all(value <= limit for value, limit in zip(values, ceilings))
         relative_ok = all(value <= base * (1 + allowed / 100) for value, base in zip(values, baseline))
         status = "PASS" if absolute_ok and relative_ok else "FAIL"
     claimed = record.get("status")

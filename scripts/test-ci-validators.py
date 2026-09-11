@@ -37,6 +37,40 @@ def write(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
+def pin_exact_head(root: Path, record_path: Path) -> None:
+    subprocess.run(
+        ["git", "init"],
+        cwd=root,
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=seyal",
+            "-c",
+            "user.email=seyal@test",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "fixture",
+        ],
+        cwd=root,
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+    sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    record_path.write_text(
+        record_path.read_text(encoding="utf-8").replace(
+            "1111111111111111111111111111111111111111", sha
+        ),
+        encoding="utf-8",
+    )
+
+
 def main() -> None:
     with tempfile.TemporaryDirectory(prefix="seyal-ci-validator-") as tmp:
         base = Path(tmp)
@@ -159,6 +193,7 @@ def main() -> None:
                 invalid_percentiles / "baseline-cohorts" / f"cohort-{cohort}.toml",
                 f"cohort = {cohort}\nsamples = [{', '.join(map(str, baseline_samples[(cohort - 1) * 100:cohort * 100]))}]\n",
             )
+        pin_exact_head(invalid_percentiles, invalid_percentiles / "record.toml")
         run_negative(
             ["python3", str(ROOT / "scripts/check-m002-performance-contract.py"), "--record", "record.toml"],
             invalid_percentiles,
@@ -342,6 +377,79 @@ def main() -> None:
             ["python3", str(ROOT / "scripts/check-m002-performance-contract.py"), "--record", "record.toml"],
             escaped_baseline,
             "baseline_raw_cohorts escapes validation root",
+        )
+
+        weakened_ceiling = base / "m002-performance-weakened-ceiling"
+        write(
+            weakened_ceiling / "docs/evidence/M002-PERFORMANCE-CONTRACT-V1.md",
+            "Status: proposed contract for Issue #673\nexact production SHA\nbaseline SHA\nnearest-rank\n",
+        )
+        toml = (ROOT / "docs/evidence/M002-PERFORMANCE-CONTRACT-V1.toml").read_text(encoding="utf-8")
+        toml = toml.replace(
+            'boundary = "HistoryStore active reflow"\nunit = "ms"\np50 = 2\np95 = 4\np99 = 8\n',
+            'boundary = "HistoryStore active reflow"\nunit = "ms"\np50 = 20\np95 = 4\np99 = 8\n',
+        )
+        write(weakened_ceiling / "docs/evidence/M002-PERFORMANCE-CONTRACT-V1.toml", toml)
+        run_negative(
+            ["python3", str(ROOT / "scripts/check-m002-performance-contract.py")],
+            weakened_ceiling,
+            "frozen ceiling p50 must remain 2",
+        )
+
+        boolean_samples = base / "m002-performance-boolean-samples"
+        shutil.copytree(accepted_pass, boolean_samples)
+        for cohort in range(1, 6):
+            write(
+                boolean_samples / "cohorts" / f"cohort-{cohort}.toml",
+                f"cohort = {cohort}\nsamples = [{', '.join(['true'] * 100)}]\n",
+            )
+        run_negative(
+            ["python3", str(ROOT / "scripts/check-m002-performance-contract.py"), "--record", "record.toml"],
+            boolean_samples,
+            "contains invalid samples",
+        )
+
+        missing_git = base / "m002-performance-missing-git"
+        shutil.copytree(accepted_pass, missing_git)
+        shutil.rmtree(missing_git / ".git")
+        run_negative(
+            ["python3", str(ROOT / "scripts/check-m002-performance-contract.py"), "--record", "record.toml"],
+            missing_git,
+            "cannot verify exact production SHA without a git checkout",
+        )
+
+        missing_metrics = base / "m002-performance-missing-metrics"
+        shutil.copytree(accepted_pass, missing_metrics)
+        record = (missing_metrics / "record.toml").read_text(encoding="utf-8")
+        record = record.replace("sample_count = 500", "sample_count = 0")
+        record = record.replace(
+            "p50 = 2\np95 = 4\np99 = 8\nbaseline_p50 = 2\nbaseline_p95 = 4\nbaseline_p99 = 8",
+            'p50 = "unknown"\np95 = "not-instrumented"\np99 = "unknown"\n'
+            'baseline_p50 = "unknown"\nbaseline_p95 = "not-instrumented"\nbaseline_p99 = "unknown"',
+        )
+        (missing_metrics / "record.toml").write_text(record, encoding="utf-8")
+        result = subprocess.run(
+            ["python3", str(ROOT / "scripts/check-m002-performance-contract.py"), "--record", "record.toml"],
+            cwd=missing_metrics,
+            env={**os.environ, ENV_ROOT: str(missing_metrics)},
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+        require(
+            result.returncode == 0 and "reason=not-instrumented" in result.stdout and "PASS" not in result.stdout,
+            "unknown/not-instrumented metrics were not retained as an honest FAIL",
+        )
+
+        missing_metrics_pass = base / "m002-performance-missing-metrics-pass"
+        shutil.copytree(missing_metrics, missing_metrics_pass)
+        record = (missing_metrics_pass / "record.toml").read_text(encoding="utf-8")
+        (missing_metrics_pass / "record.toml").write_text(record + "status = 'PASS'\n", encoding="utf-8")
+        run_negative(
+            ["python3", str(ROOT / "scripts/check-m002-performance-contract.py"), "--record", "record.toml"],
+            missing_metrics_pass,
+            "missing M002 metrics cannot PASS",
         )
 
         unicode_benchmark = base / "unicode-benchmark-contract"

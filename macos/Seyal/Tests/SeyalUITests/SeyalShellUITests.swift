@@ -413,22 +413,34 @@ final class SeyalShellUITests: XCTestCase {
         composer.click()
         let baselineSurfacePNG = surface.screenshot().pngRepresentation
 
-        // Keep the typed command ASCII so XCTest's keyboard path is stable;
-        // printf expands locale-independent UTF-8 octal bytes at the PTY
-        // boundary. The payload is captured before being echoed with cat so
-        // the terminal and exact fixture assertion use the same bytes without
-        // relying on XCTest to type a shell pipeline character.
+        // Keep the typed command short ASCII so XCTest's keyboard path is
+        // stable. The octal payload lives in a script file: hosted-runner
+        // typeText previously truncated the inline printf and left a 222-byte
+        // marker instead of the 50-byte UTF-8 fixture. printf still expands
+        // locale-independent UTF-8 at the PTY boundary; cat echoes the same
+        // captured bytes into the terminal.
         let expectedUnicode = "é 界 👩‍💻 🇮🇳 क्ष مرحبا\n"
-        let command =
-            "LC_ALL=C printf '%b' '\\0145\\0314\\0201 \\0347\\0225\\0214 \\0360\\0237\\0221\\0251\\0342\\0200\\0215\\0360\\0237\\0222\\0273 \\0360\\0237\\0207\\0256\\0360\\0237\\0207\\0263 \\0340\\0244\\0225\\0340\\0245\\0215\\0340\\0244\\0267 \\0331\\0205\\0330\\0261\\0330\\0255\\0330\\0250\\0330\\0247\\0012' > '\(markerURL.path)' && LC_ALL=C cat '\(markerURL.path)'"
-        composer.typeText(command)
+        let scriptURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "seyal-m002-unicode-headed-\(UUID().uuidString).sh"
+        )
+        let script = """
+        #!/bin/sh
+        LC_ALL=C printf '%b' '\\0145\\0314\\0201 \\0347\\0225\\0214 \\0360\\0237\\0221\\0251\\0342\\0200\\0215\\0360\\0237\\0222\\0273 \\0360\\0237\\0207\\0256\\0360\\0237\\0207\\0263 \\0340\\0244\\0225\\0340\\0245\\0215\\0340\\0244\\0267 \\0331\\0205\\0330\\0261\\0330\\0255\\0330\\0250\\0330\\0247\\0012' > '\(markerURL.path)'
+        LC_ALL=C cat '\(markerURL.path)'
+        """
+        try script.write(to: scriptURL, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: scriptURL) }
+        composer.typeText("sh '\(scriptURL.path)'")
         composer.typeKey(.return, modifierFlags: [])
 
+        let expectedUnicodeData = Data(expectedUnicode.utf8)
         XCTAssertTrue(
-            wait(timeout: 5) { FileManager.default.fileExists(atPath: markerURL.path) },
+            wait(timeout: 8) {
+                (try? Data(contentsOf: markerURL)) == expectedUnicodeData
+            },
             "Unicode workload did not reach the Runtime-owned PTY shell"
         )
-        XCTAssertEqual(try Data(contentsOf: markerURL), Data(expectedUnicode.utf8))
+        XCTAssertEqual(try Data(contentsOf: markerURL), expectedUnicodeData)
 
         let blocks = app.descendants(matching: .any).matching(
             NSPredicate(format: "identifier CONTAINS '.block.'")

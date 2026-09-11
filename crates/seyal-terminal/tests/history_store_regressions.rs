@@ -27,6 +27,32 @@ fn canonical_search_keeps_multiscalar_grapheme_units_atomic() {
 }
 
 #[test]
+fn primary_history_reflow_keeps_multiscalar_grapheme_payload() {
+    let mut terminal = TerminalState::new(8, 1).expect("terminal");
+    terminal
+        .feed("e\u{301} 👩\u{200d}💻\r\n".as_bytes())
+        .expect("feed");
+    let rows = terminal.primary_history_reflow(8, 8);
+    let leads: Vec<&str> = rows
+        .iter()
+        .flat_map(|row| {
+            row.cells
+                .iter()
+                .filter(|cell| !cell.continuation)
+                .map(|cell| cell.text.as_str())
+        })
+        .collect();
+    assert!(
+        leads.iter().any(|text| *text == "e\u{301}"),
+        "reflow truncated combining grapheme: {leads:?}"
+    );
+    assert!(
+        leads.iter().any(|text| *text == "👩\u{200d}💻"),
+        "reflow truncated ZWJ grapheme: {leads:?}"
+    );
+}
+
+#[test]
 fn canonical_search_matches_across_soft_wrap_and_returns_source_anchors() {
     let mut terminal = TerminalState::new(4, 1).expect("terminal");
     terminal.feed(b"abcdefgh\r\n").expect("feed");
@@ -84,7 +110,7 @@ fn reflow_at_one_column_never_emits_an_orphan_wide_unit() {
     assert!(rows.iter().all(|row| {
         row.cells
             .first()
-            .is_none_or(|cell| cell.role != CellRole::Lead || cell.width < 2)
+            .is_none_or(|cell| cell.continuation || cell.width < 2)
     }));
 }
 
@@ -669,7 +695,7 @@ fn units_text(units: &[HistoryUnitView]) -> String {
 fn row_text(row: &seyal_terminal::ReflowRow) -> String {
     row.cells
         .iter()
-        .filter(|cell| cell.role == CellRole::Lead)
-        .map(|cell| cell.character)
+        .filter(|cell| !cell.continuation)
+        .map(|cell| cell.text.as_str())
         .collect()
 }

@@ -498,6 +498,7 @@ impl TerminalState {
 
     /// Derives width-specific rows from canonical retained history. The
     /// projection is bounded by `max_rows` and does not rewrite source text.
+    /// Each lead cell carries the complete grapheme UTF-8 payload.
     pub fn primary_history_reflow(&self, cols: u16, max_rows: usize) -> Vec<ReflowRow> {
         self.core.primary.history().reflow(cols, max_rows)
     }

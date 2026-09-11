@@ -5,7 +5,8 @@
 | Item | Value |
 | --- | --- |
 | Branch | `issue/819` |
-| Exact head | `177541f` (production tip; freeze docs commit is branch tip) |
+| Exact head | successor of `ef6885d` (this commit: grapheme reflow + sparse eviction) |
+| Prior freeze SHA | `177541f` — superseded; do not treat as current-head evidence |
 | Base | `origin/master` @ `485bdf5` |
 | Relationship | `Refs #819` only — do **not** use `Closes #819` |
 | Environment | Linux x86_64 cloud agent — no headed/macOS/ARM64 claim |
@@ -35,10 +36,10 @@ cargo test -p seyal-protocol --locked --lib -- pass7::
 # 14 passed
 
 cargo test -p seyal-terminal --locked --lib history::
-# 20 passed
+# 22 passed
 
 cargo test -p seyal-terminal --locked --test history_store_regressions
-# 20 passed
+# 23 passed
 ```
 
 `git diff --check origin/master...HEAD` should be clean on the freeze push.
@@ -59,5 +60,5 @@ cargo test -p seyal-terminal --locked --test history_store_regressions
 ## Requested next action
 
 Independent reviewer: run source review against ADR-010 / SPEC-010 / #819 on
-exact head `177541f` (or successor freeze SHA if docs-only amend). Record
-GO/NO-GO with P0–P2 table. Do not self-approve.
+this freeze commit (successor of `ef6885d`). Record GO/NO-GO with P0–P2 table.
+Do not self-approve.

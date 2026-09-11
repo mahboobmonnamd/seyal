@@ -58,8 +58,9 @@ pub enum HistoryAnchorResolution {
 }
 
 /// Canonical source unit projection for history consumers that need complete
-/// grapheme payloads. The scalar `Cell` projection remains available for
-/// legacy display framing, but it cannot carry a multi-scalar payload.
+/// grapheme payloads. Live-grid `Cell` values still carry a first scalar plus
+/// store id; public reflow uses [`HistoryWireCell`] so visual rows keep the
+/// full UTF-8 unit.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HistoryUnitView {
     pub anchor: HistoryAnchor,
@@ -76,6 +77,21 @@ pub struct HistoryWireCell {
     pub width: u8,
     pub style: Style,
     pub continuation: bool,
+}
+
+impl HistoryWireCell {
+    pub fn is_continuation(&self) -> bool {
+        self.continuation
+    }
+
+    fn continuation_placeholder(style: Style) -> Self {
+        Self {
+            text: String::new(),
+            width: 0,
+            style,
+            continuation: true,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -374,8 +390,13 @@ impl<'a> HistoryUnitRef<'a> {
         Cell::lead_inline(self.first_scalar(), self.width().max(1), self.style())
     }
 
-    fn reflow_cell(self) -> Cell {
-        self.presentation_cell()
+    fn reflow_wire_cell(self) -> HistoryWireCell {
+        HistoryWireCell {
+            text: String::from_utf8_lossy(self.utf8()).into_owned(),
+            width: self.width(),
+            style: self.style(),
+            continuation: false,
+        }
     }
 }
 
@@ -485,6 +506,9 @@ pub(crate) struct HistoryStore {
     // absorbed into an unavailable range. The Vec allocation is included in
     // resident_bytes, so this metadata participates in the same hard cap.
     evicted_id_ranges: Vec<EvictedIdRange>,
+    /// Inclusive dense prefix of actually evicted identities. Never spans a
+    /// never-allocated gap (alternate-screen LineIds).
+    evicted_from: Option<LineId>,
     evicted_through: Option<LineId>,
     reflow_cache: RefCell<Option<ReflowCache>>,
     /// SoftWrap-chain width runs used to answer resize carry columns.
@@ -1273,17 +1297,41 @@ impl HistoryStore {
     fn compact_evicted_id_ranges(&mut self) {
         while self.evicted_id_ranges.len() > MAX_EVICTED_ID_RANGES {
             let oldest = self.evicted_id_ranges.remove(0);
-            self.evicted_through = Some(match self.evicted_through {
-                Some(current) => current.max(oldest.last),
-                None => oldest.last,
-            });
+            match (self.evicted_from, self.evicted_through) {
+                (None, None) => {
+                    self.evicted_from = Some(oldest.first);
+                    self.evicted_through = Some(oldest.last);
+                }
+                (Some(_from), Some(through))
+                    if through.0.checked_add(1) == Some(oldest.first.0) =>
+                {
+                    self.evicted_through = Some(oldest.last);
+                }
+                _ => {
+                    // Dropping a non-adjacent range forgets Unavailable for
+                    // those identities (they resolve as Invalid) rather than
+                    // filling never-allocated gaps as evicted.
+                }
+            }
+        }
+    }
+
+    fn dense_evicted_prefix_contains(&self, line_id: LineId) -> bool {
+        match (self.evicted_from, self.evicted_through) {
+            (Some(from), Some(through)) => line_id >= from && line_id <= through,
+            _ => false,
+        }
+    }
+
+    fn dense_evicted_prefix_intersects(&self, start: LineId, end: LineId) -> bool {
+        match (self.evicted_from, self.evicted_through) {
+            (Some(from), Some(through)) => start <= through && end >= from,
+            _ => false,
         }
     }
 
     pub(crate) fn range_intersects_evicted(&self, start: LineId, end: LineId) -> bool {
-        if let Some(through) = self.evicted_through
-            && start <= through
-        {
+        if self.dense_evicted_prefix_intersects(start, end) {
             return true;
         }
         let index = self
@@ -1295,9 +1343,7 @@ impl HistoryStore {
     }
 
     fn line_was_evicted(&self, line_id: LineId) -> bool {
-        if let Some(through) = self.evicted_through
-            && line_id <= through
-        {
+        if self.dense_evicted_prefix_contains(line_id) {
             return true;
         }
         let index = self
@@ -1440,9 +1486,11 @@ impl HistoryStore {
                 }
                 current.source_line_id.get_or_insert(line.line_id());
                 current.anchors.push(anchor);
-                current.cells.push(unit.reflow_cell());
+                current.cells.push(unit.reflow_wire_cell());
                 if unit_width == 2 {
-                    current.cells.push(Cell::continuation());
+                    current
+                        .cells
+                        .push(HistoryWireCell::continuation_placeholder(unit.style()));
                 }
                 used = used.saturating_add(unit_width);
             }
@@ -1602,7 +1650,7 @@ impl HistoryStore {
 pub struct ReflowRow {
     pub source_line_id: Option<LineId>,
     pub anchors: Vec<HistoryAnchor>,
-    pub cells: Vec<Cell>,
+    pub cells: Vec<HistoryWireCell>,
     pub break_after: Option<HistoryBreakAfter>,
     pub unavailable: bool,
 }
@@ -2237,8 +2285,11 @@ fn reflow_rows_allocated_bytes(rows: &[ReflowRow]) -> usize {
             rows.iter()
                 .map(|row| {
                     row.cells
-                        .capacity()
-                        .saturating_mul(size_of::<Cell>())
+                        .iter()
+                        .map(|cell| {
+                            size_of::<HistoryWireCell>().saturating_add(cell.text.capacity())
+                        })
+                        .sum::<usize>()
                         .saturating_add(
                             row.anchors
                                 .capacity()
@@ -2416,6 +2467,18 @@ mod tests {
         // Folded watermark covers the oldest compacted identity, not a later
         // never-evicted primary identity sitting in an alternate-screen gap.
         assert!(!store.line_was_evicted(LineId(MAX_EVICTED_ID_RANGES as u64 * 10 + 50)));
+        assert!(store.line_was_evicted(LineId(1)));
+        // ID 2 was never allocated/evicted; it sits in the gap after the
+        // compacted [1,1] run and must not become Unavailable.
+        assert!(!store.line_was_evicted(LineId(2)));
+        assert!(!store.range_intersects_evicted(LineId(2), LineId(2)));
+        assert!(matches!(
+            store.resolve_anchor(HistoryAnchor {
+                line_id: LineId(2),
+                unit_offset: 0,
+            }),
+            HistoryAnchorResolution::Invalid
+        ));
         assert!(store.range_intersects_evicted(LineId(1), LineId(1)));
     }
 

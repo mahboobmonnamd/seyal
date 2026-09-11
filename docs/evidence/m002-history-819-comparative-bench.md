@@ -3,6 +3,9 @@
 - **Date:** 2026-09-11
 - **Host:** macOS arm64 Release `cargo bench`
 - **Recorded commit env:** `SEYAL_BENCH_COMMIT=2a5ebc535dc883dffb9e68113b9ae24cadc1b50f`
+- **Does not prove current HEAD.** These rows are historical comparative
+  direction at that parent SHA. They are not exact-head evidence for later
+  commits and must not be read as SPEC-010 §18.1 acceptance.
 - **Classification:** TerminalState-comparative only (`performance_claim=false`)
 
 Command:

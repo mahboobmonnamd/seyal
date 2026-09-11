@@ -1015,7 +1015,7 @@ mod tests {
         assert_eq!(cache.cells[1].role, DisplayCellRole::Continuation);
         assert_eq!(cache.cells[1].foreground, DisplayColor::Indexed(208));
         assert_eq!(cache.cells[1].background, cache.cells[0].background);
-        assert_eq!(cache.cells[1].attributes.bold, true);
+        assert!(cache.cells[1].attributes.bold);
         assert!(cache.cells[1].text.is_empty());
     }
 

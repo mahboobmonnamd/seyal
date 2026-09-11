@@ -6,7 +6,10 @@ use stats_alloc::{Region, StatsAlloc, INSTRUMENTED_SYSTEM};
 #[global_allocator]
 static GLOBAL: &StatsAlloc<std::alloc::System> = &INSTRUMENTED_SYSTEM;
 
-const DEFAULT_LINES: &[usize] = &[100_000];
+// `make bench` is a harness smoke (`performance_claim=false`), not SPEC-010
+// §18.1. Keep the default path small enough for native-macos-smoke's 35-minute
+// budget; the 100k/full matrix stays behind SEYAL_HISTORY_BENCH_FULL=1.
+const DEFAULT_LINES: &[usize] = &[2_000];
 const DEFAULT_EXECUTIONS: &[usize] = &[1];
 const DEFAULT_COLUMNS: &[u16] = &[80];
 const DEFAULT_WORKLOADS: &[&str] = &["ascii"];
@@ -14,7 +17,7 @@ const FULL_LINES: &[usize] = &[10_000, 100_000, 1_000_000];
 const FULL_EXECUTIONS: &[usize] = &[1, 10, 50, 100];
 const FULL_COLUMNS: &[u16] = &[40, 48, 64, 80, 96, 132, 160];
 const FULL_WORKLOADS: &[&str] = &["ascii", "styled", "cjk", "emoji-combining"];
-const DEFAULT_SAMPLES: usize = 32;
+const DEFAULT_SAMPLES: usize = 8;
 const ACTIVE_WINDOW_ROWS: usize = 120;
 
 fn parse_scales<T>(name: &str, defaults: &[T]) -> Vec<T>

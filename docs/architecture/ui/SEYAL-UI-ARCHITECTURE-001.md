@@ -1,8 +1,8 @@
 # Seyal UI Architecture — Foundation Direction
 
-**Document:** SEYAL-UI-ARCHITECTURE-001  
-**Date:** 2026-08-23; presentation-mode clarification 2026-09-11  
-**Status:** Foundation UI architecture  
+**Document:** SEYAL-UI-ARCHITECTURE-001
+**Date:** 2026-08-23; proposed presentation-mode clarification 2026-09-11
+**Status:** Foundation UI architecture; #858 clarification proposed until merge
 **Authority:** Subordinate to [`../SEYAL-ARCH-FOUNDATION-RD-001.md`](../SEYAL-ARCH-FOUNDATION-RD-001.md)
 
 This document defines the presentation architecture needed so Seyal can become a futuristic execution workspace without allowing UI work to compromise terminal correctness, persistence, memory, or latency.
@@ -90,6 +90,20 @@ same alternate grid
 No Block wrapper may intercept mouse, cursor, keyboard, focus, resize or screen semantics required by the TUI. Flow/Raw presentation yields for the takeover; on exit, current eligibility determines whether the Pane returns to Flow or Raw.
 
 Same-execution continuity does not require one AppKit terminal view object to remain permanently installed underneath all modes.
+
+### 2.4 Transition ownership
+
+Presentation transitions are input-authority transitions as well as layout changes.
+Before the destination mode can accept an event, the source mode must stop
+admitting new input, invalidate its presentation/input epoch, discard uncommitted
+IME/preedit state, release first-responder/text-input ownership and release its
+mouse route/capture. Only then may the destination route be validated and
+activated.
+
+Eligibility/admission must be current for the exact execution, attachment and
+Controller authority plus the relevant presentation/canonical/integration
+generation. Stale callbacks or eligibility never fall through to another mode,
+and one physical event is admitted through at most one presentation route.
 
 ---
 
@@ -383,6 +397,8 @@ Accessibility must be designed into Metal-backed terminal presentation; it is no
 12. UI layout persistence and execution persistence remain separate.
 13. Futuristic presentation is allowed only inside terminal correctness/performance budgets.
 14. If Flow cannot safely preserve required character-level input semantics, switch the Pane to Raw instead of passing input through a hidden terminal surface.
+15. Presentation transitions revoke the source input/focus/IME/mouse route before the destination route can admit events.
+16. Presentation eligibility is fenced to current execution/attachment/controller and relevant canonical/integration generation.
 
 ---
 

@@ -302,6 +302,7 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
       metalLayer.framebufferOnly = true
       metalLayer.maximumDrawableCount = 2
       metalLayer.presentsWithTransaction = false
+      metalLayer.isOpaque = true
       updateDrawableSize()
 
       // No dedicated GPU surface resources are retained before the view is
@@ -550,6 +551,18 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
     } catch {
       lastRenderError = error
     }
+  }
+
+  func applyRendererPresentation(_ plan: RendererPresentationPlan) {
+    renderer.setPresentationPlan(plan)
+    layer?.isOpaque = plan.drawsFullGridBackground
+    if let metalLayer = layer as? CAMetalLayer {
+      metalLayer.isOpaque = plan.drawsFullGridBackground
+    }
+  }
+
+  func inspectRendererPresentation() -> RendererPresentationInspection {
+    renderer.inspectPresentation()
   }
 
   func setTranscriptFrame(_ frame: NativeTranscriptFrame) {

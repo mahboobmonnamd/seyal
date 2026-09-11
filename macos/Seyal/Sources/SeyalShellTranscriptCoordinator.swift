@@ -152,6 +152,16 @@ extension SeyalShellView {
     if productionShell {
       surface.setAccessibilityIdentifier("terminal-surface.\(paneID)")
       surface.claimsFirstResponderOnClick = tuiPaneIDs.contains(paneID)
+      if let executionId = paneState?.executionIdentity ?? surface.terminalExecutionIdentity {
+        surface.bindPresentationIdentity(
+          TerminalPresentationIdentity(executionId: executionId, ptyGeneration: 1)
+        )
+      }
+      _ = surface.applyPresentationMode(
+        tuiPaneIDs.contains(paneID) ? .tui : .flow,
+        identity: surface.currentPresentationIdentity(),
+        explicit: false
+      )
       surface.onAlternateScreenChanged = { [weak self] active in
         self?.setPaneTUI(paneID: paneID, active: active)
       }
@@ -221,6 +231,9 @@ extension SeyalShellView {
         let identity = surface.terminalExecutionIdentity
       {
         state.bindExecutionIdentity(identity, paneID: paneID)
+        surface.bindPresentationIdentity(
+          TerminalPresentationIdentity(executionId: identity, ptyGeneration: 1)
+        )
       }
       updateTranscriptBlocks(paneID: paneID)
     } else {

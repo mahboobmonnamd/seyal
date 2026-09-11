@@ -971,7 +971,7 @@ final class SeyalShellComponentTests: XCTestCase {
   }
 
   @MainActor
-  func testPaneTranscriptBlockOverlayDoesNotCaptureTerminalSurfaceInput() throws {
+  func testPaneTranscriptBlockOverlayDoesNotRouteInputToTerminalSurface() throws {
     let transcript = PaneTranscriptView(visual: previewVisual())
     let blockStack = TranscriptBlockStackView()
     let block = BlockView(
@@ -998,8 +998,8 @@ final class SeyalShellComponentTests: XCTestCase {
       to: transcript
     )
     XCTAssertTrue(
-      transcript.hitTest(point) === transcript.terminalSurface,
-      "the timeline overlay must pass empty-area hits through to the terminal surface"
+      transcript.hitTest(point) !== transcript.terminalSurface,
+      "Flow Block chrome must not pass hits through to a raw terminal surface"
     )
   }
 

@@ -338,6 +338,7 @@ final class MetalTerminalRenderer: @unchecked Sendable {
     /// transcript frame replaces the order and membership atomically.
     private var historyRegions: [UInt64: HistoryRenderRegion] = [:]
     private var historyRegionOrder: [UInt64] = []
+    private var presentationPlan = RendererPresentationPlan.fullPane(.raw)
     private var currentRows = 0
     private var currentColumns = 0
     private var currentMetrics: TerminalFontMetrics?
@@ -821,6 +822,21 @@ final class MetalTerminalRenderer: @unchecked Sendable {
         }
     }
 
+    func setPresentationPlan(_ plan: RendererPresentationPlan) {
+        presentationPlan = plan
+        needsPresent = instanceBuffer != nil || !historyRegionOrder.isEmpty
+    }
+
+    func inspectPresentation() -> RendererPresentationInspection {
+        RendererPresentationInspection(
+            mode: presentationPlan.mode,
+            drawsFullGridBackground: presentationPlan.drawsFullGridBackground,
+            drawsLiveGrid: presentationPlan.drawsLiveGrid,
+            drawsCursorOutsideBlockRegions: presentationPlan.drawsCursorOutsideBlockRegions,
+            blockRegionIDs: historyRegionOrder
+        )
+    }
+
     func setHistoryRegionOrder(_ ids: [UInt64]) {
         guard Set(ids).count == ids.count, ids.allSatisfy({ $0 != 0 }) else { return }
         let keep = Set(ids)
@@ -1245,12 +1261,21 @@ final class MetalTerminalRenderer: @unchecked Sendable {
         pass.colorAttachments[0].texture = target
         pass.colorAttachments[0].loadAction = .clear
         pass.colorAttachments[0].storeAction = .store
-        pass.colorAttachments[0].clearColor = MTLClearColor(
-            red: 0.043,
-            green: 0.051,
-            blue: 0.063,
-            alpha: 1
-        )
+        if presentationPlan.drawsFullGridBackground {
+            pass.colorAttachments[0].clearColor = MTLClearColor(
+                red: 0.043,
+                green: 0.051,
+                blue: 0.063,
+                alpha: 1
+            )
+        } else {
+            pass.colorAttachments[0].clearColor = MTLClearColor(
+                red: 0,
+                green: 0,
+                blue: 0,
+                alpha: 0
+            )
+        }
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else {
             return nil
         }
@@ -1276,34 +1301,37 @@ final class MetalTerminalRenderer: @unchecked Sendable {
             length: MemoryLayout<UInt32>.stride,
             index: 2
         )
-        encoder.drawPrimitives(
-            type: .triangle,
-            vertexStart: 0,
-            vertexCount: 6,
-            instanceCount: instanceCount
-        )
-        // Wide grapheme glyphs span the lead and continuation cells. Draw
-        // every cell background first, then draw glyphs in a second pass so a
-        // continuation cell's background cannot cover the glyph's second
-        // half. The glyph pass discards non-glyph instances in the fragment
-        // stage and keeps the existing fixed-size instance buffer layout.
-        renderMode = 1
-        encoder.setVertexBytes(
-            &renderMode,
-            length: MemoryLayout<UInt32>.stride,
-            index: 2
-        )
-        encoder.setFragmentBytes(
-            &renderMode,
-            length: MemoryLayout<UInt32>.stride,
-            index: 2
-        )
-        encoder.drawPrimitives(
-            type: .triangle,
-            vertexStart: 0,
-            vertexCount: 6,
-            instanceCount: instanceCount
-        )
+        let drawLiveGrid = presentationPlan.drawsLiveGrid && instanceCount > 0
+        if drawLiveGrid {
+            encoder.drawPrimitives(
+                type: .triangle,
+                vertexStart: 0,
+                vertexCount: 6,
+                instanceCount: instanceCount
+            )
+            // Wide grapheme glyphs span the lead and continuation cells. Draw
+            // every cell background first, then draw glyphs in a second pass so a
+            // continuation cell's background cannot cover the glyph's second
+            // half. The glyph pass discards non-glyph instances in the fragment
+            // stage and keeps the existing fixed-size instance buffer layout.
+            renderMode = 1
+            encoder.setVertexBytes(
+                &renderMode,
+                length: MemoryLayout<UInt32>.stride,
+                index: 2
+            )
+            encoder.setFragmentBytes(
+                &renderMode,
+                length: MemoryLayout<UInt32>.stride,
+                index: 2
+            )
+            encoder.drawPrimitives(
+                type: .triangle,
+                vertexStart: 0,
+                vertexCount: 6,
+                instanceCount: instanceCount
+            )
+        }
         for region in historyRegions where region.instanceCount > 0 {
             encoder.setVertexBuffer(region.buffer, offset: 0, index: 0)
             let x = max(0, Int(region.clip.minX.rounded(.down)))

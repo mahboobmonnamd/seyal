@@ -290,6 +290,10 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
   /// Flow panes keep keyboard input on the composer. TUI/raw clicks still
   /// claim this surface. Default true preserves SPEC-009 probe surfaces.
   var claimsFirstResponderOnClick = true
+  private(set) var presentation = PanePresentationSession()
+  var allowsEmptyCanvasTerminalHitTest: Bool {
+    presentation.allowsEmptyCanvasTerminalHitTest
+  }
   private var nativeFailure: NativeInputFailure?
   private let failureLayer = CATextLayer()
   /// IME activate is sticky for a given surface/window session. AppKit may
@@ -336,7 +340,41 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
     claimsFirstResponderOnClick
   }
 
+  @discardableResult
+  func applyPresentationMode(
+    _ mode: TerminalPresentationMode,
+    identity: TerminalPresentationIdentity,
+    explicit: Bool
+  ) -> Bool {
+    guard presentation.transition(to: mode, identity: identity, explicit: explicit) else {
+      return false
+    }
+    claimsFirstResponderOnClick = presentation.allowsDirectTerminalFirstResponder
+    applyRendererPresentation(presentation.rendererPlan)
+    if mode == .flow, window?.firstResponder === self {
+      _ = resignFirstResponder()
+    }
+    return true
+  }
+
+  func bindPresentationIdentity(_ identity: TerminalPresentationIdentity) {
+    presentation.bindIdentity(identity)
+  }
+
+  func currentPresentationIdentity() -> TerminalPresentationIdentity {
+    if let executionId = terminalExecutionIdentity ?? requestedExecutionIdentity,
+      executionId != "unbound"
+    {
+      let generation = presentation.identity.ptyGeneration == 0
+        ? 1
+        : presentation.identity.ptyGeneration
+      return TerminalPresentationIdentity(executionId: executionId, ptyGeneration: generation)
+    }
+    return presentation.identity
+  }
+
   override func becomeFirstResponder() -> Bool {
+    guard claimsFirstResponderOnClick else { return false }
     guard super.becomeFirstResponder() else { return false }
     inputContext?.activate()
     setAccessibilityFocused(true)

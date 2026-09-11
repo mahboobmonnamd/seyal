@@ -4,9 +4,9 @@
 - **Host:** macOS 26.5, arm64, local headed session
 - **Branch:** `issue/819`
 - **Parent production SHA at test time:** `2a5ebc535dc883dffb9e68113b9ae24cadc1b50f`
-- **Does not prove current HEAD.** Headed XCUITests were collected on that
-  parent. Later source commits (`ef6885d` empty-grid resize, this grapheme
-  reflow / sparse-eviction fix) are covered by focused terminal tests and
+- **Does not prove current HEAD (`7ef9d5d`).** Headed XCUITests were collected on that
+  parent. Later source commits (`ef6885d` empty-grid resize, `7ef9d5d` grapheme
+  reflow / sparse-eviction) are covered by focused terminal tests and
   hosted `native-macos-smoke` mechanics, not a new Metal/theme headed pass.
   SPEC-010 §18.1 / #842 remain open.
 - **App:** `target/macos-ui-tests/Build/Products/Debug/Seyal.app`

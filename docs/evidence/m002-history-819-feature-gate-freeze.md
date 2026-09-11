@@ -5,7 +5,7 @@
 | Item | Value |
 | --- | --- |
 | Branch | `issue/819` |
-| Exact head | successor of `ef6885d` (this commit: grapheme reflow + sparse eviction) |
+| Exact head | `7ef9d5d` (production tip; freeze identity commit may be the branch tip) |
 | Prior freeze SHA | `177541f` — superseded; do not treat as current-head evidence |
 | Base | `origin/master` @ `485bdf5` |
 | Relationship | `Refs #819` only — do **not** use `Closes #819` |
@@ -60,5 +60,4 @@ cargo test -p seyal-terminal --locked --test history_store_regressions
 ## Requested next action
 
 Independent reviewer: run source review against ADR-010 / SPEC-010 / #819 on
-this freeze commit (successor of `ef6885d`). Record GO/NO-GO with P0–P2 table.
-Do not self-approve.
+exact head `7ef9d5d`. Record GO/NO-GO with P0–P2 table. Do not self-approve.

@@ -183,6 +183,10 @@ final class SeyalShellUITests: XCTestCase {
         app.typeKey(.return, modifierFlags: [])
     }
 
+    /// Attaches a headed PNG for human review. This is not a palette/theme
+    /// assertion: the production Metal surface currently clears to a hard-coded
+    /// dark default (`MetalTerminalRenderer`) even when AppKit chrome is light.
+    /// Matching the active theme is outside #819 HistoryStore scope.
     @MainActor
     private func attachHeadedPNG(_ element: XCUIElement, name: String) {
         let attachment = XCTAttachment(
@@ -535,11 +539,14 @@ final class SeyalShellUITests: XCTestCase {
         composer.typeText(command)
         composer.typeKey(.return, modifierFlags: [])
 
+        let expectedUnicodeData = Data(expectedUnicode.utf8)
         XCTAssertTrue(
-            wait(timeout: 5) { FileManager.default.fileExists(atPath: markerURL.path) },
+            wait(timeout: 5) {
+                (try? Data(contentsOf: markerURL)) == expectedUnicodeData
+            },
             "Unicode workload did not reach the Runtime-owned PTY shell"
         )
-        XCTAssertEqual(try Data(contentsOf: markerURL), Data(expectedUnicode.utf8))
+        XCTAssertEqual(try Data(contentsOf: markerURL), expectedUnicodeData)
 
         let blocks = app.descendants(matching: .any).matching(
             NSPredicate(format: "identifier CONTAINS '.block.'")
@@ -1146,6 +1153,9 @@ final class SeyalShellUITests: XCTestCase {
             },
             "numbered history did not render on the production Metal surface"
         )
+        // Pixel inequality only proves the drawable changed. It does not
+        // require the surface to match the light AppKit canvas; default
+        // terminal cells remain the hard-coded dark Metal palette.
 
         let transcript = app.scrollViews["transcript.pane-local"]
         XCTAssertTrue(transcript.waitForExistence(timeout: 5))

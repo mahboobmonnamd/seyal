@@ -45,6 +45,9 @@ ladder is also covered by
 
 `** TEST EXECUTE SUCCEEDED **` on 2026-09-11.
 
+**PASS here means HistoryStore/reflow/scroll/alt-screen mechanics**, not that
+the Metal pane matches the light window theme.
+
 Alternate-screen coverage uses the production `?1049h` / `?1049l` path and the
 Metal surface `alternate-screen=` recovery field. That is the same VT switch
 `vim`/`htop`/`nvim` use; those binaries are not required on the test host.
@@ -52,8 +55,16 @@ Metal surface `alternate-screen=` recovery field. That is the same VT switch
 ## Limits
 
 - Headed XCUITests prove scroll, resize geometry, connection health, Block
-  creation, and alternate-screen enter/leave. They do not OCR Metal glyphs;
-  grapheme/lineage correctness remains in the HistoryStore regressions and fuzz
-  adapter.
+  creation, and alternate-screen enter/leave. They do **not** assert that the
+  Metal result area uses the active AppKit theme.
+- The production renderer still clears to a hard-coded near-black default
+  (`MetalTerminalRenderer` clear color ≈ rgb(11,13,16), default cell
+  background `0xff10_0d0b`) while light chrome uses
+  `SeyalProductPalette.light(.canvas)` ≈ white. After Enter, glyphs can appear
+  as light text on a dark pane. That is a known presentation gap, **out of
+  #819 HistoryStore scope**. These tests would still PASS if that pane stays
+  dark; they are not a visual-theme gate and must not be cited as one.
+- They also do not OCR Metal glyphs; grapheme/lineage correctness remains in
+  the HistoryStore regressions and fuzz adapter.
 - This does **not** close SPEC-010 §18.1 physical ARM64 p50/p95/p99 gates or
   the remaining #842 evidence matrix. Keep `performance_claim=false`.

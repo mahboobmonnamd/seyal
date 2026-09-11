@@ -170,16 +170,35 @@ impl HistoryLine {
     }
 }
 
-fn line_entirely_before(line: &HistoryLine, from: HistoryAnchor) -> bool {
-    if line.line_id < from.line_id {
+/// True when `[start_offset, start_offset + unit_len)` does not overlap the
+/// truncation half-open range `[from, ∞)`.
+///
+/// An empty fragment at `from` (`unit_len == 0` and `start_offset == from`)
+/// sits *at* the cut, so it is not wholly before it. Using `end <= from` here
+/// would keep that empty line forever and duplicate it on every resize.
+pub(crate) fn range_entirely_before(
+    line_id: LineId,
+    start_offset: u32,
+    unit_len: u32,
+    from: HistoryAnchor,
+) -> bool {
+    if line_id < from.line_id {
         return true;
     }
-    if line.line_id > from.line_id {
+    if line_id > from.line_id {
         return false;
     }
-    line.start_offset
-        .saturating_add(u32::try_from(line.units.len()).unwrap_or(u32::MAX))
-        <= from.unit_offset
+    let end = start_offset.saturating_add(unit_len);
+    start_offset < from.unit_offset && end <= from.unit_offset
+}
+
+fn line_entirely_before(line: &HistoryLine, from: HistoryAnchor) -> bool {
+    range_entirely_before(
+        line.line_id,
+        line.start_offset,
+        u32::try_from(line.units.len()).unwrap_or(u32::MAX),
+        from,
+    )
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -589,12 +608,12 @@ impl HistoryStore {
                         .iter()
                         .map(|unit| usize::from(unit.width.max(1)))
                         .sum::<usize>();
-                    if cells.saturating_add(add) > extend_budget && !collected.is_empty() {
+                    if cells.saturating_add(add.max(1)) > extend_budget && !collected.is_empty() {
                         omitted_joins = true;
                         break;
                     }
                     collected.push(cur.to_owned_line());
-                    cells = cells.saturating_add(add);
+                    cells = cells.saturating_add(add.max(1));
                     match entries.next() {
                         None => {
                             reached_hard_boundary = true;
@@ -624,9 +643,10 @@ impl HistoryStore {
                         line.units
                             .iter()
                             .map(|unit| usize::from(unit.width.max(1)))
-                            .sum()
+                            .sum::<usize>()
+                            .max(1)
                     })
-                    .unwrap_or(0),
+                    .unwrap_or(1),
             );
         }
         collected.reverse();
@@ -923,10 +943,12 @@ impl HistoryStore {
                 self.segments.pop_back();
                 continue;
             };
-            let last_end = last_line.start_offset.saturating_add(last_line.unit_len);
-            if last_line.line_id < from.line_id
-                || (last_line.line_id == from.line_id && last_end <= from.unit_offset)
-            {
+            if range_entirely_before(
+                last_line.line_id,
+                last_line.start_offset,
+                last_line.unit_len,
+                from,
+            ) {
                 break;
             }
             let segment = self.segments.pop_back().expect("back existed");
@@ -2505,6 +2527,59 @@ mod tests {
         assert!(matches!(
             store.resolve_anchor(HistoryAnchor {
                 line_id: LineId(0),
+                unit_offset: 0
+            }),
+            HistoryAnchorResolution::Resolved { .. }
+        ));
+    }
+
+    #[test]
+    fn eager_resize_suffix_is_bounded_for_blank_hard_broken_history() {
+        let mut store = HistoryStore::default();
+        for id in 0..8_000 {
+            store.append_line(HistoryLine {
+                line_id: LineId(id),
+                units: Vec::new(),
+                break_after: HistoryBreakAfter::HardBreak,
+                start_offset: 0,
+            });
+        }
+        let (suffix, from, start_col) = store.eager_resize_suffix(8, 6);
+        assert!(
+            suffix.len() <= 48,
+            "eager suffix cloned {} blank lines from 8000 empty rows",
+            suffix.len()
+        );
+        assert_eq!(start_col, 0);
+        store.truncate_from(from.expect("suffix"));
+        assert!(
+            store.entries().count() < 8_000,
+            "truncate_from must drop the blank suffix"
+        );
+    }
+
+    #[test]
+    fn truncate_from_drops_an_empty_line_at_the_cut() {
+        let mut store = HistoryStore::default();
+        store.append_line(ascii_line(1, "x", HistoryBreakAfter::HardBreak));
+        store.append_line(HistoryLine {
+            line_id: LineId(2),
+            units: Vec::new(),
+            break_after: HistoryBreakAfter::HardBreak,
+            start_offset: 0,
+        });
+        store.truncate_from(HistoryAnchor {
+            line_id: LineId(2),
+            unit_offset: 0,
+        });
+        assert_eq!(
+            store.entries().count(),
+            1,
+            "empty line at the cut must be dropped"
+        );
+        assert!(matches!(
+            store.resolve_anchor(HistoryAnchor {
+                line_id: LineId(1),
                 unit_offset: 0
             }),
             HistoryAnchorResolution::Resolved { .. }

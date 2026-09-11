@@ -636,6 +636,32 @@ fn hist_resize_oscillation_at_spec_column_ladder() {
     }
 }
 
+#[test]
+fn empty_grid_column_oscillation_stays_bounded_and_cheap() {
+    let mut terminal = TerminalState::new(120, 40).expect("terminal");
+    let started = std::time::Instant::now();
+    for i in 0..120 {
+        let cols = if i % 2 == 0 { 121 } else { 120 };
+        terminal.resize(cols, 40).expect("oscillation resize");
+    }
+    let elapsed = started.elapsed();
+    let resident = terminal.primary_history_resident_bytes();
+    let visual = terminal.primary_history_reflow(120, 256);
+    assert!(
+        resident <= 64 * 1024,
+        "empty 120x40 oscillation retained {resident} history bytes"
+    );
+    assert!(
+        visual.len() <= 8,
+        "empty column oscillation leaked {} blank history rows",
+        visual.len()
+    );
+    assert!(
+        elapsed.as_millis() < 1_000,
+        "120 empty-grid 120/121 column resizes took {elapsed:?} (pass7 CI budget cannot absorb ~100ms/sample)"
+    );
+}
+
 fn units_text(units: &[HistoryUnitView]) -> String {
     units.iter().map(|unit| unit.text.as_str()).collect()
 }

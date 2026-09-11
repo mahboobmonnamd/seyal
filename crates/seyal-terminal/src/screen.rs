@@ -2,7 +2,10 @@ use crate::{
     cursor::Cursor,
     damage::Mutation,
     grapheme_store::GraphemeStore,
-    history::{HistoryBreakAfter, HistoryLine, HistoryLineRef, HistoryStore, HistoryUnit},
+    history::{
+        range_entirely_before, HistoryBreakAfter, HistoryLine, HistoryLineRef, HistoryStore,
+        HistoryUnit,
+    },
     line::LineIdAllocator,
     Cell, CellRole, Color, CursorState, LineId, Style, TerminalError,
 };
@@ -273,7 +276,11 @@ impl Screen {
         let mut next_source_breaks = HashMap::new();
         let mut mapped_cursor = None;
         if self.retain_history && (cols != old_cols || rows < old_rows) {
-            let last_content_row = (0..old_rows)
+            // Trailing blank active rows are omitted when content exists so
+            // wrapped source still fills the new viewport. An entirely empty
+            // screen still includes those blanks so column-only resize cannot
+            // eat scrollback spacers (unwrap_or(0) pulled history onto row 0).
+            let last_source_row = (0..old_rows)
                 .rev()
                 .find(|row| {
                     let start = usize::from(*row) * usize::from(old_cols);
@@ -281,7 +288,7 @@ impl Screen {
                         .iter()
                         .any(|cell| cell.role != CellRole::Empty)
                 })
-                .unwrap_or(0);
+                .unwrap_or(old_rows.saturating_sub(1));
             let mut source_lines: Vec<HistoryLine> = Vec::new();
             let mut source_cells = HashMap::new();
             let mut source_offsets = HashMap::<LineId, u32>::new();
@@ -290,7 +297,7 @@ impl Screen {
                 line_id: self.line_ids[usize::from(self.cursor.row)],
                 unit_offset: 0,
             };
-            for row in 0..=last_content_row {
+            for row in 0..=last_source_row {
                 let row_start = usize::from(row) * usize::from(old_cols);
                 let break_after =
                     self.row_breaks[usize::from(row)].unwrap_or(HistoryBreakAfter::HardBreak);
@@ -484,7 +491,7 @@ impl Screen {
                 .line_ids
                 .iter()
                 .copied()
-                .skip(usize::from(last_content_row) + 1)
+                .skip(usize::from(last_source_row) + 1)
                 .collect::<VecDeque<_>>();
             for line_id in &mut next_line_ids {
                 if line_id.is_none() {
@@ -1500,19 +1507,13 @@ fn history_prefix(
     };
     let mut retained = Vec::new();
     for line in lines {
-        if line.line_id < boundary.line_id {
+        let unit_len = u32::try_from(line.units.len()).unwrap_or(u32::MAX);
+        if range_entirely_before(line.line_id, line.start_offset, unit_len, boundary) {
             retained.push(line.clone());
             continue;
         }
         if line.line_id > boundary.line_id {
             break;
-        }
-        let fragment_end = line
-            .start_offset
-            .saturating_add(u32::try_from(line.units.len()).unwrap_or(u32::MAX));
-        if boundary.unit_offset >= fragment_end {
-            retained.push(line.clone());
-            continue;
         }
         let count = boundary
             .unit_offset

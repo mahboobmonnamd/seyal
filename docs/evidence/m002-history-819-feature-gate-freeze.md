@@ -5,8 +5,8 @@
 | Item | Value |
 | --- | --- |
 | Branch | `issue/819` |
-| Exact head | `65be0cf` (production tip; freeze identity commit may be the branch tip) |
-| Prior freeze SHA | `7ef9d5d` / `177541f` — superseded; do not treat as current-head evidence |
+| Exact head | `74ca3c5` (production tip; freeze identity commit may be the branch tip) |
+| Prior freeze SHA | `65be0cf` / `7ef9d5d` / `177541f` — superseded; do not treat as current-head evidence |
 | Base | `origin/master` @ `485bdf5` |
 | Relationship | `Refs #819` only — do **not** use `Closes #819` |
 | Environment | Linux x86_64 cloud agent — no headed/macOS/ARM64 claim |
@@ -36,7 +36,7 @@ cargo test -p seyal-protocol --locked --lib -- pass7::
 # 14 passed
 
 cargo test -p seyal-terminal --locked --lib history::
-# 22 passed
+# 24 passed
 
 cargo test -p seyal-terminal --locked --test history_store_regressions
 # 23 passed
@@ -60,4 +60,4 @@ cargo test -p seyal-terminal --locked --test history_store_regressions
 ## Requested next action
 
 Independent reviewer: run source review against ADR-010 / SPEC-010 / #819 on
-exact head `65be0cf`. Record GO/NO-GO with P0–P2 table. Do not self-approve.
+exact head `74ca3c5`. Record GO/NO-GO with P0–P2 table. Do not self-approve.

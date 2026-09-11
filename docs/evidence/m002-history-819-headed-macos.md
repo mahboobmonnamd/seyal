@@ -4,12 +4,13 @@
 - **Host:** macOS 26.5, arm64, local headed session
 - **Branch:** `issue/819`
 - **Parent production SHA at test time:** `2a5ebc535dc883dffb9e68113b9ae24cadc1b50f`
-- **Does not prove current HEAD (`65be0cf`).** Headed XCUITests were collected on
-  parent `2a5ebc5`. Later source commits, including `65be0cf` (exact compacted
-  eviction identities), are covered by focused terminal tests. A live Runtime
-  from this worktree was still attached during this pass, so the five headed
-  XCUITests were not re-run against `65be0cf`. Hosted `native-macos-smoke` is
-  mechanics, not Metal/theme headed proof. SPEC-010 §18.1 / #842 remain open.
+- **Does not prove current HEAD (`74ca3c5`).** Headed XCUITests were collected on
+  parent `2a5ebc5`. Later source commits, including `74ca3c5` (bounded overflow
+  eviction and derived-cache capacity accounting), are covered by focused
+  terminal tests. A live Runtime from this worktree remains attached, so the
+  five headed XCUITests were not re-run against `74ca3c5`. Hosted
+  `native-macos-smoke` is mechanics, not Metal/theme headed proof. SPEC-010
+  §18.1 / #842 remain open.
 - **App:** `target/macos-ui-tests/Build/Products/Debug/Seyal.app`
 - **Runtime:** separately owned `target/debug/seyal-runtime` (`/bin/zsh`)
 - **Result bundle:** `target/macos-ui-tests-819-headed.xcresult`

@@ -33,6 +33,8 @@ def main() -> None:
                 "seyal-terminal",
                 "--bench",
                 "history_reflow",
+                "--features",
+                "history-reflow-bench",
                 "--locked",
                 "--",
                 "--quiet",

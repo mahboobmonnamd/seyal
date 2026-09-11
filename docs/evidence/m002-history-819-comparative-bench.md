@@ -14,7 +14,7 @@ SEYAL_HISTORY_BENCH_COLUMNS=40,80,160 \
 SEYAL_HISTORY_BENCH_WORKLOADS=ascii,cjk \
 SEYAL_HISTORY_BENCH_SAMPLES=10 \
 SEYAL_BENCH_COMMIT=$(git rev-parse HEAD) \
-cargo bench -p seyal-terminal --bench history_reflow --locked -- --quiet
+cargo bench -p seyal-terminal --bench history_reflow --features history-reflow-bench --locked -- --quiet
 ```
 
 | workload | cols | append p50 ns | reflow p50 ns | reflow p95 ns | allocation_status |

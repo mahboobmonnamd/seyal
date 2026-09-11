@@ -9,6 +9,10 @@ publish = false
 
 [features]
 test-fault-injection = []
+# Opt-in so `cargo bench --workspace` / native-macos-smoke `make bench` does not
+# compile this comparative harness on the 35-minute hosted job. Evidence runs:
+# cargo bench -p seyal-terminal --bench history_reflow --features history-reflow-bench
+history-reflow-bench = []
 
 [[bench]]
 name = "vt_parser_state"
@@ -21,6 +25,7 @@ harness = false
 [[bench]]
 name = "history_reflow"
 harness = false
+required-features = ["history-reflow-bench"]
 
 [lints]
 workspace = true

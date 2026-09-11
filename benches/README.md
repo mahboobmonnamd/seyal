@@ -37,7 +37,7 @@ small comparative smoke case. The complete SPEC-010 shape is selected explicitly
 ```sh
 SEYAL_HISTORY_BENCH_FULL=1 \
 SEYAL_HISTORY_BENCH_SAMPLES=32 \
-cargo bench -p seyal-terminal --bench history_reflow --locked -- --quiet \
+cargo bench -p seyal-terminal --bench history_reflow --features history-reflow-bench --locked -- --quiet \
   | tee /tmp/seyal-history-819.log
 python3 scripts/check-history-benchmark.py --require-full-matrix \
   /tmp/seyal-history-819.log

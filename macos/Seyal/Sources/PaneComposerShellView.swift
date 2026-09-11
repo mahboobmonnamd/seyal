@@ -7,12 +7,50 @@ private final class PaneComposerTextView: NSTextView {
     override func doCommand(by selector: Selector) {
         let isReturn = Self.isReturnSelector(selector)
         let isShiftReturn = NSApp.currentEvent?.modifierFlags.contains(.shift) == true
-        let command = string.trimmingCharacters(in: .whitespacesAndNewlines)
-        if isReturn && !isShiftReturn && !command.isEmpty {
-            _ = onSubmit?(command)
+        if isReturn && !isShiftReturn {
+            submitCurrentDraft()
             return
         }
         super.doCommand(by: selector)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if submitReturnEvent(event) {
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if submitReturnEvent(event) {
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    /// Return may arrive as a key equivalent or as ordinary first-responder
+    /// keyDown depending on the surrounding AppKit hierarchy. Keep both paths
+    /// local to the focused composer instead of installing a process-global
+    /// event monitor.
+    private func submitReturnEvent(_ event: NSEvent) -> Bool {
+        guard window?.firstResponder === self else { return false }
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let isReturn = event.keyCode == 36 || event.keyCode == 76
+        guard isReturn, flags.isDisjoint(with: [.command, .option, .control]) else {
+            return false
+        }
+        if event.modifierFlags.contains(.shift) {
+            return false
+        }
+        submitCurrentDraft()
+        return true
+    }
+
+    private func submitCurrentDraft() {
+        let command = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !command.isEmpty {
+            _ = onSubmit?(command)
+        }
     }
 
     static func isReturnSelector(_ selector: Selector) -> Bool {
@@ -161,6 +199,11 @@ final class PaneComposerShellView: NSView, NSTextViewDelegate {
     func focusEditor() {
         guard let editor, let window else { return }
         window.makeFirstResponder(editor)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        focusEditor()
+        super.mouseDown(with: event)
     }
 
     func setBusy(_ busy: Bool, process: String) {

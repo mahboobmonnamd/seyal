@@ -16,6 +16,17 @@ final class TranscriptBlockStackView: NSStackView {
   }
 }
 
+/// Holds Block chrome above the clip-hosted Metal surface. Empty document
+/// hits must fall through so the one terminal surface keeps first-responder
+/// and mouse delivery.
+@MainActor
+final class TranscriptDocumentView: NSView {
+  override func hitTest(_ point: NSPoint) -> NSView? {
+    let hit = super.hitTest(point)
+    return hit === self ? nil : hit
+  }
+}
+
 @MainActor
 final class CommandBlockBodyView: NSView {
   private weak var surface: InteractiveMetalSurfaceView?
@@ -95,11 +106,12 @@ final class CommandBlockBodyView: NSView {
 @MainActor
 final class PaneTranscriptView: NSScrollView {
   private let paneID: String
-  let transcriptDocument = NSView(frame: .zero)
+  let transcriptDocument = TranscriptDocumentView(frame: .zero)
   let terminalSurface: InteractiveMetalSurfaceView
   private var blockBodies: [PaneBlockKey: NSView] = [:]
   private var blockOrder: [PaneBlockKey] = []
   private var frameRevision: UInt64 = 0
+  private var isRefreshingFromClipBounds = false
   var onBlockBodySizeChanged: (() -> Void)?
 
   init(
@@ -118,6 +130,10 @@ final class PaneTranscriptView: NSScrollView {
       allowsImplicitExecutionBootstrap: allowsImplicitExecutionBootstrap,
       terminalFont: visual.terminalFont
     )
+    // Flow keyboard belongs to the composer. Set this before layout/recovery
+    // so renderer-ready restore cannot steal first responder (that is what
+    // broke Enter after Metal moved to a viewport sibling).
+    terminalSurface.claimsFirstResponderOnClick = false
     super.init(frame: .zero)
     translatesAutoresizingMaskIntoConstraints = false
     drawsBackground = false
@@ -125,29 +141,69 @@ final class PaneTranscriptView: NSScrollView {
     hasHorizontalScroller = false
     autohidesScrollers = true
     borderType = .noBorder
+    // CAMetalLayer inside a scrolling document is copied by NSClipView and
+    // bilinear-stretched into smear. Keep Metal on the clip viewport instead.
+    contentView.copiesOnScroll = false
+    contentView.postsBoundsChangedNotifications = true
+    contentView.wantsLayer = true
+    contentView.drawsBackground = false
+    contentView.layer?.backgroundColor = visual.colors.cg(.canvas)
     transcriptDocument.translatesAutoresizingMaskIntoConstraints = false
     transcriptDocument.wantsLayer = true
-    transcriptDocument.layer?.backgroundColor = visual.colors.cg(.canvas)
+    transcriptDocument.layer?.backgroundColor = .clear
     documentView = transcriptDocument
 
     // NSScrollView does not infer a document width from edge constraints on
-    // subviews. Pin the document to the clip view's viewport bounds so the
-    // pane-owned Metal surface receives the final visible width before it
-    // proposes terminal geometry to Runtime. The explicit layout pass below
-    // avoids the transient zero/narrow content bounds seen during startup.
+    // subviews. Pin the document to the clip view's viewport bounds so Block
+    // chrome and history clips share the final visible width. The explicit
+    // layout pass below avoids the transient zero/narrow content bounds seen
+    // during startup.
     transcriptDocument.widthAnchor.constraint(equalTo: contentView.widthAnchor).isActive = true
 
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(clipViewBoundsDidChange),
+      name: NSView.boundsDidChangeNotification,
+      object: contentView
+    )
+
     if installSurface {
-      terminalSurface.translatesAutoresizingMaskIntoConstraints = false
-      transcriptDocument.addSubview(terminalSurface)
-      NSLayoutConstraint.activate([
-        terminalSurface.leadingAnchor.constraint(equalTo: transcriptDocument.leadingAnchor),
-        terminalSurface.trailingAnchor.constraint(equalTo: transcriptDocument.trailingAnchor),
-        terminalSurface.topAnchor.constraint(equalTo: transcriptDocument.topAnchor),
-        terminalSurface.bottomAnchor.constraint(equalTo: transcriptDocument.bottomAnchor),
-        terminalSurface.heightAnchor.constraint(greaterThanOrEqualToConstant: 180),
-      ])
+      // Viewport-sized overlay on the scroll view, not inside NSClipView.
+      // Extra clip-view subviews drop out of the key-view loop, so Enter and
+      // paste never reach the composer or the terminal. Matching the clip
+      // frame keeps the drawable at the visible size (no document-tall smear).
+      terminalSurface.translatesAutoresizingMaskIntoConstraints = true
+      terminalSurface.autoresizingMask = []
+      addSubview(terminalSurface, positioned: .below, relativeTo: contentView)
+      syncMetalSurfaceFrame()
     }
+  }
+
+  deinit {
+    NotificationCenter.default.removeObserver(self)
+  }
+
+  @objc private func clipViewBoundsDidChange() {
+    guard !isRefreshingFromClipBounds else { return }
+    isRefreshingFromClipBounds = true
+    defer { isRefreshingFromClipBounds = false }
+    syncMetalSurfaceFrame()
+    refreshTranscriptFrame()
+  }
+
+  private func syncMetalSurfaceFrame() {
+    guard terminalSurface.superview === self else { return }
+    terminalSurface.frame = contentView.frame
+  }
+
+  override func hitTest(_ point: NSPoint) -> NSView? {
+    let hit = super.hitTest(point)
+    if hit === contentView || hit === transcriptDocument,
+      terminalSurface.superview === self
+    {
+      return terminalSurface
+    }
+    return hit
   }
 
   @available(*, unavailable)
@@ -158,13 +214,14 @@ final class PaneTranscriptView: NSScrollView {
     // AppKit may lay out the scroll view and its document in separate passes.
     // Complete both passes before the interactive surface samples its viewport
     // for Runtime geometry, so a startup narrow width cannot become sticky.
+    syncMetalSurfaceFrame()
     transcriptDocument.layoutSubtreeIfNeeded()
     terminalSurface.needsLayout = true
     terminalSurface.layoutSubtreeIfNeeded()
   }
 
   func applyVisual(_ visual: SeyalResolvedVisualConfiguration) {
-    transcriptDocument.layer?.backgroundColor = visual.colors.cg(.canvas)
+    contentView.layer?.backgroundColor = visual.colors.cg(.canvas)
   }
 
   func installBlockStack(_ stack: NSStackView) {

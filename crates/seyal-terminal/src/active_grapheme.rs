@@ -49,6 +49,9 @@ pub(crate) fn edge_decision_new_unit(
     if width < 2 {
         return EdgeDecision::Place;
     }
+    if u16::from(width) > cols {
+        return EdgeDecision::IgnoreUnit;
+    }
     if col + 1 < cols {
         return EdgeDecision::Place;
     }
@@ -68,6 +71,9 @@ pub(crate) fn edge_decision_late_widen(
 ) -> EdgeDecision {
     if new_width < 2 {
         return EdgeDecision::Place;
+    }
+    if u16::from(new_width) > cols {
+        return EdgeDecision::RejectExtension;
     }
     if col + 1 < cols {
         return EdgeDecision::Place;
@@ -186,6 +192,18 @@ mod tests {
     fn decawm_reset_rejects_late_widen_at_final() {
         assert_eq!(
             edge_decision_late_widen(2, 3, 2, false),
+            EdgeDecision::RejectExtension
+        );
+    }
+
+    #[test]
+    fn unit_wider_than_grid_is_rejected_even_with_decawm() {
+        assert_eq!(
+            edge_decision_new_unit(0, 1, 2, true),
+            EdgeDecision::IgnoreUnit
+        );
+        assert_eq!(
+            edge_decision_late_widen(0, 1, 2, true),
             EdgeDecision::RejectExtension
         );
     }

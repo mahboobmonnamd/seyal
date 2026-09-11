@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+input="${1:?retained fuzz seed path is required}"
+input="$(cd "$(dirname "$input")" && pwd)/$(basename "$input")"
+SEYAL_FUZZ_INPUT="$input" cargo test --quiet -p seyal-terminal --test fuzz_smoke history_resize_eviction_seed -- --ignored --exact

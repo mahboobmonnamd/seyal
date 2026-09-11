@@ -165,6 +165,7 @@ def validate_fuzz_registry() -> None:
     expected = {
         "vt-byte-parser",
         "parser-state-mutation",
+        "history-resize-eviction",
         "local-binary-protocol-decode",
         "shared-projection-validation",
         "reconnect-resync-state-machine",

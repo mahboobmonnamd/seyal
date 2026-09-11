@@ -5,7 +5,7 @@ use crate::LocalDisplayClient;
 use super::{
     error_code, with_active_client, with_active_client_mut, SeyalBlockRecord, SeyalComposerResult,
     SeyalExecutionBlockMetadata, SeyalHistoryCell, SeyalHistoryRange, SeyalHistoryRow,
-    SeyalPreparedFrame,
+    SeyalHistorySidecar, SeyalPreparedFrame,
 };
 
 #[unsafe(no_mangle)]
@@ -82,7 +82,7 @@ pub extern "C" fn seyal_bridge_history_range_peek_for(
                 request_id: range.request_id,
                 revision: range.revision,
                 row_count: 0,
-                reserved: 0,
+                reserved: range.status as u32,
             };
         };
         let last = range.rows.last().map_or(first.line_id, |row| row.line_id);
@@ -93,7 +93,7 @@ pub extern "C" fn seyal_bridge_history_range_peek_for(
             request_id: range.request_id,
             revision: range.revision,
             row_count: range.rows.len() as u32,
-            reserved: 0,
+            reserved: range.status as u32,
         }
     })
     .unwrap_or_else(SeyalHistoryRange::empty)
@@ -122,6 +122,27 @@ pub extern "C" fn seyal_bridge_history_range_row_for(
         }
     })
     .unwrap_or_else(SeyalHistoryRow::empty)
+}
+
+/// Returns the snapshot sidecar for a previously peeked history range. The
+/// pointer remains valid until poll, disconnect, or consume, matching row
+/// pointers. `len == 0` means every cell is inline.
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_history_range_sidecar_for(
+    block_id: u64,
+    request_id: u64,
+) -> SeyalHistorySidecar {
+    with_active_client(|client| {
+        let Some(range) = client.history_range_for(block_id, request_id) else {
+            return SeyalHistorySidecar::empty();
+        };
+        SeyalHistorySidecar {
+            bytes: range.sidecar.as_ptr(),
+            len: range.sidecar.len() as u32,
+            reserved: 0,
+        }
+    })
+    .unwrap_or_else(SeyalHistorySidecar::empty)
 }
 
 /// Consumes a previously peeked response after its rows have been copied by
@@ -233,9 +254,12 @@ pub extern "C" fn seyal_bridge_request_history_range(
     end_line: u64,
     max_lines: u16,
     max_cells: u32,
+    start_unit: u32,
 ) -> i32 {
     with_active_client_mut(|client| {
-        client.request_history_range(block_id, start_line, end_line, max_lines, max_cells)
+        client.request_history_range(
+            block_id, start_line, end_line, max_lines, max_cells, start_unit,
+        )
     })
     .map_or(-1, |result| result.map_or_else(error_code, |_| 0))
 }

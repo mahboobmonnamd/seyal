@@ -66,6 +66,7 @@ pub struct HistoryUnitView {
     pub text: String,
     pub width: u8,
     pub style: Style,
+    pub break_after: HistoryBreakAfter,
 }
 
 /// Physical history-wire cell. Continuation placeholders carry no text.
@@ -1477,6 +1478,7 @@ impl HistoryStore {
                     text: String::from_utf8_lossy(unit.utf8()).into_owned(),
                     width: unit.width(),
                     style: unit.style(),
+                    break_after: line.break_after(),
                 });
                 if units.len() >= max_units {
                     return units;
@@ -1503,6 +1505,7 @@ impl HistoryStore {
                     text: String::from_utf8_lossy(unit.utf8()).into_owned(),
                     width: unit.width(),
                     style: unit.style(),
+                    break_after: line.break_after(),
                 });
                 while window.len() > needle_units {
                     window.remove(0);
@@ -1556,6 +1559,7 @@ impl HistoryStore {
                     text: String::from_utf8_lossy(unit.utf8()).into_owned(),
                     width: unit.width(),
                     style: unit.style(),
+                    break_after: line.break_after(),
                 };
                 if view.anchor >= start && view.anchor <= end {
                     if selected.len() >= HISTORY_SELECTION_UNIT_CAP {

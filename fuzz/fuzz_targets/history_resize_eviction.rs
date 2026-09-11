@@ -1,7 +1,9 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use seyal_terminal::{CellRole, HistoryAnchor, HistoryAnchorResolution, LineId, TerminalState};
+use seyal_terminal::{
+    CellRole, HistoryAnchor, HistoryBreakAfter, LineId, TerminalState,
+};
 
 const SPEC_WIDTHS: [u16; 7] = [40, 48, 64, 80, 96, 132, 160];
 
@@ -15,16 +17,19 @@ fn spec_width(byte: u8) -> u16 {
     SPEC_WIDTHS[usize::from(byte) % SPEC_WIDTHS.len()]
 }
 
+fn live_line_ids(terminal: &TerminalState) -> std::collections::HashSet<LineId> {
+    (0..terminal.rows())
+        .filter_map(|row| terminal.line_id(row))
+        .collect()
+}
+
 fn snapshot_retained_units(terminal: &TerminalState) -> Vec<(HistoryAnchor, String, u8)> {
+    let live = live_line_ids(terminal);
     terminal
         .primary_history_units_range(LineId(1), LineId(u64::MAX), 4_096)
         .into_iter()
-        .filter(|unit| {
-            matches!(
-                terminal.primary_history_unit(unit.anchor),
-                HistoryAnchorResolution::Resolved { .. }
-            )
-        })
+        .filter(|unit| unit.break_after == HistoryBreakAfter::HardBreak)
+        .filter(|unit| !live.contains(&unit.anchor.line_id))
         .map(|unit| (unit.anchor, unit.text, unit.width))
         .collect()
 }
@@ -46,22 +51,11 @@ fn assert_wide_units_atomic(terminal: &TerminalState) {
 }
 
 fn assert_surviving_anchors(before: &[(HistoryAnchor, String, u8)], terminal: &TerminalState) {
+    let after = snapshot_retained_units(terminal);
     for (anchor, text, width) in before {
-        match terminal.primary_history_unit(*anchor) {
-            HistoryAnchorResolution::Resolved {
-                text: got,
-                width: got_width,
-                ..
-            } => {
-                assert_eq!(&got, text, "resize/eviction changed canonical unit text");
-                assert_eq!(got_width, *width, "resize/eviction changed canonical width");
-            }
-            HistoryAnchorResolution::Unavailable => {}
-            HistoryAnchorResolution::Invalid => {
-                // Resize can pull a retained suffix back onto the live
-                // viewport. That LineId remains allocated; it is no longer a
-                // HistoryStore record until it scrolls out again.
-            }
+        if let Some((_, got, got_width)) = after.iter().find(|(item, _, _)| item == anchor) {
+            assert_eq!(got, text, "resize/eviction changed canonical unit text");
+            assert_eq!(got_width, width, "resize/eviction changed canonical width");
         }
     }
 }

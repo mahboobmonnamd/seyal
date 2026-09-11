@@ -1,6 +1,6 @@
 use std::{env, fs, path::PathBuf};
 
-use seyal_terminal::{CellRole, LineId, TerminalState};
+use seyal_terminal::{CellRole, HistoryBreakAfter, LineId, TerminalState};
 
 fn input() -> Vec<u8> {
     let path =
@@ -12,6 +12,25 @@ fn new_terminal() -> TerminalState {
     let mut terminal = TerminalState::new(80, 24).expect("valid fuzz terminal");
     let _ = terminal.take_damage();
     terminal
+}
+
+fn live_line_ids(terminal: &TerminalState) -> std::collections::HashSet<LineId> {
+    (0..terminal.rows())
+        .filter_map(|row| terminal.line_id(row))
+        .collect()
+}
+
+fn snapshot_retained_history(
+    terminal: &TerminalState,
+) -> Vec<(seyal_terminal::HistoryAnchor, String, u8)> {
+    let live = live_line_ids(terminal);
+    terminal
+        .primary_history_units_range(LineId(1), LineId(u64::MAX), 4_096)
+        .into_iter()
+        .filter(|unit| unit.break_after == HistoryBreakAfter::HardBreak)
+        .filter(|unit| !live.contains(&unit.anchor.line_id))
+        .map(|unit| (unit.anchor, unit.text.clone(), unit.width))
+        .collect()
 }
 
 fn assert_same_state(left: &TerminalState, right: &TerminalState) {
@@ -125,17 +144,7 @@ fn history_resize_eviction_seed() {
         bytewise.primary_history_units_range(LineId(1), LineId(u64::MAX), 4_096)
     );
 
-    let mut snapshot = one_shot
-        .primary_history_units_range(LineId(1), LineId(u64::MAX), 4_096)
-        .into_iter()
-        .filter(|unit| {
-            matches!(
-                one_shot.primary_history_unit(unit.anchor),
-                seyal_terminal::HistoryAnchorResolution::Resolved { .. }
-            )
-        })
-        .map(|unit| (unit.anchor, unit.text.clone(), unit.width))
-        .collect::<Vec<_>>();
+    let mut snapshot = snapshot_retained_history(&one_shot);
     for (index, byte) in bytes.iter().take(SPEC_WIDTHS.len()).enumerate() {
         let next_cols = SPEC_WIDTHS[usize::from(*byte) % SPEC_WIDTHS.len()];
         let next_rows = u16::from(bytes.get(index + 2).copied().unwrap_or(*byte) % 8) + 1;
@@ -146,33 +155,18 @@ fn history_resize_eviction_seed() {
             .resize(next_cols, next_rows)
             .expect("bytewise resize");
         if !one_shot.modes().alternate_screen {
+            let after = snapshot_retained_history(&one_shot);
             for (anchor, text, width) in &snapshot {
-                match one_shot.primary_history_unit(*anchor) {
-                    seyal_terminal::HistoryAnchorResolution::Resolved {
-                        text: got,
-                        width: got_width,
-                        ..
-                    } => {
-                        assert_eq!(&got, text);
-                        assert_eq!(got_width, *width);
-                    }
-                    seyal_terminal::HistoryAnchorResolution::Unavailable => {}
-                    seyal_terminal::HistoryAnchorResolution::Invalid => {
-                        // Resize may return a retained suffix to the live viewport.
-                    }
+                if let Some((_, got, got_width)) = after.iter().find(|(item, _, _)| item == anchor)
+                {
+                    assert_eq!(got, text, "hard-break unit changed text at {anchor:?}");
+                    assert_eq!(
+                        got_width, width,
+                        "hard-break unit changed width at {anchor:?}"
+                    );
                 }
             }
-            snapshot = one_shot
-                .primary_history_units_range(LineId(1), LineId(u64::MAX), 4_096)
-                .into_iter()
-                .filter(|unit| {
-                    matches!(
-                        one_shot.primary_history_unit(unit.anchor),
-                        seyal_terminal::HistoryAnchorResolution::Resolved { .. }
-                    )
-                })
-                .map(|unit| (unit.anchor, unit.text.clone(), unit.width))
-                .collect();
+            snapshot = snapshot_retained_history(&one_shot);
         }
         assert_eq!(
             one_shot.primary_history_units_range(LineId(1), LineId(u64::MAX), 4_096),

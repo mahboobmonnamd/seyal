@@ -14,9 +14,9 @@ use crate::{
     },
     screen::{PreparedScreen, Screen},
     width::{grapheme_terminal_width, AmbiguousWidthPolicy},
-    Cell, CellRole, CursorState, Damage, HistoryAnchor, HistoryAnchorResolution, HistoryMatch,
-    HistoryRangeError, HistoryUnitView, HistoryWireCell, LineId, ModeState, ReflowRow,
-    TerminalError,
+    Cell, CellRole, CursorState, Damage, HistoryAnchor, HistoryAnchorResolution, HistoryBreakAfter,
+    HistoryMatch, HistoryRangeError, HistoryUnitView, HistoryWireCell, LineId, ModeState,
+    ReflowRow, TerminalError,
 };
 use std::collections::VecDeque;
 
@@ -482,6 +482,9 @@ impl TerminalState {
                         text,
                         width: cell.width.max(1),
                         style: cell.style,
+                        // Live viewport rows are not sealed HistoryStore
+                        // records; treat them as ephemeral wrap fragments.
+                        break_after: HistoryBreakAfter::SoftWrap,
                     });
                     if units.len() >= max_units {
                         return units;

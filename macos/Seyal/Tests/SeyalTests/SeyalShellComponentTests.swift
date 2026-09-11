@@ -1744,6 +1744,20 @@ final class SeyalShellComponentTests: XCTestCase {
   }
 
   @MainActor
+  func testProductionShellCanDetachRuntimeSurfacesOnApplicationTermination() throws {
+    let shell = SeyalShellProductionFactory.make(
+      frame: NSRect(x: 0, y: 0, width: 1280, height: 800),
+      visual: previewVisual()
+    )
+    shell.layoutSubtreeIfNeeded()
+
+    XCTAssertEqual(shell.surfaces.count, 1)
+    shell.detachRuntimeSurfacesForApplicationTermination()
+
+    XCTAssertTrue(shell.surfaces.values.allSatisfy { !$0.terminalBridgeIsConnected })
+  }
+
+  @MainActor
   func testProductionTerminalSurfaceExposesSafeAccessibilityAndInputContract() throws {
     let shell = SeyalShellProductionFactory.make(
       frame: NSRect(x: 0, y: 0, width: 960, height: 600),

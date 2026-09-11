@@ -110,6 +110,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         self.window = window
+        window.contentView?.layoutSubtreeIfNeeded()
+        (window.contentView as? SeyalShellView)?.activateRuntimeSurfacesAfterWindowPresentation()
 
         #if DEBUG
         if useShellPreview, environment["SEYAL_UI_TEST_FORCE_SHORTCUT_HINTS"] == "1" {
@@ -121,6 +123,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             previewShortcutController?.showShortcutHintsForTesting()
         }
         #endif
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        (window?.contentView as? SeyalShellView)?.detachRuntimeSurfacesForApplicationTermination()
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        (window?.contentView as? SeyalShellView)?.detachRuntimeSurfacesForApplicationTermination()
+        return .terminateNow
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

@@ -1,9 +1,9 @@
 # ADR-009 — Command Blocks, Pane Composer, and Presentation Takeover
 
-- **Status:** Accepted; amended 2026-09-11 by #858
-- **Date:** 2026-08-28; amended 2026-09-11
+- **Status:** Accepted 2026-08-28; proposed presentation-mode amendment under #858, accepted only on merge
+- **Date:** 2026-08-28; proposed amendment 2026-09-11
 - **Scope:** Post-Pass-7 command/Block presentation and Flow/Raw/TUI mode ownership
-- **Supersedes for this behavior:** the Pass 8 minimal-only boundary in `SPEC-007`
+- **Supersedes for this behavior:** the Pass 8 minimal-only boundary in `SPEC-007`; historical M001 presentation wording in SPEC-006/SPEC-009 and M001 UI design documents only where it assumes a permanently visible/focusable terminal surface while Flow is active
 - **Depends on:** ADR-004, ADR-005, ADR-006, ADR-007, ADR-008, SPEC-001, SPEC-003, SPEC-004, SPEC-005, SPEC-006
 
 ## Decision
@@ -37,7 +37,7 @@ The identity/state continuity is the `ExecutionId` + PTY + `TerminalState`.
 It does **not** require a permanently visible/focusable terminal `NSView`,
 `CAMetalLayer`, or conventional terminal viewport underneath Flow.
 
-## 2026-09-11 correction — authority is not viewport
+## 2026-09-11 proposed correction — authority is not viewport
 
 The original wording correctly rejected PTY/grid/renderer-per-Block designs, but
 it did not state strongly enough that Flow, Raw and TUI must not be presented at
@@ -45,7 +45,7 @@ the same time. The current macOS implementation consequently reused the Pane's
 interactive Metal terminal surface as a permanent full-transcript backing/input
 surface while also placing Block chrome over it.
 
-That interpretation is rejected.
+That interpretation is rejected by this proposed amendment.
 
 ### Flow
 
@@ -93,6 +93,51 @@ that one AppKit view object remain permanently installed underneath every mode.
 Renderer resources may be safely reused/reconfigured when that is the best
 implementation, provided authority and latency invariants are preserved.
 
+## Presentation transition and input fencing
+
+Mode exclusivity is not only visual. A transition must change presentation and
+input ownership atomically from the user's point of view.
+
+Every `Flow ↔ Raw`, `Flow ↔ TUI`, and `Raw ↔ TUI` transition follows this order:
+
+```text
+freeze new source-mode input admission
+→ invalidate source-mode route/presentation epoch
+→ cancel/discard source-mode marked/preedit state without PTY submission
+→ revoke source first-responder/text-input context and mouse route/capture
+→ reject or ignore stale source-mode native callbacks that were not already admitted
+→ validate destination eligibility against current Runtime authority
+→ install destination presentation/input route
+→ acquire destination first responder/IME/mouse semantics
+→ resume destination input admission
+```
+
+No destination route becomes eligible while the source route can still admit
+input. One native event may be admitted to at most one presentation route.
+Anything already atomically admitted before the fence retains normal FIFO
+semantics; unadmitted stale callbacks are rejected rather than replayed.
+
+Eligibility and admission for Flow/composer or direct-terminal input must be
+bound to the exact current authority tuple, conceptually:
+
+```text
+ExecutionId
++ AttachmentId / Controller authority
++ presentation/input epoch
++ relevant canonical TerminalState generation/mode state
++ trusted shell-integration generation/state
+```
+
+The concrete protocol representation may differ, but it must provide equivalent
+fencing. A reconnect, controller change, execution replacement, canonical mode
+change, integration generation change, or presentation transition makes stale
+eligibility/admission evidence unusable. Stale or uncertain evidence never
+widens authority and never causes one event to reach the previous route.
+
+Flow command admission must likewise be correlated to the current eligible
+execution/attachment/presentation generation. A delayed result from an older
+presentation epoch cannot authorize or clear state in a newer epoch.
+
 ## Problem and conflict
 
 The pre-ADR implementation exposed one `connect_first_running()` surface inside
@@ -113,7 +158,8 @@ permanent Raw terminal viewport + input surface
 ```
 
 That is not the selected architecture. The correct model is one terminal
-authority feeding one active presentation mode at a time.
+authority feeding one active presentation mode and one active input route at a
+time.
 
 ## Alternatives considered
 
@@ -136,7 +182,7 @@ into the GUI.
 
 ### D. Permanent Pane-wide interactive terminal viewport with Blocks layered over it
 
-Rejected by the 2026-09-11 amendment. It conflates canonical terminal authority
+Rejected by this proposed amendment. It conflates canonical terminal authority
 with visible presentation, permits Raw interaction to leak through Flow, and
 makes Blocks decorative chrome rather than the primary execution presentation.
 
@@ -182,6 +228,33 @@ and where input is routed.
 17. A Pane may reuse one Metal compositor across visible Flow regions and
     Raw/TUI takeover, but that reuse does not grant the compositor PTY/VT
     authority and must not expose multiple presentation modes simultaneously.
+18. A presentation transition revokes the old first responder, IME/preedit,
+    mouse route and input-admission route before enabling the new route.
+19. Eligibility/admission is fenced to current execution, attachment/controller,
+    presentation epoch and relevant canonical/integration generation; stale
+    evidence fails closed.
+20. One native input event is admitted through at most one presentation route.
+
+## Relationship to SPEC-006 and SPEC-009
+
+SPEC-006 remains authoritative for direct-terminal native event classification,
+IME composition semantics, bounded input queues, Runtime-owned key encoding and
+resize transactions. Under this amendment, wording that assigns those duties to
+a permanent terminal surface is scoped to the **active Raw/TUI/direct-terminal
+presentation endpoint**. It does not authorize a focusable terminal surface
+under Flow.
+
+SPEC-009 remains authoritative for Runtime/PTY survival, fresh AttachmentId and
+Controller reacquisition, state reconstruction and reconnect fencing. Under this
+amendment, reconnect restores interaction to the **newly selected current
+presentation owner** after validating fresh execution/attachment/canonical state:
+Flow composer/Blocks when trusted Flow eligibility is current, Raw otherwise,
+or TUI when canonical full-screen/alternate state requires it. Reconnect does
+not recreate or focus a raw terminal target underneath Flow.
+
+These scoping rules supersede only conflicting presentation-target wording; they
+do not weaken the accepted protocol, security, latency, resize, IME or reconnect
+correctness contracts.
 
 ## Required implementation seams
 
@@ -192,6 +265,7 @@ and where input is routed.
   current live tail;
 - disposable client Block cache keyed by `ExecutionId` and `BlockId`;
 - explicit Pane presentation state: `Flow | Raw | TUI`;
+- presentation/input epoch or equivalent stale-callback fence;
 - Flow compositor that clips terminal-derived pixels to Block output regions;
 - composer eligibility/focus state and explicit execute action;
 - Raw full-Pane input/render path without coexisting Block interaction;
@@ -214,10 +288,10 @@ The presentation layer must be corrected so:
 - Flow hit testing no longer falls through to raw terminal interaction;
 - full current-frame and Block-region rendering cannot leak into one visible
   presentation;
-- terminal first-responder/IME behavior is active only in the presentation mode
-  that owns direct terminal interaction;
-- tests assert mode exclusivity and the absence of terminal pixels/input outside
-  Flow Block output regions.
+- first-responder/IME/mouse/input ownership follows the active presentation and
+  transitions through the required fence;
+- tests assert mode exclusivity, stale-event rejection and the absence of
+  terminal pixels/input outside Flow Block output regions.
 
 Issue #858 owns this architecture correction. Production implementation follows
 in separate TDD implementation PRs after this amendment is accepted.
@@ -228,9 +302,10 @@ Reopen this decision if trusted shell integration cannot preserve required shell
 semantics, if command boundaries require scraping, if Block metadata must carry
 copied terminal output, if one Pane compositor cannot meet required
 virtualization/resource bounds, or if performance/security evidence shows that
-Flow projection blocks terminal progress.
+Flow projection or transition fencing blocks terminal progress.
 
 Originally approved by product authority on 2026-08-28. Presentation-mode
-clarification requested by product authority on 2026-09-11 under #858.
+clarification requested by product authority on 2026-09-11 under #858. This
+amendment remains proposed until its PR is explicitly approved and merged.
 Independent architecture/security review and explicit merge confirmation remain
 required.

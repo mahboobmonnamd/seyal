@@ -138,10 +138,6 @@
         {
           "path": "docs/specs/SPEC-009-M001-DETACH-RECONNECT.md",
           "fingerprint": "d324dff8d1c8f3f23e41522440cd2c80049048e3"
-        },
-        {
-          "path": "docs/specs/README.md",
-          "fingerprint": "5a53de628dacfe97e4932380495904667a2460c7"
         }
       ],
       "relationships": [

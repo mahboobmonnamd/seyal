@@ -455,7 +455,9 @@ final class SeyalShellUITests: XCTestCase {
         composer.typeKey(.return, modifierFlags: [])
 
         XCTAssertTrue(
-            wait(timeout: 5) { FileManager.default.fileExists(atPath: markerURL.path) },
+            wait(timeout: 5) {
+                (try? String(contentsOf: markerURL, encoding: .utf8)) == "ok"
+            },
             "Return submission did not reach the Runtime-owned PTY shell"
         )
         XCTAssertEqual(try String(contentsOf: markerURL, encoding: .utf8), "ok")

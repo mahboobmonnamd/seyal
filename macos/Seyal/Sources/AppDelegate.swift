@@ -98,6 +98,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 frame: contentRect,
                 visual: snapshot
             )
+            Self.installProductionApplicationMenu()
         }
         appearance.onChange = { [weak self] next in
             guard let window = self?.window else { return }
@@ -109,6 +110,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         self.window = window
+        window.contentView?.layoutSubtreeIfNeeded()
+        (window.contentView as? SeyalShellView)?.activateRuntimeSurfacesAfterWindowPresentation()
 
         #if DEBUG
         if useShellPreview, environment["SEYAL_UI_TEST_FORCE_SHORTCUT_HINTS"] == "1" {
@@ -122,7 +125,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #endif
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        (window?.contentView as? SeyalShellView)?.detachRuntimeSurfacesForApplicationTermination()
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        (window?.contentView as? SeyalShellView)?.detachRuntimeSurfacesForApplicationTermination()
+        return .terminateNow
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
+    }
+
+    private static func installProductionApplicationMenu() {
+        NSApp.mainMenu = makeProductionApplicationMenu()
+    }
+
+    /// Shared with component tests so keyboard coverage cannot silently test a
+    /// hand-written menu that differs from the production responder chain.
+    static func makeProductionApplicationMenu() -> NSMenu {
+        let appMenu = NSMenu(title: "Seyal")
+        let quit = NSMenuItem(
+            title: "Quit Seyal",
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q"
+        )
+        quit.keyEquivalentModifierMask = [.command]
+        appMenu.addItem(quit)
+
+        let appItem = NSMenuItem()
+        appItem.submenu = appMenu
+
+        // AppKit routes standard editing shortcuts through the main menu and
+        // then down the responder chain. A quit-only menu leaves an otherwise
+        // functional NSTextView unable to receive Command-C/V in production.
+        let editMenu = NSMenu(title: "Edit")
+        let copy = NSMenuItem(
+            title: "Copy",
+            action: #selector(NSText.copy(_:)),
+            keyEquivalent: "c"
+        )
+        copy.keyEquivalentModifierMask = [.command]
+        editMenu.addItem(copy)
+        let paste = NSMenuItem(
+            title: "Paste",
+            action: #selector(NSText.paste(_:)),
+            keyEquivalent: "v"
+        )
+        paste.keyEquivalentModifierMask = [.command]
+        editMenu.addItem(paste)
+        editMenu.addItem(.separator())
+        let selectAll = NSMenuItem(
+            title: "Select All",
+            action: #selector(NSText.selectAll(_:)),
+            keyEquivalent: "a"
+        )
+        selectAll.keyEquivalentModifierMask = [.command]
+        editMenu.addItem(selectAll)
+
+        let editItem = NSMenuItem()
+        editItem.submenu = editMenu
+        let mainMenu = NSMenu(title: "Main Menu")
+        mainMenu.addItem(appItem)
+        mainMenu.addItem(editItem)
+        return mainMenu
     }
 }

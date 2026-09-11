@@ -21,7 +21,7 @@
       "sources": [
         {
           "path": "docs/architecture/README.md",
-          "fingerprint": "50f790b755a5c130b94096ef72a4ed50d3230106"
+          "fingerprint": "58031d6b751e6a2b345c9d3675a1458021db6fd7"
         }
       ],
       "relationships": [
@@ -32,6 +32,10 @@
         {
           "type": "related_to",
           "target": "COMP-BLOCK-TIMELINE"
+        },
+        {
+          "type": "related_to",
+          "target": "COMP-PANE-PRESENTATION"
         }
       ]
     },
@@ -82,13 +86,72 @@
       "sources": [
         {
           "path": "docs/architecture/README.md",
-          "fingerprint": "50f790b755a5c130b94096ef72a4ed50d3230106"
+          "fingerprint": "58031d6b751e6a2b345c9d3675a1458021db6fd7"
         }
       ],
       "relationships": [
         {
           "type": "related_to",
           "target": "COMP-TERMINAL-EXECUTION"
+        },
+        {
+          "type": "related_to",
+          "target": "COMP-PANE-PRESENTATION"
+        }
+      ]
+    },
+    {
+      "id": "COMP-PANE-PRESENTATION",
+      "kind": "component",
+      "title": "Pane Flow Raw TUI presentation",
+      "summary": "Per TerminalExecution, exactly one user-visible presentation is active: Flow native Blocks/composer, Raw full-Pane primary grid, or TUI full-Pane takeover. Flow terminal cells are clipped to Block output regions and input ownership/reconnect transitions are fenced.",
+      "tags": [
+        "pane",
+        "presentation",
+        "flow",
+        "raw",
+        "tui",
+        "blocks",
+        "composer",
+        "input",
+        "focus",
+        "ime",
+        "reconnect",
+        "adr-009",
+        "spec-006",
+        "spec-008",
+        "spec-009"
+      ],
+      "sources": [
+        {
+          "path": "docs/architecture/ADR-009-COMMAND-BLOCKS-COMPOSER-AND-TUI.md",
+          "fingerprint": "6058de22273837cfd0c2f4ddef9571a0d8739daa"
+        },
+        {
+          "path": "docs/specs/SPEC-006-M001-NATIVE-INPUT-RESIZE.md",
+          "fingerprint": "506b49abb61dfc5889cd73308b19254bd409b69b"
+        },
+        {
+          "path": "docs/specs/SPEC-008-M003-COMMAND-BLOCKS.md",
+          "fingerprint": "f451bea6f467938a1d202a2d7c490709c61555dd"
+        },
+        {
+          "path": "docs/specs/SPEC-009-M001-DETACH-RECONNECT.md",
+          "fingerprint": "d324dff8d1c8f3f23e41522440cd2c80049048e3"
+        }
+      ],
+      "relationships": [
+        {
+          "type": "governed_by",
+          "target": "DEC-ADR-009"
+        },
+        {
+          "type": "related_to",
+          "target": "COMP-TERMINAL-EXECUTION"
+        },
+        {
+          "type": "related_to",
+          "target": "COMP-BLOCK-TIMELINE"
         }
       ]
     },
@@ -114,6 +177,36 @@
         {
           "type": "governs",
           "target": "COMP-TERMINAL-STATE"
+        }
+      ]
+    },
+    {
+      "id": "DEC-ADR-009",
+      "kind": "decision",
+      "title": "ADR-009 Command Blocks composer and presentation takeover",
+      "summary": "Accepted command-Block baseline with proposed #858 correction defining Block-first Flow, mutually exclusive Raw/TUI takeover, renderer reuse without viewport authority, and fenced input ownership transitions.",
+      "tags": [
+        "adr",
+        "adr-009",
+        "spec-008",
+        "flow",
+        "raw",
+        "tui",
+        "blocks",
+        "composer",
+        "presentation",
+        "input"
+      ],
+      "sources": [
+        {
+          "path": "docs/architecture/ADR-009-COMMAND-BLOCKS-COMPOSER-AND-TUI.md",
+          "fingerprint": "6058de22273837cfd0c2f4ddef9571a0d8739daa"
+        }
+      ],
+      "relationships": [
+        {
+          "type": "governs",
+          "target": "COMP-PANE-PRESENTATION"
         }
       ]
     },

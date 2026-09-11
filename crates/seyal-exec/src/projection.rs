@@ -202,7 +202,7 @@ pub(crate) fn update(
 
 fn copy_rows(terminal: &TerminalState, first_row: u16, row_count: u16) -> Vec<ProjectionCell> {
     let columns = terminal.cols();
-    let mut cells = Vec::with_capacity(row_count as usize * columns as usize);
+    let mut cells: Vec<ProjectionCell> = Vec::with_capacity(row_count as usize * columns as usize);
     for row in first_row..first_row.saturating_add(row_count) {
         for col in 0..columns {
             let cell = terminal.cell(col, row).unwrap_or_default();
@@ -217,27 +217,82 @@ fn copy_rows(terminal: &TerminalState, first_row: u16, row_count: u16) -> Vec<Pr
                     .unwrap_or(cell.canonical_scalar()),
                 CellRole::Empty | CellRole::Continuation => ' ',
             };
-            cells.push(ProjectionCell {
-                role: cell.role,
-                width: cell.width,
-                text,
-                scalar,
-                foreground: cell.style.fg.into(),
-                background: cell.style.bg.into(),
-                attributes: ProjectionAttributes {
+            // Continuations are only valid immediately after their lead in the
+            // same row. Do not carry the previous row's last cell across a row
+            // boundary when projecting reconnect snapshots.
+            let previous = (col > 0)
+                .then(|| cells.last())
+                .flatten()
+                .map(|cell| (cell.role, cell.width));
+            let role = normalized_role(previous, cell.role);
+            // Continuation cells are structural slots with a default terminal
+            // style. The display wire contract repeats the lead's style on its
+            // continuation, so inherit it at this projection boundary.
+            let continuation_style = (role == CellRole::Continuation)
+                .then(|| cells.last())
+                .flatten()
+                .map(|lead| (lead.foreground, lead.background, lead.attributes));
+            let (foreground, background, attributes) = continuation_style.unwrap_or((
+                cell.style.fg.into(),
+                cell.style.bg.into(),
+                ProjectionAttributes {
                     bold: cell.style.bold,
                     underline: cell.style.underline,
                     inverse: cell.style.inverse,
                 },
+            ));
+            cells.push(ProjectionCell {
+                role,
+                width: if role == CellRole::Empty {
+                    0
+                } else {
+                    cell.width
+                },
+                text: if role == CellRole::Empty {
+                    Arc::from([])
+                } else {
+                    text
+                },
+                scalar: if role == CellRole::Empty { ' ' } else { scalar },
+                foreground,
+                background,
+                attributes,
             });
         }
     }
     cells
 }
 
+fn normalized_role(previous: Option<(CellRole, u8)>, role: CellRole) -> CellRole {
+    if role == CellRole::Continuation
+        && !previous
+            .is_some_and(|(previous_role, width)| previous_role == CellRole::Lead && width >= 2)
+    {
+        CellRole::Empty
+    } else {
+        role
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn orphan_continuation_is_projected_as_empty() {
+        assert_eq!(
+            normalized_role(None, CellRole::Continuation),
+            CellRole::Empty
+        );
+        assert_eq!(
+            normalized_role(Some((CellRole::Lead, 1)), CellRole::Continuation),
+            CellRole::Empty
+        );
+        assert_eq!(
+            normalized_role(Some((CellRole::Lead, 2)), CellRole::Continuation),
+            CellRole::Continuation
+        );
+    }
 
     #[test]
     fn snapshot_copies_complete_visible_state() {
@@ -289,6 +344,23 @@ mod tests {
         if lead.width == 2 {
             assert_eq!(snapshot.cells[1].role, CellRole::Continuation);
             assert!(snapshot.cells[1].text.is_empty());
+        }
+    }
+
+    #[test]
+    fn wide_continuation_inherits_lead_style_for_wire_contract() {
+        let mut terminal = TerminalState::new(8, 2).unwrap();
+        terminal
+            .feed(b"\x1b[38;5;208m\xF0\x9F\x91\xA9\xE2\x80\x8D\xF0\x9F\x92\xBB")
+            .unwrap();
+        let snapshot = snapshot(&terminal, 1);
+        let lead = &snapshot.cells[0];
+        if lead.width == 2 {
+            assert_eq!(lead.foreground, ProjectionColor::Indexed(208));
+            assert_eq!(snapshot.cells[1].role, CellRole::Continuation);
+            assert_eq!(snapshot.cells[1].foreground, lead.foreground);
+            assert_eq!(snapshot.cells[1].background, lead.background);
+            assert_eq!(snapshot.cells[1].attributes, lead.attributes);
         }
     }
 }

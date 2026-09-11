@@ -161,6 +161,17 @@ final class SeyalShellView: NSView {
     layoutSubtreeIfNeeded()
   }
 
+  /// Explicitly releases every GUI-owned Runtime attachment before AppKit
+  /// terminates the process. The Runtime/execution remains alive for the next
+  /// foreground attachment.
+  func detachRuntimeSurfacesForApplicationTermination() {
+    surfaces.values.forEach { $0.detachRuntimeConnectionForApplicationTermination() }
+  }
+
+  func activateRuntimeSurfacesAfterWindowPresentation() {
+    surfaces.values.forEach { $0.activateRuntimeAfterWindowPresentation() }
+  }
+
   func buildUI() {
     let topChrome = makeTopChrome()
     let leftContext = makeLeftContextPanel()

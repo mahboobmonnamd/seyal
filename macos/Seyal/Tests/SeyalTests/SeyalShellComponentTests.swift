@@ -995,12 +995,114 @@ final class SeyalShellComponentTests: XCTestCase {
     )
     let point = commandLabel.convert(
       NSPoint(x: commandLabel.bounds.midX, y: commandLabel.bounds.midY),
-      to: transcript.transcriptDocument
+      to: transcript
     )
     XCTAssertTrue(
-      transcript.transcriptDocument.hitTest(point) === transcript.terminalSurface,
+      transcript.hitTest(point) === transcript.terminalSurface,
       "the timeline overlay must pass empty-area hits through to the terminal surface"
     )
+  }
+
+  @MainActor
+  func testBlockHeaderDoesNotStealHalfTheBodyHeight() {
+    let body = CommandBlockBodyView()
+    let block = BlockView(
+      presentation: BlockPresentation(
+        id: "block-1", command: "printf output", state: .completed,
+        elapsed: "Done", timestamp: nil, isSelected: false, actions: []
+      ),
+      bodyView: body,
+      visual: previewVisual()
+    )
+    let transcript = PaneTranscriptView(visual: previewVisual())
+    let stack = TranscriptBlockStackView()
+    stack.orientation = .vertical
+    stack.alignment = .width
+    stack.addArrangedSubview(block)
+    transcript.frame = NSRect(x: 0, y: 0, width: 720, height: 420)
+    transcript.installBlockStack(stack)
+    transcript.layoutSubtreeIfNeeded()
+
+    XCTAssertGreaterThan(body.bounds.height, 0)
+    XCTAssertLessThan(body.bounds.height, 40)
+    XCTAssertLessThan(block.bounds.height, 120)
+    XCTAssertLessThan(block.bounds.height, transcript.contentView.bounds.height * 0.4)
+  }
+
+  @MainActor
+  func testPaneTranscriptKeepsMetalOnClipViewportWhenHistoryGrows() throws {
+    let transcript = PaneTranscriptView(visual: previewVisual())
+    let window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 800, height: 500),
+      styleMask: [.titled, .resizable],
+      backing: .buffered,
+      defer: false
+    )
+    window.contentView = transcript
+    window.orderFront(nil)
+    defer { window.orderOut(nil) }
+
+    XCTAssertFalse(transcript.contentView.copiesOnScroll)
+    XCTAssertTrue(transcript.terminalSurface.superview === transcript)
+
+    let body = CommandBlockBodyView()
+    let block = BlockView(
+      presentation: BlockPresentation(
+        id: "7", command: "history dump", state: .completed,
+        elapsed: "Done", timestamp: nil, isSelected: true, actions: []
+      ),
+      bodyView: body,
+      visual: previewVisual()
+    )
+    let stack = TranscriptBlockStackView()
+    stack.orientation = .vertical
+    stack.alignment = .width
+    stack.addArrangedSubview(block)
+    transcript.installBlockStack(stack)
+    transcript.registerBlockBody(body, blockID: 7)
+
+    let cell = NativeHistoryRange.Cell(
+      scalar: 0x41,
+      foreground: 0xffe9_e1d8,
+      background: 0xff10_0d0b,
+      flags: 0
+    )
+    let rows = Array(repeating: [cell], count: 500)
+    body.setHistoryRange(
+      NativeHistoryRange(
+        startLine: 1,
+        endLine: 500,
+        blockID: 7,
+        requestID: 1,
+        revision: 1,
+        rows: rows
+      )
+    )
+    transcript.needsLayout = true
+    transcript.layoutSubtreeIfNeeded()
+
+    XCTAssertEqual(
+      transcript.terminalSurface.bounds.width,
+      transcript.contentView.bounds.width,
+      accuracy: 1
+    )
+    XCTAssertEqual(
+      transcript.terminalSurface.bounds.height,
+      transcript.contentView.bounds.height,
+      accuracy: 1
+    )
+    XCTAssertGreaterThan(
+      transcript.transcriptDocument.bounds.height,
+      transcript.contentView.bounds.height + 100
+    )
+    XCTAssertLessThan(transcript.terminalSurface.bounds.height, 600)
+
+    let metalLayer = try XCTUnwrap(transcript.terminalSurface.layer as? CAMetalLayer)
+    let backing = transcript.terminalSurface.convertToBacking(
+      transcript.terminalSurface.bounds
+    ).size
+    XCTAssertEqual(metalLayer.drawableSize.width, backing.width, accuracy: 1)
+    XCTAssertEqual(metalLayer.drawableSize.height, backing.height, accuracy: 1)
   }
 
   @MainActor
@@ -1202,6 +1304,318 @@ final class SeyalShellComponentTests: XCTestCase {
   }
 
   @MainActor
+  func testComposerWindowSendEventReturnSubmitsDraft() throws {
+    var submitted: String?
+    let composer = PaneComposerShellView(
+      mode: .available,
+      draft: "echo via window event",
+      visual: previewVisual(),
+      onSubmit: {
+        submitted = $0
+        return true
+      }
+    )
+    let window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 640, height: 120),
+      styleMask: [.titled],
+      backing: .buffered,
+      defer: false
+    )
+    window.contentView = composer
+    window.makeKeyAndOrderFront(nil)
+    defer { window.orderOut(nil) }
+    composer.layoutSubtreeIfNeeded()
+    composer.focusEditor()
+    let editor = try XCTUnwrap(descendants(of: NSTextView.self, in: composer).first)
+    XCTAssertTrue(window.firstResponder === editor)
+
+    let event = try XCTUnwrap(
+      NSEvent.keyEvent(
+        with: .keyDown,
+        location: editor.convert(.zero, to: nil),
+        modifierFlags: [],
+        timestamp: ProcessInfo.processInfo.systemUptime,
+        windowNumber: window.windowNumber,
+        context: nil,
+        characters: "\r",
+        charactersIgnoringModifiers: "\r",
+        isARepeat: false,
+        keyCode: 36
+      )
+    )
+    window.sendEvent(event)
+    XCTAssertEqual(
+      submitted,
+      "echo via window event",
+      "Return must submit through NSWindow.sendEvent, not only doCommand(_:)"
+    )
+  }
+
+  @MainActor
+  func testUnmodifiedReturnIsNotClaimedByProductionMenu() throws {
+    var submitted: String?
+    let composer = PaneComposerShellView(
+      mode: .available,
+      draft: "echo via nsapp event",
+      visual: previewVisual(),
+      onSubmit: {
+        submitted = $0
+        return true
+      }
+    )
+    let window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 640, height: 120),
+      styleMask: [.titled, .closable],
+      backing: .buffered,
+      defer: false
+    )
+    window.contentView = composer
+    window.makeKeyAndOrderFront(nil)
+    defer { window.orderOut(nil) }
+
+    let previousMenu = NSApp.mainMenu
+    defer { NSApp.mainMenu = previousMenu }
+    NSApp.mainMenu = AppDelegate.makeProductionApplicationMenu()
+
+    composer.layoutSubtreeIfNeeded()
+    composer.focusEditor()
+    let editor = try XCTUnwrap(descendants(of: NSTextView.self, in: composer).first)
+    XCTAssertTrue(window.firstResponder === editor)
+
+    let event = try XCTUnwrap(
+      NSEvent.keyEvent(
+        with: .keyDown,
+        location: editor.convert(.zero, to: nil),
+        modifierFlags: [],
+        timestamp: ProcessInfo.processInfo.systemUptime,
+        windowNumber: window.windowNumber,
+        context: nil,
+        characters: "\r",
+        charactersIgnoringModifiers: "\r",
+        isARepeat: false,
+        keyCode: 36
+      )
+    )
+
+    XCTAssertFalse(
+      NSApp.mainMenu?.performKeyEquivalent(with: event) ?? false,
+      "Quit-only production menu must not claim unmodified Return"
+    )
+    XCTAssertNil(window.defaultButtonCell)
+
+    NSApp.sendEvent(event)
+    XCTAssertEqual(
+      submitted,
+      "echo via nsapp event",
+      "NSApp.sendEvent(Return) is the live path; window.sendEvent tests are not enough"
+    )
+  }
+
+  @MainActor
+  func testProductionShellDoesNotInstallAReturnKeyEquivalent() throws {
+    let shell = SeyalShellProductionFactory.make(
+      frame: NSRect(x: 0, y: 0, width: 960, height: 600),
+      visual: previewVisual()
+    )
+    let window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 960, height: 600),
+      styleMask: [.titled, .closable, .miniaturizable, .resizable],
+      backing: .buffered,
+      defer: false
+    )
+    window.contentView = shell
+    window.makeKeyAndOrderFront(nil)
+    defer { window.orderOut(nil) }
+    shell.layoutSubtreeIfNeeded()
+
+    let previousMenu = NSApp.mainMenu
+    defer { NSApp.mainMenu = previousMenu }
+    NSApp.mainMenu = AppDelegate.makeProductionApplicationMenu()
+
+    let composer = try XCTUnwrap(descendants(of: PaneComposerShellView.self, in: shell).first)
+    let editor = try XCTUnwrap(descendants(of: NSTextView.self, in: composer).first)
+    composer.focusEditor()
+    XCTAssertTrue(window.firstResponder === editor)
+    XCTAssertNil(window.defaultButtonCell)
+
+    let returnButtons = descendants(of: NSButton.self, in: shell)
+      .filter { $0.keyEquivalent == "\r" }
+    XCTAssertTrue(
+      returnButtons.isEmpty,
+      "Return key-equivalent buttons steal Enter: \(returnButtons.map { $0.accessibilityIdentifier() ?? $0.title })"
+    )
+
+    let event = try XCTUnwrap(
+      NSEvent.keyEvent(
+        with: .keyDown,
+        location: editor.convert(.zero, to: nil),
+        modifierFlags: [],
+        timestamp: ProcessInfo.processInfo.systemUptime,
+        windowNumber: window.windowNumber,
+        context: nil,
+        characters: "\r",
+        charactersIgnoringModifiers: "\r",
+        isARepeat: false,
+        keyCode: 36
+      )
+    )
+    XCTAssertFalse(
+      NSApp.mainMenu?.performKeyEquivalent(with: event) ?? false,
+      "production menu claimed unmodified Return in the full shell window"
+    )
+  }
+
+  @MainActor
+  func testComposerWindowSendEventReturnSubmitsDespiteDefaultButton() throws {
+    var submitted: String?
+    var thiefClicks = 0
+    let composer = PaneComposerShellView(
+      mode: .available,
+      draft: "echo despite default button",
+      visual: previewVisual(),
+      onSubmit: {
+        submitted = $0
+        return true
+      }
+    )
+    let window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 640, height: 180),
+      styleMask: [.titled],
+      backing: .buffered,
+      defer: false
+    )
+    let host = NSView(frame: NSRect(x: 0, y: 0, width: 640, height: 180))
+    composer.frame = NSRect(x: 0, y: 0, width: 640, height: 90)
+    let thief = NSButton(title: "Default", target: nil, action: nil)
+    thief.keyEquivalent = "\r"
+    thief.frame = NSRect(x: 8, y: 110, width: 120, height: 24)
+    thief.target = thief
+    thief.action = #selector(NSControl.performClick(_:))
+    host.addSubview(composer)
+    host.addSubview(thief)
+    window.contentView = host
+    window.defaultButtonCell = thief.cell as? NSButtonCell
+    window.makeKeyAndOrderFront(nil)
+    defer { window.orderOut(nil) }
+    composer.layoutSubtreeIfNeeded()
+    composer.focusEditor()
+    let editor = try XCTUnwrap(descendants(of: NSTextView.self, in: composer).first)
+    XCTAssertTrue(window.firstResponder === editor)
+
+    let event = try XCTUnwrap(
+      NSEvent.keyEvent(
+        with: .keyDown,
+        location: editor.convert(.zero, to: nil),
+        modifierFlags: [],
+        timestamp: ProcessInfo.processInfo.systemUptime,
+        windowNumber: window.windowNumber,
+        context: nil,
+        characters: "\r",
+        charactersIgnoringModifiers: "\r",
+        isARepeat: false,
+        keyCode: 36
+      )
+    )
+    NSApp.sendEvent(event)
+    XCTAssertEqual(
+      submitted,
+      "echo despite default button",
+      "Return while the composer is focused must not activate a window default button"
+    )
+    XCTAssertEqual(thiefClicks, 0)
+  }
+
+  @MainActor
+  func testComposerReturnSubmitsWithProductionMetalSibling() throws {
+    var submitted: String?
+    let visual = previewVisual()
+    let composer = PaneComposerShellView(
+      mode: .available,
+      draft: "echo with metal sibling",
+      visual: visual,
+      onSubmit: {
+        submitted = $0
+        return true
+      }
+    )
+    let transcript = PaneTranscriptView(visual: visual)
+    let window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 720, height: 480),
+      styleMask: [.titled, .resizable],
+      backing: .buffered,
+      defer: false
+    )
+    let stack = NSStackView(views: [transcript, composer])
+    stack.orientation = .vertical
+    stack.alignment = .width
+    stack.distribution = .fill
+    window.contentView = stack
+    transcript.frame = NSRect(x: 0, y: 80, width: 720, height: 400)
+    window.makeKeyAndOrderFront(nil)
+    defer { window.orderOut(nil) }
+    stack.layoutSubtreeIfNeeded()
+    composer.focusEditor()
+    let editor = try XCTUnwrap(descendants(of: NSTextView.self, in: composer).first)
+    XCTAssertTrue(window.firstResponder === editor)
+    XCTAssertFalse(transcript.terminalSurface.acceptsFirstResponder)
+
+    let event = try XCTUnwrap(
+      NSEvent.keyEvent(
+        with: .keyDown,
+        location: editor.convert(.zero, to: nil),
+        modifierFlags: [],
+        timestamp: ProcessInfo.processInfo.systemUptime,
+        windowNumber: window.windowNumber,
+        context: nil,
+        characters: "\r",
+        charactersIgnoringModifiers: "\r",
+        isARepeat: false,
+        keyCode: 36
+      )
+    )
+    window.sendEvent(event)
+    XCTAssertEqual(
+      submitted,
+      "echo with metal sibling",
+      "Return must submit with viewport Metal in the same window as the composer"
+    )
+  }
+
+  @MainActor
+  func testProductionShellReturnStaysOnComposerNotDefaultButton() throws {
+    let shell = SeyalShellProductionFactory.make(
+      frame: NSRect(x: 0, y: 0, width: 960, height: 600),
+      visual: previewVisual()
+    )
+    let window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 960, height: 600),
+      styleMask: [.titled, .resizable],
+      backing: .buffered,
+      defer: false
+    )
+    window.contentView = shell
+    window.makeKeyAndOrderFront(nil)
+    defer { window.orderOut(nil) }
+    shell.layoutSubtreeIfNeeded()
+
+    let composer = try XCTUnwrap(descendants(of: PaneComposerShellView.self, in: shell).first)
+    let editor = try XCTUnwrap(descendants(of: NSTextView.self, in: composer).first)
+    composer.focusEditor()
+
+    XCTAssertNil(
+      window.defaultButtonCell,
+      "A window default button steals Return before the composer sees it"
+    )
+    XCTAssertTrue(
+      window.firstResponder === editor,
+      "Production Flow first responder must be the composer after click, not Metal"
+    )
+    XCTAssertFalse(
+      descendants(of: NSButton.self, in: shell).contains { $0.keyEquivalent == "\r" }
+    )
+  }
+
+  @MainActor
   func testComposerPreservesDraftWhenSubmissionIsRejected() {
     let composer = PaneComposerShellView(
       mode: .available,
@@ -1248,6 +1662,52 @@ final class SeyalShellComponentTests: XCTestCase {
   }
 
   @MainActor
+  func testTerminalRestoreDoesNotStealComposerFirstResponderOrSubmit() throws {
+    let shell = SeyalShellProductionFactory.make(
+      frame: NSRect(x: 0, y: 0, width: 960, height: 600),
+      visual: previewVisual()
+    )
+    let window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 960, height: 600),
+      styleMask: [.titled, .resizable],
+      backing: .buffered,
+      defer: false
+    )
+    window.contentView = shell
+    window.makeKeyAndOrderFront(nil)
+    defer { window.orderOut(nil) }
+    shell.layoutSubtreeIfNeeded()
+
+    let composer = try XCTUnwrap(descendants(of: PaneComposerShellView.self, in: shell).first)
+    let editor = try XCTUnwrap(descendants(of: NSTextView.self, in: composer).first)
+    let surface = try XCTUnwrap(descendants(of: InteractiveMetalSurfaceView.self, in: shell).first)
+    composer.focusEditor()
+    XCTAssertTrue(window.firstResponder === editor)
+
+    editor.string = "echo paste-and-enter"
+    XCTAssertTrue(surface.restoreNativeInteractionAfterRendererReady())
+    XCTAssertTrue(
+      window.firstResponder === editor,
+      "Candidate-D restore must not steal composer Enter/paste"
+    )
+    editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+  }
+
+  @MainActor
+  func testFlowProductionSurfaceDoesNotAcceptFirstResponder() throws {
+    let shell = SeyalShellProductionFactory.make(
+      frame: NSRect(x: 0, y: 0, width: 960, height: 600),
+      visual: previewVisual()
+    )
+    let surface = try XCTUnwrap(descendants(of: InteractiveMetalSurfaceView.self, in: shell).first)
+    XCTAssertFalse(
+      surface.claimsFirstResponderOnClick,
+      "Flow Metal is display-only; composer owns Return"
+    )
+    XCTAssertFalse(surface.acceptsFirstResponder)
+  }
+
+  @MainActor
   func testShellHasExactlyOneVerticalTranscriptScrollOwnerInitially() {
     let shell = SeyalShellPreviewFactory.make(
       frame: NSRect(x: 0, y: 0, width: 1280, height: 800)
@@ -1273,10 +1733,28 @@ final class SeyalShellComponentTests: XCTestCase {
     XCTAssertEqual(transcripts.count, 1)
     let surface = try XCTUnwrap(surfaces.first)
     let transcript = try XCTUnwrap(transcripts.first)
-    XCTAssertTrue(descendants(of: InteractiveMetalSurfaceView.self, in: transcript).contains { $0 === surface })
+    XCTAssertTrue(
+      descendants(of: InteractiveMetalSurfaceView.self, in: transcript).contains { $0 === surface }
+    )
+    XCTAssertTrue(surface.superview === transcript)
+    XCTAssertEqual(surface.bounds.width, transcript.contentView.bounds.width, accuracy: 1)
     XCTAssertEqual(descendants(of: BlockView.self, in: shell).count, 0)
     XCTAssertEqual(descendants(of: PaneComposerShellView.self, in: shell).count, 1)
     XCTAssertTrue(descendants(of: TerminalSurfaceHostView.self, in: shell).isEmpty)
+  }
+
+  @MainActor
+  func testProductionShellCanDetachRuntimeSurfacesOnApplicationTermination() throws {
+    let shell = SeyalShellProductionFactory.make(
+      frame: NSRect(x: 0, y: 0, width: 1280, height: 800),
+      visual: previewVisual()
+    )
+    shell.layoutSubtreeIfNeeded()
+
+    XCTAssertEqual(shell.surfaces.count, 1)
+    shell.detachRuntimeSurfacesForApplicationTermination()
+
+    XCTAssertTrue(shell.surfaces.values.allSatisfy { !$0.terminalBridgeIsConnected })
   }
 
   @MainActor
@@ -1298,7 +1776,10 @@ final class SeyalShellComponentTests: XCTestCase {
     XCTAssertEqual(surface.accessibilityRole(), NSAccessibility.Role.group)
     XCTAssertEqual(surface.accessibilityRoleDescription(), "Terminal")
     XCTAssertEqual(surface.accessibilityLabel(), "Seyal Terminal")
-    XCTAssertTrue(surface.acceptsFirstResponder)
+    XCTAssertFalse(
+      surface.acceptsFirstResponder,
+      "Flow composer owns first responder until TUI takeover"
+    )
     XCTAssertTrue(InteractiveMetalSurfaceView.pass7InputSelfTest())
   }
 
@@ -1983,6 +2464,7 @@ final class SeyalShellComponentTests: XCTestCase {
       return matches
     }
   }
+
 }
 
 extension NSView {

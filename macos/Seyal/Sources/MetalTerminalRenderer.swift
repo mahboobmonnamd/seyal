@@ -733,14 +733,34 @@ final class MetalTerminalRenderer: @unchecked Sendable {
                 var flags: UInt32 = 0
                 var uvRect = SIMD4<Float>(repeating: 0)
                 var atlasSlice: UInt32 = 0
-                if cell.scalar != 0 && cell.scalar != 32 {
-                    let entry = try glyphAtlas.lookup(
-                        scalar: cell.scalar,
-                        bold: cell.flags & 1 != 0,
-                        backingScale: max(backingScale, 1),
-                        cellMetrics: metrics
-                    )
+                let continuation = cell.flags & (1 << 3) != 0
+                let width = (cell.flags >> 4) & 0b11
+                if !continuation,
+                   (cell.scalar != 0 && cell.scalar != 32) || !cell.graphemeUtf8.isEmpty
+                {
+                    let entry: GlyphAtlasEntry
+                    if !cell.graphemeUtf8.isEmpty,
+                       let text = String(data: cell.graphemeUtf8, encoding: .utf8),
+                       !text.isEmpty
+                    {
+                        entry = try glyphAtlas.lookupGrapheme(
+                            text: text,
+                            bold: cell.flags & 1 != 0,
+                            backingScale: max(backingScale, 1),
+                            cellMetrics: metrics
+                        )
+                    } else {
+                        entry = try glyphAtlas.lookup(
+                            scalar: cell.scalar,
+                            bold: cell.flags & 1 != 0,
+                            backingScale: max(backingScale, 1),
+                            cellMetrics: metrics
+                        )
+                    }
                     flags |= instanceGlyphFlag
+                    if width == 2 {
+                        flags |= instanceWideGlyphFlag
+                    }
                     uvRect = entry.uvRect
                     atlasSlice = entry.slice
                 }
@@ -1286,17 +1306,6 @@ final class MetalTerminalRenderer: @unchecked Sendable {
         )
         for region in historyRegions where region.instanceCount > 0 {
             encoder.setVertexBuffer(region.buffer, offset: 0, index: 0)
-            renderMode = 2
-            encoder.setVertexBytes(
-                &renderMode,
-                length: MemoryLayout<UInt32>.stride,
-                index: 2
-            )
-            encoder.setFragmentBytes(
-                &renderMode,
-                length: MemoryLayout<UInt32>.stride,
-                index: 2
-            )
             let x = max(0, Int(region.clip.minX.rounded(.down)))
             let y = max(0, Int(region.clip.minY.rounded(.down)))
             let maxX = min(target.width, Int(region.clip.maxX.rounded(.up)))
@@ -1308,12 +1317,29 @@ final class MetalTerminalRenderer: @unchecked Sendable {
                 width: maxX - x,
                 height: maxY - y
             ))
-            encoder.drawPrimitives(
-                type: .triangle,
-                vertexStart: 0,
-                vertexCount: 6,
-                instanceCount: region.instanceCount
-            )
+            // History uses the same two-pass order as the live surface:
+            // cell-sized backgrounds first, then glyphs. A single composited
+            // mode-2 pass would let a continuation instance cover the right
+            // half of a width-two lead.
+            for pass: UInt32 in [0, 1] {
+                var historyMode = pass
+                encoder.setVertexBytes(
+                    &historyMode,
+                    length: MemoryLayout<UInt32>.stride,
+                    index: 2
+                )
+                encoder.setFragmentBytes(
+                    &historyMode,
+                    length: MemoryLayout<UInt32>.stride,
+                    index: 2
+                )
+                encoder.drawPrimitives(
+                    type: .triangle,
+                    vertexStart: 0,
+                    vertexCount: 6,
+                    instanceCount: region.instanceCount
+                )
+            }
         }
         encoder.setScissorRect(MTLScissorRect(x: 0, y: 0, width: target.width, height: target.height))
         encoder.endEncoding()

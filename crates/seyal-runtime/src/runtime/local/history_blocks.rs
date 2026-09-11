@@ -1,4 +1,4 @@
-use seyal_exec::{Color, LineId};
+use seyal_exec::{Color, HistoryRangeError, LineId};
 
 use crate::{
     local_ipc::{
@@ -67,59 +67,106 @@ impl Runtime {
             return;
         };
         let max_lines = usize::from(request.max_lines);
-        let rows = entry.execution.terminal().primary_history_range(
+        let revision = entry.execution.terminal().damage_generation();
+        let rows = match entry.execution.terminal().primary_history_wire_range(
             LineId(request.start_line),
             LineId(request.end_line),
             max_lines,
-        );
+            request.start_unit,
+        ) {
+            Ok(rows) => rows,
+            Err(HistoryRangeError::Unrepresentable) => {
+                self.send_error(
+                    token,
+                    ErrorCode::DisplayUnavailable,
+                    MessageType::HistoryRangeRequest as u16,
+                );
+                return;
+            }
+            Err(HistoryRangeError::Stale) => {
+                let snapshot = framing::HistoryRangeSnapshot {
+                    request_id: request.request_id,
+                    block_id: request.block_id,
+                    revision,
+                    status: framing::HistoryRangeStatus::Stale,
+                    rows: Vec::new(),
+                    sidecar: Vec::new(),
+                };
+                let Ok(payload) = snapshot.try_encode() else {
+                    self.send_error(
+                        token,
+                        ErrorCode::CapacityExceeded,
+                        MessageType::HistoryRangeRequest as u16,
+                    );
+                    return;
+                };
+                let _ = self.send_mandatory_frame(
+                    token,
+                    framing::encode_frame(MessageType::HistoryRangeSnapshot, &payload),
+                );
+                return;
+            }
+        };
         // VT already caps at max_lines. A full window means more in-range
         // retained rows may remain — report Truncated so clients can continue.
         let hit_line_cap = max_lines > 0 && rows.len() == max_lines;
-        let mapped = rows
-            .into_iter()
-            .map(|(line_id, cells)| framing::HistoryRow {
-                line_id: line_id.0,
-                cells: cells
+        let source_rows = rows.into_iter().map(|(line_id, cells)| {
+            (
+                line_id.0,
+                cells
                     .into_iter()
-                    .map(|cell| framing::HistoryCell {
-                        scalar: cell.character as u32,
+                    .map(|cell| framing::HistorySourceCell {
+                        text: cell.text,
+                        width: cell.width,
+                        continuation: cell.continuation,
                         foreground: pack_terminal_color(cell.style.fg),
                         background: pack_terminal_color(cell.style.bg),
-                        flags: (u16::from(cell.style.bold))
+                        style_flags: u16::from(cell.style.bold)
                             | (u16::from(cell.style.underline) << 1)
                             | (u16::from(cell.style.inverse) << 2),
-                        reserved: 0,
                     })
                     .collect(),
-            });
+            )
+        });
+        let (packed_rows, sidecar, pack_truncated) =
+            framing::HistoryRangeSnapshot::pack_source_rows(source_rows);
         let (encoded_rows, budget_truncated) = framing::HistoryRangeSnapshot::admit_rows(
-            mapped,
+            packed_rows,
             max_lines,
             usize::try_from(request.max_cells).unwrap_or(0),
+            sidecar.len(),
         );
-        // Truncation is budget-driven only. Never infer Truncated from sparse
-        // LineId numeric distance (alt-screen identity burn makes spans large).
-        let truncated = budget_truncated || hit_line_cap;
+        let truncated = budget_truncated || hit_line_cap || pack_truncated;
         let mut snapshot = framing::HistoryRangeSnapshot {
             request_id: request.request_id,
             block_id: request.block_id,
-            revision: entry.execution.terminal().damage_generation(),
+            revision,
             status: if truncated {
                 framing::HistoryRangeStatus::Truncated
             } else {
                 framing::HistoryRangeStatus::Complete
             },
             rows: encoded_rows,
+            sidecar,
         };
+        snapshot.trim_sidecar_to_rows();
         // Wire admission should make encode succeed. If an invariant still
         // breaks, shrink to a Truncated prefix rather than CapacityExceeded
         // (which the GUI treated as a fatal attachment tear-down).
         let payload = loop {
             match snapshot.try_encode() {
                 Ok(payload) => break payload,
-                Err(_) if !snapshot.rows.is_empty() => {
-                    snapshot.rows.pop();
-                    snapshot.status = framing::HistoryRangeStatus::Truncated;
+                Err(_) if snapshot.shrink_for_encode() => {
+                    if snapshot.rows.is_empty()
+                        || framing::HistoryRangeSnapshot::lead_count(&snapshot.rows) == 0
+                    {
+                        self.send_error(
+                            token,
+                            ErrorCode::CapacityExceeded,
+                            MessageType::HistoryRangeRequest as u16,
+                        );
+                        return;
+                    }
                 }
                 Err(_) => {
                     self.send_error(

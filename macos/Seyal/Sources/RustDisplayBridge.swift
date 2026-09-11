@@ -59,6 +59,21 @@ struct NativeHistoryRange: Equatable {
     let foreground: UInt32
     let background: UInt32
     let flags: UInt16
+    let graphemeUtf8: Data
+
+    init(
+      scalar: UInt32,
+      foreground: UInt32,
+      background: UInt32,
+      flags: UInt16,
+      graphemeUtf8: Data = Data()
+    ) {
+      self.scalar = scalar
+      self.foreground = foreground
+      self.background = background
+      self.flags = flags
+      self.graphemeUtf8 = graphemeUtf8
+    }
   }
 
   let startLine: UInt64
@@ -67,6 +82,89 @@ struct NativeHistoryRange: Equatable {
   let requestID: UInt64
   let revision: UInt64
   let rows: [[Cell]]
+  let status: UInt32
+
+  init(
+    startLine: UInt64,
+    endLine: UInt64,
+    blockID: UInt64,
+    requestID: UInt64,
+    revision: UInt64,
+    rows: [[Cell]],
+    status: UInt32 = 0
+  ) {
+    self.startLine = startLine
+    self.endLine = endLine
+    self.blockID = blockID
+    self.requestID = requestID
+    self.revision = revision
+    self.rows = rows
+    self.status = status
+  }
+}
+
+private func mergeHistoryRange(
+  _ previous: NativeHistoryRange?,
+  _ chunk: NativeHistoryRange
+) -> NativeHistoryRange {
+  guard let previous else { return chunk }
+  if previous.rows.isEmpty {
+    return NativeHistoryRange(
+      startLine: previous.startLine,
+      endLine: chunk.endLine,
+      blockID: chunk.blockID,
+      requestID: chunk.requestID,
+      revision: chunk.revision,
+      rows: chunk.rows,
+      status: chunk.status
+    )
+  }
+  if chunk.rows.isEmpty {
+    return NativeHistoryRange(
+      startLine: previous.startLine,
+      endLine: previous.endLine,
+      blockID: chunk.blockID,
+      requestID: chunk.requestID,
+      revision: chunk.revision,
+      rows: previous.rows,
+      status: chunk.status
+    )
+  }
+  var rows = previous.rows
+  if previous.endLine == chunk.startLine {
+    rows[rows.count - 1] = rows[rows.count - 1] + chunk.rows[0]
+    rows.append(contentsOf: chunk.rows.dropFirst())
+  } else {
+    rows.append(contentsOf: chunk.rows)
+  }
+  return NativeHistoryRange(
+    startLine: previous.startLine,
+    endLine: chunk.endLine == 0 ? previous.endLine : chunk.endLine,
+    blockID: chunk.blockID,
+    requestID: chunk.requestID,
+    revision: chunk.revision,
+    rows: rows,
+    status: chunk.status
+  )
+}
+
+private func historyLeadCount(_ rows: [[NativeHistoryRange.Cell]]) -> UInt32 {
+  rows.reduce(into: 0) { count, row in
+    count += UInt32(row.filter { $0.scalar != 0 || !$0.graphemeUtf8.isEmpty }.count)
+  }
+}
+
+private let historyCellSidecarFlag: UInt16 = 1 << 7
+
+private func historyGraphemeUtf8(cell: SeyalHistoryCell, sidecar: Data) -> Data {
+  guard cell.flags & historyCellSidecarFlag != 0 else { return Data() }
+  let offset = Int(cell.reserved)
+  guard offset + 2 <= sidecar.count else { return Data() }
+  let length = Int(sidecar[offset]) | (Int(sidecar[offset + 1]) << 8)
+  let start = offset + 2
+  let end = start + length
+  guard length > 0, end <= sidecar.count else { return Data() }
+  return sidecar.subdata(in: start..<end)
 }
 
 struct NativeComposerResult: Equatable {
@@ -374,6 +472,8 @@ final class RustDisplayBridge {
   private var requestedHistoryRanges:
     [PaneHistoryRequestKey: (blockID: UInt64, startLine: UInt64, endLine: UInt64)] = [:]
   private var historyRevisions: [PaneHistoryRequestKey: (revision: UInt64, requestID: UInt64)] = [:]
+  private var historyContinuations:
+    [PaneHistoryRequestKey: (startUnit: UInt32, range: NativeHistoryRange)] = [:]
   private var lastComposerResultRequestID: UInt64 = 0
 
   static func teardownReconnectStateSelfTest() -> Bool {
@@ -607,6 +707,7 @@ final class RustDisplayBridge {
     runtimeBlockMetadata = nil
     requestedHistoryRanges.removeAll(keepingCapacity: false)
     historyRevisions.removeAll(keepingCapacity: false)
+    historyContinuations.removeAll(keepingCapacity: false)
     lastTimelineRevision = 0
     lastComposerResultRequestID = 0
     runtimeIdentityWords = (0, 0)
@@ -649,6 +750,7 @@ final class RustDisplayBridge {
     // composer, timeline, or generation state from the dead socket.
     requestedHistoryRanges.removeAll(keepingCapacity: false)
     historyRevisions.removeAll(keepingCapacity: false)
+    historyContinuations.removeAll(keepingCapacity: false)
     lastTimelineRevision = 0
     lastComposerResultRequestID = 0
     runtimeIdentityWords = (0, 0)
@@ -795,7 +897,7 @@ final class RustDisplayBridge {
     let requestID = seyal_bridge_next_history_request_id()
     guard requestID != 0 else { return -4 }
     let result = finishMutation(
-      seyal_bridge_request_history_range(blockID, startLine, endLine, 512, 131_072))
+      seyal_bridge_request_history_range(blockID, startLine, endLine, 512, 131_072, 0))
     if result == 0 {
       let requestKey = PaneHistoryRequestKey(paneID: paneID, requestID: requestID)
       requestedHistoryRanges[requestKey] = (blockID, startLine, endLine)
@@ -806,6 +908,9 @@ final class RustDisplayBridge {
   func discardHistoryRequests(except blockIDs: Set<UInt64>) {
     requestedHistoryRanges = requestedHistoryRanges.filter { blockIDs.contains($0.value.blockID) }
     historyRevisions = historyRevisions.filter { requestKey, _ in
+      requestedHistoryRanges[requestKey] != nil
+    }
+    historyContinuations = historyContinuations.filter { requestKey, _ in
       requestedHistoryRanges[requestKey] != nil
     }
   }
@@ -822,6 +927,13 @@ final class RustDisplayBridge {
         historyRevisions[requestKey]?.revision != metadata.revision
           || historyRevisions[requestKey]?.requestID != metadata.request_id
       else { continue }
+      let sidecar = seyal_bridge_history_range_sidecar_for(metadata.block_id, metadata.request_id)
+      let sidecarData: Data
+      if sidecar.len > 0, let bytes = sidecar.bytes {
+        sidecarData = Data(bytes: bytes, count: Int(sidecar.len))
+      } else {
+        sidecarData = Data()
+      }
       let rows = (0..<Int(metadata.row_count)).compactMap { index -> [NativeHistoryRange.Cell]? in
         let row = seyal_bridge_history_range_row_for(
           metadata.block_id,
@@ -834,25 +946,44 @@ final class RustDisplayBridge {
             scalar: $0.scalar,
             foreground: $0.foreground,
             background: $0.background,
-            flags: $0.flags
+            flags: $0.flags,
+            graphemeUtf8: historyGraphemeUtf8(cell: $0, sidecar: sidecarData)
           )
         }
       }
       historyRevisions[requestKey] = (metadata.revision, metadata.request_id)
-      let nativeRange = NativeHistoryRange(
+      let chunk = NativeHistoryRange(
         startLine: metadata.start_line == 0 ? request.startLine : metadata.start_line,
         endLine: metadata.end_line == 0 ? request.endLine : metadata.end_line,
         blockID: metadata.block_id,
         requestID: metadata.request_id,
         revision: metadata.revision,
-        rows: rows
+        rows: rows,
+        status: metadata.reserved
       )
-      onHistory(nativeRange)
-      // The native handler receives copied rows and the complete typed
-      // identity before this disposable Runtime cache entry is freed.
+      let previous = historyContinuations[requestKey]
+      let merged = mergeHistoryRange(previous?.range, chunk)
+      let leads = historyLeadCount(rows)
       _ = seyal_bridge_history_range_consume(metadata.block_id, metadata.request_id)
       requestedHistoryRanges.removeValue(forKey: requestKey)
       historyRevisions.removeValue(forKey: requestKey)
+      historyContinuations.removeValue(forKey: requestKey)
+      let truncated = metadata.reserved == 1
+      if truncated, leads > 0, reconstructionState.canMutate, selectClient() {
+        let nextStart = (previous?.startUnit ?? 0) + leads
+        let nextID = seyal_bridge_next_history_request_id()
+        if nextID != 0 {
+          let continued = finishMutation(
+            seyal_bridge_request_history_range(
+              request.blockID, request.startLine, request.endLine, 512, 131_072, nextStart))
+          if continued == 0 {
+            let nextKey = PaneHistoryRequestKey(paneID: paneID, requestID: nextID)
+            requestedHistoryRanges[nextKey] = request
+            historyContinuations[nextKey] = (nextStart, merged)
+          }
+        }
+      }
+      onHistory(merged)
     }
   }
 

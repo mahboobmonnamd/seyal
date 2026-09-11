@@ -124,9 +124,14 @@ final class BlockView: NSView {
 
         bodyView.translatesAutoresizingMaskIntoConstraints = false
 
+        header.setContentHuggingPriority(.required, for: .vertical)
+        header.setContentCompressionResistancePriority(.required, for: .vertical)
+        bodyView.setContentHuggingPriority(.defaultLow, for: .vertical)
+
         let stack = NSStackView(views: [header, bodyView, seam])
         stack.orientation = .vertical
-        stack.alignment = .leading
+        stack.alignment = .width
+        stack.distribution = .fill
         stack.spacing = visual.metrics.blockSeamSpacing / 2
         stack.edgeInsets = NSEdgeInsets(
             top: visual.metrics.contentPaddingVertical,
@@ -144,12 +149,6 @@ final class BlockView: NSView {
             stack.trailingAnchor.constraint(equalTo: trailingAnchor),
             stack.topAnchor.constraint(equalTo: topAnchor),
             stack.bottomAnchor.constraint(equalTo: bottomAnchor),
-            header.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
-            header.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
-            seam.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
-            seam.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
-            bodyView.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
-            bodyView.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
         ])
     }
 

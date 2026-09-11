@@ -82,6 +82,8 @@ typedef struct SeyalHistoryCell {
     uint32_t scalar;
     uint32_t foreground;
     uint32_t background;
+    /* bit0 bold, bit1 underline, bit2 inverse, bit3 continuation,
+       bits 4-5 terminal width, bit7 sidecar offset in reserved */
     uint16_t flags;
     uint16_t reserved;
 } SeyalHistoryCell;
@@ -95,6 +97,12 @@ typedef struct SeyalHistoryRange {
     uint32_t row_count;
     uint32_t reserved;
 } SeyalHistoryRange;
+
+typedef struct SeyalHistorySidecar {
+    const uint8_t *bytes;
+    uint32_t len;
+    uint32_t reserved;
+} SeyalHistorySidecar;
 
 typedef struct SeyalComposerResult {
     uint64_t request_id;
@@ -180,11 +188,13 @@ int32_t seyal_bridge_request_history_range(
     uint64_t start_line,
     uint64_t end_line,
     uint16_t max_lines,
-    uint32_t max_cells
+    uint32_t max_cells,
+    uint32_t start_unit
 );
 uint64_t seyal_bridge_next_history_request_id(void);
 SeyalHistoryRange seyal_bridge_history_range_peek_for(uint64_t block_id, uint64_t request_id);
 SeyalHistoryRow seyal_bridge_history_range_row_for(uint64_t block_id, uint64_t request_id, uint32_t index);
+SeyalHistorySidecar seyal_bridge_history_range_sidecar_for(uint64_t block_id, uint64_t request_id);
 uint8_t seyal_bridge_history_range_consume(uint64_t block_id, uint64_t request_id);
 SeyalComposerResult seyal_bridge_composer_result(void);
 SeyalRecoveryResult seyal_bridge_last_recovery_result(void);

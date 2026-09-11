@@ -16,6 +16,17 @@ pub const MAX_COMMAND_BLOCK_RECORDS: usize = 128;
 pub const MAX_HISTORY_RANGE_LINES: usize = 512;
 pub const MAX_HISTORY_RANGE_CELLS: usize = 131_072;
 pub const MAX_HISTORY_RANGE_BYTES: usize = 196_608;
+/// Chunk-local UTF-8 sidecar for multi-scalar history cells. Zero keeps the
+/// M001 snapshot layout (`reserved == 0`, header bytes 28..32 zero).
+pub const MAX_HISTORY_SIDECAR_BYTES: usize = 65_536;
+pub const MAX_HISTORY_GRAPHEME_BYTES: usize = 8_192;
+/// `HistoryCell.flags` bit 3: this cell is a width-two continuation placeholder.
+pub const HISTORY_CELL_CONTINUATION_FLAG: u16 = 1 << 3;
+/// `HistoryCell.flags` bits 4–5: terminal cell width (1 or 2) for a lead.
+pub const HISTORY_CELL_WIDTH_SHIFT: u16 = 4;
+pub const HISTORY_CELL_WIDTH_MASK: u16 = 0b11 << 4;
+/// `HistoryCell.flags` bit 7: `reserved` is a sidecar byte offset, not zero.
+pub const HISTORY_CELL_SIDECAR_FLAG: u16 = 1 << 7;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -197,6 +208,9 @@ pub struct HistoryRangeRequest {
     pub end_line: u64,
     pub max_lines: u16,
     pub max_cells: u32,
+    /// Lead cells to skip from the start of the line range. Zero is the
+    /// M001-compatible beginning of the first in-range line.
+    pub start_unit: u32,
 }
 
 impl HistoryRangeRequest {
@@ -212,7 +226,7 @@ impl HistoryRangeRequest {
         out.extend_from_slice(&self.max_lines.to_le_bytes());
         out.extend_from_slice(&[0; 2]);
         out.extend_from_slice(&self.max_cells.to_le_bytes());
-        out.extend_from_slice(&[0; 4]);
+        out.extend_from_slice(&self.start_unit.to_le_bytes());
         out.extend_from_slice(&[0; 4]);
         out
     }
@@ -224,7 +238,7 @@ impl HistoryRangeRequest {
         let start_line = u64::from_le_bytes(bytes[32..40].try_into().unwrap());
         let end_line = u64::from_le_bytes(bytes[40..48].try_into().unwrap());
         if bytes[50..52] != [0; 2]
-            || bytes[56..64] != [0; 8]
+            || bytes[60..64] != [0; 4]
             || request_id == 0
             || block_id == 0
             || start_line == 0
@@ -234,6 +248,7 @@ impl HistoryRangeRequest {
         }
         let max_lines = u16::from_le_bytes(bytes[48..50].try_into().unwrap());
         let max_cells = u32::from_le_bytes(bytes[52..56].try_into().unwrap());
+        let start_unit = u32::from_le_bytes(bytes[56..60].try_into().unwrap());
         if max_lines == 0
             || usize::from(max_lines) > MAX_HISTORY_RANGE_LINES
             || max_cells == 0
@@ -249,6 +264,7 @@ impl HistoryRangeRequest {
             end_line,
             max_lines,
             max_cells,
+            start_unit,
         })
     }
 }
@@ -284,6 +300,10 @@ impl HistoryRow {
 ///
 /// Layout matches `SeyalHistoryCell` in `macos/Seyal/Sources/SeyalBridge.h`
 /// (`reserved` is an explicit ABI field, not accidental padding).
+///
+/// Single-scalar leads keep `reserved == 0`. Multi-scalar/combining payloads
+/// set [`HISTORY_CELL_SIDECAR_FLAG`] and store a length-prefixed UTF-8 record
+/// in the snapshot sidecar; `reserved` is the byte offset of that record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(C)]
 pub struct HistoryCell {
@@ -294,6 +314,120 @@ pub struct HistoryCell {
     pub reserved: u16,
 }
 
+impl HistoryCell {
+    /// Pack one presented history glyph. Single-scalar text stays inline so
+    /// snapshots without combining/ZWJ units remain byte-identical to M001.
+    pub fn from_text(
+        text: &str,
+        foreground: u32,
+        background: u32,
+        style_flags: u16,
+        sidecar: &mut Vec<u8>,
+    ) -> Result<Self, FramingError> {
+        let style_flags = style_flags
+            & !(HISTORY_CELL_SIDECAR_FLAG
+                | HISTORY_CELL_CONTINUATION_FLAG
+                | HISTORY_CELL_WIDTH_MASK);
+        if text.is_empty() {
+            return Ok(Self {
+                scalar: 0,
+                foreground,
+                background,
+                flags: style_flags,
+                reserved: 0,
+            });
+        }
+        let mut scalars = text.chars();
+        let scalar = scalars.next().ok_or(FramingError::MalformedPayload)?;
+        let multi = scalars.next().is_some() || text.len() != scalar.len_utf8();
+        if !multi {
+            return Ok(Self {
+                scalar: scalar as u32,
+                foreground,
+                background,
+                flags: style_flags,
+                reserved: 0,
+            });
+        }
+        let utf8 = text.as_bytes();
+        if utf8.len() > MAX_HISTORY_GRAPHEME_BYTES
+            || sidecar.len().saturating_add(2).saturating_add(utf8.len())
+                > MAX_HISTORY_SIDECAR_BYTES
+            || sidecar.len() > u16::MAX as usize
+        {
+            return Err(FramingError::OversizedPayload);
+        }
+        let reserved = sidecar.len() as u16;
+        sidecar.extend_from_slice(&(utf8.len() as u16).to_le_bytes());
+        sidecar.extend_from_slice(utf8);
+        Ok(Self {
+            scalar: scalar as u32,
+            foreground,
+            background,
+            flags: style_flags | HISTORY_CELL_SIDECAR_FLAG,
+            reserved,
+        })
+    }
+
+    pub fn sidecar_utf8<'a>(&self, sidecar: &'a [u8]) -> Result<Option<&'a [u8]>, FramingError> {
+        if self.flags & HISTORY_CELL_SIDECAR_FLAG == 0 {
+            if self.reserved != 0 {
+                return Err(FramingError::MalformedPayload);
+            }
+            return Ok(None);
+        }
+        let start = usize::from(self.reserved);
+        let len_end = start.checked_add(2).ok_or(FramingError::MalformedPayload)?;
+        if len_end > sidecar.len() {
+            return Err(FramingError::MalformedPayload);
+        }
+        let len = u16::from_le_bytes(sidecar[start..len_end].try_into().unwrap()) as usize;
+        if len == 0 || len > MAX_HISTORY_GRAPHEME_BYTES {
+            return Err(FramingError::MalformedPayload);
+        }
+        let end = len_end
+            .checked_add(len)
+            .ok_or(FramingError::MalformedPayload)?;
+        let bytes = sidecar
+            .get(len_end..end)
+            .ok_or(FramingError::MalformedPayload)?;
+        if std::str::from_utf8(bytes).is_err() {
+            return Err(FramingError::MalformedPayload);
+        }
+        Ok(Some(bytes))
+    }
+
+    pub fn with_cell_metrics(mut self, width: u8, continuation: bool) -> Self {
+        self.flags &= !(HISTORY_CELL_CONTINUATION_FLAG | HISTORY_CELL_WIDTH_MASK);
+        if continuation {
+            self.flags |= HISTORY_CELL_CONTINUATION_FLAG;
+        } else {
+            let stored = width.clamp(1, 3);
+            self.flags |= u16::from(stored) << HISTORY_CELL_WIDTH_SHIFT;
+        }
+        self
+    }
+
+    pub fn is_continuation(self) -> bool {
+        self.flags & HISTORY_CELL_CONTINUATION_FLAG != 0
+    }
+
+    pub fn cell_width(self) -> u8 {
+        ((self.flags & HISTORY_CELL_WIDTH_MASK) >> HISTORY_CELL_WIDTH_SHIFT) as u8
+    }
+}
+
+/// One history glyph before sidecar packing. Continuations carry no text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HistorySourceCell {
+    pub text: String,
+    pub width: u8,
+    pub continuation: bool,
+    pub foreground: u32,
+    pub background: u32,
+    pub style_flags: u16,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HistoryRangeSnapshot {
     pub request_id: u64,
@@ -301,6 +435,7 @@ pub struct HistoryRangeSnapshot {
     pub revision: u64,
     pub status: HistoryRangeStatus,
     pub rows: Vec<HistoryRow>,
+    pub sidecar: Vec<u8>,
 }
 
 impl HistoryRangeSnapshot {
@@ -311,16 +446,18 @@ impl HistoryRangeSnapshot {
     /// Wire admission is the authoritative stop for `MAX_HISTORY_RANGE_BYTES` /
     /// `MAX_FRAME_PAYLOAD`. Callers must treat a `true` truncated flag as
     /// `HistoryRangeStatus::Truncated` and must not surface `CapacityExceeded`
-    /// merely because more retained history remains.
+    /// merely because more retained history remains. `sidecar_len` is reserved
+    /// in the byte budget so packed multi-scalar snapshots stay encodable.
     pub fn admit_rows(
         rows: impl IntoIterator<Item = HistoryRow>,
         max_lines: usize,
         max_cells: usize,
+        sidecar_len: usize,
     ) -> (Vec<HistoryRow>, bool) {
         let byte_limit = MAX_HISTORY_RANGE_BYTES.min(crate::framing::MAX_FRAME_PAYLOAD as usize);
         let mut truncated = false;
         let mut cell_budget = max_cells;
-        let mut used = Self::ENCODED_HEADER_LEN;
+        let mut used = Self::ENCODED_HEADER_LEN.saturating_add(sidecar_len);
         let mut out = Vec::new();
         for row in rows {
             if max_lines == 0 || out.len() >= max_lines {
@@ -343,20 +480,133 @@ impl HistoryRangeSnapshot {
         (out, truncated)
     }
 
+    /// Drop trailing lead/continuation groups from the last row until encode
+    /// can succeed, or drop empty trailing rows. Used as a safety net so a
+    /// Truncated prefix never collapses to zero leads / CapacityExceeded.
+    pub fn shrink_for_encode(&mut self) -> bool {
+        if self.try_encode().is_ok() {
+            return false;
+        }
+        let Some(last) = self.rows.last_mut() else {
+            return false;
+        };
+        if last.cells.is_empty() {
+            self.rows.pop();
+            self.trim_sidecar_to_rows();
+            self.status = HistoryRangeStatus::Truncated;
+            return true;
+        }
+        while last.cells.last().is_some_and(|cell| cell.is_continuation()) {
+            last.cells.pop();
+        }
+        if last.cells.pop().is_none() || last.cells.is_empty() {
+            self.rows.pop();
+        }
+        self.trim_sidecar_to_rows();
+        self.status = HistoryRangeStatus::Truncated;
+        true
+    }
+
+    pub fn lead_count(rows: &[HistoryRow]) -> u32 {
+        rows.iter()
+            .flat_map(|row| row.cells.iter())
+            .filter(|cell| !cell.is_continuation())
+            .count() as u32
+    }
+
+    /// Pack glyphs into wire cells. Sidecar overflow keeps the already-packed
+    /// prefix of the current row so a `start_unit` continuation can proceed.
+    pub fn pack_source_rows(
+        rows: impl IntoIterator<Item = (u64, Vec<HistorySourceCell>)>,
+    ) -> (Vec<HistoryRow>, Vec<u8>, bool) {
+        let mut sidecar = Vec::new();
+        let mut packed_rows = Vec::new();
+        let mut pack_truncated = false;
+        for (line_id, cells) in rows {
+            let mut wire_cells = Vec::with_capacity(cells.len());
+            for cell in cells {
+                let packed = if cell.continuation {
+                    HistoryCell {
+                        scalar: 0,
+                        foreground: cell.foreground,
+                        background: cell.background,
+                        flags: cell.style_flags
+                            & !(HISTORY_CELL_SIDECAR_FLAG
+                                | HISTORY_CELL_CONTINUATION_FLAG
+                                | HISTORY_CELL_WIDTH_MASK),
+                        reserved: 0,
+                    }
+                    .with_cell_metrics(cell.width, true)
+                } else {
+                    match HistoryCell::from_text(
+                        &cell.text,
+                        cell.foreground,
+                        cell.background,
+                        cell.style_flags,
+                        &mut sidecar,
+                    ) {
+                        Ok(packed) => packed.with_cell_metrics(cell.width, false),
+                        Err(_) => {
+                            pack_truncated = true;
+                            break;
+                        }
+                    }
+                };
+                wire_cells.push(packed);
+            }
+            if pack_truncated && wire_cells.is_empty() {
+                break;
+            }
+            if !wire_cells.is_empty() {
+                packed_rows.push(HistoryRow {
+                    line_id,
+                    cells: wire_cells,
+                });
+            }
+            if pack_truncated {
+                break;
+            }
+        }
+        (packed_rows, sidecar, pack_truncated)
+    }
+
+    /// Drop sidecar bytes no longer referenced after a trailing-row pop.
+    pub fn trim_sidecar_to_rows(&mut self) {
+        let mut end = 0usize;
+        for cell in self.rows.iter().flat_map(|row| &row.cells) {
+            if cell.flags & HISTORY_CELL_SIDECAR_FLAG == 0 {
+                continue;
+            }
+            let start = usize::from(cell.reserved);
+            if start + 2 > self.sidecar.len() {
+                continue;
+            }
+            let len =
+                u16::from_le_bytes(self.sidecar[start..start + 2].try_into().unwrap()) as usize;
+            end = end.max(start.saturating_add(2).saturating_add(len));
+        }
+        self.sidecar.truncate(end);
+    }
+
     pub fn try_encode(&self) -> Result<Vec<u8>, FramingError> {
         if self.rows.len() > MAX_HISTORY_RANGE_LINES
             || self.rows.iter().map(|row| row.cells.len()).sum::<usize>() > MAX_HISTORY_RANGE_CELLS
+            || self.sidecar.len() > MAX_HISTORY_SIDECAR_BYTES
         {
             return Err(FramingError::OversizedPayload);
         }
-        let mut out = Vec::with_capacity(Self::ENCODED_HEADER_LEN);
+        for cell in self.rows.iter().flat_map(|row| &row.cells) {
+            cell.sidecar_utf8(&self.sidecar)?;
+        }
+        let mut out =
+            Vec::with_capacity(Self::ENCODED_HEADER_LEN.saturating_add(self.sidecar.len()));
         out.extend_from_slice(&self.request_id.to_le_bytes());
         out.extend_from_slice(&self.block_id.to_le_bytes());
         out.extend_from_slice(&self.revision.to_le_bytes());
         out.push(self.status as u8);
         out.push(0);
         out.extend_from_slice(&(self.rows.len() as u16).to_le_bytes());
-        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&(self.sidecar.len() as u32).to_le_bytes());
         for row in &self.rows {
             if row.line_id == 0 || row.cells.len() > u32::MAX as usize {
                 return Err(FramingError::MalformedPayload);
@@ -371,11 +621,18 @@ impl HistoryRangeSnapshot {
                 out.extend_from_slice(&cell.flags.to_le_bytes());
                 out.extend_from_slice(&cell.reserved.to_le_bytes());
             }
-            if out.len() > crate::framing::MAX_FRAME_PAYLOAD as usize
-                || out.len() > MAX_HISTORY_RANGE_BYTES
+            if out.len().saturating_add(self.sidecar.len())
+                > crate::framing::MAX_FRAME_PAYLOAD as usize
+                || out.len().saturating_add(self.sidecar.len()) > MAX_HISTORY_RANGE_BYTES
             {
                 return Err(FramingError::OversizedPayload);
             }
+        }
+        out.extend_from_slice(&self.sidecar);
+        if out.len() > crate::framing::MAX_FRAME_PAYLOAD as usize
+            || out.len() > MAX_HISTORY_RANGE_BYTES
+        {
+            return Err(FramingError::OversizedPayload);
         }
         Ok(out)
     }
@@ -390,8 +647,19 @@ impl HistoryRangeSnapshot {
         {
             return Err(FramingError::OversizedPayload);
         }
-        if bytes.len() < Self::ENCODED_HEADER_LEN || bytes[25] != 0 || bytes[28..32] != [0; 4] {
+        if bytes.len() < Self::ENCODED_HEADER_LEN || bytes[25] != 0 {
             return Err(FramingError::MalformedPayload);
+        }
+        let sidecar_len = u32::from_le_bytes(bytes[28..32].try_into().unwrap()) as usize;
+        if sidecar_len > MAX_HISTORY_SIDECAR_BYTES {
+            return Err(FramingError::OversizedPayload);
+        }
+        let row_bytes_end = bytes
+            .len()
+            .checked_sub(sidecar_len)
+            .ok_or(FramingError::MalformedPayload)?;
+        if row_bytes_end < Self::ENCODED_HEADER_LEN {
+            return Err(FramingError::TruncatedPayload);
         }
         let status = match bytes[24] {
             0 => HistoryRangeStatus::Complete,
@@ -411,7 +679,7 @@ impl HistoryRangeSnapshot {
             let end = offset
                 .checked_add(16)
                 .ok_or(FramingError::MalformedPayload)?;
-            if end > bytes.len() {
+            if end > row_bytes_end {
                 return Err(FramingError::TruncatedPayload);
             }
             let line_id = u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
@@ -432,7 +700,7 @@ impl HistoryRangeSnapshot {
             let cells_end = end
                 .checked_add(bytes_len)
                 .ok_or(FramingError::OversizedPayload)?;
-            if cells_end > bytes.len() {
+            if cells_end > row_bytes_end {
                 return Err(FramingError::TruncatedPayload);
             }
             let (cell_chunks, remainder) = bytes[end..cells_end].as_chunks::<16>();
@@ -442,35 +710,40 @@ impl HistoryRangeSnapshot {
             let values = cell_chunks
                 .iter()
                 .map(|chunk| {
-                    let reserved = u16::from_le_bytes(chunk[14..16].try_into().unwrap());
-                    if reserved != 0 {
-                        return Err(FramingError::MalformedPayload);
-                    }
                     Ok(HistoryCell {
                         scalar: u32::from_le_bytes(chunk[..4].try_into().unwrap()),
                         foreground: u32::from_le_bytes(chunk[4..8].try_into().unwrap()),
                         background: u32::from_le_bytes(chunk[8..12].try_into().unwrap()),
                         flags: u16::from_le_bytes(chunk[12..14].try_into().unwrap()),
-                        reserved,
+                        reserved: u16::from_le_bytes(chunk[14..16].try_into().unwrap()),
                     })
                 })
-                .collect::<Result<Vec<_>, _>>()?;
+                .collect::<Result<Vec<_>, FramingError>>()?;
             rows.push(HistoryRow {
                 line_id,
                 cells: values,
             });
             offset = cells_end;
         }
-        if offset != bytes.len() {
+        let sidecar_end = offset
+            .checked_add(sidecar_len)
+            .ok_or(FramingError::MalformedPayload)?;
+        if offset != row_bytes_end || sidecar_end != bytes.len() {
             return Err(FramingError::ExactLengthMismatch);
         }
-        Ok(Self {
+        let sidecar = bytes[offset..sidecar_end].to_vec();
+        let snapshot = Self {
             request_id: u64::from_le_bytes(bytes[..8].try_into().unwrap()),
             block_id: u64::from_le_bytes(bytes[8..16].try_into().unwrap()),
             revision: u64::from_le_bytes(bytes[16..24].try_into().unwrap()),
             status,
             rows,
-        })
+            sidecar,
+        };
+        for cell in snapshot.rows.iter().flat_map(|row| &row.cells) {
+            cell.sidecar_utf8(&snapshot.sidecar)?;
+        }
+        Ok(snapshot)
     }
 }
 
@@ -707,6 +980,7 @@ mod command_block_tests {
             end_line: 8,
             max_lines: 32,
             max_cells: 4096,
+            start_unit: 12,
         };
         assert_eq!(HistoryRangeRequest::decode(&request.encode()), Ok(request));
         let mut reversed = request.encode();
@@ -758,6 +1032,7 @@ mod command_block_tests {
                     ],
                 },
             ],
+            sidecar: Vec::new(),
         };
         assert_eq!(
             HistoryRangeSnapshot::decode(&snapshot.encode()),
@@ -781,6 +1056,7 @@ mod command_block_tests {
                     MAX_HISTORY_RANGE_CELLS + 1
                 ],
             }],
+            sidecar: Vec::new(),
         };
         assert_eq!(too_many.try_encode(), Err(FramingError::OversizedPayload));
     }
@@ -813,6 +1089,7 @@ mod command_block_tests {
             revision: 3,
             status: HistoryRangeStatus::Complete,
             rows: dense.clone(),
+            sidecar: Vec::new(),
         };
         assert_eq!(
             without_wire.try_encode(),
@@ -823,6 +1100,7 @@ mod command_block_tests {
             dense,
             MAX_HISTORY_RANGE_LINES,
             MAX_HISTORY_RANGE_CELLS,
+            0,
         );
         assert!(truncated);
         assert!(admitted.len() < 200);
@@ -833,6 +1111,7 @@ mod command_block_tests {
             revision: 3,
             status: HistoryRangeStatus::Truncated,
             rows: admitted,
+            sidecar: Vec::new(),
         };
         let encoded = snapshot
             .try_encode()
@@ -856,7 +1135,7 @@ mod command_block_tests {
             }
         }
         let rows: Vec<_> = (1..=5).map(row).collect();
-        let (admitted, truncated) = HistoryRangeSnapshot::admit_rows(rows, 3, 4096);
+        let (admitted, truncated) = HistoryRangeSnapshot::admit_rows(rows, 3, 4096, 0);
         assert!(truncated);
         assert_eq!(admitted.len(), 3);
     }
@@ -878,15 +1157,241 @@ mod command_block_tests {
                     reserved: 0,
                 }],
             }],
+            sidecar: Vec::new(),
         };
         let mut encoded = snapshot.encode();
         // scalar(4)+fg(4)+bg(4)+flags(2)+reserved(2) — flip reserved.
+        // Sidecar is empty, so reserved sits at the last two payload bytes.
         let reserved_at = encoded.len() - 2;
         encoded[reserved_at] = 1;
         assert_eq!(
             HistoryRangeSnapshot::decode(&encoded),
             Err(FramingError::MalformedPayload)
         );
+    }
+
+    #[test]
+    fn history_snapshot_round_trips_combining_grapheme_sidecar() {
+        let mut sidecar = Vec::new();
+        let cell =
+            HistoryCell::from_text("e\u{301}", 0, 0, 0, &mut sidecar).expect("combining cell");
+        assert_eq!(
+            cell.flags & HISTORY_CELL_SIDECAR_FLAG,
+            HISTORY_CELL_SIDECAR_FLAG
+        );
+        assert_eq!(
+            cell.sidecar_utf8(&sidecar).expect("sidecar"),
+            Some("e\u{301}".as_bytes())
+        );
+        let snapshot = HistoryRangeSnapshot {
+            request_id: 11,
+            block_id: 2,
+            revision: 4,
+            status: HistoryRangeStatus::Complete,
+            rows: vec![HistoryRow {
+                line_id: 1,
+                cells: vec![cell],
+            }],
+            sidecar,
+        };
+        assert_eq!(
+            HistoryRangeSnapshot::decode(&snapshot.encode()),
+            Ok(snapshot)
+        );
+    }
+
+    #[test]
+    fn pack_source_rows_keeps_a_sidecar_prefix_when_the_row_exceeds_the_budget() {
+        let grapheme = "\u{10000}".repeat(MAX_HISTORY_GRAPHEME_BYTES / 4);
+        assert_eq!(grapheme.len(), MAX_HISTORY_GRAPHEME_BYTES);
+        let cell = HistorySourceCell {
+            text: grapheme,
+            width: 2,
+            continuation: false,
+            foreground: 0,
+            background: 0,
+            style_flags: 0,
+        };
+        let continuation = HistorySourceCell {
+            text: String::new(),
+            width: 0,
+            continuation: true,
+            foreground: 0,
+            background: 0,
+            style_flags: 0,
+        };
+        let mut row = Vec::new();
+        for _ in 0..8 {
+            row.push(cell.clone());
+            row.push(continuation.clone());
+        }
+        let (rows, sidecar, truncated) = HistoryRangeSnapshot::pack_source_rows([(1, row)]);
+        assert!(truncated);
+        assert_eq!(rows.len(), 1);
+        let leads: Vec<_> = rows[0]
+            .cells
+            .iter()
+            .filter(|cell| !cell.is_continuation())
+            .collect();
+        assert_eq!(leads.len(), 7);
+        assert!(leads.iter().all(|cell| cell.cell_width() == 2));
+        assert!(rows[0].cells.iter().any(|cell| cell.is_continuation()));
+        HistoryRangeSnapshot {
+            request_id: 1,
+            block_id: 2,
+            revision: 1,
+            status: HistoryRangeStatus::Truncated,
+            rows: rows.clone(),
+            sidecar: sidecar.clone(),
+        }
+        .try_encode()
+        .expect("packed prefix encodes");
+        assert!(sidecar.len() <= MAX_HISTORY_SIDECAR_BYTES);
+        assert!(!leads.is_empty());
+    }
+
+    #[test]
+    fn truncated_sidecar_prefix_continues_with_start_unit_without_zero_progress() {
+        let grapheme = "\u{10000}".repeat(MAX_HISTORY_GRAPHEME_BYTES / 4);
+        let lead = HistorySourceCell {
+            text: grapheme,
+            width: 2,
+            continuation: false,
+            foreground: 0,
+            background: 0,
+            style_flags: 0,
+        };
+        let continuation = HistorySourceCell {
+            text: String::new(),
+            width: 0,
+            continuation: true,
+            foreground: 0,
+            background: 0,
+            style_flags: 0,
+        };
+        let mut source = Vec::new();
+        for _ in 0..8 {
+            source.push(lead.clone());
+            source.push(continuation.clone());
+        }
+
+        let (first_rows, first_sidecar, first_truncated) =
+            HistoryRangeSnapshot::pack_source_rows([(1, source.clone())]);
+        assert!(first_truncated);
+        let (first_rows, first_budget) = HistoryRangeSnapshot::admit_rows(
+            first_rows,
+            MAX_HISTORY_RANGE_LINES,
+            MAX_HISTORY_RANGE_CELLS,
+            first_sidecar.len(),
+        );
+        assert!(!first_budget || first_truncated);
+        let first_leads = HistoryRangeSnapshot::lead_count(&first_rows);
+        assert!(
+            first_leads > 0,
+            "truncated chunk must expose leads for start_unit"
+        );
+        let first = HistoryRangeSnapshot {
+            request_id: 1,
+            block_id: 2,
+            revision: 1,
+            status: HistoryRangeStatus::Truncated,
+            rows: first_rows,
+            sidecar: first_sidecar,
+        };
+        first.try_encode().expect("first truncated chunk encodes");
+
+        let skip = first_leads as usize;
+        let mut remaining = Vec::new();
+        let mut seen_leads = 0usize;
+        for cell in source {
+            if cell.continuation {
+                if seen_leads > skip {
+                    remaining.push(cell);
+                }
+                continue;
+            }
+            let include = seen_leads >= skip;
+            seen_leads += 1;
+            if include {
+                remaining.push(cell);
+            }
+        }
+        assert!(!remaining.is_empty(), "unconsumed suffix must remain");
+
+        let (second_rows, second_sidecar, second_truncated) =
+            HistoryRangeSnapshot::pack_source_rows([(1, remaining)]);
+        let (second_rows, _) = HistoryRangeSnapshot::admit_rows(
+            second_rows,
+            MAX_HISTORY_RANGE_LINES,
+            MAX_HISTORY_RANGE_CELLS,
+            second_sidecar.len(),
+        );
+        let second_leads = HistoryRangeSnapshot::lead_count(&second_rows);
+        assert!(
+            second_leads > 0,
+            "continuation chunk must not be zero-progress"
+        );
+        let second = HistoryRangeSnapshot {
+            request_id: 2,
+            block_id: 2,
+            revision: 1,
+            status: if second_truncated {
+                HistoryRangeStatus::Truncated
+            } else {
+                HistoryRangeStatus::Complete
+            },
+            rows: second_rows,
+            sidecar: second_sidecar,
+        };
+        second.try_encode().expect("continuation chunk encodes");
+        assert_eq!(first_leads + second_leads, 8);
+    }
+
+    #[test]
+    fn admit_rows_reserves_sidecar_bytes_so_packed_prefix_encodes() {
+        let grapheme = "\u{10000}".repeat(MAX_HISTORY_GRAPHEME_BYTES / 4);
+        let lead = HistorySourceCell {
+            text: grapheme,
+            width: 2,
+            continuation: false,
+            foreground: 0,
+            background: 0,
+            style_flags: 0,
+        };
+        let continuation = HistorySourceCell {
+            text: String::new(),
+            width: 0,
+            continuation: true,
+            foreground: 0,
+            background: 0,
+            style_flags: 0,
+        };
+        let mut row = Vec::new();
+        for _ in 0..8 {
+            row.push(lead.clone());
+            row.push(continuation.clone());
+        }
+        let (packed, sidecar, truncated) = HistoryRangeSnapshot::pack_source_rows([(1, row)]);
+        assert!(truncated);
+        assert!(!sidecar.is_empty());
+        let (admitted, _) = HistoryRangeSnapshot::admit_rows(
+            packed,
+            MAX_HISTORY_RANGE_LINES,
+            MAX_HISTORY_RANGE_CELLS,
+            sidecar.len(),
+        );
+        assert!(!admitted.is_empty());
+        assert!(HistoryRangeSnapshot::lead_count(&admitted) > 0);
+        HistoryRangeSnapshot {
+            request_id: 1,
+            block_id: 2,
+            revision: 1,
+            status: HistoryRangeStatus::Truncated,
+            rows: admitted,
+            sidecar,
+        }
+        .try_encode()
+        .expect("sidecar-aware admit must encode");
     }
 }
 

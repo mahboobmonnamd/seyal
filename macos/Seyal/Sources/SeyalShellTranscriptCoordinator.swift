@@ -151,6 +151,7 @@ extension SeyalShellView {
 
     if productionShell {
       surface.setAccessibilityIdentifier("terminal-surface.\(paneID)")
+      surface.claimsFirstResponderOnClick = tuiPaneIDs.contains(paneID)
       surface.onAlternateScreenChanged = { [weak self] active in
         self?.setPaneTUI(paneID: paneID, active: active)
       }

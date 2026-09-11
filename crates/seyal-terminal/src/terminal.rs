@@ -14,7 +14,9 @@ use crate::{
     },
     screen::{PreparedScreen, Screen},
     width::{grapheme_terminal_width, AmbiguousWidthPolicy},
-    Cell, CursorState, Damage, LineId, ModeState, TerminalError,
+    Cell, CellRole, CursorState, Damage, HistoryAnchor, HistoryAnchorResolution, HistoryBreakAfter,
+    HistoryMatch, HistoryRangeError, HistoryUnitView, HistoryWireCell, LineId, ModeState,
+    ReflowRow, TerminalError,
 };
 use std::collections::VecDeque;
 
@@ -229,6 +231,16 @@ impl TerminalState {
         self.core.current().line_id(row)
     }
 
+    #[cfg(test)]
+    pub fn primary_source_break_count(&self) -> usize {
+        self.core.primary.source_break_len()
+    }
+
+    #[cfg(test)]
+    fn primary_row_break_after(&self, row: u16) -> Option<crate::HistoryBreakAfter> {
+        self.core.primary.row_break_after(row)
+    }
+
     /// Returns a bounded primary-screen history range. The returned rows are
     /// an explicit read-only projection of **primary** retained history plus
     /// primary visible rows. Alternate-screen cells are never included; the
@@ -242,21 +254,37 @@ impl TerminalState {
         start: LineId,
         end: LineId,
         max_lines: usize,
-    ) -> Vec<(LineId, Vec<Cell>)> {
+    ) -> Result<Vec<(LineId, Vec<Cell>)>, HistoryRangeError> {
         if max_lines == 0 || end < start {
-            return Vec::new();
+            return Ok(Vec::new());
         }
-        let mut lines = Vec::new();
-        for (id, cells) in self.core.primary.history_entries() {
+        if self
+            .core
+            .primary
+            .history()
+            .range_intersects_evicted(start, end)
+        {
+            return Err(HistoryRangeError::Stale);
+        }
+        let mut lines: Vec<(LineId, Vec<Cell>)> = Vec::new();
+        for entry in self.core.primary.history_entries() {
+            let id = entry.line_id();
             if id < start {
                 continue;
             }
             if id > end {
                 break;
             }
-            lines.push((id, cells.to_vec()));
-            if lines.len() >= max_lines {
-                return lines;
+            let cells = entry.presentation_cells();
+            if let Some((last_id, last_cells)) = lines.last_mut()
+                && *last_id == id
+            {
+                last_cells.extend(cells);
+            } else {
+                lines.push((id, cells));
+                if lines.len() >= max_lines {
+                    return Ok(lines);
+                }
             }
         }
         for row in 0..self.core.primary.rows() {
@@ -277,7 +305,248 @@ impl TerminalState {
                 break;
             }
         }
-        lines
+        Ok(lines)
+    }
+
+    /// History rows for the Pass-7 snapshot wire, including full grapheme
+    /// UTF-8. Continuation placeholders carry empty text.
+    pub fn primary_history_wire_range(
+        &self,
+        start: LineId,
+        end: LineId,
+        max_lines: usize,
+        skip_leads: u32,
+    ) -> Result<Vec<(LineId, Vec<HistoryWireCell>)>, HistoryRangeError> {
+        if max_lines == 0 || end < start {
+            return Ok(Vec::new());
+        }
+        if self
+            .core
+            .primary
+            .history()
+            .range_intersects_evicted(start, end)
+        {
+            return Err(HistoryRangeError::Stale);
+        }
+        let mut skip = skip_leads;
+        let mut lines: Vec<(LineId, Vec<HistoryWireCell>)> = Vec::new();
+        for entry in self.core.primary.history_entries() {
+            let id = entry.line_id();
+            if id < start {
+                continue;
+            }
+            if id > end {
+                break;
+            }
+            let cells = skip_wire_leads(entry.wire_cells(), &mut skip);
+            if cells.is_empty() {
+                continue;
+            }
+            if let Some((last_id, last_cells)) = lines.last_mut()
+                && *last_id == id
+            {
+                last_cells.extend(cells);
+            } else {
+                lines.push((id, cells));
+                if skip == 0 && lines.len() >= max_lines {
+                    return Ok(lines);
+                }
+            }
+        }
+        for row in 0..self.core.primary.rows() {
+            let Some(id) = self.core.primary.line_id(row) else {
+                continue;
+            };
+            if id < start || id > end {
+                continue;
+            }
+            if lines.iter().any(|(existing, _)| *existing == id) {
+                continue;
+            }
+            let Some(cells) = self.core.primary.cell_row(row) else {
+                continue;
+            };
+            let content_end = cells
+                .iter()
+                .rposition(|cell| cell.role != CellRole::Empty)
+                .map_or(0, |index| index + 1);
+            let mut wire = Vec::new();
+            for cell in &cells[..content_end] {
+                match cell.role {
+                    CellRole::Continuation => {
+                        wire.push(HistoryWireCell {
+                            text: String::new(),
+                            width: 0,
+                            style: cell.style,
+                            continuation: true,
+                        });
+                    }
+                    CellRole::Empty => {
+                        wire.push(HistoryWireCell {
+                            text: " ".into(),
+                            width: 1,
+                            style: cell.style,
+                            continuation: false,
+                        });
+                    }
+                    CellRole::Lead => {
+                        let text = if cell.overflow {
+                            "\u{FFFD}".to_owned()
+                        } else {
+                            self.core.grapheme_store.get(cell.store_id).map_or_else(
+                                || cell.character.to_string(),
+                                |bytes| String::from_utf8_lossy(bytes).into_owned(),
+                            )
+                        };
+                        wire.push(HistoryWireCell {
+                            text,
+                            width: cell.width.max(1),
+                            style: cell.style,
+                            continuation: false,
+                        });
+                    }
+                }
+            }
+            lines.push((id, skip_wire_leads(wire, &mut skip)));
+            if let Some((_, cells)) = lines.last()
+                && cells.is_empty()
+            {
+                lines.pop();
+            }
+            if skip == 0 && lines.len() >= max_lines {
+                break;
+            }
+        }
+        Ok(lines)
+    }
+
+    /// Returns complete canonical source units for a bounded primary-history
+    /// range. This projection preserves multi-scalar grapheme payloads and
+    /// source anchors; callers that only need legacy scalar cells can use
+    /// [`Self::primary_history_range`].
+    pub fn primary_history_units_range(
+        &self,
+        start: LineId,
+        end: LineId,
+        max_units: usize,
+    ) -> Vec<HistoryUnitView> {
+        let mut units = self
+            .core
+            .primary
+            .history()
+            .source_units(start, end, max_units)
+            .into_iter()
+            .collect::<Vec<_>>();
+        if units.len() >= max_units {
+            return units;
+        }
+        let mut visible_offsets = std::collections::HashMap::<LineId, u32>::new();
+        for row in 0..self.core.primary.rows() {
+            let Some(line_id) = self.core.primary.line_id(row) else {
+                continue;
+            };
+            if line_id < start || line_id > end {
+                continue;
+            }
+            let Some(cells) = self.core.primary.cell_row(row) else {
+                continue;
+            };
+            let content_end = cells
+                .iter()
+                .rposition(|cell| cell.role != CellRole::Empty)
+                .map_or(0, |index| index + 1);
+            let unit_offset = visible_offsets.entry(line_id).or_default();
+            for (col, cell) in cells[..content_end].iter().enumerate() {
+                let CellRole::Lead = cell.role else {
+                    continue;
+                };
+                let text = if cell.overflow {
+                    "\u{FFFD}".to_owned()
+                } else {
+                    self.core.grapheme_store.get(cell.store_id).map_or_else(
+                        || cell.character.to_string(),
+                        |bytes| String::from_utf8_lossy(bytes).into_owned(),
+                    )
+                };
+                let anchor =
+                    self.core
+                        .primary
+                        .cell_anchor(col as u16, row)
+                        .unwrap_or(HistoryAnchor {
+                            line_id,
+                            unit_offset: *unit_offset,
+                        });
+                if !units.iter().any(|unit| unit.anchor == anchor) {
+                    units.push(HistoryUnitView {
+                        anchor,
+                        text,
+                        width: cell.width.max(1),
+                        style: cell.style,
+                        // Live viewport rows are not sealed HistoryStore
+                        // records; treat them as ephemeral wrap fragments.
+                        break_after: HistoryBreakAfter::SoftWrap,
+                    });
+                    if units.len() >= max_units {
+                        return units;
+                    }
+                }
+                *unit_offset = (*unit_offset).saturating_add(1);
+            }
+        }
+        units
+    }
+
+    /// Derives width-specific rows from canonical retained history. The
+    /// projection is bounded by `max_rows` and does not rewrite source text.
+    /// Each lead cell carries the complete grapheme UTF-8 payload.
+    pub fn primary_history_reflow(&self, cols: u16, max_rows: usize) -> Vec<ReflowRow> {
+        self.core.primary.history().reflow(cols, max_rows)
+    }
+
+    pub fn primary_history_reflow_uncached(&self, cols: u16, max_rows: usize) -> Vec<ReflowRow> {
+        self.core.primary.history().reflow_uncached(cols, max_rows)
+    }
+
+    pub fn primary_history_resident_bytes(&self) -> usize {
+        self.core.primary.history().resident_bytes()
+    }
+
+    pub fn primary_history_derived_cache_bytes(&self) -> usize {
+        self.core.primary.history().derived_cache_bytes()
+    }
+
+    pub fn drop_primary_history_derived_cache(&mut self) {
+        self.core.primary.history_mut().drop_derived_cache();
+    }
+
+    pub fn primary_history_eviction_generation(&self) -> u64 {
+        self.core.primary.history().eviction_generation()
+    }
+
+    pub fn primary_history_oldest_segment_age(&self) -> Option<u64> {
+        self.core.primary.history().oldest_segment_age()
+    }
+
+    pub fn evict_oldest_primary_history_segment(&mut self) -> usize {
+        self.core.primary.history_mut().evict_oldest_segment()
+    }
+
+    /// Resolves a retained source anchor without conflating an evicted source
+    /// with an invalid line or unit offset.
+    pub fn primary_history_unit(&self, anchor: HistoryAnchor) -> HistoryAnchorResolution {
+        self.core.primary.history().resolve_anchor(anchor)
+    }
+
+    pub fn primary_history_search(&self, needle: &str, max_matches: usize) -> Vec<HistoryMatch> {
+        self.core.primary.history().search(needle, max_matches)
+    }
+
+    pub fn primary_history_selection(
+        &self,
+        start: HistoryAnchor,
+        end: HistoryAnchor,
+    ) -> Result<Vec<HistoryUnitView>, HistoryRangeError> {
+        self.core.primary.history().selection(start, end)
     }
 
     pub fn row_text(&self, row: u16) -> Option<String> {
@@ -344,7 +613,7 @@ struct TerminalCore {
 impl TerminalCore {
     fn new(cols: u16, rows: u16) -> Result<Self, TerminalError> {
         let mut line_ids = LineIdAllocator::new();
-        let primary = Screen::new(cols, rows, &mut line_ids)?;
+        let primary = Screen::new(cols, rows, &mut line_ids, true)?;
         let mut damage = DamageTracker::default();
         damage.mark(Mutation::full(rows));
         damage.commit();
@@ -414,11 +683,11 @@ impl TerminalCore {
             return Err(TerminalError::LineIdentityExhausted);
         }
 
-        let primary = self
-            .primary
-            .prepare_resize(cols, rows, &mut self.line_ids)?;
+        let primary =
+            self.primary
+                .prepare_resize(cols, rows, &mut self.line_ids, &self.grapheme_store)?;
         let alternate = if let Some(screen) = &self.alternate {
-            Some(screen.prepare_resize(cols, rows, &mut self.line_ids)?)
+            Some(screen.prepare_resize(cols, rows, &mut self.line_ids, &self.grapheme_store)?)
         } else {
             None
         };
@@ -430,10 +699,13 @@ impl TerminalCore {
     }
 
     fn commit_resize(&mut self, prepared: PreparedResize) {
-        let primary = self.primary.commit_prepared(prepared.primary);
+        self.invalidate_active_grapheme();
+        let primary = self
+            .primary
+            .commit_prepared(prepared.primary, &mut self.grapheme_store);
         let alternate = if let Some(prepared_alt) = prepared.alternate {
             if let Some(screen) = &mut self.alternate {
-                screen.commit_prepared(prepared_alt)
+                screen.commit_prepared(prepared_alt, &mut self.grapheme_store)
             } else {
                 Mutation::none()
             }
@@ -574,7 +846,7 @@ impl TerminalCore {
             let cols = self.primary.cols();
             let rows = self.primary.rows();
             let pen = self.primary.pen();
-            let mut screen = Screen::new(cols, rows, &mut self.line_ids)?;
+            let mut screen = Screen::new(cols, rows, &mut self.line_ids, false)?;
             screen.inherit_pen_for_clean_buffer(pen, &mut self.grapheme_store);
             self.alternate = Some(screen);
             self.modes.alternate_screen = true;
@@ -823,9 +1095,10 @@ impl TerminalCore {
         if self.modes.alternate_screen
             && let Some(screen) = &mut self.alternate
         {
-            return screen.execute(byte, &mut self.line_ids);
+            return screen.execute(byte, &mut self.line_ids, &mut self.grapheme_store);
         }
-        self.primary.execute(byte, &mut self.line_ids)
+        self.primary
+            .execute(byte, &mut self.line_ids, &mut self.grapheme_store)
     }
 
     fn record_fault(&mut self, error: TerminalError) {
@@ -1047,7 +1320,12 @@ impl Actions for TerminalCore {
                 self.invalidate_active_grapheme();
                 let count = param_one(params, 0);
                 self.editing_mutation(|screen, line_ids, store| {
-                    screen.scroll_up(count, line_ids, Some(store))
+                    screen.scroll_up(
+                        count,
+                        line_ids,
+                        Some(store),
+                        crate::HistoryBreakAfter::HardBreak,
+                    )
                 })
             }
             b'T' => {
@@ -1085,15 +1363,17 @@ impl Actions for TerminalCore {
             b'8' => self.current_mut().restore_cursor(),
             b'D' => {
                 self.invalidate_active_grapheme();
-                self.editing_mutation(|screen, line_ids, _| screen.index_down(line_ids))
+                self.editing_mutation(|screen, line_ids, store| screen.index_down(line_ids, store))
             }
             b'M' => {
                 self.invalidate_active_grapheme();
-                self.editing_mutation(|screen, line_ids, _| screen.reverse_index(line_ids))
+                self.editing_mutation(|screen, line_ids, store| {
+                    screen.reverse_index(line_ids, store)
+                })
             }
             b'E' => {
                 self.invalidate_active_grapheme();
-                self.editing_mutation(|screen, line_ids, _| screen.next_line(line_ids))
+                self.editing_mutation(|screen, line_ids, store| screen.next_line(line_ids, store))
             }
             _ => {
                 self.record_unknown();
@@ -1174,6 +1454,25 @@ fn param_one(params: &[u16], index: usize) -> u16 {
 
 fn param_zero(params: &[u16], index: usize) -> u16 {
     params.get(index).copied().unwrap_or(0)
+}
+
+fn skip_wire_leads(cells: Vec<HistoryWireCell>, skip: &mut u32) -> Vec<HistoryWireCell> {
+    if *skip == 0 {
+        return cells;
+    }
+    let mut index = 0usize;
+    while index < cells.len() && *skip > 0 {
+        if cells[index].continuation {
+            index += 1;
+            continue;
+        }
+        *skip = skip.saturating_sub(1);
+        index += 1;
+        while index < cells.len() && cells[index].continuation {
+            index += 1;
+        }
+    }
+    cells[index..].to_vec()
 }
 
 #[cfg(test)]
@@ -1263,7 +1562,7 @@ mod tests {
         terminal.feed(b"one\r\ntwo\r\nthree").unwrap();
         let first = terminal.line_id(0).unwrap();
         let last = terminal.line_id(1).unwrap();
-        let rows = terminal.primary_history_range(LineId(1), last, 8);
+        let rows = terminal.primary_history_range(LineId(1), last, 8).unwrap();
         assert_eq!(rows.first().map(|(id, _)| *id), Some(LineId(1)));
         assert!(rows.iter().any(|(_, cells)| {
             cells
@@ -1272,7 +1571,10 @@ mod tests {
                 .collect::<String>()
                 .starts_with("one")
         }));
-        assert!(terminal.primary_history_range(first, last, 0).is_empty());
+        assert!(terminal
+            .primary_history_range(first, last, 0)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -1280,11 +1582,11 @@ mod tests {
         let mut terminal = TerminalState::new(4, 2).unwrap();
         terminal.feed(b"one\r\ntwo\r\nthree").unwrap();
         let last = terminal.line_id(1).unwrap();
-        let before = terminal.primary_history_range(LineId(1), last, 8);
+        let before = terminal.primary_history_range(LineId(1), last, 8).unwrap();
         assert!(!before.is_empty());
         terminal.feed(b"\x1b[?1049h").unwrap();
         assert!(terminal.modes().alternate_screen);
-        let during = terminal.primary_history_range(LineId(1), last, 8);
+        let during = terminal.primary_history_range(LineId(1), last, 8).unwrap();
         assert_eq!(
             during.len(),
             before.len(),
@@ -1299,6 +1601,158 @@ mod tests {
                 .iter()
                 .map(|(id, cells)| (*id, cells.iter().map(|c| c.character).collect::<String>()))
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn retained_history_records_softwrap_and_hardbreak_lineage() {
+        let mut terminal = TerminalState::new(2, 1).unwrap();
+        terminal.feed(b"ab").unwrap();
+        terminal.feed(b"c\n").unwrap();
+        let history: Vec<_> = terminal
+            .core
+            .primary
+            .history_entries()
+            .map(|entry| {
+                (
+                    entry.line_id(),
+                    entry.break_after(),
+                    entry
+                        .presentation_cells()
+                        .iter()
+                        .map(|cell| cell.character)
+                        .collect::<String>(),
+                )
+            })
+            .collect();
+
+        assert!(
+            history.iter().any(|(_, break_after, text)| {
+                matches!(break_after, crate::HistoryBreakAfter::SoftWrap) && text == "ab"
+            }),
+            "soft-wrapped overflow row should be retained with SoftWrap lineage"
+        );
+        assert!(
+            history.iter().any(|(_, break_after, text)| {
+                matches!(break_after, crate::HistoryBreakAfter::HardBreak) && text == "c"
+            }),
+            "explicit line feed should be retained with HardBreak lineage and no viewport padding"
+        );
+    }
+
+    #[test]
+    fn history_projection_omits_viewport_padding_but_keeps_explicit_spaces() {
+        let mut terminal = TerminalState::new(4, 1).unwrap();
+        terminal.feed(b"a b\r\n").unwrap();
+
+        let units = terminal.primary_history_units_range(LineId(1), LineId(1), 8);
+        assert_eq!(
+            units
+                .iter()
+                .map(|unit| unit.text.as_str())
+                .collect::<String>(),
+            "a b"
+        );
+        assert_eq!(
+            terminal
+                .primary_history_range(LineId(1), LineId(1), 8)
+                .unwrap()[0]
+                .1
+                .len(),
+            3
+        );
+    }
+
+    #[test]
+    fn primary_resize_reflows_active_soft_wrapped_source() {
+        let mut terminal = TerminalState::new(4, 2).unwrap();
+        terminal.feed(b"abcdef").unwrap();
+        terminal.resize(8, 2).unwrap();
+        assert_eq!(terminal.row_text(0).as_deref(), Some("abcdef  "));
+        assert_eq!(
+            terminal.primary_row_break_after(0),
+            Some(crate::HistoryBreakAfter::HardBreak),
+            "resize must carry the source boundary onto the materialized row"
+        );
+        terminal.resize(3, 2).unwrap();
+        let text = format!(
+            "{}{}",
+            terminal.row_text(0).unwrap(),
+            terminal.row_text(1).unwrap()
+        );
+        assert!(
+            text.starts_with("abc"),
+            "rows={:?} reflow text={text:?}",
+            (terminal.row_text(0), terminal.row_text(1))
+        );
+        assert!(text.contains("def"), "reflow text={text:?}");
+    }
+
+    #[test]
+    fn alternate_screen_never_adds_primary_history() {
+        let mut terminal = TerminalState::new(4, 1).unwrap();
+        terminal.feed(b"primary\r\n").unwrap();
+        let before = terminal.primary_history_resident_bytes();
+        terminal
+            .feed(b"\x1b[?1049halternate\r\nalternate\r\n\x1b[?1049l")
+            .unwrap();
+        assert_eq!(terminal.primary_history_resident_bytes(), before);
+        assert!(terminal.primary_history_eviction_generation() == 0);
+    }
+
+    #[test]
+    fn source_breaks_stay_bounded_to_active_lines_after_long_output() {
+        let mut terminal = TerminalState::new(8, 2).unwrap();
+        for i in 0..200 {
+            terminal.feed(format!("line-{i}\r\n").as_bytes()).unwrap();
+        }
+        assert!(
+            terminal.primary_source_break_count() <= 4,
+            "source_breaks leaked retained lineage metadata: {}",
+            terminal.primary_source_break_count()
+        );
+    }
+
+    #[test]
+    fn retained_unit_preserves_canonical_multiscalar_payload_and_anchor() {
+        let mut terminal = TerminalState::new(2, 1).unwrap();
+        terminal.feed("界\u{301}\r\n".as_bytes()).unwrap();
+        let line_id = terminal
+            .primary_history_units_range(LineId(1), LineId(u64::MAX), 1)
+            .into_iter()
+            .next()
+            .expect("wide source row is retained")
+            .anchor
+            .line_id;
+        let unit = terminal.primary_history_unit(HistoryAnchor {
+            line_id,
+            unit_offset: 0,
+        });
+        assert!(matches!(
+            unit,
+            HistoryAnchorResolution::Resolved { ref text, width: 2, .. }
+                if text == "界\u{301}"
+        ));
+
+        let projected = terminal.primary_history_units_range(line_id, line_id, 8);
+        assert_eq!(projected.len(), 1);
+        assert_eq!(projected[0].anchor.unit_offset, 0);
+        assert_eq!(projected[0].text, "界\u{301}");
+        assert_eq!(projected[0].width, 2);
+    }
+
+    #[test]
+    fn history_reflow_is_invariant_under_input_chunking() {
+        let input = "alpha界\u{301}xyz\r\nsecond-line\r\nthird";
+        let mut one_shot = TerminalState::new(6, 1).unwrap();
+        one_shot.feed(input.as_bytes()).unwrap();
+        let mut bytewise = TerminalState::new(6, 1).unwrap();
+        for byte in input.as_bytes() {
+            bytewise.feed(std::slice::from_ref(byte)).unwrap();
+        }
+        assert_eq!(
+            one_shot.primary_history_reflow(5, 64),
+            bytewise.primary_history_reflow(5, 64)
         );
     }
 
@@ -1414,7 +1868,9 @@ mod tests {
         terminal.feed(b"five\r\nsix").unwrap();
 
         let started = Instant::now();
-        let rows = terminal.primary_history_range(LineId(1), LineId(u64::MAX), 512);
+        let rows = terminal
+            .primary_history_range(LineId(1), LineId(u64::MAX), 512)
+            .unwrap();
         assert!(
             started.elapsed() < Duration::from_millis(100),
             "history lookup must not scale with numeric LineId distance"
@@ -1422,7 +1878,9 @@ mod tests {
         assert!(rows.len() <= 512);
         assert!(!rows.is_empty());
 
-        let absent = terminal.primary_history_range(LineId(u64::MAX - 10), LineId(u64::MAX), 8);
+        let absent = terminal
+            .primary_history_range(LineId(u64::MAX - 10), LineId(u64::MAX), 8)
+            .unwrap();
         assert!(absent.is_empty());
     }
 

@@ -255,6 +255,7 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
   private var preparationRetryScheduled = false
   private var preparationState = PreparationRecoveryState()
   private var lastAlternateScreen: Bool?
+  private var isDetachingRuntimeConnection = false
   private(set) var lastBridgeError: Int32?
   private(set) var lastRenderError: Error?
   private var historyRanges: [PaneBlockKey: NativeHistoryRange] = [:]
@@ -380,6 +381,7 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
 
   func terminalBridgeStatusDidChange() {
     refreshRecoveryAccessibilityValue()
+    guard !isDetachingRuntimeConnection else { return }
     guard bridge?.isConnected != true else { return }
     // History/composer/display correlations are disposable connection state;
     // logical pane and Block identity remain owned by Runtime and are not
@@ -416,7 +418,10 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
   @discardableResult
   func ensureTerminalBridgeConnected() -> Bool {
     guard bridge?.isConnected != true else { return true }
-    guard shouldRender, bridge?.clientHandle == 0 else { return false }
+    guard !isDetachingRuntimeConnection,
+      shouldAttachRuntime,
+      bridge?.clientHandle == 0
+    else { return false }
     if !bridgeRecoveryCoordinator.isActive,
       runtimeRecoveryState.stage != .blocked
     {
@@ -693,18 +698,30 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
       // Suppress status-driven reconnect before stop() publishes its
       // disconnected transition. Teardown is detach-only and must not create
       // a replacement foreground recovery episode.
-      renderable = false
-      renderer.setVisible(false)
-      invalidatePreparedPresentation()
-      invalidateMetalDisplayLink()
-      cancelBridgeReconnect()
-      bridge?.stop()
+      detachRuntimeConnectionForApplicationTermination()
     }
     super.viewWillMove(toWindow: newWindow)
   }
 
+  /// Detaches the disposable GUI-side Runtime client before the application
+  /// exits. The Runtime/helper intentionally survives GUI lifetime, but its
+  /// controller lease must be released before a later Seyal launch attempts
+  /// to reacquire the same execution.
+  func detachRuntimeConnectionForApplicationTermination() {
+    isDetachingRuntimeConnection = true
+    renderable = false
+    renderer.setVisible(false)
+    invalidatePreparedPresentation()
+    invalidateMetalDisplayLink()
+    cancelBridgeReconnect()
+    bridge?.stop()
+  }
+
   override func viewDidMoveToWindow() {
     super.viewDidMoveToWindow()
+    if window != nil {
+      isDetachingRuntimeConnection = false
+    }
     if let window {
       NotificationCenter.default.addObserver(
         self,
@@ -745,10 +762,22 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
   }
 
   private var shouldRender: Bool {
+    guard shouldAttachRuntime else { return false }
+    guard let window else { return false }
+    return window.occlusionState.contains(.visible)
+  }
+
+  /// Runtime attachment is a lifecycle concern, not a Metal presentation
+  /// concern. AppKit may report a stale/non-visible occlusion state while a
+  /// newly reopened window is already visible and focusable. Gating attach on
+  /// that state strands the pane with no Runtime, no Metal frame, and no
+  /// working Enter key until an unrelated window/occlusion notification.
+  /// A surface already installed in a non-miniaturized window is an eligible
+  /// foreground pane even while AppKit is still settling visibility or an
+  /// ancestor's occlusion bookkeeping.
+  private var shouldAttachRuntime: Bool {
     guard let window else { return false }
     return !window.isMiniaturized
-      && window.occlusionState.contains(.visible)
-      && !isHiddenOrHasHiddenAncestor
   }
 
   private func cancelBridgeReconnect() {
@@ -757,7 +786,8 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
 
   private func startAutomaticBridgeRecoveryIfNeeded() {
     guard !suppressesAutomaticBridgeRecovery,
-      renderable,
+      !isDetachingRuntimeConnection,
+      shouldAttachRuntime,
       bridge?.isConnected == false,
       // stop() keeps the old clientHandle until both dispatch-source cancel
       // handlers complete. Waiting for zero prevents consuming a retry on our
@@ -774,13 +804,23 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
   /// Automatic exhaustion never invokes this method recursively.
   @discardableResult
   func retryRuntimeConnection() -> Bool {
-    guard shouldRender,
+    guard shouldAttachRuntime,
       bridge?.isConnected != true,
       bridge?.clientHandle == 0,
       runtimeRecoveryState.stage != .blocked
     else { return bridge?.isConnected == true }
     bridgeRecoveryCoordinator.retry()
     return bridge?.isConnected == true
+  }
+
+  /// AppKit can finish attaching a scroll-view sibling to its window after
+  /// `viewDidMoveToWindow` has already run. Re-evaluate the lifecycle boundary
+  /// after the shell's window has been ordered front so Runtime discovery is
+  /// never left stranded in `.disconnected`.
+  func activateRuntimeAfterWindowPresentation() {
+    updateVisibility()
+    startAutomaticBridgeRecoveryIfNeeded()
+    refreshRecoveryAccessibilityValue()
   }
 
   private func updateVisibility() {
@@ -824,6 +864,11 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
         beginPresentationAttemptSeries()
         armMetalDisplayLink()
       }
+    } else if shouldAttachRuntime {
+      // The window can be attachable before AppKit publishes a reliable
+      // occlusion state. Keep Runtime recovery independent from presentation;
+      // the renderer remains hidden until a real visible-frame opportunity.
+      startAutomaticBridgeRecoveryIfNeeded()
     }
   }
 
@@ -853,7 +898,9 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
       if result == .updated {
         forceNextFrame = false
         hasPreparedState = true
-        bridgeRecoveryCoordinator.transition(to: .restoringInteraction)
+        if runtimeRecoveryState.stage != .usable {
+          bridgeRecoveryCoordinator.transition(to: .restoringInteraction)
+        }
         // Candidate-D can continue advancing while an exhausted GPU
         // display failure is latched. A successful CPU preparation must
         // not erase that asynchronous display diagnostic.
@@ -866,17 +913,18 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
         if shouldRender,
           bridge?.isConnected == true,
           hasPreparedState,
-          !presentationState.exhausted
+          !presentationState.exhausted,
+          runtimeRecoveryState.stage != .usable
         {
           // SPEC-009 §10: first-responder / accessibility / IME must be restored
           // before Usable when this surface owns the native interaction seam.
+          // After Usable, leave the first responder alone so the Flow composer
+          // can keep Enter and paste.
           guard restoreNativeInteractionAfterRendererReady() else {
             return
           }
-          if runtimeRecoveryState.stage != .usable {
-            bridgeRecoveryCoordinator.transition(to: .usable)
-            refreshRecoveryAccessibilityValue()
-          }
+          bridgeRecoveryCoordinator.transition(to: .usable)
+          refreshRecoveryAccessibilityValue()
         }
         if shouldRender,
           renderer.persistentDisplayFailure == nil,

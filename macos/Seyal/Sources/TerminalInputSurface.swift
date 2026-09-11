@@ -287,6 +287,9 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
   /// Component-test seam for observing the exact sample produced by layout.
   /// Production leaves this nil; Runtime remains the only geometry authority.
   var geometryProposalObserver: ((TerminalLayoutSample) -> Void)?
+  /// Flow panes keep keyboard input on the composer. TUI/raw clicks still
+  /// claim this surface. Default true preserves SPEC-009 probe surfaces.
+  var claimsFirstResponderOnClick = true
   private var nativeFailure: NativeInputFailure?
   private let failureLayer = CATextLayer()
   /// IME activate is sticky for a given surface/window session. AppKit may
@@ -330,7 +333,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
   }
 
   override var acceptsFirstResponder: Bool {
-    true
+    claimsFirstResponderOnClick
   }
 
   override func becomeFirstResponder() -> Bool {
@@ -358,6 +361,17 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
     }
     if !window.isKeyWindow {
       window.makeKey()
+    }
+    if !claimsFirstResponderOnClick {
+      return true
+    }
+    if let current = window.firstResponder as? NSView,
+      current !== self,
+      current is NSTextView
+    {
+      // The Flow composer is an NSTextView. Restoring terminal first-responder
+      // on every Candidate-D frame would steal Enter and paste from it.
+      return true
     }
     guard window.makeFirstResponder(self) else { return false }
     // makeFirstResponder is a no-op when already first responder and will not
@@ -387,8 +401,15 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
   }
 
   override func mouseDown(with event: NSEvent) {
-    window?.makeFirstResponder(self)
+    if claimsFirstResponderOnClick {
+      window?.makeFirstResponder(self)
+    }
     super.mouseDown(with: event)
+  }
+
+  override func performKeyEquivalent(with event: NSEvent) -> Bool {
+    guard claimsFirstResponderOnClick else { return false }
+    return super.performKeyEquivalent(with: event)
   }
 
   override func keyDown(with event: NSEvent) {

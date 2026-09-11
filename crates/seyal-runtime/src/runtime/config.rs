@@ -7,6 +7,8 @@ use std::{
 use std::collections::HashMap;
 
 use crate::{CapabilityPolicy, RuntimeError};
+use seyal_exec::HISTORY_RUNTIME_AGGREGATE_BYTE_CAP;
+use seyal_exec::HISTORY_RUNTIME_DERIVED_INDEX_CAP;
 
 #[cfg(feature = "benchmark-instrumentation")]
 use crate::ExecutionId;
@@ -100,6 +102,8 @@ pub struct RuntimeConfig {
     pub control_queue_capacity: usize,
     pub per_execution_input_bytes: usize,
     pub aggregate_input_bytes: usize,
+    pub history_aggregate_bytes: usize,
+    pub derived_history_aggregate_bytes: usize,
     pub read_dispatch_bytes: usize,
     pub write_dispatch_bytes: usize,
     pub graceful_termination: Duration,
@@ -117,6 +121,8 @@ impl RuntimeConfig {
             control_queue_capacity: 1024,
             per_execution_input_bytes: 256 * 1024,
             aggregate_input_bytes: 8 * 1024 * 1024,
+            history_aggregate_bytes: HISTORY_RUNTIME_AGGREGATE_BYTE_CAP,
+            derived_history_aggregate_bytes: HISTORY_RUNTIME_DERIVED_INDEX_CAP,
             read_dispatch_bytes: 64 * 1024,
             write_dispatch_bytes: 64 * 1024,
             graceful_termination: Duration::from_secs(1),

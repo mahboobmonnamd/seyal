@@ -265,11 +265,13 @@ fn decode_cell_v2(
     }
 
     if let Some(expected) = pending_continuation {
-        if expected.row != cell_row
-            || expected.foreground != foreground
-            || expected.background != background
-            || expected.attributes != attributes
-        {
+        // Structural continuation rules stay fail-closed. Presentation
+        // colors/attributes are not independent authority (SPEC-011 §5.3 /
+        // §11.4): a reconnect snapshot may repeat the lead's style or the
+        // terminal's default continuation style. Rejecting that mismatch as
+        // InvalidCell drops the whole attach snapshot, so no frame reaches
+        // Metal and the input bridge appears dead.
+        if expected.row != cell_row {
             return Err(DisplayError::InvalidCell);
         }
         if role != DisplayCellRole::Continuation
@@ -280,6 +282,9 @@ fn decode_cell_v2(
         {
             return Err(DisplayError::InvalidCell);
         }
+        let foreground = expected.foreground;
+        let background = expected.background;
+        let attributes = expected.attributes;
         *pending_continuation = None;
         return Ok(DisplayCell {
             scalar: ' ',

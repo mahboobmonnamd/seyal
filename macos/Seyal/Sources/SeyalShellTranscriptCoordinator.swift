@@ -152,6 +152,9 @@ extension SeyalShellView {
     if productionShell {
       surface.setAccessibilityIdentifier("terminal-surface.\(paneID)")
       surface.claimsFirstResponderOnClick = tuiPaneIDs.contains(paneID)
+      surface.onPresentationKeyboardOwnerNeeded = { [weak self] in
+        self?.composerViews[paneID]?.focusEditor()
+      }
       if let executionId = paneState?.executionIdentity ?? surface.terminalExecutionIdentity {
         surface.bindPresentationIdentity(
           TerminalPresentationIdentity(executionId: executionId, ptyGeneration: 1)

@@ -433,9 +433,14 @@ final class MetalTerminalRenderer: @unchecked Sendable {
     var hasPresentablePreparedState: Bool {
         persistentDisplayFailure == nil
             && needsPresent
-            && instanceBuffer != nil
-            && instanceCount > 0
-            && glyphAtlas.texture != nil
+            && (
+                (presentationPlan.drawsLiveGrid
+                    && instanceBuffer != nil
+                    && instanceCount > 0
+                    && glyphAtlas.texture != nil)
+                    || !historyRegionOrder.isEmpty && glyphAtlas.texture != nil
+                    || !presentationPlan.drawsLiveGrid
+            )
     }
 
     var hasFrameInFlight: Bool {
@@ -718,7 +723,7 @@ final class MetalTerminalRenderer: @unchecked Sendable {
         deferredHistoryPrepares.removeValue(forKey: historyRange.blockID)
         guard cells > 0 else {
             historyRegions.removeValue(forKey: historyRange.blockID)
-            needsPresent = instanceBuffer != nil
+            needsPresent = instanceBuffer != nil || !presentationPlan.drawsLiveGrid
             return
         }
         let metrics = glyphAtlas.metrics(backingScale: max(backingScale, 1))
@@ -731,6 +736,24 @@ final class MetalTerminalRenderer: @unchecked Sendable {
         var outputIndex = 0
         for (rowIndex, row) in historyRange.rows.enumerated() {
             for (columnIndex, cell) in row.prefix(512).enumerated() {
+                let origin = SIMD2<Float>(
+                    Float(region.origin.x) + Float(columnIndex * metrics.cellWidth),
+                    Float(region.origin.y) + Float(rowIndex * metrics.cellHeight)
+                )
+                let size = SIMD2<Float>(Float(metrics.cellWidth), Float(metrics.cellHeight))
+                let painted = CGRect(
+                    x: CGFloat(origin.x),
+                    y: CGFloat(origin.y),
+                    width: CGFloat(size.x),
+                    height: CGFloat(size.y)
+                )
+                // Flow owns no full-grid canvas. Do not even prepare cells
+                // outside the Block body clip: Metal scissoring prevents
+                // pixels from escaping, but retaining those instances both
+                // wastes hot-path work and violates the observable contract.
+                guard region.clip.intersects(painted.insetBy(dx: 0.5, dy: 0.5)) else {
+                    continue
+                }
                 var flags: UInt32 = 0
                 var uvRect = SIMD4<Float>(repeating: 0)
                 var atlasSlice: UInt32 = 0
@@ -767,11 +790,8 @@ final class MetalTerminalRenderer: @unchecked Sendable {
                 }
                 if cell.flags & 2 != 0 { flags |= instanceUnderlineFlag }
                 pointer[outputIndex] = TerminalInstance(
-                    origin: SIMD2<Float>(
-                        Float(region.origin.x) + Float(columnIndex * metrics.cellWidth),
-                        Float(region.origin.y) + Float(rowIndex * metrics.cellHeight)
-                    ),
-                    size: SIMD2<Float>(Float(metrics.cellWidth), Float(metrics.cellHeight)),
+                    origin: origin,
+                    size: size,
                     uvRect: uvRect,
                     foreground: resolveTerminalColor(cell.foreground, defaultRGBA: 0xffe9_e1d8),
                     background: resolveTerminalColor(cell.background, defaultRGBA: 0xff10_0d0b),
@@ -786,7 +806,7 @@ final class MetalTerminalRenderer: @unchecked Sendable {
             instanceCount: outputIndex,
             clip: region.clip
         )
-        needsPresent = instanceBuffer != nil
+        needsPresent = instanceBuffer != nil || !presentationPlan.drawsLiveGrid
     }
 
     private func flushDeferredHistoryPrepares() {
@@ -824,7 +844,11 @@ final class MetalTerminalRenderer: @unchecked Sendable {
 
     func setPresentationPlan(_ plan: RendererPresentationPlan) {
         presentationPlan = plan
-        needsPresent = instanceBuffer != nil || !historyRegionOrder.isEmpty
+        // Flow must be allowed to submit a clear-only frame so a prior live
+        // grid cannot remain on the drawable after the mode fence.
+        needsPresent = instanceBuffer != nil
+            || !historyRegionOrder.isEmpty
+            || !plan.drawsLiveGrid
     }
 
     func inspectPresentation() -> RendererPresentationInspection {
@@ -834,6 +858,47 @@ final class MetalTerminalRenderer: @unchecked Sendable {
             drawsLiveGrid: presentationPlan.drawsLiveGrid,
             drawsCursorOutsideBlockRegions: presentationPlan.drawsCursorOutsideBlockRegions,
             blockRegionIDs: historyRegionOrder
+        )
+    }
+
+    func inspectFlowPaint(from texture: MTLTexture? = nil) -> FlowPaintInspection {
+        var instancesOutsideClips = 0
+        var historyInstanceCount = 0
+        for region in orderedHistoryRegions {
+            let pointer = region.buffer.contents().bindMemory(
+                to: TerminalInstance.self,
+                capacity: region.instanceCount
+            )
+            for index in 0..<region.instanceCount {
+                historyInstanceCount += 1
+                let origin = pointer[index].origin
+                let size = pointer[index].size
+                let painted = CGRect(
+                    x: CGFloat(origin.x),
+                    y: CGFloat(origin.y),
+                    width: CGFloat(size.x),
+                    height: CGFloat(size.y)
+                )
+                if !region.clip.intersects(painted.insetBy(dx: 0.5, dy: 0.5)) {
+                    instancesOutsideClips += 1
+                }
+            }
+        }
+        var opaqueOutside = 0
+        var opaqueInside = 0
+        if let texture {
+            let sampled = countOpaquePixels(in: texture, clips: orderedHistoryRegions.map(\.clip))
+            opaqueOutside = sampled.outside
+            opaqueInside = sampled.inside
+        }
+        return FlowPaintInspection(
+            mode: presentationPlan.mode,
+            liveGridSubmitted: presentationPlan.drawsLiveGrid,
+            fullGridBackgroundSubmitted: presentationPlan.drawsFullGridBackground,
+            historyInstanceCount: historyInstanceCount,
+            instancesOutsideClips: instancesOutsideClips,
+            opaquePixelsOutsideClips: opaqueOutside,
+            opaquePixelsInsideClips: opaqueInside
         )
     }
 
@@ -872,16 +937,14 @@ final class MetalTerminalRenderer: @unchecked Sendable {
               persistentDisplayFailure == nil,
               needsPresent,
               framesInFlight == 0,
-              let instanceBuffer,
-              instanceCount > 0,
-              let atlasTexture = glyphAtlas.texture
+              hasPresentablePreparedState
         else {
             return false
         }
         guard let commandBuffer = makeCommandBuffer(
             target: drawable.texture,
             instanceBuffer: instanceBuffer,
-            atlasTexture: atlasTexture,
+            atlasTexture: glyphAtlas.texture,
             historyRegions: orderedHistoryRegions
         ) else {
             deferredNeedsFullRebuild = true
@@ -940,8 +1003,7 @@ final class MetalTerminalRenderer: @unchecked Sendable {
               persistentDisplayFailure == nil,
               needsPresent,
               framesInFlight == 0,
-              instanceBuffer != nil,
-              instanceCount > 0
+              instanceBuffer != nil || !presentationPlan.drawsLiveGrid || !orderedHistoryRegions.isEmpty
         else {
             return false
         }
@@ -961,13 +1023,15 @@ final class MetalTerminalRenderer: @unchecked Sendable {
     /// Deterministic offscreen validation only. Production presentation never
     /// waits for GPU completion.
     func renderOffscreenAndWait(width: Int, height: Int) -> MTLTexture? {
-        guard width > 0,
-              height > 0,
-              let instanceBuffer,
-              instanceCount > 0,
-              let atlasTexture = glyphAtlas.texture
-        else {
+        guard width > 0, height > 0 else {
             return nil
+        }
+        if presentationPlan.drawsLiveGrid {
+            guard instanceBuffer != nil, instanceCount > 0, glyphAtlas.texture != nil else {
+                return nil
+            }
+        } else if !orderedHistoryRegions.isEmpty {
+            guard glyphAtlas.texture != nil else { return nil }
         }
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .bgra8Unorm,
@@ -981,7 +1045,7 @@ final class MetalTerminalRenderer: @unchecked Sendable {
               let commandBuffer = makeCommandBuffer(
                   target: texture,
                   instanceBuffer: instanceBuffer,
-                  atlasTexture: atlasTexture,
+                  atlasTexture: glyphAtlas.texture,
                   historyRegions: orderedHistoryRegions
               )
         else {
@@ -1251,8 +1315,8 @@ final class MetalTerminalRenderer: @unchecked Sendable {
 
     private func makeCommandBuffer(
         target: MTLTexture,
-        instanceBuffer: MTLBuffer,
-        atlasTexture: MTLTexture,
+        instanceBuffer: MTLBuffer?,
+        atlasTexture: MTLTexture?,
         historyRegions: [HistoryRenderRegion] = []
     ) -> MTLCommandBuffer? {
         guard let commandBuffer = commandQueue.makeCommandBuffer() else { return nil }
@@ -1281,15 +1345,12 @@ final class MetalTerminalRenderer: @unchecked Sendable {
         }
         encoder.label = "Seyal Terminal Encoder"
         encoder.setRenderPipelineState(pipeline)
-        encoder.setVertexBuffer(instanceBuffer, offset: 0, index: 0)
         var viewport = SIMD2<Float>(Float(target.width), Float(target.height))
         encoder.setVertexBytes(
             &viewport,
             length: MemoryLayout<SIMD2<Float>>.stride,
             index: 1
         )
-        encoder.setFragmentTexture(atlasTexture, index: 0)
-        encoder.setFragmentSamplerState(sampler, index: 0)
         var renderMode: UInt32 = 0
         encoder.setVertexBytes(
             &renderMode,
@@ -1301,8 +1362,16 @@ final class MetalTerminalRenderer: @unchecked Sendable {
             length: MemoryLayout<UInt32>.stride,
             index: 2
         )
-        let drawLiveGrid = presentationPlan.drawsLiveGrid && instanceCount > 0
-        if drawLiveGrid {
+        if let atlasTexture {
+            encoder.setFragmentTexture(atlasTexture, index: 0)
+            encoder.setFragmentSamplerState(sampler, index: 0)
+        }
+        let drawLiveGrid = presentationPlan.drawsLiveGrid
+            && instanceCount > 0
+            && instanceBuffer != nil
+            && atlasTexture != nil
+        if drawLiveGrid, let instanceBuffer {
+            encoder.setVertexBuffer(instanceBuffer, offset: 0, index: 0)
             encoder.drawPrimitives(
                 type: .triangle,
                 vertexStart: 0,
@@ -1332,7 +1401,7 @@ final class MetalTerminalRenderer: @unchecked Sendable {
                 instanceCount: instanceCount
             )
         }
-        for region in historyRegions where region.instanceCount > 0 {
+        for region in historyRegions where region.instanceCount > 0 && atlasTexture != nil {
             encoder.setVertexBuffer(region.buffer, offset: 0, index: 0)
             let x = max(0, Int(region.clip.minX.rounded(.down)))
             let y = max(0, Int(region.clip.minY.rounded(.down)))
@@ -1421,6 +1490,41 @@ final class MetalTerminalRenderer: @unchecked Sendable {
         if !deferredDamage.isEmpty || deferredNeedsFullRebuild || needsCurrentFrameWhenIdle {
             requestCurrentFrameIfNeeded()
         }
+    }
+
+    private func countOpaquePixels(
+        in texture: MTLTexture,
+        clips: [CGRect]
+    ) -> (outside: Int, inside: Int) {
+        let width = texture.width
+        let height = texture.height
+        guard width > 0, height > 0 else { return (0, 0) }
+        let bytesPerRow = width * 4
+        var bytes = [UInt8](repeating: 0, count: bytesPerRow * height)
+        texture.getBytes(
+            &bytes,
+            bytesPerRow: bytesPerRow,
+            from: MTLRegionMake2D(0, 0, width, height),
+            mipmapLevel: 0
+        )
+        var outside = 0
+        var inside = 0
+        var offset = 0
+        for y in 0..<height {
+            for x in 0..<width {
+                let alpha = bytes[offset + 3]
+                let maxRGB = max(bytes[offset], max(bytes[offset + 1], bytes[offset + 2]))
+                offset += 4
+                guard alpha > 8 || maxRGB > 8 else { continue }
+                let point = CGPoint(x: CGFloat(x) + 0.5, y: CGFloat(y) + 0.5)
+                if clips.contains(where: { $0.contains(point) }) {
+                    inside += 1
+                } else {
+                    outside += 1
+                }
+            }
+        }
+        return (outside, inside)
     }
 
     private func requestCurrentFrameIfNeeded() {

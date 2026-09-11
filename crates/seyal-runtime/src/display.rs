@@ -968,6 +968,58 @@ mod tests {
     }
 
     #[test]
+    fn v2_reconnect_snapshot_accepts_default_styled_wide_continuation() {
+        // Old/reconnect producers can emit a width-2 lead plus a continuation
+        // that still carries the terminal's default style. The client must
+        // inherit the lead's presentation instead of rejecting InvalidCell.
+        let cjk = "中".as_bytes();
+        let mut cells = vec![cell(0); 4];
+        cells[0] = ProjectionCell {
+            role: CellRole::Lead,
+            width: 2,
+            text: Arc::from(cjk.to_vec()),
+            scalar: '中',
+            foreground: ProjectionColor::Indexed(208),
+            background: ProjectionColor::Default,
+            attributes: ProjectionAttributes {
+                bold: true,
+                underline: false,
+                inverse: false,
+            },
+        };
+        cells[1] = ProjectionCell {
+            role: CellRole::Continuation,
+            width: 0,
+            text: Arc::from([]),
+            scalar: ' ',
+            foreground: ProjectionColor::Default,
+            background: ProjectionColor::Default,
+            attributes: ProjectionAttributes::default(),
+        };
+        let snapshot = TerminalProjectionSnapshot {
+            rows: 1,
+            columns: 4,
+            cursor_row: 0,
+            cursor_col: 2,
+            cursor_visible: true,
+            alternate_screen: false,
+            source_damage_generation: 9,
+            damage: ProjectionDamage::full(1),
+            cells,
+        };
+        let batch = encode_snapshot_v2(&snapshot).unwrap();
+        let mut cache = empty_cache();
+        cache.apply_batch(&batch).unwrap();
+        assert_eq!(cache.cells[0].role, DisplayCellRole::Lead);
+        assert_eq!(cache.cells[0].text.as_ref(), cjk);
+        assert_eq!(cache.cells[1].role, DisplayCellRole::Continuation);
+        assert_eq!(cache.cells[1].foreground, DisplayColor::Indexed(208));
+        assert_eq!(cache.cells[1].background, cache.cells[0].background);
+        assert_eq!(cache.cells[1].attributes.bold, true);
+        assert!(cache.cells[1].text.is_empty());
+    }
+
+    #[test]
     fn v2_partial_row_packing_for_dense_sidecar() {
         // Nine 8192-byte width-1 leads require partial-row spans.
         let payload = vec![b'x'; MAX_GRAPHEME_UTF8_BYTES];

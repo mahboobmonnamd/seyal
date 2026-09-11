@@ -17,7 +17,10 @@ final class KeyedConstraintOwnership {
   }
 
   func contains(_ key: PaneBlockKey) -> Bool {
-    constraintsByKey[key] != nil
+    guard let constraints = constraintsByKey[key], !constraints.isEmpty else {
+      return false
+    }
+    return constraints.allSatisfy(\.isActive)
   }
 
   func remove(_ key: PaneBlockKey) {

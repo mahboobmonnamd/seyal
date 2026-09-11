@@ -81,6 +81,10 @@ grep -q 'enum TerminalPresentationMode' "$SOURCES/PanePresentationContract.swift
   || fail "Flow/Raw/TUI presentation contract is missing"
 grep -q 'func applyPresentationMode' "$SOURCES/TerminalInputSurface.swift" \
   || fail "interactive Metal surface must apply the Flow/Raw/TUI presentation contract"
+grep -q 'func inspectFlowPaint' "$SOURCES/MetalTerminalRenderer.swift" \
+  || fail "Flow paint detection must inspect Metal instances/pixels, not XCUI glyph text"
+grep -q 'flow-paint=' "$SOURCES/MetalSurfaceView.swift" \
+  || fail "terminal-surface accessibility must publish flow-paint for XCUI"
 grep -q 'final class PaneTranscriptView: NSScrollView' "$SOURCES/CommandBlockBodyView.swift" \
   || fail "Pane transcript must remain the single normal-scroll owner"
 grep -q 'NSSegmentedControl' "$SOURCES/SeyalShellChrome.swift" \

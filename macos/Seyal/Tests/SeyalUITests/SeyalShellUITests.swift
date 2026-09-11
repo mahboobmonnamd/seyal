@@ -493,6 +493,85 @@ final class SeyalShellUITests: XCTestCase {
     }
 
     @MainActor
+    func testProductionComposerReturnAloneKeepsSequentialBlocksVisible() throws {
+        app.terminate()
+        terminateOrphanedRuntimes()
+        let runtime = try startExternalZshRuntime()
+        defer {
+            if runtime.isRunning { runtime.terminate() }
+            runtime.waitUntilExit()
+        }
+
+        var surface = launchProductionApp()
+        let beforeReconnect = try XCTUnwrap(recoveryFields(surface))
+        var composer = app.textViews["composer.pane-local"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        let markerRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("seyal-return-only-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: markerRoot) }
+
+        for index in 1...2 {
+            let marker = markerRoot.appendingPathExtension(String(index))
+            composer.click()
+            composer.typeText("printf RETURN_ONLY_\(index); printf ok > \(marker.path)")
+            composer.typeKey(.return, modifierFlags: [])
+            XCTAssertTrue(
+                wait(timeout: 5) {
+                    (try? String(contentsOf: marker, encoding: .utf8)) == "ok"
+                },
+                "physical Return \(index) did not reach the Runtime-owned PTY shell"
+            )
+            XCTAssertTrue(
+                wait(timeout: 5) { (composer.value as? String) == "" },
+                "accepted draft \(index) was not cleared"
+            )
+        }
+
+        app.terminate()
+        surface = launchProductionApp()
+        let afterReconnect = try XCTUnwrap(recoveryFields(surface))
+        XCTAssertEqual(afterReconnect["runtime"], beforeReconnect["runtime"])
+        XCTAssertEqual(afterReconnect["execution"], beforeReconnect["execution"])
+        XCTAssertNotEqual(afterReconnect["attachment"], beforeReconnect["attachment"])
+
+        let reconnectMarker = markerRoot.appendingPathExtension("reconnect")
+        composer = app.textViews["composer.pane-local"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        composer.click()
+        composer.typeText("printf RETURN_AFTER_RECONNECT; printf ok > \(reconnectMarker.path)")
+        composer.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(
+            wait(timeout: 5) {
+                (try? String(contentsOf: reconnectMarker, encoding: .utf8)) == "ok"
+            },
+            "physical Return after GUI reconnect did not reach the retained Runtime-owned PTY"
+        )
+        XCTAssertTrue(
+            wait(timeout: 5) { (composer.value as? String) == "" },
+            "accepted post-reconnect draft was not cleared"
+        )
+        let blocks = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier CONTAINS '.block.'")
+        )
+        XCTAssertTrue(wait(timeout: 5) { blocks.count == 3 })
+        XCTAssertGreaterThan(surface.frame.width, 480)
+        for index in 0..<blocks.count {
+            let block = blocks.element(boundBy: index)
+            XCTAssertEqual(block.frame.width, surface.frame.width - 16, accuracy: 2)
+            XCTAssertEqual(block.frame.minX, surface.frame.minX + 8, accuracy: 2)
+            XCTAssertEqual(block.frame.maxX, surface.frame.maxX - 8, accuracy: 2)
+            XCTAssertGreaterThan(block.frame.height, 0)
+            XCTAssertTrue(block.frame.intersects(surface.frame))
+        }
+        XCTAssertEqual(
+            recoveryFields(surface)?["flow-paint"],
+            "ok",
+            "sequential Return submissions leaked Flow paint outside Block clips"
+        )
+        attachHeadedPNG(surface, name: "issue-861-return-only-sequential-blocks")
+    }
+
+    @MainActor
     func testProductionUnicodeCommandRetainsHeadedRenderedEvidence() throws {
         app.terminate()
         terminateOrphanedRuntimes()
@@ -596,6 +675,11 @@ final class SeyalShellUITests: XCTestCase {
         attachment.lifetime = .keepAlways
         add(attachment)
         XCTAssertGreaterThan(renderedSurfacePNG.count, 0)
+        XCTAssertEqual(
+            recoveryFields(surface)?["flow-paint"],
+            "ok",
+            "Flow Metal paint leaked outside Block clips; XCUI reads flow-paint= from terminal-surface.value"
+        )
     }
 
     @MainActor

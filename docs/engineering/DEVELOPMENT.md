@@ -185,6 +185,33 @@ On macOS, after `make build`, the native application can be launched manually wi
 open target/macos-derived-data/Build/Products/Debug/Seyal.app
 ```
 
+### Diagnosing an apparently inert Return key
+
+If the composer accepts text but Return, Command-C, or Command-V appears to do
+nothing, do not assume that AppKit failed to deliver the key. Inspect the
+terminal surface accessibility value first. A usable production path reports
+non-`none` `runtime`, `execution`, and `attachment` identities together with
+`connection=usable`. If it instead reports
+`connection=disconnected runtime=none execution=none attachment=none`, input is
+intentionally fenced because no Runtime-owned execution is attached. A focused
+composer or a passing text-view unit test does not prove that end-to-end path.
+
+One reproducible development-only trigger is terminating `seyal-runtime` while
+its canonical control socket remains present. Connection then fails with
+`ECONNREFUSED`: current reconnect authority treats that differently from an
+absent endpoint, and only the Runtime may validate and remove its stale socket.
+Do not make the GUI unlink the socket or broaden Runtime launch policy inside an
+unrelated UI issue; that changes the accepted reconnect/process-lifecycle
+contract and requires architecture/specification review first.
+
+For user-visible keyboard regressions, retain a packaged-app
+XCTest/XCUIAutomation case that starts the exact Runtime helper, asserts
+`connection=usable`, sends a physical Return with no modifiers, observes the
+command through the Runtime-owned PTY, and repeats the submission to exercise
+Block reconciliation. In Flow mode also assert full-width, aligned Blocks and
+`flow-paint=ok`; the right-edge black strip is a separate Block/Metal clipping
+failure, not evidence that Return itself was dropped.
+
 There are no required private repositories, `seyal-commercial` dependencies, shell-profile assumptions, Homebrew assumptions or hidden environment variables for this canonical product flow. AI-SDLC is an optional public developer-framework dependency materialized only by `make bootstrap-agents`.
 
 ## Generated and fixture data

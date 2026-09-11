@@ -1165,6 +1165,102 @@ final class SeyalShellComponentTests: XCTestCase {
   }
 
   @MainActor
+  func testKeyedBlockConstraintOwnershipDoesNotTreatInactiveConstraintAsInstalled() {
+    let stack = NSStackView()
+    stack.orientation = .vertical
+    stack.alignment = .width
+    let block = NSView()
+    stack.addArrangedSubview(block)
+    let constraint = block.widthAnchor.constraint(equalTo: stack.widthAnchor)
+    let ownership = KeyedConstraintOwnership()
+    let key = PaneBlockKey(paneID: "pane-test", blockID: 7)
+    ownership.install([constraint], for: key)
+    XCTAssertTrue(ownership.contains(key))
+
+    stack.removeArrangedSubview(block)
+    block.removeFromSuperview()
+
+    XCTAssertFalse(constraint.isActive)
+    XCTAssertFalse(
+      ownership.contains(key),
+      "a retained dictionary entry must not suppress reinstalling AppKit-deactivated constraints"
+    )
+  }
+
+  @MainActor
+  func testProductionTimelineReconciliationKeepsSequentialBlockBodiesFullWidth() throws {
+    let state = SeyalShellState.makeProduction()
+    let shell = SeyalShellView(
+      frame: NSRect(x: 0, y: 0, width: 1_180, height: 720),
+      state: state,
+      productionShell: true,
+      visual: previewVisual()
+    )
+    let paneID = state.activeTab.focusedPaneID
+    let first = NativeBlockRecord(
+      id: 1,
+      command: "printf first",
+      state: .completed,
+      startLine: 1,
+      endLine: 1,
+      exitStatus: 0
+    )
+    let second = NativeBlockRecord(
+      id: 2,
+      command: "printf second",
+      state: .completed,
+      startLine: 2,
+      endLine: 2,
+      exitStatus: 0
+    )
+
+    state.applyRuntimeBlocks([first], paneID: paneID)
+    shell.updateTranscriptBlocks(paneID: paneID)
+    state.applyRuntimeBlocks([first, second], paneID: paneID)
+    shell.updateTranscriptBlocks(paneID: paneID)
+    shell.layoutSubtreeIfNeeded()
+
+    let transcript = try XCTUnwrap(shell.transcriptDocuments[paneID])
+    let expectedWidth = transcript.contentView.bounds.width - 16
+    XCTAssertGreaterThan(expectedWidth, 0)
+    for blockID in [UInt64(1), UInt64(2)] {
+      let key = PaneBlockKey(paneID: paneID, blockID: blockID)
+      let block = try XCTUnwrap(shell.blockViews[key])
+      let body = try XCTUnwrap(shell.blockBodies[key])
+      XCTAssertEqual(block.bounds.width, expectedWidth, accuracy: 2)
+      XCTAssertEqual(
+        body.bounds.width,
+        block.bounds.width - (previewVisual().metrics.contentPaddingHorizontal * 2),
+        accuracy: 2
+      )
+      XCTAssertLessThan(body.convert(body.bounds, to: transcript.terminalSurface).minX, 48)
+    }
+  }
+
+  @MainActor
+  func testProductionTranscriptSpansComposerWidthAtDefaultWindowSize() throws {
+    let state = SeyalShellState.makeProduction()
+    let shell = SeyalShellView(
+      frame: NSRect(x: 0, y: 0, width: 960, height: 600),
+      state: state,
+      productionShell: true,
+      visual: previewVisual()
+    )
+    shell.layoutSubtreeIfNeeded()
+
+    let paneID = state.activeTab.focusedPaneID
+    let transcript = try XCTUnwrap(shell.transcriptDocuments[paneID])
+    let composer = try XCTUnwrap(shell.composerViews[paneID])
+    XCTAssertEqual(transcript.frame.minX, composer.frame.minX, accuracy: 1)
+    XCTAssertEqual(
+      transcript.frame.width,
+      composer.frame.width,
+      accuracy: 1,
+      "the Flow transcript/Metal viewport must not collapse into a trailing half-pane strip"
+    )
+  }
+
+  @MainActor
   func testComposerResultCorrelationOnlyAcceptsMatchingRequest() {
     var correlation = ComposerRequestCorrelation()
     let request = correlation.begin(command: "printf one")
@@ -1578,6 +1674,60 @@ final class SeyalShellComponentTests: XCTestCase {
       submitted,
       "echo with metal sibling",
       "Return must submit with viewport Metal in the same window as the composer"
+    )
+  }
+
+  private final class InnerCaretView: NSView {
+    override var acceptsFirstResponder: Bool { true }
+  }
+
+  @MainActor
+  func testComposerReturnSubmitsWhenInnerTextSystemViewIsFirstResponder() throws {
+    var submitted: String?
+    let composer = PaneComposerShellView(
+      mode: .available,
+      draft: "echo inner caret",
+      visual: previewVisual(),
+      onSubmit: {
+        submitted = $0
+        return true
+      }
+    )
+    let window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 640, height: 120),
+      styleMask: [.titled],
+      backing: .buffered,
+      defer: false
+    )
+    window.contentView = composer
+    window.makeKeyAndOrderFront(nil)
+    defer { window.orderOut(nil) }
+    composer.layoutSubtreeIfNeeded()
+    let editor = try XCTUnwrap(descendants(of: NSTextView.self, in: composer).first)
+    let inner = InnerCaretView(frame: NSRect(x: 0, y: 0, width: 8, height: 8))
+    editor.addSubview(inner)
+    XCTAssertTrue(window.makeFirstResponder(inner))
+    XCTAssertFalse(window.firstResponder === editor)
+
+    let event = try XCTUnwrap(
+      NSEvent.keyEvent(
+        with: .keyDown,
+        location: editor.convert(.zero, to: nil),
+        modifierFlags: [],
+        timestamp: ProcessInfo.processInfo.systemUptime,
+        windowNumber: window.windowNumber,
+        context: nil,
+        characters: "\r",
+        charactersIgnoringModifiers: "\r",
+        isARepeat: false,
+        keyCode: 36
+      )
+    )
+    window.sendEvent(event)
+    XCTAssertEqual(
+      submitted,
+      "echo inner caret",
+      "Return must submit when an inner text-system view is first responder"
     )
   }
 

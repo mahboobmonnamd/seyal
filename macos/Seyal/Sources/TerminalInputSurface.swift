@@ -290,6 +290,9 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
   /// Flow panes keep keyboard input on the composer. TUI/raw clicks still
   /// claim this surface. Default true preserves SPEC-009 probe surfaces.
   var claimsFirstResponderOnClick = true
+  /// Flow keyboard owner (Pane composer). Invoked when this surface must not
+  /// hold first responder so Return/paste stay on the composer.
+  var onPresentationKeyboardOwnerNeeded: (() -> Void)?
   private(set) var presentation = PanePresentationSession()
   var allowsEmptyCanvasTerminalHitTest: Bool {
     presentation.allowsEmptyCanvasTerminalHitTest
@@ -351,8 +354,9 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
     }
     claimsFirstResponderOnClick = presentation.allowsDirectTerminalFirstResponder
     applyRendererPresentation(presentation.rendererPlan)
-    if mode == .flow, window?.firstResponder === self {
-      _ = resignFirstResponder()
+    refreshRecoveryAccessibilityValue()
+    if mode == .flow {
+      yieldKeyboardToPresentationOwnerIfNeeded()
     }
     return true
   }
@@ -371,6 +375,17 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
       return TerminalPresentationIdentity(executionId: executionId, ptyGeneration: generation)
     }
     return presentation.identity
+  }
+
+  private func yieldKeyboardToPresentationOwnerIfNeeded() {
+    if window?.firstResponder === self {
+      _ = resignFirstResponder()
+    }
+    guard !claimsFirstResponderOnClick else { return }
+    if window?.firstResponder is NSTextView {
+      return
+    }
+    onPresentationKeyboardOwnerNeeded?()
   }
 
   override func becomeFirstResponder() -> Bool {
@@ -401,6 +416,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, NSTextInputClient {
       window.makeKey()
     }
     if !claimsFirstResponderOnClick {
+      yieldKeyboardToPresentationOwnerIfNeeded()
       return true
     }
     if let current = window.firstResponder as? NSView,

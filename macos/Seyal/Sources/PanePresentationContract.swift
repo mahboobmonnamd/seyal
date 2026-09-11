@@ -51,14 +51,39 @@ struct RendererPresentationPlan: Equatable, Sendable {
   }
 }
 
-/// Observable renderer submission contract. Tests assert this rather than
-/// sampling GPU pixels.
+/// Observable renderer submission contract for mode flags.
 struct RendererPresentationInspection: Equatable, Sendable {
   var mode: TerminalPresentationMode
   var drawsFullGridBackground: Bool
   var drawsLiveGrid: Bool
   var drawsCursorOutsideBlockRegions: Bool
   var blockRegionIDs: [UInt64]
+}
+
+/// Flow paint evidence. XCUI cannot read Metal glyphs as AX text, so tests
+/// and the recovery accessibility value consume this instead of screenshots.
+struct FlowPaintInspection: Equatable, Sendable {
+  var mode: TerminalPresentationMode
+  var liveGridSubmitted: Bool
+  var fullGridBackgroundSubmitted: Bool
+  var historyInstanceCount: Int
+  var instancesOutsideClips: Int
+  var opaquePixelsOutsideClips: Int
+  var opaquePixelsInsideClips: Int
+
+  var isClean: Bool {
+    if mode != .flow {
+      return true
+    }
+    return !liveGridSubmitted
+      && !fullGridBackgroundSubmitted
+      && instancesOutsideClips == 0
+      && opaquePixelsOutsideClips == 0
+  }
+
+  var accessibilityToken: String {
+    mode == .flow ? (isClean ? "ok" : "leak") : "n/a"
+  }
 }
 
 /// Pane-owned presentation/input epoch. One session maps to one surface/PTY.

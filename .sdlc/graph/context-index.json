@@ -12,12 +12,31 @@
       "kind": "component",
       "title": "TerminalExecution",
       "summary": "Owns one terminal endpoint/PTY, child lifecycle, authoritative terminal state, and attachment/projection state.",
-      "tags": ["pty", "execution", "runtime", "ownership"],
-      "sources": [{"path": "docs/architecture/README.md", "fingerprint": "28b95c4cd491198e2f97948c267c730aab457300"}],
+      "tags": [
+        "pty",
+        "execution",
+        "runtime",
+        "ownership"
+      ],
+      "sources": [
+        {
+          "path": "docs/architecture/README.md",
+          "fingerprint": "28b95c4cd491198e2f97948c267c730aab457300"
+        }
+      ],
       "relationships": [
-        {"type": "owns", "target": "COMP-TERMINAL-STATE"},
-        {"type": "related_to", "target": "COMP-BLOCK-TIMELINE"},
-        {"type": "related_to", "target": "COMP-PANE-PRESENTATION"}
+        {
+          "type": "owns",
+          "target": "COMP-TERMINAL-STATE"
+        },
+        {
+          "type": "related_to",
+          "target": "COMP-BLOCK-TIMELINE"
+        },
+        {
+          "type": "related_to",
+          "target": "COMP-PANE-PRESENTATION"
+        }
       ]
     },
     {
@@ -25,14 +44,32 @@
       "kind": "component",
       "title": "TerminalState",
       "summary": "Canonical VT/grid state mutated by the incremental parser; renderer and GUI consume derived projection and never own a second authoritative grid.",
-      "tags": ["vt", "grid", "parser", "damage", "terminal"],
+      "tags": [
+        "vt",
+        "grid",
+        "parser",
+        "damage",
+        "terminal"
+      ],
       "sources": [
-        {"path": "docs/architecture/ADR-004-VT-STATE-OWNERSHIP.md", "fingerprint": "36ef6cf1ca4d0db954b1fd43e19871d9a39ffa53"},
-        {"path": "docs/specs/SPEC-001-M001-VT.md", "fingerprint": "6fb5364c4a0dffe6e97398a47f138e6262052d27"}
+        {
+          "path": "docs/architecture/ADR-004-VT-STATE-OWNERSHIP.md",
+          "fingerprint": "36ef6cf1ca4d0db954b1fd43e19871d9a39ffa53"
+        },
+        {
+          "path": "docs/specs/SPEC-001-M001-VT.md",
+          "fingerprint": "6fb5364c4a0dffe6e97398a47f138e6262052d27"
+        }
       ],
       "relationships": [
-        {"type": "governed_by", "target": "DEC-ADR-004"},
-        {"type": "implemented_by", "target": "COMP-SEYAL-TERMINAL"}
+        {
+          "type": "governed_by",
+          "target": "DEC-ADR-004"
+        },
+        {
+          "type": "implemented_by",
+          "target": "COMP-SEYAL-TERMINAL"
+        }
       ]
     },
     {
@@ -40,11 +77,27 @@
       "kind": "component",
       "title": "BlockTimeline",
       "summary": "Workspace metadata keyed by ExecutionId and logical history anchors. Blocks own no PTY, VT, grid, child, renderer, or copied terminal output.",
-      "tags": ["blocks", "workspace", "history", "execution-id"],
-      "sources": [{"path": "docs/architecture/README.md", "fingerprint": "28b95c4cd491198e2f97948c267c730aab457300"}],
+      "tags": [
+        "blocks",
+        "workspace",
+        "history",
+        "execution-id"
+      ],
+      "sources": [
+        {
+          "path": "docs/architecture/README.md",
+          "fingerprint": "28b95c4cd491198e2f97948c267c730aab457300"
+        }
+      ],
       "relationships": [
-        {"type": "related_to", "target": "COMP-TERMINAL-EXECUTION"},
-        {"type": "related_to", "target": "COMP-PANE-PRESENTATION"}
+        {
+          "type": "related_to",
+          "target": "COMP-TERMINAL-EXECUTION"
+        },
+        {
+          "type": "related_to",
+          "target": "COMP-PANE-PRESENTATION"
+        }
       ]
     },
     {
@@ -52,18 +105,58 @@
       "kind": "component",
       "title": "Pane Flow Raw TUI presentation",
       "summary": "Per TerminalExecution, exactly one user-visible presentation is active: Flow native Blocks/composer, Raw full-Pane primary grid, or TUI full-Pane takeover. Flow terminal cells are clipped to Block output regions and input ownership/reconnect transitions are fenced.",
-      "tags": ["pane", "presentation", "flow", "raw", "tui", "blocks", "composer", "input", "focus", "ime", "reconnect", "adr-009", "spec-006", "spec-008", "spec-009"],
+      "tags": [
+        "pane",
+        "presentation",
+        "flow",
+        "raw",
+        "tui",
+        "blocks",
+        "composer",
+        "input",
+        "focus",
+        "ime",
+        "reconnect",
+        "adr-009",
+        "spec-006",
+        "spec-008",
+        "spec-009"
+      ],
       "sources": [
-        {"path": "docs/architecture/ADR-009-COMMAND-BLOCKS-COMPOSER-AND-TUI.md", "fingerprint": "6058de22273837cfd0c2f4ddef9571a0d8739daa"},
-        {"path": "docs/specs/SPEC-006-M001-NATIVE-INPUT-RESIZE.md", "fingerprint": "506b49abb61dfc5889cd73308b19254bd409b69b"},
-        {"path": "docs/specs/SPEC-008-M003-COMMAND-BLOCKS.md", "fingerprint": "f451bea6f467938a1d202a2d7c490709c61555dd"},
-        {"path": "docs/specs/SPEC-009-M001-DETACH-RECONNECT.md", "fingerprint": "d324dff8d1c8f3f23e41522440cd2c80049048e3"},
-        {"path": "docs/specs/README.md", "fingerprint": "5a53de628dacfe97e4932380495904667a2460c7"}
+        {
+          "path": "docs/architecture/ADR-009-COMMAND-BLOCKS-COMPOSER-AND-TUI.md",
+          "fingerprint": "6058de22273837cfd0c2f4ddef9571a0d8739daa"
+        },
+        {
+          "path": "docs/specs/SPEC-006-M001-NATIVE-INPUT-RESIZE.md",
+          "fingerprint": "506b49abb61dfc5889cd73308b19254bd409b69b"
+        },
+        {
+          "path": "docs/specs/SPEC-008-M003-COMMAND-BLOCKS.md",
+          "fingerprint": "f451bea6f467938a1d202a2d7c490709c61555dd"
+        },
+        {
+          "path": "docs/specs/SPEC-009-M001-DETACH-RECONNECT.md",
+          "fingerprint": "d324dff8d1c8f3f23e41522440cd2c80049048e3"
+        },
+        {
+          "path": "docs/specs/README.md",
+          "fingerprint": "5a53de628dacfe97e4932380495904667a2460c7"
+        }
       ],
       "relationships": [
-        {"type": "governed_by", "target": "DEC-ADR-009"},
-        {"type": "related_to", "target": "COMP-TERMINAL-EXECUTION"},
-        {"type": "related_to", "target": "COMP-BLOCK-TIMELINE"}
+        {
+          "type": "governed_by",
+          "target": "DEC-ADR-009"
+        },
+        {
+          "type": "related_to",
+          "target": "COMP-TERMINAL-EXECUTION"
+        },
+        {
+          "type": "related_to",
+          "target": "COMP-BLOCK-TIMELINE"
+        }
       ]
     },
     {
@@ -71,26 +164,74 @@
       "kind": "decision",
       "title": "ADR-004 VT state ownership",
       "summary": "Establishes one authoritative TerminalState, incremental parser framing, parser/state separation, screen ownership, line identity, and generation-based damage.",
-      "tags": ["adr", "vt", "ownership", "parser", "damage"],
-      "sources": [{"path": "docs/architecture/ADR-004-VT-STATE-OWNERSHIP.md", "fingerprint": "36ef6cf1ca4d0db954b1fd43e19871d9a39ffa53"}],
-      "relationships": [{"type": "governs", "target": "COMP-TERMINAL-STATE"}]
+      "tags": [
+        "adr",
+        "vt",
+        "ownership",
+        "parser",
+        "damage"
+      ],
+      "sources": [
+        {
+          "path": "docs/architecture/ADR-004-VT-STATE-OWNERSHIP.md",
+          "fingerprint": "36ef6cf1ca4d0db954b1fd43e19871d9a39ffa53"
+        }
+      ],
+      "relationships": [
+        {
+          "type": "governs",
+          "target": "COMP-TERMINAL-STATE"
+        }
+      ]
     },
     {
       "id": "DEC-ADR-009",
       "kind": "decision",
       "title": "ADR-009 Command Blocks composer and presentation takeover",
       "summary": "Accepted command-Block baseline with proposed #858 correction defining Block-first Flow, mutually exclusive Raw/TUI takeover, renderer reuse without viewport authority, and fenced input ownership transitions.",
-      "tags": ["adr", "adr-009", "spec-008", "flow", "raw", "tui", "blocks", "composer", "presentation", "input"],
-      "sources": [{"path": "docs/architecture/ADR-009-COMMAND-BLOCKS-COMPOSER-AND-TUI.md", "fingerprint": "6058de22273837cfd0c2f4ddef9571a0d8739daa"}],
-      "relationships": [{"type": "governs", "target": "COMP-PANE-PRESENTATION"}]
+      "tags": [
+        "adr",
+        "adr-009",
+        "spec-008",
+        "flow",
+        "raw",
+        "tui",
+        "blocks",
+        "composer",
+        "presentation",
+        "input"
+      ],
+      "sources": [
+        {
+          "path": "docs/architecture/ADR-009-COMMAND-BLOCKS-COMPOSER-AND-TUI.md",
+          "fingerprint": "6058de22273837cfd0c2f4ddef9571a0d8739daa"
+        }
+      ],
+      "relationships": [
+        {
+          "type": "governs",
+          "target": "COMP-PANE-PRESENTATION"
+        }
+      ]
     },
     {
       "id": "DEC-ADR-003",
       "kind": "decision",
       "title": "ADR-003 OSS/commercial boundary",
       "summary": "Seyal OSS is canonical and independent; seyal-commercial consumes a pinned OSS revision and proprietary code never becomes an OSS dependency.",
-      "tags": ["adr", "oss", "commercial", "repository", "submodule"],
-      "sources": [{"path": "docs/architecture/ADR-003-OSS-COMMERCIAL-REPOSITORY-BOUNDARY.md", "fingerprint": "8a977a581f01be7b645744598d8ca07718dcb19c"}],
+      "tags": [
+        "adr",
+        "oss",
+        "commercial",
+        "repository",
+        "submodule"
+      ],
+      "sources": [
+        {
+          "path": "docs/architecture/ADR-003-OSS-COMMERCIAL-REPOSITORY-BOUNDARY.md",
+          "fingerprint": "8a977a581f01be7b645744598d8ca07718dcb19c"
+        }
+      ],
       "relationships": []
     },
     {
@@ -98,9 +239,24 @@
       "kind": "component",
       "title": "seyal-terminal",
       "summary": "Portable terminal-semantics ownership boundary for VT parsing, canonical terminal state, history identity and damage semantics.",
-      "tags": ["rust", "crate", "terminal", "vt"],
-      "sources": [{"path": "docs/engineering/REPOSITORY-STRUCTURE.md", "fingerprint": "d24e1bc4804e31a75cd88dbd68210373f14267df"}],
-      "relationships": [{"type": "implements", "target": "COMP-TERMINAL-STATE"}]
+      "tags": [
+        "rust",
+        "crate",
+        "terminal",
+        "vt"
+      ],
+      "sources": [
+        {
+          "path": "docs/engineering/REPOSITORY-STRUCTURE.md",
+          "fingerprint": "d24e1bc4804e31a75cd88dbd68210373f14267df"
+        }
+      ],
+      "relationships": [
+        {
+          "type": "implements",
+          "target": "COMP-TERMINAL-STATE"
+        }
+      ]
     }
   ]
 }

@@ -409,6 +409,30 @@ def main() -> None:
             "contains invalid samples",
         )
 
+        infinite_samples = base / "m002-performance-infinite-samples"
+        shutil.copytree(accepted_pass, infinite_samples)
+        write(
+            infinite_samples / "cohorts" / "cohort-1.toml",
+            "cohort = 1\nsamples = [" + ", ".join(["2"] * 99 + ["inf"]) + "]\n",
+        )
+        run_negative(
+            ["python3", str(ROOT / "scripts/check-m002-performance-contract.py"), "--record", "record.toml"],
+            infinite_samples,
+            "contains invalid samples",
+        )
+
+        nan_samples = base / "m002-performance-nan-samples"
+        shutil.copytree(accepted_pass, nan_samples)
+        write(
+            nan_samples / "cohorts" / "cohort-1.toml",
+            "cohort = 1\nsamples = [" + ", ".join(["2"] * 50 + ["nan"] + ["2"] * 49) + "]\n",
+        )
+        run_negative(
+            ["python3", str(ROOT / "scripts/check-m002-performance-contract.py"), "--record", "record.toml"],
+            nan_samples,
+            "contains invalid samples",
+        )
+
         missing_git = base / "m002-performance-missing-git"
         shutil.copytree(accepted_pass, missing_git)
         shutil.rmtree(missing_git / ".git")

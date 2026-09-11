@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import tomllib
 import argparse
+import math
 import re
 import subprocess
 
@@ -34,7 +35,12 @@ def nearest_rank(values: list[float], percentile: int) -> float:
 
 
 def is_non_negative_number(value: object) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value >= 0
+    )
 
 
 def is_missing_metric(value: object) -> bool:

@@ -87,7 +87,12 @@ def main() -> None:
         if gate.get("status", "accepted") == "accepted" and "source" not in gate:
             raise SystemExit(f"accepted M002 performance gate {name} is missing authority source")
     matrix = schema.get("matrix", {})
-    if matrix.get("retained_content") != [10000, 100000, 1000000] or matrix.get("execution_populations") != [1, 10, 50, 100]:
+    if (
+        matrix.get("retained_content") != [10000, 100000, 1000000]
+        or matrix.get("execution_populations") != [1, 10, 50, 100]
+        or matrix.get("columns") != [40, 48, 64, 80, 96, 132, 160]
+        or matrix.get("workloads") != ["ASCII", "styled", "CJK", "emoji-combining"]
+    ):
         raise SystemExit("M002 performance matrix is incomplete")
     if "performance_claim=true" in text or "performance_claim=true" in SCHEMA.read_text(encoding="utf-8"):
         raise SystemExit("M002 performance contract must not claim a gate passed")
@@ -142,7 +147,11 @@ def evaluate_record(path: Path, schema: dict) -> str:
         raise SystemExit("M002 performance result percentile method mismatch")
     if record["cohort_count"] != schema["cohorts"] or record["sample_count"] != schema["cohorts"] * schema["samples_per_cohort"]:
         raise SystemExit("M002 performance result does not satisfy the cohort policy")
-    for field in ("production_sha", "harness_sha", "baseline_sha", "build_mode", "os_version", "toolchain", "hardware", "display", "power_thermal_state", "workload_hash", "topology", "raw_log", "raw_cohorts"):
+    for field in (
+        "production_sha", "harness_sha", "baseline_sha", "build_mode", "os_version", "toolchain",
+        "hardware", "display", "power_thermal_state", "workload_hash", "topology",
+        "raw_log", "raw_cohorts", "baseline_raw_cohorts",
+    ):
         if not isinstance(record[field], str) or not record[field].strip():
             raise SystemExit(f"M002 performance result {field} must be non-empty")
     for field in ("production_sha", "harness_sha", "baseline_sha"):
@@ -155,7 +164,7 @@ def evaluate_record(path: Path, schema: dict) -> str:
         ).stdout.strip()
         if current_sha and record["production_sha"] != current_sha:
             raise SystemExit("M002 performance result production_sha does not match validation checkout")
-    for field in ("raw_log", "raw_cohorts"):
+    for field in ("raw_log", "raw_cohorts", "baseline_raw_cohorts"):
         artifact = (ROOT / record[field]).resolve()
         if ROOT not in artifact.parents and artifact != ROOT:
             raise SystemExit(f"M002 performance result {field} escapes validation root")

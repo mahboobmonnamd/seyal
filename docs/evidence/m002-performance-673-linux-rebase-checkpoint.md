@@ -19,8 +19,11 @@ A proposed-gate evaluation negative was added so records cannot claim results
 against gates still marked `status = "proposed"` (for example
 `input_visible_proxy`).
 
-This does **not** claim any release performance gate passed, and does **not**
-clear the native Runtime-attach / headed smoke NO-GO.
+This does **not** claim any release performance gate passed.
+
+Hosted `native-macos-smoke` on exact head `3b40d233` succeeded. That is
+Foundation Quality CI for this contract PR, not accepted physical ARM64
+performance evidence and not a `Closes #673` gate.
 
 ## Linux verification
 
@@ -34,8 +37,8 @@ python3 scripts/test-ci-validators.py
 
 ## Still open (blocks Closes #673 / performance pass)
 
-- [ ] `native-macos-smoke` clean on exact head (Runtime attach / headed Unicode evidence)
-- [ ] Independent review GO on the rebased tip
+- [x] Hosted `native-macos-smoke` on exact head `3b40d233` (CI; not a performance pass)
+- [ ] Independent review GO on the current tip
 - [ ] Accepted physical ARM64 evidence under this contract (C-gate)
 
 ## Mac note

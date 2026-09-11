@@ -297,6 +297,53 @@ def main() -> None:
             "cannot evaluate a proposed gate",
         )
 
+        accepted_pass = base / "m002-performance-accepted-pass"
+        shutil.copytree(invalid_percentiles, accepted_pass)
+        record = (accepted_pass / "record.toml").read_text(encoding="utf-8").replace(
+            "p50 = 3\np95 = 2\np99 = 4", "p50 = 2\np95 = 4\np99 = 8")
+        (accepted_pass / "record.toml").write_text(record, encoding="utf-8")
+        for cohort in range(1, 6):
+            write(
+                accepted_pass / "cohorts" / f"cohort-{cohort}.toml",
+                f"cohort = {cohort}\nsamples = [{', '.join(['2'] * 50 + ['4'] * 45 + ['8'] * 5)}]\n",
+            )
+        result = subprocess.run(
+            ["python3", str(ROOT / "scripts/check-m002-performance-contract.py"), "--record", "record.toml"],
+            cwd=accepted_pass, env={**os.environ, ENV_ROOT: str(accepted_pass)},
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False,
+        )
+        require(
+            result.returncode == 0 and "M002 performance result: PASS" in result.stdout,
+            "accepted-ceiling in-policy record was not evaluated as PASS",
+        )
+
+        incomplete_matrix = base / "m002-performance-incomplete-matrix"
+        write(
+            incomplete_matrix / "docs/evidence/M002-PERFORMANCE-CONTRACT-V1.md",
+            "Status: proposed contract for Issue #673\nexact production SHA\nbaseline SHA\nnearest-rank\n",
+        )
+        toml = (ROOT / "docs/evidence/M002-PERFORMANCE-CONTRACT-V1.toml").read_text(encoding="utf-8")
+        toml = toml.replace("columns = [40, 48, 64, 80, 96, 132, 160]\n", "")
+        write(incomplete_matrix / "docs/evidence/M002-PERFORMANCE-CONTRACT-V1.toml", toml)
+        run_negative(
+            ["python3", str(ROOT / "scripts/check-m002-performance-contract.py")],
+            incomplete_matrix,
+            "matrix is incomplete",
+        )
+
+        escaped_baseline = base / "m002-performance-escaped-baseline"
+        shutil.copytree(invalid_percentiles, escaped_baseline)
+        record = (escaped_baseline / "record.toml").read_text(encoding="utf-8").replace(
+            "baseline_raw_cohorts = 'baseline-cohorts/'",
+            "baseline_raw_cohorts = '../outside-baseline/'",
+        )
+        (escaped_baseline / "record.toml").write_text(record, encoding="utf-8")
+        run_negative(
+            ["python3", str(ROOT / "scripts/check-m002-performance-contract.py"), "--record", "record.toml"],
+            escaped_baseline,
+            "baseline_raw_cohorts escapes validation root",
+        )
+
         unicode_benchmark = base / "unicode-benchmark-contract"
         write(
             unicode_benchmark / "crates/seyal-terminal/benches/good.rs",

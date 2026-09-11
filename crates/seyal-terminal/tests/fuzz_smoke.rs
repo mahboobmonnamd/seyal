@@ -95,3 +95,93 @@ fn parser_state_mutation_seed() {
         assert_same_state(&one_shot, &bytewise);
     }
 }
+
+#[test]
+#[ignore = "executed by fuzz/targets/history-resize-eviction with a retained seed"]
+fn history_resize_eviction_seed() {
+    const SPEC_WIDTHS: [u16; 7] = [40, 48, 64, 80, 96, 132, 160];
+    let bytes = input();
+    let cols = SPEC_WIDTHS[usize::from(bytes.first().copied().unwrap_or(80)) % SPEC_WIDTHS.len()];
+    let rows = u16::from(bytes.get(1).copied().unwrap_or(2) % 8) + 1;
+
+    let mut one_shot = TerminalState::new(cols, rows).expect("one-shot terminal");
+    let _ = one_shot.take_damage();
+    one_shot.feed(&bytes).expect("one-shot feed succeeds");
+    one_shot
+        .finish_input()
+        .expect("one-shot finish input succeeds");
+
+    let mut bytewise = TerminalState::new(cols, rows).expect("bytewise terminal");
+    let _ = bytewise.take_damage();
+    for byte in &bytes {
+        bytewise.feed(&[*byte]).expect("bytewise feed succeeds");
+    }
+    bytewise
+        .finish_input()
+        .expect("bytewise finish input succeeds");
+
+    assert_eq!(
+        one_shot.primary_history_units_range(LineId(1), LineId(u64::MAX), 4_096),
+        bytewise.primary_history_units_range(LineId(1), LineId(u64::MAX), 4_096)
+    );
+
+    let mut snapshot = one_shot
+        .primary_history_units_range(LineId(1), LineId(u64::MAX), 4_096)
+        .into_iter()
+        .filter(|unit| {
+            matches!(
+                one_shot.primary_history_unit(unit.anchor),
+                seyal_terminal::HistoryAnchorResolution::Resolved { .. }
+            )
+        })
+        .map(|unit| (unit.anchor, unit.text.clone(), unit.width))
+        .collect::<Vec<_>>();
+    for (index, byte) in bytes.iter().take(SPEC_WIDTHS.len()).enumerate() {
+        let next_cols = SPEC_WIDTHS[usize::from(*byte) % SPEC_WIDTHS.len()];
+        let next_rows = u16::from(bytes.get(index + 2).copied().unwrap_or(*byte) % 8) + 1;
+        one_shot
+            .resize(next_cols, next_rows)
+            .expect("one-shot resize");
+        bytewise
+            .resize(next_cols, next_rows)
+            .expect("bytewise resize");
+        if !one_shot.modes().alternate_screen {
+            for (anchor, text, width) in &snapshot {
+                match one_shot.primary_history_unit(*anchor) {
+                    seyal_terminal::HistoryAnchorResolution::Resolved {
+                        text: got,
+                        width: got_width,
+                        ..
+                    } => {
+                        assert_eq!(&got, text);
+                        assert_eq!(got_width, *width);
+                    }
+                    seyal_terminal::HistoryAnchorResolution::Unavailable => {}
+                    seyal_terminal::HistoryAnchorResolution::Invalid => {
+                        // Resize may return a retained suffix to the live viewport.
+                    }
+                }
+            }
+            snapshot = one_shot
+                .primary_history_units_range(LineId(1), LineId(u64::MAX), 4_096)
+                .into_iter()
+                .filter(|unit| {
+                    matches!(
+                        one_shot.primary_history_unit(unit.anchor),
+                        seyal_terminal::HistoryAnchorResolution::Resolved { .. }
+                    )
+                })
+                .map(|unit| (unit.anchor, unit.text.clone(), unit.width))
+                .collect();
+        }
+        assert_eq!(
+            one_shot.primary_history_units_range(LineId(1), LineId(u64::MAX), 4_096),
+            bytewise.primary_history_units_range(LineId(1), LineId(u64::MAX), 4_096)
+        );
+    }
+
+    for _ in 0..bytes.first().copied().unwrap_or(0).min(8) {
+        let _ = one_shot.evict_oldest_primary_history_segment();
+        let _ = bytewise.evict_oldest_primary_history_segment();
+    }
+}

@@ -1,6 +1,6 @@
 use seyal_terminal::{
-    CellRole, Color, HistoryAnchor, HistoryAnchorResolution, HistoryRangeError, LineId,
-    TerminalState, HISTORY_PER_EXECUTION_BYTE_CAP,
+    CellRole, Color, HistoryAnchor, HistoryAnchorResolution, HistoryBreakAfter, HistoryRangeError,
+    HistoryUnitView, LineId, TerminalState, HISTORY_PER_EXECUTION_BYTE_CAP,
 };
 
 #[test]
@@ -488,4 +488,162 @@ fn resize_keeps_early_hard_broken_history_without_rewriting_it() {
     terminal.resize(6, 2).expect("narrow");
     let matches = terminal.primary_history_search("early", 1);
     assert_eq!(matches.len(), 1);
+}
+
+/// SPEC-010 `hist-resize-oscillation`: exact-width and width-oscillation reflow
+/// at 40/48/64/80/96/132/160 columns must preserve canonical units, `LineId`s,
+/// hard/soft lineage, and source anchors.
+#[test]
+fn hist_resize_oscillation_at_spec_column_ladder() {
+    const WIDTHS: [u16; 7] = [40, 48, 64, 80, 96, 132, 160];
+    let mut terminal = TerminalState::new(40, 2).expect("terminal");
+    terminal.feed(b"HARD-A\r\nHARD-B\r\n").expect("hard breaks");
+
+    let mut soft = String::from("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789xxxx");
+    soft.push('界');
+    soft.push('😀');
+    soft.push_str("e\u{301}");
+    soft.push_str("YYYYYYYYYY");
+    terminal
+        .feed(soft.as_bytes())
+        .expect("soft-wrapped payload");
+    terminal
+        .feed(b"\r\n\r\n\r\n\r\n")
+        .expect("scroll the soft-wrapped chain fully into retained history");
+
+    let expected_units = terminal.primary_history_units_range(LineId(1), LineId(u64::MAX), 4_096);
+    assert!(
+        expected_units
+            .iter()
+            .any(|unit| unit.text == "H" && unit.anchor.unit_offset == 0),
+        "hard-broken prefix must be retained before oscillation"
+    );
+    let expected_text = units_text(&expected_units);
+    assert!(
+        expected_text.contains("HARD-AHARD-B")
+            && expected_text.contains("界")
+            && expected_text.contains("😀"),
+        "canonical snapshot missing hard prefix or wide units: {expected_text}"
+    );
+    let expected_anchors = expected_units
+        .iter()
+        .map(|unit| (unit.anchor, unit.text.clone(), unit.width))
+        .collect::<Vec<_>>();
+    let mut prefix = String::new();
+    let soft_start = expected_units
+        .iter()
+        .position(|unit| {
+            if prefix == "HARD-AHARD-B" {
+                true
+            } else {
+                prefix.push_str(&unit.text);
+                false
+            }
+        })
+        .expect("soft-wrapped payload follows hard-broken prefix");
+    let soft_line_ids = expected_units[soft_start..]
+        .iter()
+        .map(|unit| unit.anchor.line_id)
+        .collect::<std::collections::HashSet<_>>();
+
+    let mut ladder = Vec::from(WIDTHS);
+    ladder.extend(WIDTHS.iter().copied().rev());
+    ladder.extend(WIDTHS);
+
+    for cols in ladder {
+        terminal.resize(cols, 2).expect("oscillation resize");
+        let units = terminal.primary_history_units_range(LineId(1), LineId(u64::MAX), 4_096);
+        assert_eq!(
+            units_text(&units),
+            expected_text,
+            "canonical payload changed at {cols} columns"
+        );
+        assert_eq!(
+            units
+                .iter()
+                .map(|unit| (unit.anchor, unit.text.as_str(), unit.width))
+                .collect::<Vec<_>>(),
+            expected_anchors
+                .iter()
+                .map(|(anchor, text, width)| (*anchor, text.as_str(), *width))
+                .collect::<Vec<_>>(),
+            "LineId/offset/width anchors changed at {cols} columns"
+        );
+        assert!(
+            units.iter().all(|unit| !unit.text.is_empty()),
+            "wide/grapheme unit split into an empty independent half at {cols} columns"
+        );
+
+        let rows = terminal.primary_history_reflow(cols, 256);
+        let hard_a = rows.iter().find(|row| row_text(row).starts_with("HARD-A"));
+        let hard_b = rows.iter().find(|row| row_text(row).starts_with("HARD-B"));
+        let hard_a = hard_a.expect("HARD-A visual row");
+        let hard_b = hard_b.expect("HARD-B visual row");
+        assert_eq!(hard_a.break_after, Some(HistoryBreakAfter::HardBreak));
+        assert_eq!(hard_b.break_after, Some(HistoryBreakAfter::HardBreak));
+        assert_ne!(
+            hard_a.source_line_id, hard_b.source_line_id,
+            "hard newline must remain a source boundary at {cols} columns"
+        );
+        assert!(
+            !row_text(hard_a).contains("HARD-B") && !row_text(hard_b).contains("HARD-A"),
+            "hard-broken rows joined at {cols} columns"
+        );
+
+        let soft_rows = rows
+            .iter()
+            .filter(|row| {
+                row.source_line_id
+                    .is_some_and(|id| soft_line_ids.contains(&id))
+                    || row
+                        .anchors
+                        .iter()
+                        .any(|anchor| soft_line_ids.contains(&anchor.line_id))
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            !soft_rows.is_empty(),
+            "soft-wrapped payload missing from reflow at {cols} columns"
+        );
+        if cols >= 64 {
+            assert_eq!(
+                soft_rows.len(),
+                1,
+                "soft wraps must rejoin at {cols} columns, got {:?}",
+                soft_rows
+                    .iter()
+                    .map(|row| row_text(row))
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(soft_rows[0].break_after, Some(HistoryBreakAfter::HardBreak));
+        } else {
+            assert!(
+                soft_rows.len() > 1,
+                "soft-wrapped payload should occupy multiple visual rows at {cols} columns, got {:?}",
+                soft_rows.iter().map(|row| row_text(row)).collect::<Vec<_>>()
+            );
+            assert!(
+                soft_rows
+                    .iter()
+                    .any(|row| row.break_after == Some(HistoryBreakAfter::SoftWrap)),
+                "autowrapped visual rows lost SoftWrap lineage at {cols} columns"
+            );
+            assert_eq!(
+                soft_rows.last().and_then(|row| row.break_after),
+                Some(HistoryBreakAfter::HardBreak)
+            );
+        }
+    }
+}
+
+fn units_text(units: &[HistoryUnitView]) -> String {
+    units.iter().map(|unit| unit.text.as_str()).collect()
+}
+
+fn row_text(row: &seyal_terminal::ReflowRow) -> String {
+    row.cells
+        .iter()
+        .filter(|cell| cell.role == CellRole::Lead)
+        .map(|cell| cell.character)
+        .collect()
 }

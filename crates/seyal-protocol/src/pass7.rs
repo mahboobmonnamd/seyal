@@ -402,7 +402,7 @@ impl HistoryCell {
         if continuation {
             self.flags |= HISTORY_CELL_CONTINUATION_FLAG;
         } else {
-            let stored = width.max(1).min(3);
+            let stored = width.clamp(1, 3);
             self.flags |= u16::from(stored) << HISTORY_CELL_WIDTH_SHIFT;
         }
         self
@@ -499,9 +499,7 @@ impl HistoryRangeSnapshot {
         while last.cells.last().is_some_and(|cell| cell.is_continuation()) {
             last.cells.pop();
         }
-        if last.cells.pop().is_none() {
-            self.rows.pop();
-        } else if last.cells.is_empty() {
+        if last.cells.pop().is_none() || last.cells.is_empty() {
             self.rows.pop();
         }
         self.trim_sidecar_to_rows();

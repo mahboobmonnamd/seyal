@@ -677,10 +677,11 @@ impl HistoryStore {
             return;
         }
         if line.units.is_empty() {
-            if continue_chain && line.break_after == HistoryBreakAfter::HardBreak {
-                if let Some(chain) = self.wrap_chains.back_mut() {
-                    chain.open = false;
-                }
+            if continue_chain
+                && line.break_after == HistoryBreakAfter::HardBreak
+                && let Some(chain) = self.wrap_chains.back_mut()
+            {
+                chain.open = false;
             }
             return;
         }
@@ -916,10 +917,7 @@ impl HistoryStore {
             self.tail.pop();
         }
         self.recount_tail();
-        loop {
-            let Some(segment) = self.segments.back() else {
-                break;
-            };
+        while let Some(segment) = self.segments.back() {
             let Some(last_line) = segment.lines.last() else {
                 self.segments.pop_back();
                 continue;
@@ -1331,13 +1329,12 @@ impl HistoryStore {
         start_col: usize,
     ) -> Vec<ReflowRow> {
         let generation = self.eviction_generation;
-        if start_col == 0 {
-            if let Some(cache) = self.reflow_cache.borrow().as_ref()
-                && (cache.columns, cache.max_rows, cache.eviction_generation)
-                    == (cols, max_rows, generation)
-            {
-                return cache.rows.clone();
-            }
+        if start_col == 0
+            && let Some(cache) = self.reflow_cache.borrow().as_ref()
+            && (cache.columns, cache.max_rows, cache.eviction_generation)
+                == (cols, max_rows, generation)
+        {
+            return cache.rows.clone();
         }
         let rows = self.reflow_uncached_from(cols, max_rows, start_col);
         if start_col == 0 {
@@ -1901,7 +1898,7 @@ fn note_pattern_after_prefix_trim(chain: &mut WrapChain, drop_units: u32, period
         chain.pattern_len = n as u32;
         return;
     }
-    if chain.pattern_len >= 2 && period_units > 0 && drop_units % period_units == 0 {
+    if chain.pattern_len >= 2 && period_units > 0 && drop_units.is_multiple_of(period_units) {
         return;
     }
     chain.pattern_len = 0;

@@ -13,11 +13,11 @@ use seyal_exec::{CommandSpec, WindowSize};
 use seyal_runtime::{
     display::{decode_chunk, empty_cache, DecodedDisplayChunk, DisplayCache},
     local_ipc::framing::{
-        encode_frame, Attach, Attached, ClientHello, ErrorCode, ErrorMessage, FrameHeader,
-        HistoryRangeRequest, HistoryRangeSnapshot, HistoryRangeStatus, InputRef, MessageType,
-        ResizeRequest, ResizeResult, ResizeResultCode, Role, ServerHello, TerminalKey,
-        TerminalKeyKind, TerminalKeyModifiers, CAP_CORRELATED_RESIZE, CAP_SEMANTIC_TERMINAL_KEY,
-        HEADER_LEN, HISTORY_CELL_SIDECAR_FLAG,
+        encode_frame, Attach, Attached, ClientHello, FrameHeader, HistoryRangeRequest,
+        HistoryRangeSnapshot, HistoryRangeStatus, InputRef, MessageType, ResizeRequest,
+        ResizeResult, ResizeResultCode, Role, ServerHello, TerminalKey, TerminalKeyKind,
+        TerminalKeyModifiers, CAP_CORRELATED_RESIZE, CAP_SEMANTIC_TERMINAL_KEY, HEADER_LEN,
+        HISTORY_CELL_SIDECAR_FLAG,
     },
     AttachmentId, LocalIpcMode, Runtime, RuntimeConfig,
 };

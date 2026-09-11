@@ -61,8 +61,11 @@ also ran on Linux (`privateWorkerId=null`) and recorded the same five-step
 `ENVIRONMENT_UNSUPPORTED` ledger at `/tmp/m002-819-headed-ledger.md`. It did
 not launch `Seyal.app`.
 
-The 2026-09-09 partial AX/scrollbar observation above is unchanged and still
-does not prove rendered history content. #819 remains NO-GO for a closing PR.
+The 2026-09-09 partial AX/scrollbar observation above is unchanged as a
+historical ledger. Headed production XCUITests for the five #819 manual steps
+were recorded on 2026-09-11 in
+[`m002-history-819-headed-macos.md`](m002-history-819-headed-macos.md).
+Use that record, not this file, for current headed evidence.
 
 ## 2026-09-10 later computer-use abort (after `2d04f6d`)
 

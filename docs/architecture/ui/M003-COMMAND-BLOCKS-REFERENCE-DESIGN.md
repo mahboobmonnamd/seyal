@@ -1,6 +1,6 @@
 # M003 Command Blocks and Pane Composer — Reference Design
 
-**Status:** Accepted design authority for ADR-009 / SPEC-008; presentation boundary amended 2026-09-11 by #858
+**Status:** Accepted design authority for the ADR-009 / SPEC-008 baseline; #858 presentation correction proposed until merge
 
 ## Source visual
 
@@ -94,8 +94,9 @@ terminal interaction is required:
 
 ```text
 Flow
-  -> yield transcript/composer interaction
-  -> Raw fills the Pane
+  -> fence/revoke Flow input, IME, focus and mouse route
+  -> validate Raw against current execution/attachment/canonical state
+  -> Raw fills the Pane and acquires direct input
   -> same ExecutionId / PTY / TerminalState
 ```
 
@@ -108,10 +109,12 @@ When canonical alternate/full-screen state becomes active:
 
 ```text
 Flow or Raw
-  -> yield normal presentation chrome
-  -> TUI fills the Pane
+  -> fence/revoke previous input/focus/IME/mouse route
+  -> validate current alternate/full-screen state
+  -> TUI fills the Pane and acquires application input
   -> same ExecutionId / PTY / VT / alternate state
   -> TUI exits
+  -> fence TUI route
   -> re-evaluate Flow vs Raw
 ```
 
@@ -137,6 +140,15 @@ three modes.
   reporting where enabled, cursor and terminal selection semantics;
 - no Flow Block/composer control may intercept application input.
 
+### Transition fence
+
+The source mode stops admission and releases first responder, IME/preedit and
+mouse routing before the destination mode is enabled. Presentation-sensitive
+eligibility/admission is valid only for the current `ExecutionId`, fresh
+attachment/controller authority, presentation epoch and relevant canonical /
+trusted-integration generation. Stale callbacks fail closed and one native event
+may reach at most one mode.
+
 ## Measurement/token starting point
 
 The image has no trusted scale-factor metadata. Preserve the 1448×1086 source
@@ -157,17 +169,19 @@ that is not itself a Block output region.
 4. long-output Block with bounded/scrollable output;
 5. command failure Block;
 6. Flow empty-canvas hit test: no raw-terminal focus/input;
-7. full-Pane Raw fallback with Flow interaction yielded;
-8. TUI takeover with composer/Flow yielded;
-9. TUI exit returning to Flow or Raw based on current eligibility;
-10. light/dark and keyboard-focus/accessibility states;
-11. splits/tabs where each Pane independently owns one active presentation.
+7. Flow→Raw with pending key/IME: source route revoked before destination opens;
+8. stale Flow eligibility after reconnect/controller change: fails closed;
+9. full-Pane Raw fallback with Flow interaction yielded;
+10. TUI takeover with composer/Flow yielded;
+11. TUI exit returning to Flow or Raw based on current eligibility;
+12. light/dark and keyboard-focus/accessibility states;
+13. splits/tabs where each Pane independently owns one active presentation.
 
 ## Implementation dependency graph
 
 ```text
-ADR-009 amendment + SPEC-008 amendment
-  -> explicit Pane Flow|Raw|TUI state contract
+accepted ADR-009 baseline + proposed #858 amendment + SPEC-008
+  -> explicit Pane Flow|Raw|TUI state + input-route epoch contract
   -> trusted shell integration / bounded command events
   -> Runtime/Workspace BlockTimeline + completed/live-tail projection
   -> Pane compositor with Block-region clipping

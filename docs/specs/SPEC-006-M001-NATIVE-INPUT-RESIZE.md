@@ -2,18 +2,58 @@
 
 - **Status:** Accepted for M001 Pass 7 via PR #703; production implementation completed by PR #707, merged as `4490d89fd32f96fe5ff04393a5470944c592f546`
 - **Date:** 2026-08-27
+- **Presentation amendment:** proposed by #858 / PR #859 on 2026-09-11; effective only if that architecture amendment merges
 - **Issue:** #702
-- **Architecture authority:** Foundation Architecture + ADR-001 + ADR-004 + ADR-005 + ADR-006
+- **Architecture authority:** Foundation Architecture + ADR-001 + ADR-004 + ADR-005 + ADR-006; proposed ADR-009 presentation amendment from #858 / PR #859
 - **Depends on:** SPEC-001, SPEC-002, SPEC-003, SPEC-004, SPEC-005
+
+## 0. Presentation-mode applicability of the proposed ADR-009 amendment
+
+Sections 1–20 preserve the accepted Pass 7 mechanics for AppKit event normalization, semantic-key routing, Controller authority, bounded input admission, IME composition and authoritative resize. The historical Pass 7 implementation demonstrated those mechanics with one permanent interactive Metal terminal surface.
+
+If the #858 / PR #859 amendment merges, **“permanent terminal surface” in this historical contract no longer means a raw-terminal viewport/input target that remains visible, focusable or hit-testable underneath Flow**. The permanent authority remains `TerminalExecution` + PTY + canonical `TerminalState`; renderer/compositor resources may be reused, but direct terminal interaction is owned only by the currently selected presentation.
+
+The active input/focus model becomes:
+
+```text
+Flow
+  -> Pane composer + explicit Flow/Block controls
+  -> no hidden/coexisting raw terminal first responder, IME target,
+     mouse target, accessibility focus target or arbitrary input route
+
+Raw
+  -> full-Pane primary-grid terminal presentation
+  -> direct terminal first responder / IME / mouse / input route
+
+TUI
+  -> full-Pane terminal-application presentation
+  -> direct terminal first responder / IME / mouse / input route
+```
+
+Controller/attachment authority is transport/runtime mutation authority. Possessing a Controller lease does not authorize a hidden terminal input surface while Flow is active.
+
+Every Flow/Raw/TUI transition must be input-fenced. Before a new route is enabled:
+
+1. validate the target route against the exact current `ExecutionId`, `AttachmentId` and relevant canonical/presentation generation or state;
+2. disable input admission on the old route;
+3. revoke the old first responder and accessibility focused state;
+4. discard/cancel old marked-text/IME composition when ownership changes;
+5. disable old mouse reporting/hit testing and any direct-terminal event route;
+6. install/activate the new presentation owner;
+7. only then assign its focus/AX/IME/mouse ownership and enable input admission.
+
+A delayed callback, event or eligibility result from an old attachment, old presentation generation or uncertain canonical state fails closed. One physical/native event must never reach both the old and new route. Reconnect applies the same rule and is governed by the presentation-aware reconstruction in SPEC-009 once the amendment merges.
+
+Historical Pass 7 tests/evidence remain valid evidence for the direct-terminal mechanics themselves. They are not evidence that Flow should retain a permanent raw-terminal viewport.
 
 ## 1. Purpose
 
-This specification defines the observable M001 Pass 7 contract that makes the permanent macOS Metal terminal surface interactive without moving terminal authority into the GUI.
+This specification defines the observable M001 Pass 7 contract for native macOS terminal interaction without moving terminal authority into the GUI. Historically Pass 7 hosted this contract on one permanent Metal terminal surface; under the proposed #858 amendment the direct-terminal parts of this contract apply only when Raw/TUI owns direct terminal interaction, while Flow uses its composer/Block input route.
 
-The required input path is:
+The required direct-terminal input path is:
 
 ```text
-NSEvent / AppKit text-input callbacks
+NSEvent / AppKit text-input callbacks on the active direct-terminal presentation
 → native normalization
 → bounded typed client queue
 → compact local protocol
@@ -24,10 +64,12 @@ NSEvent / AppKit text-input callbacks
 → shell/application
 ```
 
+Flow composer submission may use the same authorized Runtime/PT​​Y path for a committed structured command, but it is not a hidden `NSTextInputClient` terminal surface and does not gain arbitrary character-level terminal semantics merely because the same renderer exists.
+
 The required resize path is:
 
 ```text
-usable native terminal viewport
+usable active Pane presentation viewport
 → desired rows/columns proposal
 → bounded client control queue
 → correlated ResizeRequest
@@ -36,7 +78,7 @@ usable native terminal viewport
 → canonical TerminalState resize commit
 → asynchronous ResizeResult + applied-generation fence
 → authoritative display projection
-→ permanent Metal renderer
+→ active Metal compositor/renderer presentation
 ```
 
 `ResizeResult` is never an acknowledgement dependency for terminal progress. Runtime commits or rejects the resize transaction independently and queues the result asynchronously. On success, the client retains a bounded `appliedAwaitingProjection` fence until authoritative projection reaches the canonical generation produced by that resize, preventing a successful result from reopening duplicate admission before its display update arrives.
@@ -47,7 +89,7 @@ Pass 7 does not create a GUI VT parser, mirrored mode state, client-owned grid, 
 
 1. `TerminalExecution` remains sole owner of the PTY, child lifecycle and canonical `TerminalState`.
 2. Runtime remains the authority for attachment role, terminal-mode-sensitive key encoding, input admission, PTY writes and canonical resize commit.
-3. AppKit owns only native event normalization plus ephemeral focus/IME composition state.
+3. AppKit owns only native event normalization plus ephemeral focus/IME composition state for the active presentation route.
 4. The client never consults disposable display state to decide terminal escape sequences.
 5. Existing `Input` bytes represent already-committed literal input bytes. They are not a license for Swift to synthesize mode-sensitive terminal key sequences.
 6. Semantic terminal keys cross the client/Runtime boundary as typed logical keys, not pre-encoded escape bytes.
@@ -57,15 +99,16 @@ Pass 7 does not create a GUI VT parser, mirrored mode state, client-owned grid, 
 10. `ResizeResult(Applied)` does not make the same target immediately eligible for re-admission. A bounded applied-success fence remains until authoritative projection reaches the generation produced by that resize or a later generation supersedes it.
 11. A Runtime resize failure never causes an immediate resend loop. Runtime-reported failures are retry-gated by an external recovery event defined in section 12.6.
 12. Resize never publishes canonical geometry before the PTY accepts the winsize transaction.
-13. `NSTextInputClient` exposes only a bounded ephemeral composition document. Terminal/history text is never returned through text-input APIs and never becomes a second editable text model.
+13. `NSTextInputClient` exposes only a bounded ephemeral composition document on the active direct-terminal Raw/TUI route. Terminal/history text is never returned through text-input APIs and never becomes a second editable text model.
 14. No input/resize path waits synchronously for rendering, display projection, Block semantics, persistence, agents, cloud, telemetry or licensing.
 15. Input, marked text and terminal contents are secret-bearing data and are never emitted by latency instrumentation or normal diagnostic logs.
+16. If #858 merges, exactly one presentation route owns input/focus/AX/IME/mouse at a time; Flow cannot coexist with a focusable/hit-testable direct-terminal surface, and stale route callbacks fail closed.
 
 ## 3. Scope
 
 Pass 7 includes:
 
-- first-responder/focus behavior for the permanent `MetalSurfaceView` terminal surface;
+- first-responder/focus behavior for the direct-terminal Metal presentation when Raw/TUI owns terminal interaction;
 - AppKit native event normalization;
 - committed UTF-8 text input;
 - the exact M001 semantic terminal-key subset in section 6;
@@ -78,8 +121,8 @@ Pass 7 includes:
 - canonical-generation fencing between successful resize result and authoritative projection;
 - error-class retry gating;
 - resize coalescing with ordering barriers;
-- permanent AppKit `NSTextInputClient` composition seam with explicit UTF-16 range semantics;
-- minimum accessibility/focus seam on the Metal surface;
+- AppKit `NSTextInputClient` composition seam for an active direct-terminal Raw/TUI presentation, with explicit UTF-16 range semantics;
+- minimum accessibility/focus seam for the active selected presentation; terminal-surface AX semantics apply to Raw/TUI while Flow exposes Block/composer structure under SPEC-008;
 - input/resize latency instrumentation and benchmarks;
 - deterministic, integration, failure and fuzz coverage required by section 16.
 
@@ -87,7 +130,7 @@ Pass 7 does not claim full terminal application compatibility. The canonical M00
 
 ## 4. Native input classification
 
-Every native key/text event is classified into exactly one of these categories before terminal submission:
+Every native key/text event admitted to the active direct-terminal route is classified into exactly one of these categories before terminal submission:
 
 ```text
 ApplicationCommand
@@ -127,17 +170,18 @@ An unsupported native event is not guessed into terminal bytes. It remains unhan
 
 ## 5. Event-routing order
 
-The terminal surface must avoid duplicate delivery through `keyDown`, menu key equivalents and AppKit text interpretation, while preserving IME control of composition keys.
+The active direct-terminal input surface must avoid duplicate delivery through `keyDown`, menu key equivalents and AppKit text interpretation, while preserving IME control of composition keys. Under #858 this surface exists as the input owner only in Raw/TUI; Flow events are owned by the composer/explicit Flow controls and cannot fall through into this router.
 
 The behavioral order is:
 
 1. allow recognized application/menu commands to resolve as native application commands;
-2. if marked/composition state is active, give the active AppKit text-input context first opportunity to consume the event; if consumed, stop terminal routing for that event;
+2. if marked/composition state is active on the selected direct-terminal route, give the active AppKit text-input context first opportunity to consume the event; if consumed, stop terminal routing for that event;
 3. when no active composition consumed the event, recognize the supported non-text terminal keys and supported Control-key combinations from the native event;
 4. route remaining text-producing input through AppKit's text-input/IME machinery;
 5. submit only text that the `NSTextInputClient` contract commits as `Input`;
 6. preserve marked/preedit callbacks locally;
-7. never submit one physical/native event by more than one route.
+7. never submit one physical/native event by more than one route;
+8. before every admission, reject the event if its `ExecutionId`, `AttachmentId` or active presentation/input-route generation no longer matches the current owner.
 
 This ordering is required so Enter/Escape/arrows can commit, cancel or navigate an active IME candidate session instead of leaking to the PTY, while ordinary terminal navigation keys are not unconditionally consumed as AppKit editing selectors when no composition owns them.
 
@@ -348,16 +392,18 @@ Only the Runtime reactor owner writes resulting bytes to the PTY, preserving SPE
 
 ## 9. Interactive attachment and authority
 
-The production Pass 7 terminal surface requests `Controller`, not `Observer`, for the execution it intends to control.
+An interactive client requests `Controller`, not `Observer`, for the execution it intends to control. Under #858, the Controller lease is shared runtime mutation authority for the selected Pane route; it does not imply that a raw terminal surface is active in Flow.
 
 Rules:
 
 - no client silently preempts an existing controller;
 - `ControllerBusy` is an explicit noninteractive state;
-- the Pass 7 surface must not appear to accept terminal typing while only Observer authority exists;
+- the active selected input owner must not appear to accept mutation while only Observer authority exists;
+- Flow must not route arbitrary direct terminal input merely because the client holds Controller authority;
 - no silent fallback may accept native input locally and discard it;
-- reconnect obtains a new attachment/controller lease under normal SPEC-004 semantics; old `AttachmentId` and resize request IDs are stale;
-- losing the connection or controller authority cancels marked composition locally and stops accepting terminal mutation until authority is re-established.
+- reconnect obtains a new attachment/controller lease under normal SPEC-004 semantics; old `AttachmentId`, route generation and resize request IDs are stale;
+- losing the connection or controller authority cancels marked composition locally on whichever route owns it and stops accepting terminal mutation until authority is re-established;
+- switching Flow/Raw/TUI revokes old route admission before new route admission, even when the same Controller attachment remains valid.
 
 A future product may offer an intentional read-only observer UI; that is not the success path claimed by Pass 7.
 
@@ -399,7 +445,7 @@ The exact behavior is:
 
 Because an AppKit commit has already occurred by the time the client attempts queue admission, local rejection must never be silent.
 
-The native terminal surface owns a small non-canonical `InputAdmissionFailure` presentation state with at least these reason categories:
+The **active selected input owner** owns a small non-canonical `InputAdmissionFailure` presentation state with at least these reason categories:
 
 ```text
 ClientBackpressure
@@ -414,7 +460,7 @@ On rejection:
 
 - no rejected text/key payload is retained for automatic retry;
 - no rejected payload is logged, copied into accessibility text or persisted;
-- the terminal surface visibly reports a non-secret reason;
+- the active selected presentation visibly reports a non-secret reason;
 - the state is exposed accessibly without exposing the rejected content;
 - AppKit/main-thread execution returns immediately;
 - automatic replay is forbidden because rejection occurs before ownership and an implicit retry could duplicate later user intent.
@@ -425,7 +471,7 @@ For transient client-queue backpressure, the visible busy state may clear after 
 
 ### 11.1 Native proposal only
 
-AppKit computes a rows/columns **desired proposal** from the usable terminal viewport in logical points and the permanent renderer's cell metrics/insets.
+AppKit computes a rows/columns **desired proposal** from the usable active terminal presentation viewport in logical points and the authoritative renderer/layout cell metrics/insets. Flow transcript scrolling itself never mutates PTY dimensions; only the active terminal geometry owner proposes rows/columns through this canonical path.
 
 Before subtraction, division, `floor` or integer conversion, validate every operand:
 
@@ -469,7 +515,7 @@ GPU pixel dimensions are not terminal geometry authority.
 
 ### 11.3 Layout chrome
 
-Pass 7 has one terminal surface. Future composer/Block chrome may change the usable terminal viewport only through the same rows/columns proposal path; it may not resize a hidden GUI grid independently.
+Historical Pass 7 had one terminal surface. Under #858, Flow composer/Block chrome, Raw and TUI are mutually exclusive presentations of the same execution. Any change to the usable terminal viewport must go through the same rows/columns proposal path; Flow chrome may not resize a hidden GUI grid, and Flow transcript scrolling never changes PTY dimensions or cursor state.
 
 ## 12. Resize ordering, reconciliation, correlation and retry policy
 
@@ -653,13 +699,13 @@ An unknown `ResizeResult.result_code`, invalid `applied_generation`, duplicate r
 
 Disconnect/reattach invalidates every unresolved request ID, clears `appliedAwaitingProjection`, clears request/result transport state and resets generation-fence bookkeeping. Desired geometry may be recomputed/retained as native layout intent, but nothing from the old connection is treated as committed or retried until new attachment authority exists.
 
-## 13. Exact AppKit `NSTextInputClient` composition seam
+## 13. Exact AppKit `NSTextInputClient` direct-terminal composition seam
 
-The permanent Metal terminal surface is first-responder capable and owns the native terminal focus target. No `NSTextView`, SwiftUI text editor or parallel terminal text surface is introduced.
+When Raw/TUI owns direct terminal interaction, its selected Metal terminal presentation is first-responder capable and owns the native terminal focus target. Flow does not keep this direct-terminal `NSTextInputClient` focus target active underneath its transcript/composer. No `NSTextView`, SwiftUI text editor or parallel terminal text surface is introduced.
 
 ### 13.1 Composition-only document
 
-For text-input protocol purposes, M001 exposes exactly one bounded ephemeral `CompositionDocument`:
+For direct-terminal text-input protocol purposes, M001 exposes exactly one bounded ephemeral `CompositionDocument` for the active Raw/TUI route:
 
 ```text
 text                 current marked/preedit text only
@@ -716,14 +762,14 @@ The complete composition document must remain `<= 65,536` UTF-8 bytes. An update
 - accepts only `NSString` or `NSAttributedString`, using only the plain string;
 - an explicit replacement range is supported only when `NSNotFound` or wholly inside the ephemeral composition document;
 - a range outside that document is `UnsupportedReplacementRange`; Seyal does not pretend terminal history is editable text storage;
-- the supplied string is committed atomically through section 10.1;
+- the supplied string is committed atomically through section 10.1 only if this Raw/TUI route still owns current input admission;
 - after the commit attempt, clear the composition document regardless of success/failure so rejected content is not retained for hidden replay;
 - failed admission surfaces non-secret `InputAdmissionFailure` and is never automatically replayed.
 
 `unmarkText()`
 
 - is a **commit**, not cancellation, when marked text exists;
-- snapshot the current marked plain string, atomically submit it through section 10.1 as one committed-text action, then clear the composition document regardless of admission result;
+- snapshot the current marked plain string, atomically submit it through section 10.1 as one committed-text action only while this route remains current, then clear the composition document regardless of admission result;
 - if no marked text exists, it is a no-op;
 - failed admission is visible/accessibility-safe and never automatically replayed.
 
@@ -735,10 +781,10 @@ The complete composition document must remain `<= 65,536` UTF-8 bytes. An update
 
 - never derives geometry by reading terminal/history text;
 - validates/intersects the requested UTF-16 range only against the ephemeral composition document;
-- returns the current disposable terminal-cursor/candidate anchor converted to **screen coordinates**;
+- returns the current disposable terminal-cursor/candidate anchor converted to **screen coordinates** for the active Raw/TUI presentation;
 - the M001 anchor is a zero-width caret rectangle with finite height derived from renderer cursor/cell presentation metrics;
 - `actualRange`, when supplied, reports the validated/intersected composition range; `{0,0}` is valid for the empty document;
-- if safe cursor/window conversion is unavailable, return a bounded zero-width fallback at the visible terminal surface rather than inventing terminal text geometry.
+- if safe cursor/window conversion is unavailable, return a bounded zero-width fallback at the visible active direct-terminal presentation rather than inventing terminal text geometry.
 
 `characterIndex(for:)`
 
@@ -759,7 +805,7 @@ Optional coordinate/text-access methods, if implemented, are composition-only. `
 
 True cancellation is separate from `unmarkText`.
 
-On explicit IME cancellation, relevant focus loss, connection loss, controller loss, terminal teardown, or an over-limit/invalid composition failure:
+On explicit IME cancellation, relevant focus loss, presentation-route loss, connection loss, controller loss, terminal teardown, or an over-limit/invalid composition failure:
 
 1. tell the active `NSTextInputContext` to discard marked text/conversion when appropriate;
 2. clear the local composition document;
@@ -769,17 +815,21 @@ This preserves the distinction between AppKit commit (`insertText` or `unmarkTex
 
 While composition is active, IME-consumed Enter/Escape/arrows/control keys do not also escape through the semantic-key route.
 
-M001 does not require rich inline preedit rendering inside terminal history. Candidate-window placement and composition state are presentation-only seams that can evolve later without replacing the terminal surface.
+M001 does not require rich inline preedit rendering inside terminal history. Candidate-window placement and composition state are presentation-only seams that can evolve later without replacing terminal authority.
 
 ## 14. Minimum accessibility seam
 
-Pass 7 keeps the Metal terminal surface in the native accessibility tree with:
+Accessibility ownership follows the selected presentation.
 
-- stable accessibility identity;
+When Raw/TUI owns direct terminal interaction, the selected Metal terminal presentation remains in the native accessibility tree with:
+
+- stable accessibility identity for that presentation lifetime;
 - terminal-surface label/description;
 - focusability/focused-state reporting;
-- geometry consistent with the visible terminal surface;
+- geometry consistent with the visible selected terminal presentation;
 - non-secret exposure of input-admission/resize failure state without rejected input contents.
+
+When Flow is active, accessibility exposes the Flow Block/transcript/composer structure defined by SPEC-008 and must not additionally expose a competing hidden full-Pane raw-terminal focus target. A Flow→Raw/TUI or Raw/TUI→Flow transition revokes the old accessibility focused state before the new owner is enabled.
 
 M001 does not claim a complete screen-reader text-range/transcript implementation. Later accessibility text exposure must derive from authorized terminal/history presentation state; it must not be sourced from the `CompositionDocument` or create a second VT/grid authority.
 
@@ -828,7 +878,10 @@ Every new/renamed production hot-path function participating in input ingress, q
 
 ### 16.1 Native/AppKit deterministic tests
 
-- first-responder acceptance/focus transitions and one-event/one-route classification;
+- first-responder acceptance/focus transitions and one-event/one-route classification for the active selected presentation;
+- Flow has no focusable/hit-testable raw-terminal route; Raw/TUI owns direct-terminal focus only while selected;
+- transition ordering revokes old first responder/IME/mouse/AX/input admission before enabling the new route;
+- delayed old-attachment/old-presentation callbacks fail closed;
 - Command shortcut non-leak;
 - committed ASCII/non-ASCII UTF-8;
 - one committed callback → one atomic `Input` frame;
@@ -849,7 +902,7 @@ Every new/renamed production hot-path function participating in input ingress, q
 - `characterIndex(for:) == NSNotFound`;
 - `insertText` commits then clears composition on success/failure;
 - `unmarkText` commits current marked text rather than discarding it;
-- `discardMarkedText`/focus/controller/connection loss clears with zero PTY submission;
+- `discardMarkedText`/focus/presentation/controller/connection loss clears with zero PTY submission;
 - over-limit/invalid composition fails closed and discards conversion;
 - active-IME control/navigation keys are not duplicated into terminal input.
 
@@ -903,10 +956,10 @@ The local binary-protocol fuzz target includes `TerminalKey` and correlated `Res
 
 ### 16.4 End-to-end acceptance
 
-Using the real production path:
+Historical Pass 7 direct-terminal evidence used the real production path:
 
 ```text
-native AppKit terminal surface
+native AppKit direct-terminal presentation
 → seyal-client
 → SPEC-004/006 local protocol
 → Runtime
@@ -914,16 +967,20 @@ native AppKit terminal surface
 → shell/application
 → Seyal VT/TerminalState
 → Candidate-D display
-→ permanent Metal renderer
+→ reusable Metal renderer
 ```
 
-prove:
+Under #858 this direct-terminal path is exercised while Raw/TUI owns the Pane; Flow uses its structured composer/Block presentation over the same execution and must not expose this route underneath it.
 
-- focus/type a shell command, Backspace, Control-C and supported arrows;
+Prove:
+
+- focus/type a shell command, Backspace, Control-C and supported arrows on an active direct-terminal Raw/TUI route;
 - supported Shift-produced Control ASCII cases;
 - real dead-key and at least one real IME path keep preedit local before commit;
 - `unmarkText` commit differs from explicit discard/cancel;
 - text-input substring/range queries cannot retrieve prompt/terminal/scrollback content;
+- Flow cannot type through empty canvas or hidden renderer into this direct-terminal route;
+- Flow→Raw/TUI and Raw/TUI→Flow transitions revoke the old route before the new route admits events;
 - resize changes PTY/canonical/projection consistently;
 - resize-away-then-return converges under overlapping unresolved requests;
 - force `ResizeResult(Applied)` to be observed before its corresponding presentation update and prove no duplicate same-target request is emitted while the success fence is active;
@@ -945,6 +1002,7 @@ Record exact SHA, hardware/OS/build, repetitions/percentile method, baseline/res
 
 - Runtime unavailable/disconnected: stop mutation acceptance, discard marked conversion without sending, preserve UI responsiveness and surface non-secret state.
 - `ControllerBusy`: explicitly noninteractive; no preemption or silent typing loss.
+- stale/uncertain presentation route: reject before admission; do not fall through to another route.
 - committed text >65,536 UTF-8 bytes: atomic complete rejection, no chunk/prefix, visible `CommitTooLarge`.
 - client queue full: atomic rejection before ownership, visible `ClientBackpressure`, no main-thread block.
 - rejected input never automatically replays.
@@ -961,14 +1019,15 @@ Record exact SHA, hardware/OS/build, repetitions/percentile method, baseline/res
 
 - no normal/error/performance log contains input payloads, semantic encoded bytes, marked text or terminal contents;
 - protocol validation happens before unbounded allocation or mutation;
-- only authenticated attached Controller submits `Input`, `TerminalKey` or `ResizeRequest`;
-- stale AttachmentIds/request IDs never regain authority after reconnect;
+- only authenticated attached Controller submits `Input`, `TerminalKey` or `ResizeRequest` through the currently admitted route;
+- stale AttachmentIds/request IDs/presentation-route generations never regain authority after reconnect or mode transition;
 - malformed/unsupported key events fail closed before PTY mutation;
 - rejected committed text is not retained for hidden retry/telemetry/diagnostics;
 - input/resize failure state carries only non-secret category/geometry/request-ID/generation metadata;
 - `NSTextInputClient` storage/query/range/coordinate methods operate only on bounded ephemeral composition state and never return terminal/history text;
 - optional text-input methods cannot expose terminal transcript as a hidden document model;
-- accessibility/IME helpers do not turn presentation text into authority.
+- accessibility/IME helpers do not turn presentation text into authority;
+- Flow never exposes a hidden raw-terminal focus/IME/mouse/AX/input target.
 
 ## 19. Explicit non-goals
 
@@ -992,16 +1051,18 @@ commercial features
 SwiftUI/NSTextView terminal rendering
 ```
 
+The #858 amendment does not retroactively move Flow/Raw/TUI implementation into historical Pass 7; it scopes how the accepted Pass 7 native-input mechanics may be used by the later presentation architecture.
+
 ## 20. Pass 7 definition of done
 
-Pass 7 implementation is complete only when:
+Pass 7 historical implementation is complete because:
 
-- real AppKit key event → Runtime → PTY → shell/application works on permanent Metal surface;
+- real AppKit direct-terminal key event → Runtime → PTY → shell/application works on the Metal path;
 - committed text/semantic keys follow this spec;
 - Control normalization is explicit/layout-aware/tested;
 - committed callbacks are atomic and rejection is visible/accessibility-safe/non-secret;
 - Runtime owns terminal-key encoding; client has no mirrored VT/mode authority;
-- interactive surface owns Controller authority or is visibly noninteractive;
+- interactive route owns Controller authority or is visibly noninteractive;
 - queue is bounded/FIFO/readiness-driven with no main-thread busy wait;
 - Pass 7 production resize uses capability-gated correlated `ResizeRequest`/`ResizeResult`, not legacy uncorrelated type 10;
 - request results correlate exactly; older failures cannot invalidate newer requests; persistent failure cannot create automatic retry loops;
@@ -1017,9 +1078,11 @@ Pass 7 implementation is complete only when:
 - no Pass 8+ scope creep;
 - independent final architecture/performance/security review has no unresolved blocker.
 
+If #858 merges, current production presentation must additionally enforce section 0: these accepted mechanics are direct-terminal mechanics for Raw/TUI (or an explicitly authorized future route), not justification for a permanently focusable raw terminal surface in Flow.
+
 ## 21. M002 keyboard extension contract (#834 → #823)
 
-**Status: accepted specification (2026-09-07, #834); not implemented or advertised.** Sections 1–20 remain the historical accepted M001 contract. This section graduates only the keyboard behaviors listed here for M002; it does not change resize, terminal ownership, mouse, clipboard, or the M003 keybinding product scope. Acceptance of the specification is separate from #823 production acceptance.
+**Status: accepted specification (2026-09-07, #834); not implemented or advertised.** Sections 1–20 remain the historical accepted M001 mechanics as presentation-scoped by section 0 if #858 merges. This section graduates only the keyboard behaviors listed here for M002; it does not change resize, terminal ownership, mouse, clipboard, or the M003 keybinding product scope. Acceptance of the specification is separate from #823 production acceptance.
 
 ### 21.1 Ownership and admission
 

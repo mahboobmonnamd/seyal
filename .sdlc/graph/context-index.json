@@ -57,7 +57,8 @@
         {"path": "docs/architecture/ADR-009-COMMAND-BLOCKS-COMPOSER-AND-TUI.md", "fingerprint": "6058de22273837cfd0c2f4ddef9571a0d8739daa"},
         {"path": "docs/specs/SPEC-006-M001-NATIVE-INPUT-RESIZE.md", "fingerprint": "506b49abb61dfc5889cd73308b19254bd409b69b"},
         {"path": "docs/specs/SPEC-008-M003-COMMAND-BLOCKS.md", "fingerprint": "f451bea6f467938a1d202a2d7c490709c61555dd"},
-        {"path": "docs/specs/SPEC-009-M001-DETACH-RECONNECT.md", "fingerprint": "d324dff8d1c8f3f23e41522440cd2c80049048e3"}
+        {"path": "docs/specs/SPEC-009-M001-DETACH-RECONNECT.md", "fingerprint": "d324dff8d1c8f3f23e41522440cd2c80049048e3"},
+        {"path": "docs/specs/README.md", "fingerprint": "5a53de628dacfe97e4932380495904667a2460c7"}
       ],
       "relationships": [
         {"type": "governed_by", "target": "DEC-ADR-009"},

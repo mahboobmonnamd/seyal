@@ -172,7 +172,7 @@ Availability is evaluated from current authority at use/recovery time, not infer
 
 ## 6. Retention availability summary
 
-A working set exposes a deterministic retention-availability summary covering every prerequisite class needed for the next safe continuation step.
+A working set exposes a deterministic retention-availability summary covering every prerequisite class needed for the next safe continuation step. Runtime supplies a typed `ContinuationPlan` bound to the exact WorkItem/Attempt/AgentRun and binding generation; it enumerates each next-step dependency as `required` or `optional`, its typed source and payload requirement, and the current plan generation. Unknown dependency classes, unknown requiredness, or a missing/stale plan are treated as required-but-unverified and yield `ReconciliationRequired`, never omission by default.
 
 At minimum it accounts for relevant classes including:
 
@@ -263,7 +263,7 @@ Allowed only when every prerequisite required for the next continuation step is:
 3. consistent with the current AgentRun binding/recovery state under ADR-012; and
 4. free of unresolved ambiguous external effects that require reconciliation.
 
-The continuation may use an eligible provider continuation or rebuild locally from eligible retained/current authority. Provider continuation is an optimization, not a requirement when local prerequisites suffice.
+The continuation may rebuild locally from eligible retained/current authority. An opaque provider-continuation/session reference never satisfies a required payload prerequisite and never by itself proves hidden state is intact, authorized, current, unexpired, or sufficient for the next step. A provider continuation may be used only as an optional optimization under a typed provider contract that attests the current exact AgentRun binding, checkpoint/content generation, privacy/policy generation, expiry, and required capabilities; otherwise abandon it and rebuild locally or return `ReconciliationRequired`. Provider continuation is never a requirement when local prerequisites suffice.
 
 ### 9.2 `ReconciliationRequired`
 

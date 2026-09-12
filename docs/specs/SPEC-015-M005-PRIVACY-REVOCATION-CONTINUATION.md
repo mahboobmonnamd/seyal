@@ -292,14 +292,23 @@ Forgetting must not be silently undone by the same pre-revocation evidence.
 
 The suppression identity is stable across later unrelated revocation-generation increments. Revocation generation is ordering metadata, **not part of the semantic identity key used to decide whether old evidence is suppressed**.
 
-The key binds at least:
+The matching identity binds at least:
 
 ```text
-scope identity
-record kind / semantic category
-opaque semantic token
-source/evidence lineage identity
+owning scope identity
+opaque semantic token derived from the canonical semantic subject identity
+canonical applicability identity/version where applicable
 ```
+
+The following are retained only as policy-safe tombstone/provenance metadata and are **not** matching-key components:
+
+```text
+record kind / semantic category at revocation
+source/evidence lineage references or fingerprints
+revocation generation/time
+```
+
+Changing kind/category, evidence formatting/fingerprint/lineage, or later generation/time cannot bypass suppression when scope + canonical semantic identity + applicability still match. This contract must remain aligned with SPEC-012's kind-independent semantic matching key; reclassification alone is never a new semantic subject.
 
 The opaque semantic token must be:
 
@@ -312,11 +321,11 @@ The opaque semantic token must be:
 
 A raw hash of low-entropy secret/plaintext is insufficient.
 
-Suppression created at generation `N` dominates the same semantic/evidence lineage at every later generation unless explicit policy permits a new record based on genuinely independent post-revocation evidence.
+Suppression created at generation `N` dominates the same semantic identity at every later generation unless explicit policy permits a new record based on genuinely independent post-revocation evidence.
 
 ### 14.2 Independent new evidence
 
-Model paraphrase, reformatting, summary or derivation from old evidence is not independent evidence.
+Model paraphrase, reformatting, copied evidence, regenerated serialization, summary or derivation from old evidence is not independent evidence merely because lineage/fingerprint changed.
 
 Genuinely independent post-revocation evidence may propose a new MemoryRecord only through SPEC-012's normal policy pipeline.
 
@@ -341,7 +350,7 @@ If Action payload/context depends on revocable material, the ADR-014 atomic pre-
 
 ### Before `Dispatching`
 
-A revocation committed before the atomic `Dispatching` transition causes the precondition to fail. Old authorization is not silently widened/refreshed; a materially changed operation is prepared and authorized according to ADR-014/SPEC-016.
+A revocation committed before the atomic `Dispatching` transition causes the precondition to fail. Old authorization is not silently widened/refreshed; a materially changed operation is prepared and authorized according to ADR-014. The separate #871 Action/effect specification promotion may further constrain this contract once accepted; until then it is not normative authority.
 
 ### After `Dispatching`
 
@@ -466,7 +475,8 @@ Concrete budgets are calibrated under #681 before implementation readiness.
 ### Anti-resurrection
 
 - unrelated later generation increments do not bypass suppression of old evidence;
-- paraphrase/summary of same evidence remains suppressed;
+- changing kind/category does not bypass suppression for the same canonical semantic identity;
+- changed evidence fingerprint/lineage, copied/reformatted evidence, paraphrase or summary of the same pre-revocation evidence remains suppressed;
 - opaque suppression identity does not reveal low-entropy secret or allow cross-scope correlation;
 - independent post-revocation evidence may propose through normal policy.
 
@@ -498,7 +508,7 @@ SPEC-015 is acceptable only when:
 - provider handoff has a deterministic race/linearization contract;
 - effectful tools cannot bypass ADR-014;
 - continuations are exact-AgentRun-bound by default and safely re-attested after revocation only with authoritative provider evidence;
-- suppression is scope-bound, opaque and stable across later generations;
+- suppression matching is scope-bound, opaque, kind-independent, applicability-aware and stable across changed lineage/fingerprint/later generations;
 - local forgetting has explicit pending/completed/degraded states and finite convergence behavior;
 - already transmitted external content is represented truthfully;
 - all derived-state invalidation is dependency/generation fenced;

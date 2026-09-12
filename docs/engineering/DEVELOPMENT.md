@@ -133,8 +133,8 @@ make docs-check    # run Starlight/Astro documentation validation
 Current behavior after Passes 1–10 (M001 Pass 10 closeout in progress; #727/#5 open until final freeze + Phase 2 PASS):
 
 - `make bootstrap` provisions/verifies the pinned Rust toolchain and, on macOS, validates full Xcode + Swift + macOS SDK + Metal tooling when that host tree exists;
-- `make build` builds the Rust workspace (`seyal-core`, `seyal-terminal`, `seyal-exec`, `seyal-protocol`, `seyal-runtime`, `seyal-render`, `seyal-client`). It does **not** currently produce `Seyal.app`; the native host was removed on the `remove-all-swift` recovery branch and returns in #883;
-- `make test` validates repository/tooling/workspace and harness invariants, validates the M001 fuzz registry/corpora, and runs Rust workspace unit/integration tests. Native XCTest/XCUI is skipped while `macos/Seyal` is absent;
+- `make build` builds the Rust workspace and, on macOS, the thin `Seyal.app` host over Rust snapshots (`#883` one-pane slice);
+- `make test` validates repository/tooling/workspace and harness invariants, validates the M001 fuzz registry/corpora, and runs Rust workspace unit/integration tests. Native XCTest/XCUI is `make ui-test` on macOS;
 - `make check` runs the deterministic repository checks, harness/fuzz validation, controlled negative fixtures proving custom validators actually reject bad inputs, Rust formatting/Clippy/tests, and architecture layering. Native Metal hot-path files are required only when `macos/Seyal` exists;
 - `make bench` records and round-trips benchmark environment metadata under `target/benchmarks/` and runs the real Cargo benchmark targets that exist for M001 passes;
 - `make docs` starts the local Starlight documentation site after installing its isolated Node dependencies;
@@ -146,7 +146,7 @@ Canonical Cargo operations use the pinned toolchain and `--locked` where depende
 
 The physical Rust workspace is the Passes 1–10 / M001 production surface documented in `docs/engineering/REPOSITORY-STRUCTURE.md`. Crates exist only for justified ownership boundaries; do not pre-create empty diagram-driven packages.
 
-The native host under `macos/Seyal` is **not in this tree** until #883 recreates a thin AppKit/Metal adapter over Rust snapshots. Historical Pass 6–9 Metal/IME/Candidate-D architecture remains accepted; do not treat `make build` as producing a headed `Seyal.app` on this recovery branch.
+The native host under `macos/Seyal` is a thin AppKit/Metal adapter over Rust `seyal_app_*` snapshots and Candidate-D `seyal_bridge_*` frames. It does not own Workspace/Tab/Pane/composer/chrome product state.
 
 Harness locations under `tests/`, `fuzz/` and `benches/` hold real M001 fixtures, fuzz adapters and pass benchmarks. Pass 10 evidence/protocol docs live under `docs/engineering/M001-PASS10-EVIDENCE.md` and `docs/evidence/`; #727 remains open until final freeze + Phase 2 PASS.
 
@@ -179,7 +179,11 @@ To preview the documentation locally (Node.js 22.12+):
 make docs
 ```
 
-`make build` does not currently produce `Seyal.app`. Do not run `open target/macos-derived-data/Build/Products/Debug/Seyal.app` until #883 restores the native host. Headless Rust verification remains `make test` / focused crate tests.
+On macOS, after `make build`, the one-pane host can be launched with:
+
+```sh
+open target/macos-derived-data/Build/Products/Debug/Seyal.app
+```
 
 ### Diagnosing an apparently inert Return key
 

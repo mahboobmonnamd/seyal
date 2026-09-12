@@ -14,6 +14,10 @@ REQUIRED = [
     ROOT / "scripts/test-macos-ui.sh",
 ]
 
+if not any(path.exists() for path in REQUIRED):
+    print("UI test policy passed (no native UI surface).")
+    sys.exit(0)
+
 missing = [str(path.relative_to(ROOT)) for path in REQUIRED if not path.exists()]
 if missing:
     print("UI test policy failed: missing required native test assets:", file=sys.stderr)

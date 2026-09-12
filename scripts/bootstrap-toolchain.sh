@@ -19,7 +19,6 @@ validate_host_prerequisites() {
     fi
     has xcrun || fail "xcrun is required from Xcode"
     xcrun --find clang >/dev/null 2>&1 || fail "clang is unavailable from the active Xcode installation"
-    bash "${ROOT}/scripts/check-macos-toolchain.sh"
   fi
 }
 

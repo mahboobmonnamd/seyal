@@ -134,8 +134,8 @@ Current behavior after Passes 1–10 (M001 Pass 10 closeout in progress; #727/#5
 
 - `make bootstrap` provisions/verifies the pinned Rust toolchain and, on macOS, validates full Xcode + Swift + macOS SDK + Metal tooling when that host tree exists;
 - `make build` builds the Rust workspace and, on macOS, the thin `Seyal.app` host over Rust snapshots (`#883` one-pane slice);
-- `make test` validates repository/tooling/workspace and harness invariants, validates the M001 fuzz registry/corpora, and runs Rust workspace unit/integration tests. Native XCTest/XCUI is `make ui-test` on macOS;
-- `make check` runs the deterministic repository checks, harness/fuzz validation, controlled negative fixtures proving custom validators actually reject bad inputs, Rust formatting/Clippy/tests, and architecture layering. Native Metal hot-path files are required only when `macos/Seyal` exists;
+- `make test` validates repository/tooling/workspace and harness invariants, validates the M001 fuzz registry/corpora, runs Rust workspace unit/integration tests, and on macOS runs native XCTest/XCUI (`make ui-test`);
+- `make check` runs the deterministic repository checks, harness/fuzz validation, controlled negative fixtures proving custom validators actually reject bad inputs, Rust formatting/Clippy/tests, architecture layering, and on macOS requires the thin `Seyal.app` Metal/hot-path files;
 - `make bench` records and round-trips benchmark environment metadata under `target/benchmarks/` and runs the real Cargo benchmark targets that exist for M001 passes;
 - `make docs` starts the local Starlight documentation site after installing its isolated Node dependencies;
 - `make docs-build` and `make docs-check` validate documentation without becoming dependencies of terminal production execution.

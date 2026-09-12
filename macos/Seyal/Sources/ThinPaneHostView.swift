@@ -16,6 +16,8 @@ final class ThinPaneHostView: NSView {
         )
         super.init(frame: frameRect)
         translatesAutoresizingMaskIntoConstraints = false
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
         setAccessibilityIdentifier("seyal-thin-pane")
         inputSurface.translatesAutoresizingMaskIntoConstraints = false
         addSubview(inputSurface)

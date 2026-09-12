@@ -31,6 +31,7 @@ An Issue or PR cannot override architecture/specification. Existing code is neve
 - Metal is the first production macOS terminal renderer; no temporary text renderer or temporary production VT path.
 - Headless Runtime exists from M001; GUI detach/crash must not kill the execution.
 - Terminal fundamentals stay license/cloud independent.
+- **Portable Seyal product/UI state and behavior are Rust-owned; native platform code, including macOS Swift, is only a thin OS adapter. Product authority in Swift is merge-blocking unless accepted architecture explicitly requires it; if ownership is ambiguous, STOP and use `architecture-change`.**
 
 ## Production vs POC guardrail
 

@@ -1,6 +1,6 @@
 # SPEC-015 — M005 privacy revocation, continuation fencing and forgetting completion
 
-- **Status:** Proposed under #870; accepted on merge only after independent review
+- **Status:** Accepted on merge; specification promotion for #870
 - **Architecture:** ADR-013, ADR-014
 - **Parent refinement:** #838
 - **Implementation consumer:** #681

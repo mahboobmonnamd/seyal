@@ -26,7 +26,11 @@ enum SeyalAppActionKind {
     SEYAL_APP_ACTION_REFRESH = 2,
     SEYAL_APP_ACTION_SUBMIT_INPUT = 3,
     SEYAL_APP_ACTION_QUIT = 4,
-    SEYAL_APP_ACTION_ACK_EFFECT = 5
+    SEYAL_APP_ACTION_ACK_EFFECT = 5,
+    SEYAL_APP_ACTION_BEGIN_RECOVERY = 6,
+    SEYAL_APP_ACTION_COMPLETE_RECOVERY = 7,
+    SEYAL_APP_ACTION_FIRE_RECOVERY = 8,
+    SEYAL_APP_ACTION_ACK_RECOVERY = 9
 };
 
 enum SeyalAppEligibility {
@@ -34,6 +38,50 @@ enum SeyalAppEligibility {
     SEYAL_APP_ELIGIBILITY_FLOW = 1,
     SEYAL_APP_ELIGIBILITY_RAW = 2,
     SEYAL_APP_ELIGIBILITY_TUI = 3
+};
+
+/*
+ * Recovery actions keep the 120-byte SeyalAppAction record.
+ * BEGIN/FIRE: target_pty_generation = host clock milliseconds.
+ * COMPLETE: target_execution_lo = episode generation,
+ *           reserved = outcome | (launch << 8),
+ *           target_attachment_lo = opened handle,
+ *           target_pty_generation = host clock milliseconds.
+ */
+enum SeyalAppRecoveryStage {
+    SEYAL_APP_RECOVERY_DISCONNECTED = 0,
+    SEYAL_APP_RECOVERY_DISCOVERING = 1,
+    SEYAL_APP_RECOVERY_STARTING = 2,
+    SEYAL_APP_RECOVERY_WAITING_CONTROLLER = 3,
+    SEYAL_APP_RECOVERY_RECONSTRUCTING = 4,
+    SEYAL_APP_RECOVERY_RESTORING = 5,
+    SEYAL_APP_RECOVERY_USABLE = 6,
+    SEYAL_APP_RECOVERY_EXHAUSTED = 7,
+    SEYAL_APP_RECOVERY_BLOCKED = 8
+};
+
+enum SeyalAppRecoveryOutcome {
+    SEYAL_APP_RECOVERY_CONNECTED = 0,
+    SEYAL_APP_RECOVERY_OPENED_ADOPTED = 1,
+    SEYAL_APP_RECOVERY_OPENED_REJECTED = 2,
+    SEYAL_APP_RECOVERY_ENDPOINT_MISSING = 3,
+    SEYAL_APP_RECOVERY_RETRYABLE = 4,
+    SEYAL_APP_RECOVERY_CONTROLLER_BUSY = 5,
+    SEYAL_APP_RECOVERY_BLOCKED_OUTCOME = 6
+};
+
+enum SeyalAppRecoveryLaunch {
+    SEYAL_APP_RECOVERY_LAUNCH_NONE = 0,
+    SEYAL_APP_RECOVERY_LAUNCH_STARTED = 1,
+    SEYAL_APP_RECOVERY_LAUNCH_HELPER_MISSING = 2
+};
+
+enum SeyalAppRecoveryEffect {
+    SEYAL_APP_RECOVERY_EFFECT_NONE = 0,
+    SEYAL_APP_RECOVERY_EFFECT_PERFORM_ATTEMPT = 1,
+    SEYAL_APP_RECOVERY_EFFECT_SCHEDULE = 2,
+    SEYAL_APP_RECOVERY_EFFECT_LAUNCH_HELPER = 3,
+    SEYAL_APP_RECOVERY_EFFECT_DISPOSE_HANDLE = 4
 };
 
 enum SeyalAppAxRole {
@@ -89,6 +137,10 @@ typedef struct SeyalAppSnapshot {
     const uint8_t *output_utf8;
     uint32_t output_utf8_len;
     uint32_t reserved;
+    uint16_t recovery_stage;
+    uint16_t recovery_attempts;
+    uint32_t recovery_effect;
+    uint64_t recovery_generation;
 } SeyalAppSnapshot;
 
 typedef struct SeyalAppAxNode {

@@ -178,11 +178,12 @@ must not retry them against a newer snapshot.
 Product snapshots and terminal prepared frames are **separate transfers**.
 Both are immutable and versioned. Pointer-bearing fields are borrowed only
 through the synchronous FFI consumption operation and only until the next
-mutating call on that explicit handle. The host must copy the data before that
-next mutating call and may retain only its own derived copy. A stale generation
-must not authorize actions. This is the existing `SeyalBridge.h` /
-`seyal-client` FFI borrow policy; it is not a longer-lived Rust buffer lease
-and does not add retain/release of Rust memory.
+mutating bridge call. The host must copy the data before that next mutating
+bridge call and may retain only its own derived copy. A stale generation must
+not authorize actions. This is the existing public `SeyalBridge.h` /
+`seyal-client` FFI borrow policy. The published contract does not promise a
+per-handle lifetime exception. It is not a longer-lived Rust buffer lease and
+does not add retain/release of Rust memory.
 
 - Product snapshots carry portable UI/product state. Native may keep only its
   derived copy. When the snapshot generation is no longer current, that copy

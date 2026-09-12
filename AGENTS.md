@@ -31,43 +31,7 @@ An Issue or PR cannot override architecture/specification. Existing code is neve
 - Metal is the first production macOS terminal renderer; no temporary text renderer or temporary production VT path.
 - Headless Runtime exists from M001; GUI detach/crash must not kill the execution.
 - Terminal fundamentals stay license/cloud independent.
-
-## Cross-platform product UI ownership — hard rule
-
-**Rust is authoritative for portable Seyal product/UI state and behavior. Native platform code is an adapter, not a second product implementation. This is a merge-blocking architecture invariant.**
-
-Rust must own portable Seyal behavior including, at minimum:
-
-- Workspace / Tab / Pane models and navigation state.
-- Block state, lifecycle, presentation semantics, and Block-related product decisions.
-- Composer state and command-submission semantics.
-- Focus/navigation policy and keyboard command/action mapping decisions.
-- Split/layout state and portable layout behavior.
-- Agent / Inspector / Activity product state.
-- Portable theme/layout/product rules and shared behavior/conformance tests.
-
-Native macOS Swift may own only platform integration that is inherently macOS-specific, including:
-
-- `NSApplication` / `NSWindow` lifecycle and AppKit hosting.
-- native event collection and forwarding into the Rust-owned action model.
-- IME/text-input bridging required by macOS APIs.
-- accessibility bridging.
-- clipboard / drag-and-drop and other OS service bridges.
-- macOS lifecycle/system integrations.
-- Metal drawable/surface hookup and other narrowly scoped platform plumbing.
-
-Swift must **not** become authoritative for Seyal product behavior merely because AppKit makes a local implementation convenient. In particular, do not place Workspace/Tab/Pane state, Block semantics, composer behavior, command-submission rules, focus/navigation policy, split/layout product state, or agent/inspector/activity behavior in Swift.
-
-A macOS-first implementation order does not permit a macOS-specific product architecture. The portable contract must be shaped so future Windows and Linux hosts can provide native platform adapters without reimplementing Seyal product semantics.
-
-When touching UI code, agents must explicitly identify:
-
-1. the authoritative Rust state/behavior path,
-2. the narrow native platform responsibility,
-3. the direction of data/actions across the boundary, and
-4. evidence that no duplicate product authority exists in Swift.
-
-If this boundary is missing, ambiguous, or contradicted by the requested implementation, **STOP before coding and use the architecture-change process**. Existing Swift code is not justification for preserving product logic in Swift.
+- **Portable Seyal product/UI state and behavior are Rust-owned; native platform code, including macOS Swift, is only a thin OS adapter. Product authority in Swift is merge-blocking unless accepted architecture explicitly requires it; if ownership is ambiguous, STOP and use `architecture-change`.**
 
 ## Production vs POC guardrail
 

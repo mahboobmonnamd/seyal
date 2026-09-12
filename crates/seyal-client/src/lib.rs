@@ -1,6 +1,7 @@
 //! Disposable Seyal.app-side Candidate-D client, renderer-preparation owner,
 //! portable headed product composition (Workspace/Tab/Pane), Flow/Raw/TUI
-//! presentation fencing, and portable theme/config resolution.
+//! presentation fencing, reconnect/recovery policy, and portable theme/config
+//! resolution.
 //!
 //! Runtime/TerminalExecution remain the sole PTY, VT and canonical TerminalState
 //! authority. This crate owns a local socket attachment, an atomically
@@ -8,6 +9,7 @@
 //! host-facing product shell reducer. It is not a second Workspace database.
 
 pub mod presentation;
+pub mod recovery;
 pub mod shell;
 pub mod theme;
 

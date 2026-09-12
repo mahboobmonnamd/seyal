@@ -1,6 +1,6 @@
 # SPEC-014 — M005 RunWorkingSet retention and behavioral resumability
 
-- **Status:** Proposed for acceptance
+- **Status:** Accepted on merge; specification promotion for #862
 - **Issue:** #862
 - **Architecture:** `docs/architecture/ADR-012-AGENT-RUN-IDENTITY-LIFECYCLE.md`, `docs/architecture/ADR-013-CONTEXT-DURABLE-MEMORY.md`
 - **Parent refinement:** #838
@@ -244,7 +244,7 @@ If safe compaction cannot fit the configured bound without losing a required res
 
 ## 9. Behavioral resume classification
 
-Behavioral resume is an explicit decision, separate from AgentRun identity and execution liveness.
+Behavioral resume is an explicit advisory classification, separate from AgentRun identity and execution liveness. It does not commit an AgentRun recovery-state transition; only the Runtime/domain transition authority under ADR-012 §3 may commit durable AgentRun recovery state.
 
 At minimum the recovery decision is one of:
 
@@ -273,13 +273,14 @@ Used when the same AgentRun identity can remain meaningful but a safe next step 
 - conflicting retained/current evidence that cannot be deterministically resolved;
 - provider continuation may contain now-ineligible content and must be abandoned while local state needs reconciliation;
 - persisted run metadata and actual worker/execution state disagree after restart;
+- adapter/observation loss leaves prior execution liveness unknown;
 - a required prerequisite may exist but current validity/availability cannot yet be established safely.
 
 Reconciliation cannot fabricate missing payload.
 
 ### 9.3 `ResumeUnavailable`
 
-Used when any required prerequisite is `Unavailable`, `RevokedOrForbidden`, or irrecoverably `Stale`, and safe reconstruction from current authority is not possible.
+Used when any required prerequisite is `Unavailable`, `RevokedOrForbidden`, or irrecoverably `Stale`, and safe reconstruction from current authority is not possible. `ResumeUnavailable` does not establish that the prior execution has ended. A fresh retry may begin only after Runtime-authoritative proof that the previous execution terminated or was explicitly cancelled. If execution liveness is unknown, classify `ReconciliationRequired`; if it is known live, preserve the current Attempt/AgentRun and recover or reconcile it rather than starting a fresh retry.
 
 The product must not present this as a successful resume merely because:
 
@@ -398,6 +399,7 @@ Required behavior:
 - stale dependency -> revalidate/rebuild or become reconciliation/unavailable;
 - invalid/revoked dependency -> remove from eligibility and rebuild/reconcile as allowed;
 - provider continuation unavailable -> local rebuild if sufficient, otherwise unavailable;
+- adapter/observation loss while execution is live does not change retention availability or permit `ResumeUnavailable`/fresh retry; unknown liveness is `ReconciliationRequired` until Runtime establishes termination or explicit cancellation;
 - compaction failure -> keep prior current valid generation if policy/limits permit, otherwise reduce availability explicitly;
 - persistence corruption -> quarantine affected derived generation, preserve independent source/memory/run authorities;
 - repeated failure -> bounded retry/backoff; no hot loop;
@@ -484,19 +486,21 @@ At minimum:
 15. replacement worker generation can resume same AgentRun only after safe revalidation;
 16. stale worker generation cannot mutate current working state;
 17. provider continuation loss + sufficient local prerequisites permits same-run continuation when ADR-012 allows;
-18. provider continuation loss + missing required retained payload yields `ResumeUnavailable`;
-19. ambiguous external effect yields `ReconciliationRequired`, never blind retry;
-20. fresh retry from scratch creates new Attempt + AgentRun and does not reuse old working set as mutable current state;
-21. provider continuation that may contain revoked content is abandoned for future use;
-22. sibling worktree/workspace/run cannot read another run's working state by path/task/provider coincidence;
-23. unknown/newer persisted schema generation is quarantined;
-24. corruption of RunWorkingSet does not corrupt MemoryStore/source/AgentRun evidence authority;
-25. disk-full/repeated persistence failure yields bounded retries and honest reduced resumability;
-26. bounded eviction recalculates availability deterministically;
-27. cancellation leaves prior current generation coherent;
-28. restart reconciliation rejects stale `current` markers/generations;
-29. malformed dependency/scope/provider identifiers are rejected/fuzzed;
-30. sustained working-set/compaction failure does not synchronously stall terminal progress.
+18. live execution plus adapter/observation loss preserves retention availability and never starts a fresh retry;
+19. unknown execution liveness after observation loss yields `ReconciliationRequired`; a fresh retry requires Runtime proof of termination or explicit cancellation;
+20. provider continuation loss + missing required retained payload yields `ResumeUnavailable`;
+21. ambiguous external effect yields `ReconciliationRequired`, never blind retry;
+22. fresh retry from scratch creates new Attempt + AgentRun and does not reuse old working set as mutable current state;
+23. provider continuation that may contain revoked content is abandoned for future use;
+24. sibling worktree/workspace/run cannot read another run's working state by path/task/provider coincidence;
+25. unknown/newer persisted schema generation is quarantined;
+26. corruption of RunWorkingSet does not corrupt MemoryStore/source/AgentRun evidence authority;
+27. disk-full/repeated persistence failure yields bounded retries and honest reduced resumability;
+28. bounded eviction recalculates availability deterministically;
+29. cancellation leaves prior current generation coherent;
+30. restart reconciliation rejects stale `current` markers/generations;
+31. malformed dependency/scope/provider identifiers are rejected/fuzzed;
+32. sustained working-set/compaction failure does not synchronously stall terminal progress.
 
 Property/fuzz tests are required for generation ordering, dependency-set composition, scope identity, retained-entry decoding and malformed provider/dependency identifiers.
 
@@ -505,6 +509,7 @@ Property/fuzz tests are required for generation ordering, dependency-set composi
 SPEC-014 is acceptable when independent review establishes that:
 
 - RunWorkingSet is explicitly derived and cannot become a second MemoryStore/source/event authority;
+- sibling run/worktree/workspace payload cannot be read or resumed through path, task, provider or identifier coincidence;
 - AgentRun identity, historical explainability and behavioral resumability are separate facts;
 - retention availability is explicit and deterministic;
 - hashes/provider IDs/summaries cannot falsely reconstruct erased or unavailable payload;

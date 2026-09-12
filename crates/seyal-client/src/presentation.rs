@@ -113,6 +113,7 @@ impl FlowPaintInspection {
 pub enum PresentationError {
     ZeroPtyGeneration,
     IdentityMismatch,
+    StaleEpoch,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,6 +123,8 @@ pub enum PresentationAction {
         mode: PresentationMode,
         identity: PresentationIdentity,
         explicit: bool,
+        /// Must match the session epoch. Stale native callbacks fail closed.
+        epoch: u64,
     },
 }
 
@@ -164,7 +167,8 @@ impl PresentationSession {
                 mode,
                 identity,
                 explicit,
-            } => self.transition(mode, identity, explicit),
+                epoch,
+            } => self.transition(mode, identity, explicit, epoch),
         }
     }
 
@@ -193,7 +197,7 @@ impl PresentationSession {
                 Ok(())
             }
             Some(current) if current == identity => Ok(()),
-            Some(_) => Ok(()),
+            Some(_) => Err(PresentationError::IdentityMismatch),
         }
     }
 
@@ -202,9 +206,13 @@ impl PresentationSession {
         next: PresentationMode,
         identity: PresentationIdentity,
         explicit: bool,
+        epoch: u64,
     ) -> Result<(), PresentationError> {
         if identity.pty_generation == 0 {
             return Err(PresentationError::ZeroPtyGeneration);
+        }
+        if epoch != self.epoch {
+            return Err(PresentationError::StaleEpoch);
         }
         match self.identity {
             None => self.identity = Some(identity),
@@ -244,6 +252,20 @@ mod tests {
         PresentationIdentity::new(ExecutionId::from_bytes([tag; 16]), pty).expect("pty")
     }
 
+    fn trans(
+        session: &PresentationSession,
+        mode: PresentationMode,
+        identity: PresentationIdentity,
+        explicit: bool,
+    ) -> PresentationAction {
+        PresentationAction::Transition {
+            mode,
+            identity,
+            explicit,
+            epoch: session.snapshot().epoch,
+        }
+    }
+
     #[test]
     fn flow_raw_tui_are_mutually_exclusive_modes() {
         let bound = identity(1, 7);
@@ -255,21 +277,13 @@ mod tests {
         assert!(!snap.allows_empty_canvas_terminal_hit_test);
 
         assert!(session
-            .apply(PresentationAction::Transition {
-                mode: PresentationMode::Raw,
-                identity: bound,
-                explicit: true,
-            })
+            .apply(trans(&session, PresentationMode::Raw, bound, true,))
             .is_ok());
         assert_eq!(session.snapshot().mode, PresentationMode::Raw);
         assert_eq!(session.snapshot().input_route, InputRoute::DirectTerminal);
 
         assert!(session
-            .apply(PresentationAction::Transition {
-                mode: PresentationMode::Tui,
-                identity: bound,
-                explicit: false,
-            })
+            .apply(trans(&session, PresentationMode::Tui, bound, false,))
             .is_ok());
         assert_eq!(session.snapshot().mode, PresentationMode::Tui);
         assert_ne!(session.snapshot().mode, PresentationMode::Flow);
@@ -282,20 +296,12 @@ mod tests {
         let mut session = PresentationSession::new(Some(bound), PresentationMode::Flow);
         let start_epoch = session.snapshot().epoch;
         assert!(session
-            .apply(PresentationAction::Transition {
-                mode: PresentationMode::Tui,
-                identity: bound,
-                explicit: false,
-            })
+            .apply(trans(&session, PresentationMode::Tui, bound, false,))
             .is_ok());
         assert_eq!(session.snapshot().identity, Some(bound));
         assert!(session.snapshot().epoch > start_epoch);
         assert!(session
-            .apply(PresentationAction::Transition {
-                mode: PresentationMode::Flow,
-                identity: bound,
-                explicit: false,
-            })
+            .apply(trans(&session, PresentationMode::Flow, bound, false,))
             .is_ok());
         let snap = session.snapshot();
         assert_eq!(snap.mode, PresentationMode::Flow);
@@ -309,19 +315,11 @@ mod tests {
         let mut session = PresentationSession::new(Some(bound), PresentationMode::Flow);
         assert!(!session.snapshot().last_transition_was_explicit);
         assert!(session
-            .apply(PresentationAction::Transition {
-                mode: PresentationMode::Raw,
-                identity: bound,
-                explicit: true,
-            })
+            .apply(trans(&session, PresentationMode::Raw, bound, true,))
             .is_ok());
         assert!(session.snapshot().last_transition_was_explicit);
         assert!(session
-            .apply(PresentationAction::Transition {
-                mode: PresentationMode::Flow,
-                identity: bound,
-                explicit: true,
-            })
+            .apply(trans(&session, PresentationMode::Flow, bound, true,))
             .is_ok());
         assert!(session.snapshot().last_transition_was_explicit);
         assert_eq!(session.snapshot().identity, Some(bound));
@@ -332,20 +330,17 @@ mod tests {
         let bound = identity(1, 7);
         let mut session = PresentationSession::new(Some(bound), PresentationMode::Flow);
         assert_eq!(
-            session.apply(PresentationAction::Transition {
-                mode: PresentationMode::Tui,
-                identity: identity(2, 7),
-                explicit: false,
-            }),
+            session.apply(trans(
+                &session,
+                PresentationMode::Tui,
+                identity(2, 7),
+                false,
+            )),
             Err(PresentationError::IdentityMismatch)
         );
         assert_eq!(session.snapshot().mode, PresentationMode::Flow);
         assert_eq!(
-            session.apply(PresentationAction::Transition {
-                mode: PresentationMode::Raw,
-                identity: identity(1, 8),
-                explicit: true,
-            }),
+            session.apply(trans(&session, PresentationMode::Raw, identity(1, 8), true,)),
             Err(PresentationError::IdentityMismatch)
         );
         assert_eq!(session.snapshot().mode, PresentationMode::Flow);
@@ -370,11 +365,7 @@ mod tests {
         let mut session = PresentationSession::new(Some(bound), PresentationMode::Flow);
         assert_eq!(session.snapshot().input_route, InputRoute::Composer);
         session
-            .apply(PresentationAction::Transition {
-                mode: PresentationMode::Raw,
-                identity: bound,
-                explicit: true,
-            })
+            .apply(trans(&session, PresentationMode::Raw, bound, true))
             .unwrap();
         assert_eq!(session.snapshot().input_route, InputRoute::DirectTerminal);
         assert_ne!(session.snapshot().input_route, InputRoute::Composer);
@@ -398,9 +389,10 @@ mod tests {
     fn bind_identity_does_not_replace_a_different_bound_identity() {
         let bound = identity(1, 7);
         let mut session = PresentationSession::new(Some(bound), PresentationMode::Raw);
-        session
-            .apply(PresentationAction::BindIdentity(identity(2, 7)))
-            .unwrap();
+        assert_eq!(
+            session.apply(PresentationAction::BindIdentity(identity(2, 7))),
+            Err(PresentationError::IdentityMismatch)
+        );
         assert_eq!(session.snapshot().identity, Some(bound));
         assert_eq!(session.snapshot().mode, PresentationMode::Raw);
     }
@@ -410,15 +402,32 @@ mod tests {
         let mut session = PresentationSession::new(None, PresentationMode::Raw);
         let bound = identity(4, 1);
         session
-            .apply(PresentationAction::Transition {
-                mode: PresentationMode::Flow,
-                identity: bound,
-                explicit: true,
-            })
+            .apply(trans(&session, PresentationMode::Flow, bound, true))
             .unwrap();
         assert_eq!(session.snapshot().identity, Some(bound));
         assert_eq!(session.snapshot().mode, PresentationMode::Flow);
         assert_eq!(session.snapshot().input_route, InputRoute::Composer);
+    }
+
+    #[test]
+    fn stale_epoch_fails_closed() {
+        let bound = identity(1, 7);
+        let mut session = PresentationSession::new(Some(bound), PresentationMode::Flow);
+        let stale = session.snapshot().epoch;
+        session
+            .apply(trans(&session, PresentationMode::Raw, bound, true))
+            .unwrap();
+        assert_eq!(
+            session.apply(PresentationAction::Transition {
+                mode: PresentationMode::Tui,
+                identity: bound,
+                explicit: false,
+                epoch: stale,
+            }),
+            Err(PresentationError::StaleEpoch)
+        );
+        assert_eq!(session.snapshot().mode, PresentationMode::Raw);
+        assert_eq!(session.snapshot().identity, Some(bound));
     }
 
     #[test]

@@ -278,8 +278,8 @@ ProviderDeleteUnknown
 
 Requirements:
 
-1. Provider deletion is attempted only through an authenticated declared provider capability.
-2. `ProviderDeleteConfirmed` means only what the provider contract actually guarantees.
+1. Provider deletion initiated or authorized by Seyal is an effect and must use the single ADR-014 Action/effect authority, including durable ActionId, authorization, dispatch fencing, and evidence/reconciliation; provider deletion results cannot create a parallel effect path.
+2. `ProviderDeleteConfirmed` means only what the authenticated provider contract actually guarantees and is recorded as typed executor evidence under that Action; an external/provider observation not initiated by Seyal is labeled provider-observed and cannot be reported as Seyal-controlled completion.
 3. Unsupported/unknown provider deletion is surfaced honestly.
 4. Already transmitted data is never described as unsent.
 5. Seyal does not retain forbidden local payload merely to retry provider deletion.

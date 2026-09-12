@@ -452,7 +452,7 @@ Context build failures must be explicit and bounded.
 Required behavior:
 
 - unreadable/missing individual optional source → mark unavailable/excluded and continue when correctness permits;
-- required normative/exact source unavailable → fail the build or mark it incomplete; do not silently substitute lower authority;
+- required normative/exact source unavailable **or ineligible** because scope/permission/sensitivity/current-policy checks fail → explicit non-dispatchable failed/incomplete build; do not silently substitute lower authority or treat policy denial as an ordinary I/O miss;
 - mandatory context cannot fit budget → explicit non-dispatchable incomplete/unable-to-build state; do not silently drop required authority;
 - freshness cannot be established for a required dependency → fail/rebuild rather than reuse stale state;
 - stale LSP/index → ignore/rebuild asynchronously; source reads remain authoritative;
@@ -566,7 +566,8 @@ At minimum, production implementation must include tests for:
 33. identifier normalization covers case-sensitivity policy and Unicode normalization differences (including APFS-relevant case behavior and NFC/NFD paths) without cross-scope aliasing;
 34. repeated source/index failure converges under bounded backoff;
 35. cancellation releases build resources;
-36. heavy context/index load does not synchronously stall terminal progress.
+36. required source that exists but is ineligible by scope/permission/sensitivity produces the same non-dispatchable required-context outcome as another unavailable required source;
+37. heavy context/index load does not synchronously stall terminal progress.
 
 Property/fuzz tests are required for source-identifier normalization, dependency invalidation and scope-key composition where malformed/untrusted input can reach them.
 
@@ -576,6 +577,7 @@ SPEC-013 is satisfied only when implementation evidence proves:
 
 - one provenance-first Local Context Engine consumes existing authorities rather than creating another one;
 - scope/policy/sensitivity filtering occurs before relevance/model enhancement;
+- cross-workspace/worktree/repository scope leakage is rejected before ranking and cannot be reintroduced by cache/index/model enrichment;
 - authority and relevance remain distinct;
 - filesystem/repository/worktree/symlink/submodule provenance is deterministic;
 - LSP/index sources are generation-fenced and never source truth;

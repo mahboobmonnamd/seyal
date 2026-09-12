@@ -151,7 +151,7 @@
           "target": "DEC-ADR-009"
         },
         {
-          "type": "governed_by",
+          "type": "related_to",
           "target": "DEC-ADR-015"
         },
         {
@@ -242,7 +242,7 @@
       ],
       "relationships": [
         {
-          "type": "governs",
+          "type": "related_to",
           "target": "COMP-PANE-PRESENTATION"
         }
       ]

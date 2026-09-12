@@ -382,7 +382,7 @@ Rules:
 
 This Issue preserves the seam only. M001 still defers the production configuration system and production Lua runtime.
 
-The native host now implements the typed UI snapshot described by `M001-UI-DESIGN-SYSTEM.md`: TOML is parsed at cold load into `SeyalUserUISettings`, an optional Lua overlay may only produce `SeyalConfigPatch`, and UI/renderer consume `SeyalResolvedVisualConfiguration`. The production Lua VM remains deferred.
+**Pre-migration implementation note (ADR-015):** This passage describes the existing native implementation before M001.1, not target ownership. Under ADR-015, Rust owns TOML parsing, defaults, validation, precedence and the portable resolved snapshot; AppKit receives typed visual intent and realizes native colors/fonts/materials. #740 owns this migration. In the current pre-migration implementation, the native host parses TOML at cold load into `SeyalUserUISettings`, an optional Lua overlay may only produce `SeyalConfigPatch`, and UI/renderer consume `SeyalResolvedVisualConfiguration`. The production Lua VM remains deferred.
 
 ## 10. Native macOS behavior
 

@@ -50,16 +50,18 @@ final class ProductChromeHostView: NSView {
         inspector.orientation = .vertical
         inspector.alignment = .leading
         inspector.translatesAutoresizingMaskIntoConstraints = false
-        inspector.setAccessibilityIdentifier("seyal-inspector")
+        expose(inspector, identifier: "seyal-inspector")
         attention.orientation = .vertical
         attention.alignment = .leading
-        attention.setAccessibilityIdentifier("seyal-attention")
+        expose(attention, identifier: "seyal-attention")
         blocks.orientation = .vertical
         blocks.alignment = .leading
         blocks.translatesAutoresizingMaskIntoConstraints = false
-        blocks.setAccessibilityIdentifier("seyal-blocks")
+        expose(blocks, identifier: "seyal-blocks")
         composer.setAccessibilityIdentifier("seyal-composer")
+        recoveryLabel.setAccessibilityElement(true)
         recoveryLabel.setAccessibilityIdentifier("seyal-recovery")
+        recoveryLabel.stringValue = "disconnected"
 
         let inspectorColumn = NSStackView(views: [inspector, attention, recoveryLabel])
         inspectorColumn.orientation = .vertical
@@ -395,6 +397,12 @@ final class ProductChromeHostView: NSView {
         button.setAccessibilityIdentifier(identifier)
         button.state = selected ? .on : .off
         return button
+    }
+
+    private func expose(_ view: NSView, identifier: String) {
+        view.setAccessibilityElement(true)
+        view.setAccessibilityRole(.group)
+        view.setAccessibilityIdentifier(identifier)
     }
 }
 

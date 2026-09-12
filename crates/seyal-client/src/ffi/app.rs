@@ -8,6 +8,7 @@ use crate::app::{
     AppAction, AppError, AppFence, AppSnapshot, ApplicationRoot, BindingEvidence, NativeEffect,
     PresentationEligibility, APP_ABI_VERSION,
 };
+use crate::composer::ComposerMode;
 use crate::recovery::{AttemptOutcome, LaunchResult, RecoveryEffect, RecoveryStage};
 
 use super::allocate_handle;
@@ -104,9 +105,24 @@ pub struct SeyalAppAccessibility {
     pub reserved: u32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SeyalAppComposer {
+    pub version: u16,
+    pub size: u16,
+    pub mode: u16,
+    pub flags: u16,
+    pub epoch: u64,
+    pub request_id: u64,
+    pub draft_utf8: *const u8,
+    pub draft_utf8_len: u32,
+    pub block_count: u32,
+}
+
 struct AppHandle {
     root: ApplicationRoot,
     output: Vec<u8>,
+    composer_draft: Vec<u8>,
     ax_nodes: Vec<SeyalAppAxNode>,
     ax_text: Vec<u8>,
 }
@@ -164,6 +180,7 @@ pub extern "C" fn seyal_app_create() -> u64 {
             AppHandle {
                 root: ApplicationRoot::new(),
                 output: Vec::new(),
+                composer_draft: Vec::new(),
                 ax_nodes: Vec::new(),
                 ax_text: Vec::new(),
             },
@@ -245,6 +262,67 @@ pub extern "C" fn seyal_app_accessibility(handle: u64) -> SeyalAppAccessibility 
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn seyal_app_composer(handle: u64) -> SeyalAppComposer {
+    APPS.with(|apps| {
+        let mut apps = apps.borrow_mut();
+        let Some(state) = apps.get_mut(&handle) else {
+            return SeyalAppComposer {
+                version: APP_ABI_VERSION,
+                size: 0,
+                mode: 0,
+                flags: 0,
+                epoch: 0,
+                request_id: 0,
+                draft_utf8: ptr::null(),
+                draft_utf8_len: 0,
+                block_count: 0,
+            };
+        };
+        let snap = state.root.snapshot();
+        let Some(composer) = snap.composer else {
+            return SeyalAppComposer {
+                version: APP_ABI_VERSION,
+                size: size_of::<SeyalAppComposer>() as u16,
+                mode: 0,
+                flags: 0,
+                epoch: 0,
+                request_id: 0,
+                draft_utf8: ptr::null(),
+                draft_utf8_len: 0,
+                block_count: 0,
+            };
+        };
+        state.composer_draft = composer.draft.as_bytes().to_vec();
+        let mut flags = 0u16;
+        if composer.can_submit {
+            flags |= 1;
+        }
+        if composer.allows_direct_terminal {
+            flags |= 2;
+        }
+        SeyalAppComposer {
+            version: APP_ABI_VERSION,
+            size: size_of::<SeyalAppComposer>() as u16,
+            mode: match composer.mode {
+                ComposerMode::Hidden => 0,
+                ComposerMode::Available => 1,
+                ComposerMode::Busy { .. } => 2,
+            },
+            flags,
+            epoch: composer.epoch,
+            request_id: composer.pending_request_id.unwrap_or(0),
+            draft_utf8: if state.composer_draft.is_empty() {
+                ptr::null()
+            } else {
+                state.composer_draft.as_ptr()
+            },
+            draft_utf8_len: state.composer_draft.len() as u32,
+            block_count: composer.blocks.len() as u32,
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn seyal_app_last_error(handle: u64) -> i32 {
     APPS.with(|apps| {
         apps.borrow()
@@ -312,6 +390,24 @@ fn decode_action(action: &SeyalAppAction) -> Result<AppAction, i32> {
             now: Duration::from_millis(action.target_pty_generation),
         }),
         9 => Ok(AppAction::AckRecoveryEffect),
+        10 => Ok(AppAction::SetComposerDraft {
+            fence,
+            text: read_payload(action.payload, action.payload_len)?,
+            composer_epoch: action.target_pty_generation,
+        }),
+        11 => Ok(AppAction::SubmitComposer {
+            fence,
+            composer_epoch: action.target_pty_generation,
+        }),
+        12 => Ok(AppAction::ApplyComposerResult {
+            fence,
+            request_id: action.target_execution_lo,
+            accepted: action.reserved != 0,
+        }),
+        13 => Ok(AppAction::ApplyRuntimeBlocks {
+            fence,
+            records: Vec::new(),
+        }),
         _ => Err(-6),
     }
 }
@@ -521,6 +617,9 @@ fn error_number(error: AppError) -> i32 {
         AppError::NoLiveClient => 13,
         AppError::InvalidPayload => 14,
         AppError::StaleRecoveryGeneration => 15,
+        AppError::ComposerSubmitDisabled => 16,
+        AppError::StaleComposerRequest => 17,
+        AppError::StaleComposerEpoch => 18,
     }
 }
 

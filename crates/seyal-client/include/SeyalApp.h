@@ -30,7 +30,11 @@ enum SeyalAppActionKind {
     SEYAL_APP_ACTION_BEGIN_RECOVERY = 6,
     SEYAL_APP_ACTION_COMPLETE_RECOVERY = 7,
     SEYAL_APP_ACTION_FIRE_RECOVERY = 8,
-    SEYAL_APP_ACTION_ACK_RECOVERY = 9
+    SEYAL_APP_ACTION_ACK_RECOVERY = 9,
+    SEYAL_APP_ACTION_SET_COMPOSER_DRAFT = 10,
+    SEYAL_APP_ACTION_SUBMIT_COMPOSER = 11,
+    SEYAL_APP_ACTION_APPLY_COMPOSER_RESULT = 12,
+    SEYAL_APP_ACTION_APPLY_RUNTIME_BLOCKS = 13
 };
 
 enum SeyalAppEligibility {
@@ -162,6 +166,27 @@ typedef struct SeyalAppAxNode {
     uint32_t reserved2;
 } SeyalAppAxNode;
 
+enum SeyalAppComposerMode {
+    SEYAL_APP_COMPOSER_HIDDEN = 0,
+    SEYAL_APP_COMPOSER_AVAILABLE = 1,
+    SEYAL_APP_COMPOSER_BUSY = 2
+};
+
+#define SEYAL_APP_COMPOSER_CAN_SUBMIT 1u
+#define SEYAL_APP_COMPOSER_DIRECT_TERMINAL 2u
+
+typedef struct SeyalAppComposer {
+    uint16_t version;
+    uint16_t size;
+    uint16_t mode;
+    uint16_t flags;
+    uint64_t epoch;
+    uint64_t request_id;
+    const uint8_t *draft_utf8;
+    uint32_t draft_utf8_len;
+    uint32_t block_count;
+} SeyalAppComposer;
+
 typedef struct SeyalAppAccessibility {
     uint16_t version;
     uint16_t size;
@@ -174,6 +199,7 @@ uint64_t seyal_app_create(void);
 int32_t seyal_app_destroy(uint64_t handle);
 int32_t seyal_app_apply(uint64_t handle, const SeyalAppAction *action);
 SeyalAppSnapshot seyal_app_snapshot(uint64_t handle);
+SeyalAppComposer seyal_app_composer(uint64_t handle);
 SeyalAppAccessibility seyal_app_accessibility(uint64_t handle);
 int32_t seyal_app_last_error(uint64_t handle);
 

@@ -1,8 +1,8 @@
 # Seyal UI Architecture — Foundation Direction
 
 **Document:** SEYAL-UI-ARCHITECTURE-001
-**Date:** 2026-08-23; proposed presentation-mode clarification 2026-09-11
-**Status:** Foundation UI architecture; #858 clarification proposed until merge
+**Date:** 2026-08-23; presentation-mode clarification accepted 2026-09-11
+**Status:** Foundation UI architecture; #858 / PR #859 (`8d08f2f`) presentation exclusivity accepted
 **Authority:** Subordinate to [`../SEYAL-ARCH-FOUNDATION-RD-001.md`](../SEYAL-ARCH-FOUNDATION-RD-001.md)
 
 This document defines the presentation architecture needed so Seyal can become a futuristic execution workspace without allowing UI work to compromise terminal correctness, persistence, memory, or latency.
@@ -94,11 +94,19 @@ Same-execution continuity does not require one AppKit terminal view object to re
 ### 2.4 Transition ownership
 
 Presentation transitions are input-authority transitions as well as layout changes.
-Before the destination mode can accept an event, the source mode must stop
-admitting new input, invalidate its presentation/input epoch, discard uncommitted
-IME/preedit state, release first-responder/text-input ownership and release its
-mouse route/capture. Only then may the destination route be validated and
-activated.
+Every `Flow ↔ Raw`, `Flow ↔ TUI`, and `Raw ↔ TUI` transition follows this order:
+
+```text
+1. Rust freezes the old route and increments the epoch.
+2. Native revokes input, mouse capture, first responder, AX focus, and marked text.
+3. Stale callbacks fail closed.
+4. Rust validates current destination eligibility.
+5. Native realizes only that destination.
+6. The destination route becomes active.
+```
+
+Host completion may gate only local route activation. It must never stall PTY,
+VT, or output progress.
 
 Eligibility/admission must be current for the exact execution, attachment and
 Controller authority plus the relevant presentation/canonical/integration
@@ -379,6 +387,17 @@ On macOS, the product must support first-class:
 
 Accessibility must be designed into Metal-backed terminal presentation; it is not a reason to replace the terminal renderer with a text view. In Flow, accessibility should expose Block/composer structure without also exposing a competing hidden full-Pane raw-terminal focus target.
 
+Rust owns the semantic accessibility snapshot: stable IDs, role, label/value/help,
+enabled/selected/focused state, navigation order, and typed actions. AppKit AX
+objects only realize that snapshot and post platform notifications. Native must
+not invent product roles, labels, or actions.
+
+Product snapshots and terminal prepared frames remain separate transfers.
+Candidate-D and `seyal-render` stay damage-driven. Native may retain an
+immutable product snapshot only while its generation is current; invalidation
+requires release. Pane-sensitive actions carry stable Pane identity plus the
+current execution, attachment, and presentation epochs.
+
 ---
 
 ## 14. UI architecture invariants
@@ -397,9 +416,9 @@ Accessibility must be designed into Metal-backed terminal presentation; it is no
 12. UI layout persistence and execution persistence remain separate.
 13. Futuristic presentation is allowed only inside terminal correctness/performance budgets.
 14. If Flow cannot safely preserve required character-level input semantics, switch the Pane to Raw instead of passing input through a hidden terminal surface.
-15. Presentation transitions revoke the source input/focus/IME/mouse route before the destination route can admit events.
+15. Presentation transitions follow the Rust-freeze / native-revoke / fail-closed / Rust-eligibility / native-realize / destination-active order. Host completion may gate only local route activation.
 16. Presentation eligibility is fenced to current execution/attachment/controller and relevant canonical/integration generation.
-17. Headed product/UI state is Rust-owned; Swift in this repository is only a thin macOS adapter (ADR-015). There is no separate Swift UI product tree.
+17. Headed product/UI state is Rust-owned; Swift in this repository is only a thin macOS adapter (ADR-015). There is no separate Swift UI product tree. Rejected product-authority Swift may be deleted; required native adapter concerns must be recreated. PR #903 does not restore `Seyal.app` or satisfy the Usable Terminal Gate.
 
 ---
 

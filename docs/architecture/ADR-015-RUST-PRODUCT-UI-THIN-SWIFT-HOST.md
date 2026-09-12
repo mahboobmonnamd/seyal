@@ -1,15 +1,25 @@
 # ADR-015 — Rust Product UI and Thin Swift Host
 
-- **Status:** Accepted on merge
+- **Status:** Accepted (merged PR #887 / `993e69f` on 2026-09-12)
 - **Date:** 2026-09-12
 - **Issue:** #877
 - **Depends on:** `R-010`, `R-011`, `R-012`, ADR-004, ADR-007, ADR-009, ADR-011, SPEC-006, SPEC-007, SPEC-008, SPEC-009, [`SEYAL-UI-ARCHITECTURE-001.md`](ui/SEYAL-UI-ARCHITECTURE-001.md)
-- **Coordinates with:** #875 / PR #876 agent and review enforcement; M001.1 parent #878
+- **Coordinates with:** #875 / PR #876 agent and review enforcement; M001.1 parent #878; contract freeze #904
 
 ## Decision requested
 
 This repository keeps one mixed-language macOS application. It does **not** extract
-Swift UI to another tree and does **not** delete Swift.
+Swift UI to another tree. It does **not** delete Swift as a language or delete
+the required thin native adapter.
+
+Deleting **rejected product-authority Swift** is required. Deleting **native
+adapter concerns** (`NSApplication`/`NSWindow`, `NSEvent` normalization,
+`NSTextInputClient` preedit, accessibility realization, `NSPasteboard`,
+`CAMetalLayer`/Metal/CoreText, trusted helper spawn) without a replacement host
+is a recovery gap, not accepted architecture. A thin in-repo Swift/AppKit
+adapter remains required. PR #903 / `remove-all-swift` is an umbrella recovery
+branch and is not mergeable to `master` until a real application passes headed
+acceptance.
 
 Ownership is split by *authority*, not by deleting a language:
 
@@ -35,7 +45,7 @@ commands, focus, layout, presentation policy, theme/config semantics, recovery
 or agent/inspector behavior.
 
 #875 / PR #876 already made that split a merge-blocking agent/review rule.
-This ADR is the independent architecture decision those rules enforce. It defines language ownership only: existing accepted ADRs/specifications remain the behavior authority. In any conflict about which language may own a behavior, ADR-015 governs ownership; in any conflict about behavior, the owning contract governs and must be changed through its own review/merge gate. This ADR does not promote or modify separately proposed behavior amendments.
+This ADR is the independent architecture decision those rules enforce. It defines language ownership only: existing accepted ADRs/specifications remain the behavior authority. In any conflict about which language may own a behavior, ADR-015 governs ownership; in any conflict about behavior, the owning contract governs and must be changed through its own review/merge gate. ADR-009's presentation amendment is accepted (PR #859 / `8d08f2f`); ADR-015 assigns portable ownership of that accepted policy to Rust and does not change the behavior contract.
 
 A prior reading of #877 that would remove all Swift sources, isolate a separate
 Swift UI repository, or keep portable product authority in Swift because macOS
@@ -46,8 +56,10 @@ ships first is rejected.
 ### A. Remove all Swift from this repository
 
 Rejected. IME (`NSTextInputClient`), accessibility, AppKit window lifecycle and
-Metal drawable creation remain first-class macOS integration. Deleting Swift
-would force a premature universal GUI or a weaker input/accessibility path.
+Metal drawable creation remain first-class macOS integration. Deleting Swift as
+a language, or deleting those native adapter concerns without a replacement
+host, would force a premature universal GUI or a weaker input/accessibility
+path. Rejected product-authority Swift may still be deleted.
 
 ### B. Extract Swift UI to a sibling repository / superproject tree
 
@@ -147,13 +159,60 @@ Rust product snapshot / renderer intent
 native AppKit / accessibility / Metal realization
 ```
 
+Action and snapshot records are **versioned and size-tagged**. Unknown versions
+or mismatched sizes fail closed. The host must not parse JSON, invent fields, or
+grow a chatty schema on the hot path.
+
+Pane-sensitive actions carry:
+
+```text
+stable Pane identity
++ current ExecutionId
++ current AttachmentId / Controller authority
++ current presentation epoch
+```
+
+Stale pane, execution, attachment, or presentation epochs fail closed. The host
+must not retry them against a newer snapshot.
+
+Product snapshots and terminal prepared frames are separate transfers:
+
+- Rust owns immutable product snapshots. Native may retain a snapshot only
+  while its generation remains current. Invalidation revokes the generation;
+  native must release the buffer and must not mutate it.
+- Terminal prepared-frame transfer remains the existing Candidate-D /
+  `seyal-render` damage-driven path. It is not a product snapshot and must not
+  wait for one.
+- Native preedit, AX objects, view identities, hover/press state,
+  Metal/CoreText objects, and GPU resources are disposable platform state.
+
 The boundary must not become per-cell, per-glyph, per-frame, JSON, or
 synchronously chatty merely to move authority to Rust. Existing coarse
 Candidate-D/prepared-render patterns remain the performance model.
 
 Terminal input/output/render progress must never synchronously depend on
 product UI state transfer, platform-host acknowledgement, agent work,
-persistence or cloud services.
+persistence or cloud services. Host completion may gate only local route
+activation.
+
+### Application commands and quit
+
+Native recognizes AppKit/menu primitives. Rust decides portable
+pane/tab/window/detach behavior. Unavoidable `NSApplication` and `NSPasteboard`
+operations are returned as typed native effects. The host must not decide
+portable workspace/tab/pane policy locally.
+
+Cmd-Q / application termination: Rust freezes input and requests bounded
+detach/cleanup before native application termination. Native must not terminate
+the process while that bounded cleanup is still owed. This never stalls PTY/VT
+progress for surviving executions.
+
+### Accessibility snapshot
+
+Rust owns a semantic accessibility snapshot with stable IDs, role, label/value/help,
+enabled/selected/focused state, navigation order, and typed actions. AppKit AX
+objects only realize that snapshot and post platform notifications. Native must
+not invent product roles, labels, or actions.
 
 ## Migration discipline
 
@@ -180,7 +239,10 @@ writer/authority is unambiguous and tested.
 
 1. One `TerminalExecution` owns one PTY and one canonical `TerminalState`.
    The GUI never owns a second VT/grid.
-2. Flow / Raw / TUI presentation semantics remain governed by ADR-009 and its applicable specifications, including each amendment's own acceptance status. ADR-015 assigns portable presentation-policy ownership to Rust but does not adopt or modify presentation behavior.
+2. Flow / Raw / TUI presentation semantics remain governed by accepted ADR-009
+   (including the merged #859 exclusivity amendment) and its applicable
+   specifications. ADR-015 assigns portable presentation-policy ownership to
+   Rust but does not change that behavior contract.
 3. Metal remains the production macOS terminal renderer. No NSTextView,
    SwiftUI, or CPU-full-frame terminal engine (`R-011`).
 4. No per-cell/per-glyph/per-frame Rust↔Swift callback on the terminal hot path.
@@ -203,16 +265,22 @@ Future hosts may use different native windowing, accessibility, IME, clipboard
 and GPU APIs. They consume the same portable Rust models/actions/policies and
 provide platform adapters for the OS-specific pieces.
 
-## Required follow-up (not this PR)
+## Required follow-up (not this ADR)
 
-- #886 performs an exhaustive source-by-source Swift ownership/parity manifest
-  before production migration begins.
+- #886 freeze ledger is accepted. #904 freezes the coarse Rust/native host
+  contract in existing documents. Neither restores `Seyal.app` nor satisfies
+  the Usable Terminal Gate.
+- PR #903 / `remove-all-swift` is the umbrella recovery branch. It deleted
+  rejected product Swift and the then-current native host. It remains
+  unmergeable to `master` until a real application passes headed acceptance.
 - #879/#880/#740/#861/#881/#882 and related M001.1 children move remaining
   portable product/UI authority into Rust.
-- #883 rewrites the macOS product shell as the thin AppKit adapter after the Rust
-  authorities it consumes exist.
+- #883 recreates the thin AppKit adapter from scratch after the Rust
+  authorities it consumes exist. Concern-level native responsibilities remain
+  required even though the previous sources were deleted.
 - #884 removes parallel Swift preview/test product models.
-- #885 performs final architecture/parity/performance qualification.
+- #885 performs final architecture/parity/performance qualification, including
+  the Usable Terminal Gate for the rebuilt app.
 - Re-baseline headed UI latency/CPU/RSS/GPU metrics on the final migrated path.
 - Issue-pinned architecture-authority discovery/enforcement is tracked separately;
   agents must not rely on remembering ADR numbers as the registry grows.
@@ -225,5 +293,5 @@ resource or platform-port evidence shows that this split cannot preserve native
 quality or the terminal hot-path constraints, or that a listed Rust-owned
 portable behavior cannot be expressed without creating a worse authority model.
 
-Approved by product authority on 2026-09-12. Independent architecture review
-remains required before merge.
+Approved by product authority on 2026-09-12. Accepted on merge of PR #887 as
+`993e69f`.

@@ -21,7 +21,7 @@
       "sources": [
         {
           "path": "docs/architecture/README.md",
-          "fingerprint": "82323d93fe274921e4c0b805ade79e334a36975c"
+          "fingerprint": "a1bb58382ca900168b1f30001bee54b49e3ec0a2"
         }
       ],
       "relationships": [
@@ -86,7 +86,7 @@
       "sources": [
         {
           "path": "docs/architecture/README.md",
-          "fingerprint": "82323d93fe274921e4c0b805ade79e334a36975c"
+          "fingerprint": "a1bb58382ca900168b1f30001bee54b49e3ec0a2"
         }
       ],
       "relationships": [
@@ -126,23 +126,23 @@
       "sources": [
         {
           "path": "docs/architecture/ADR-009-COMMAND-BLOCKS-COMPOSER-AND-TUI.md",
-          "fingerprint": "6058de22273837cfd0c2f4ddef9571a0d8739daa"
+          "fingerprint": "25c820818c250848e9e42f2bf8253c7548946b64"
         },
         {
           "path": "docs/specs/SPEC-006-M001-NATIVE-INPUT-RESIZE.md",
-          "fingerprint": "6cbebdded12acb3901ddb449824a071be2dafc5f"
+          "fingerprint": "c2d5e6fe94362614269e31e217cb37f376290c4b"
         },
         {
           "path": "docs/specs/SPEC-008-M003-COMMAND-BLOCKS.md",
-          "fingerprint": "e663eac082812e23c820f0ecc9678c39e3620046"
+          "fingerprint": "5b775bf58e7f8e8445221bb548f5fe53c4c329fd"
         },
         {
           "path": "docs/specs/SPEC-009-M001-DETACH-RECONNECT.md",
-          "fingerprint": "a0a14cf80d6df1460f5d7c6711d6a6f38032c799"
+          "fingerprint": "6836906bf11d4f48c8e7918615105a166d5dfe28"
         },
         {
           "path": "docs/architecture/ADR-015-RUST-PRODUCT-UI-THIN-SWIFT-HOST.md",
-          "fingerprint": "4db2783f371c7e1a1d2cc746216cec2c68a77eb3"
+          "fingerprint": "fefb5f8b11d6a36b8fee81afa3e19f6ea75d2ed3"
         }
       ],
       "relationships": [
@@ -193,7 +193,7 @@
       "id": "DEC-ADR-009",
       "kind": "decision",
       "title": "ADR-009 Command Blocks composer and presentation takeover",
-      "summary": "Accepted command-Block baseline with proposed #858 correction defining Block-first Flow, mutually exclusive Raw/TUI takeover, renderer reuse without viewport authority, and fenced input ownership transitions.",
+      "summary": "Accepted command-Block baseline plus accepted #858 / PR #859 (8d08f2f) correction: Block-first Flow, mutually exclusive Raw/TUI takeover, renderer reuse without viewport authority, and fenced Rust/native input-ownership transitions.",
       "tags": [
         "adr",
         "adr-009",
@@ -209,7 +209,7 @@
       "sources": [
         {
           "path": "docs/architecture/ADR-009-COMMAND-BLOCKS-COMPOSER-AND-TUI.md",
-          "fingerprint": "6058de22273837cfd0c2f4ddef9571a0d8739daa"
+          "fingerprint": "25c820818c250848e9e42f2bf8253c7548946b64"
         }
       ],
       "relationships": [
@@ -223,7 +223,7 @@
       "id": "DEC-ADR-015",
       "kind": "decision",
       "title": "ADR-015 Rust product UI authority and thin native host",
-      "summary": "Portable Seyal product/UI state, policy and behavior are Rust-owned; Swift remains a thin macOS adapter for inherently platform-specific AppKit, IME, accessibility, clipboard, Metal/CoreText and OS integration.",
+      "summary": "Accepted (PR #887 / 993e69f): portable Seyal product/UI state, policy and behavior are Rust-owned; Swift remains a thin macOS adapter for inherently platform-specific AppKit, IME, accessibility, clipboard, Metal/CoreText and OS integration. Rejected product Swift may be deleted; native adapter concerns must be recreated.",
       "tags": [
         "adr",
         "adr-015",
@@ -237,7 +237,7 @@
       "sources": [
         {
           "path": "docs/architecture/ADR-015-RUST-PRODUCT-UI-THIN-SWIFT-HOST.md",
-          "fingerprint": "4db2783f371c7e1a1d2cc746216cec2c68a77eb3"
+          "fingerprint": "fefb5f8b11d6a36b8fee81afa3e19f6ea75d2ed3"
         }
       ],
       "relationships": [
@@ -295,7 +295,7 @@
       "id": "DOC-M001.1-SWIFT-OWNERSHIP",
       "kind": "document",
       "title": "M001.1 Swift ownership freeze ledger",
-      "summary": "Exhaustive M001.1 freeze map: existing Swift product shell is rejected. Classify REIMPLEMENT_IN_RUST / KEEP_NATIVE_GLUE / DELETE / REFERENCE_ONLY. Rust product first; independent shell removal (#890); new thin host from scratch (#883).",
+      "summary": "Exhaustive M001.1 freeze map: existing Swift product shell is rejected. Classify REIMPLEMENT_IN_RUST / KEEP_NATIVE_GLUE / DELETE / REFERENCE_ONLY. PR #903 is the unmergeable umbrella recovery branch; KEEP_NATIVE_GLUE means recreate the native concern. #904 freezes the host contract and does not restore Seyal.app or the Usable Terminal Gate.",
       "tags": [
         "m001.1",
         "swift",
@@ -307,7 +307,7 @@
       "sources": [
         {
           "path": "docs/engineering/M001.1-SWIFT-OWNERSHIP-PARITY-MANIFEST.md",
-          "fingerprint": "b7b079314306d72b4c1552f07a8eb15281642881"
+          "fingerprint": "408103a823c374e996534880ec1c42a86b0953f7"
         }
       ],
       "relationships": [

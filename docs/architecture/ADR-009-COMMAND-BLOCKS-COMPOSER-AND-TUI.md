@@ -1,7 +1,7 @@
 # ADR-009 — Command Blocks, Pane Composer, and Presentation Takeover
 
-- **Status:** Accepted 2026-08-28; proposed presentation-mode amendment under #858, accepted only on merge
-- **Date:** 2026-08-28; proposed amendment 2026-09-11
+- **Status:** Accepted 2026-08-28; presentation amendment accepted 2026-09-11 by #858 / PR #859 (`8d08f2f`)
+- **Date:** 2026-08-28; presentation amendment 2026-09-11
 - **Scope:** Post-Pass-7 command/Block presentation and Flow/Raw/TUI mode ownership
 - **Supersedes for this behavior:** the Pass 8 minimal-only boundary in `SPEC-007`; historical M001 presentation wording in SPEC-006/SPEC-009 and M001 UI design documents only where it assumes a permanently visible/focusable terminal surface while Flow is active
 - **Depends on:** ADR-004, ADR-005, ADR-006, ADR-007, ADR-008, SPEC-001, SPEC-003, SPEC-004, SPEC-005, SPEC-006
@@ -37,15 +37,15 @@ The identity/state continuity is the `ExecutionId` + PTY + `TerminalState`.
 It does **not** require a permanently visible/focusable terminal `NSView`,
 `CAMetalLayer`, or conventional terminal viewport underneath Flow.
 
-## 2026-09-11 proposed correction — authority is not viewport
+## 2026-09-11 accepted correction — authority is not viewport
 
 The original wording correctly rejected PTY/grid/renderer-per-Block designs, but
 it did not state strongly enough that Flow, Raw and TUI must not be presented at
-the same time. The current macOS implementation consequently reused the Pane's
-interactive Metal terminal surface as a permanent full-transcript backing/input
-surface while also placing Block chrome over it.
+the same time. The then-current macOS implementation consequently reused the
+Pane's interactive Metal terminal surface as a permanent full-transcript
+backing/input surface while also placing Block chrome over it.
 
-That interpretation is rejected by this proposed amendment.
+That interpretation is rejected by this accepted amendment.
 
 ### Flow
 
@@ -101,21 +101,20 @@ input ownership atomically from the user's point of view.
 Every `Flow ↔ Raw`, `Flow ↔ TUI`, and `Raw ↔ TUI` transition follows this order:
 
 ```text
-freeze new source-mode input admission
-→ invalidate source-mode route/presentation epoch
-→ cancel/discard source-mode marked/preedit state without PTY submission
-→ revoke source first-responder/text-input context and mouse route/capture
-→ reject or ignore stale source-mode native callbacks that were not already admitted
-→ validate destination eligibility against current Runtime authority
-→ install destination presentation/input route
-→ acquire destination first responder/IME/mouse semantics
-→ resume destination input admission
+1. Rust freezes the old route and increments the epoch.
+2. Native revokes input, mouse capture, first responder, AX focus, and marked text.
+3. Stale callbacks fail closed.
+4. Rust validates current destination eligibility.
+5. Native realizes only that destination.
+6. The destination route becomes active.
 ```
 
 No destination route becomes eligible while the source route can still admit
 input. One native event may be admitted to at most one presentation route.
 Anything already atomically admitted before the fence retains normal FIFO
 semantics; unadmitted stale callbacks are rejected rather than replayed.
+Host completion may gate only local route activation. It must never stall
+PTY, VT, or output progress.
 
 Eligibility and admission for Flow/composer or direct-terminal input must be
 bound to the exact current authority tuple, conceptually:
@@ -137,6 +136,19 @@ widens authority and never causes one event to reach the previous route.
 Flow command admission must likewise be correlated to the current eligible
 execution/attachment/presentation generation. A delayed result from an older
 presentation epoch cannot authorize or clear state in a newer epoch.
+
+## Composer ownership
+
+Rust owns the authoritative committed draft, revision, mode, and submission
+correlation for the Pane composer.
+
+Native `NSTextView` / IME owns only bounded marked text and a disposable
+derived editor cache. Native committed edits are revisioned against the Rust
+draft. Stale edits fail closed and rehydrate from the current Rust snapshot.
+
+Return during marked text remains IME-owned. Unmarked Return requests a Rust
+execute action. The host must not submit composer text to the PTY, invent
+command identity, or clear the authoritative draft.
 
 ## Problem and conflict
 
@@ -182,7 +194,7 @@ into the GUI.
 
 ### D. Permanent Pane-wide interactive terminal viewport with Blocks layered over it
 
-Rejected by this proposed amendment. It conflates canonical terminal authority
+Rejected by this accepted amendment. It conflates canonical terminal authority
 with visible presentation, permits Raw interaction to leak through Flow, and
 makes Blocks decorative chrome rather than the primary execution presentation.
 
@@ -228,8 +240,10 @@ and where input is routed.
 17. A Pane may reuse one Metal compositor across visible Flow regions and
     Raw/TUI takeover, but that reuse does not grant the compositor PTY/VT
     authority and must not expose multiple presentation modes simultaneously.
-18. A presentation transition revokes the old first responder, IME/preedit,
-    mouse route and input-admission route before enabling the new route.
+18. A presentation transition follows the Rust-freeze / native-revoke /
+    fail-closed / Rust-eligibility / native-realize / destination-active order.
+    Host completion may gate only local route activation, never PTY/VT/output
+    progress.
 19. Eligibility/admission is fenced to current execution, attachment/controller,
     presentation epoch and relevant canonical/integration generation; stale
     evidence fails closed.
@@ -239,15 +253,16 @@ and where input is routed.
 
 SPEC-006 remains authoritative for direct-terminal native event classification,
 IME composition semantics, bounded input queues, Runtime-owned key encoding and
-resize transactions. Under this amendment, wording that assigns those duties to
-a permanent terminal surface is scoped to the **active Raw/TUI/direct-terminal
-presentation endpoint**. It does not authorize a focusable terminal surface
-under Flow.
+resize transactions. Under this accepted amendment, wording that assigns those
+duties to a permanent terminal surface is scoped to the **active
+Raw/TUI/direct-terminal presentation endpoint**. It does not authorize a
+focusable terminal surface under Flow.
 
 SPEC-009 remains authoritative for Runtime/PTY survival, fresh AttachmentId and
 Controller reacquisition, state reconstruction and reconnect fencing. Under this
-amendment, reconnect restores interaction to the **newly selected current
-presentation owner** after validating fresh execution/attachment/canonical state:
+accepted amendment, reconnect restores interaction to the **newly selected
+current presentation owner** after validating fresh execution/attachment/canonical
+state:
 Flow composer/Blocks when trusted Flow eligibility is current, Raw otherwise,
 or TUI when canonical full-screen/alternate state requires it. Reconnect does
 not recreate or focus a raw terminal target underneath Flow.
@@ -293,8 +308,9 @@ The presentation layer must be corrected so:
 - tests assert mode exclusivity, stale-event rejection and the absence of
   terminal pixels/input outside Flow Block output regions.
 
-Issue #858 owns this architecture correction. Production implementation follows
-in separate TDD implementation PRs after this amendment is accepted.
+Issue #858 / PR #859 (`8d08f2f`) accepted this architecture correction.
+Production presentation implementation follows in separate TDD Issues after the
+Rust/native host contract is frozen; this ADR does not restore a headed host.
 
 ## Reopen conditions
 
@@ -305,7 +321,5 @@ virtualization/resource bounds, or if performance/security evidence shows that
 Flow projection or transition fencing blocks terminal progress.
 
 Originally approved by product authority on 2026-08-28. Presentation-mode
-clarification requested by product authority on 2026-09-11 under #858. This
-amendment remains proposed until its PR is explicitly approved and merged.
-Independent architecture/security review and explicit merge confirmation remain
-required.
+clarification requested by product authority on 2026-09-11 under #858 and
+accepted on merge of PR #859 as `8d08f2f`.

@@ -62,6 +62,7 @@ case "$cmd" in
     python3 scripts/check-pass9-merge-acceptance.py --self-test
     python3 scripts/check-ui-test-policy.py
     python3 scripts/check-host-product-fixtures.py
+    python3 scripts/check-thin-swift-boundary.py
     bash scripts/test-tooling.sh
     python3 scripts/test-workspace.py
     python3 scripts/test-harnesses.py

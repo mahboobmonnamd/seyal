@@ -176,6 +176,18 @@ def main() -> None:
             "reconstructs portable product fixture token",
         )
 
+        boundary = base / "thin-swift-boundary"
+        write(boundary / "macos/Seyal/Sources/AppDelegate.swift", "// host\n")
+        write(boundary / "macos/Seyal/Sources/ProductChromeHostView.swift", "// host\n")
+        write(boundary / "macos/Seyal/Sources/ComposerBridgeView.swift", "// host\n")
+        write(boundary / "macos/Seyal/Sources/ThinPaneHostView.swift", "// host\n")
+        write(boundary / "macos/Seyal/Sources/NativeThemeRealization.swift", "enum InspectorMode { case context }\n")
+        run_negative(
+            ["python3", str(ROOT / "scripts/check-thin-swift-boundary.py")],
+            boundary,
+            "introduces portable product authority token 'enum InspectorMode'",
+        )
+
         workspace = base / "workspace"
         workspace.mkdir()
         run_negative(["python3", str(ROOT / "scripts/test-workspace.py")], workspace, "missing root Cargo.toml")

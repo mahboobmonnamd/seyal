@@ -81,6 +81,7 @@ Prepared
    +--> Authorized
    |      +--> Prepared             authorization invalidated before dispatch
    |      +--> Dispatching
+   |             +--> Prepared      authoritative known-not-dispatched reconciliation; fresh authorization required
    |             +--> Succeeded
    |             +--> FailedKnown
    |             +--> EffectUnknown
@@ -95,9 +96,11 @@ Prepared
 Authorized -> CancelledBeforeDispatch
 ```
 
+`Dispatching -> Prepared` is allowed **only** when the owning executor contract authoritatively proves `known-not-dispatched` for that exact Action/generation as defined by §10.1. It is not a general retry edge.
+
 ### 4.1 State meanings
 
-- `Prepared`: intent durably exists; no consumable dispatch authorization is current.
+- `Prepared`: intent durably exists; no consumable dispatch authorization is current. This also includes an Action returned from `Dispatching` only by authoritative known-not-dispatched reconciliation, in which case fresh authorization is mandatory.
 - `Authorized`: exact authorization is bound and eligible, but any single-use approval has not yet been consumed for dispatch.
 - `Dispatching`: the durable conservative boundary after which missing local success cannot prove no external effect.
 - `Succeeded`: authoritative evidence proves successful completion for this Action.
@@ -362,14 +365,16 @@ An independent external CLI agent may perform shell/network/tool effects outside
 
 ## 20. Duplicate/replay behavior
 
-Receiving the same `ActionId` again:
+Receiving the same `ActionId` again is treated as a duplicate only when the caller's canonical immutable intent identity/digest matches the stored `ActionIntent` exactly.
 
-- never creates a second Action;
-- never consumes approval twice;
-- never dispatches twice merely because the caller retried;
-- returns current durable Action state or joins the current reconciliation path.
+For an exact duplicate:
 
-Materially changed requests require a new ActionId under §3.1.
+- never create a second Action;
+- never consume approval twice;
+- never dispatch twice merely because the caller retried;
+- return current durable Action state or join the current reconciliation path.
+
+Reusing an existing `ActionId` with different capability, target/version, normalized arguments, effect class, policy/privacy assumptions or canonical intent digest is an identity collision/tampering error. It is rejected explicitly and can neither mutate nor dispatch the stored Action. A materially changed request requires a new ActionId under §3.1.
 
 ## 21. Persistent failure and convergence
 
@@ -395,7 +400,9 @@ minimum recovery evidence is retained
 unrelated terminal/execution work continues
 ```
 
-The system does not invent a fake terminal lifecycle state merely to stop retry. The durable Action remains truthfully ambiguous until authoritative evidence or explicit operator resolution is available.
+Manual/operator reconciliation does not lower the evidence bar: it may transition to `Succeeded` or `FailedKnown` only with the authoritative causal evidence required by §§13–15. A human acknowledgement that evidence is unavailable may classify/accept the residual operational risk for workflow purposes, but must not fabricate a known effect outcome in Action authority; otherwise the Action remains truthfully unresolved.
+
+The system does not invent a fake terminal lifecycle state merely to stop retry. The durable Action remains truthfully ambiguous until authoritative evidence or explicit operator risk handling outside effect truth is available.
 
 No tight loops, unbounded queues or unbounded disk/RSS growth are allowed.
 
@@ -406,7 +413,7 @@ No tight loops, unbounded queues or unbounded disk/RSS growth are allowed.
 | before durable ActionIntent | no durable Action; nothing may be claimed/replayed |
 | after Prepared | no dispatch; may reconsider same intent |
 | after Authorized, before atomic transaction commit | `Authorized -> Prepared`; authorization invalidated; fresh authorization required |
-| after durable Dispatching, before executor invocation | conservative ambiguity unless executor proves known-not-dispatched |
+| after durable Dispatching, before executor invocation | conservative ambiguity unless executor proves known-not-dispatched; if proven, `Dispatching -> Prepared` only through §10.1 |
 | during executor call / timeout / channel loss | reconcile; no blind retry |
 | effect occurred, result persistence failed | unresolved/`EffectUnknown` unless executor evidence proves outcome |
 | resource changed after local check | executor CAS/fence decides; otherwise fail closed or reconcile ambiguity |
@@ -425,6 +432,7 @@ No tight loops, unbounded queues or unbounded disk/RSS growth are allowed.
 6. Reconciliation cannot infer causality from desired state alone.
 7. Raw terminal/OSC/model narration cannot fabricate Action/result authority.
 8. Persistent local safety-state failure prevents new effects but not unrelated terminal progress.
+9. Reused `ActionId` with mismatched immutable intent is rejected and never treated as an idempotent duplicate.
 
 ## 24. Resource/performance requirements
 
@@ -447,7 +455,8 @@ Concrete budgets are calibrated under #841/#680/#839 consumers before implementa
 ### Intent / authorization
 
 - material argument/resource/policy change -> new ActionId, old intent unchanged;
-- duplicate same ActionId -> no duplicate Action/approval/dispatch;
+- duplicate same ActionId + identical canonical intent -> no duplicate Action/approval/dispatch;
+- same ActionId + mismatched immutable intent/digest -> explicit rejection, stored Action unchanged and undispatched by the mismatched request;
 - expired ActionIntent while Authorized -> dispatch denied, authorization invalidated/prepared as policy requires;
 - expired approval -> dispatch denied.
 
@@ -455,6 +464,7 @@ Concrete budgets are calibrated under #841/#680/#839 consumers before implementa
 
 - crash before transaction commit -> old authorization invalidated, `Authorized -> Prepared`;
 - crash after `Dispatching` before invocation -> no blind retry;
+- executor authoritatively proves known-not-dispatched -> old dispatch fence invalidated, `Dispatching -> Prepared`, fresh authorization required;
 - approval consumption and `Dispatching` cannot persist separately.
 
 ### Fencing
@@ -478,7 +488,8 @@ Concrete budgets are calibrated under #841/#680/#839 consumers before implementa
 - effect succeeds but result write fails -> no duplicate effect;
 - state looks correct but lacks causal marker -> remains `EffectUnknown`;
 - operation ID/CAS witness proves success -> may reconcile `Succeeded`;
-- automatic reconciliation budget exhaustion stops rescheduling without fabricating known outcome.
+- automatic reconciliation budget exhaustion stops rescheduling without fabricating known outcome;
+- manual/operator handling without authoritative causal evidence cannot relabel an ambiguous Action `Succeeded` or `FailedKnown`.
 
 ### Cancellation
 
@@ -506,8 +517,8 @@ Concrete budgets are calibrated under #841/#680/#839 consumers before implementa
 
 SPEC-016 is acceptable only when:
 
-- material changes require a new ActionId;
-- lifecycle and recovery transitions are deterministic;
+- material changes require a new ActionId and ActionId collisions with changed intent fail closed;
+- lifecycle and recovery transitions are deterministic, including the narrowly authorized `Dispatching -> Prepared` known-not-dispatched edge;
 - intent expiry and authorization expiry are enforced;
 - dispatch transaction is atomic locally;
 - exact AgentRun + Action generations fence invocation/results;
@@ -516,7 +527,7 @@ SPEC-016 is acceptable only when:
 - known-not-dispatched and replay-safe recovery have explicit durable behavior;
 - cancellation is linearized and post-dispatch cancellation is reconciliation-only;
 - post-hoc reconciliation requires causal evidence;
-- automatic recovery has finite convergence behavior;
+- automatic recovery has finite convergence behavior and manual handling cannot fabricate effect truth;
 - external-agent enforcement claims remain truthful;
 - privacy hooks compose with ADR-013 and the accepted SPEC-015 without duplicate authority;
 - security/fault/property tests cover the complete race matrix;

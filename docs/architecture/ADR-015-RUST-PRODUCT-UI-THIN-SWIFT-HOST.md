@@ -95,15 +95,15 @@ module/crate only when a real ownership/dependency boundary justifies it.
 
 - `NSApplication` / `NSWindow` lifecycle and native view construction
 - native event collection and primitive normalization;
-- `ApplicationCommand` classification/menu routing required by SPEC-006, forwarding any portable Seyal state transition to Rust as a typed action
+- native event recognition/classification required by SPEC-006; forward every Seyal product command as a typed event/action for Rust to resolve, including menu and keyboard commands
 - IME / `NSTextInputClient` bridge, preedit/selection and first-responder handles
 - accessibility adapter / VoiceOver integration
 - clipboard / drag-drop / macOS services
-- observation of macOS appearance/accessibility signals
+- observation and forwarding of raw macOS appearance/accessibility inputs; Rust owns their portable semantic interpretation
 - `NSColor` / `NSFont` / `NSVisualEffectView` realization of Rust semantic intent
 - Metal drawable/surface/device/queue/pipeline/resource integration
 - CoreText/native font realization or shaping where platform-specific
-- bundled-helper launch and other inherently macOS-specific APIs
+- bundle-relative helper path/signature validation and invocation of the macOS spawn API; Rust owns helper selection, launch count, retry/deadline, endpoint, recovery and failure policy under SPEC-009
 - bounded disposable view/resource/cache state required by those APIs
 
 Swift may render pixels and forward events. Presentation state shown by Swift

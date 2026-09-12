@@ -1,5 +1,6 @@
 //! Disposable Seyal.app-side Candidate-D client, renderer-preparation owner,
-//! and portable headed product composition (Workspace/Tab/Pane).
+//! portable headed product composition (Workspace/Tab/Pane), and portable
+//! theme/config resolution.
 //!
 //! Runtime/TerminalExecution remain the sole PTY, VT and canonical TerminalState
 //! authority. This crate owns a local socket attachment, an atomically
@@ -7,6 +8,7 @@
 //! host-facing product shell reducer. It is not a second Workspace database.
 
 pub mod shell;
+pub mod theme;
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod block_cache;

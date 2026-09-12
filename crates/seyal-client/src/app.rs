@@ -1,13 +1,20 @@
 //! One-Pane application root: the sole writable portable product-state owner.
 //!
-//! Composes [`ShellState`] and [`PresentationSession`]. Runtime remains the
-//! only PTY, VT, `TerminalState`, attachment/controller, and BlockTimeline
-//! authority. This module does not implement composer/Block lifecycle (#881).
+//! Composes [`ShellState`], [`PresentationSession`], and
+//! [`RecoveryCoordinator`]. Runtime remains the only PTY, VT, `TerminalState`,
+//! attachment/controller, and BlockTimeline authority. This module does not
+//! implement composer/Block lifecycle (#881). Hosts inject clock, launch, and
+//! attach attempts; this crate owns retry/deadline/stage policy.
+
+use std::time::Duration;
 
 use seyal_core::{AttachmentId, ExecutionId, PaneId};
 
 use crate::presentation::{
     PresentationAction, PresentationIdentity, PresentationMode, PresentationSession,
+};
+use crate::recovery::{
+    AttemptOutcome, LaunchResult, RecoveryCoordinator, RecoveryEffect, RecoveryStage,
 };
 use crate::shell::{ShellAction, ShellSnapshot, ShellState};
 
@@ -33,6 +40,7 @@ pub enum AppError {
     Frozen,
     NoLiveClient,
     InvalidPayload,
+    StaleRecoveryGeneration,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,6 +93,20 @@ pub enum AppAction {
     },
     Quit,
     AckEffect,
+    BeginRecovery {
+        now: Duration,
+    },
+    CompleteRecovery {
+        generation: u64,
+        outcome: AttemptOutcome,
+        now: Duration,
+        launch: Option<LaunchResult>,
+    },
+    FireScheduledRecovery {
+        generation: u64,
+        now: Duration,
+    },
+    AckRecoveryEffect,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -125,6 +147,10 @@ pub struct AppSnapshot {
     pub output_utf8: String,
     pub shell: ShellSnapshot,
     pub accessibility: Vec<AccessibilityNode>,
+    pub recovery_stage: RecoveryStage,
+    pub recovery_generation: u64,
+    pub recovery_attempts: u32,
+    pub recovery_effect: Option<RecoveryEffect>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -146,6 +172,8 @@ pub struct ApplicationRoot {
     last_error: Option<AppError>,
     pending_effect: NativeEffect,
     frozen: bool,
+    recovery: RecoveryCoordinator,
+    pending_recovery: Vec<RecoveryEffect>,
     #[cfg(target_os = "macos")]
     client: Option<LocalDisplayClient>,
 }
@@ -168,6 +196,8 @@ impl ApplicationRoot {
             last_error: None,
             pending_effect: NativeEffect::None,
             frozen: false,
+            recovery: RecoveryCoordinator::default(),
+            pending_recovery: Vec::new(),
             #[cfg(target_os = "macos")]
             client: None,
         }
@@ -217,11 +247,20 @@ impl ApplicationRoot {
                 &self.output_utf8,
             ),
             shell,
+            recovery_stage: self.recovery.state().stage,
+            recovery_generation: self.recovery.state().generation,
+            recovery_attempts: self.recovery.attempt_count(),
+            recovery_effect: self.pending_recovery.first().copied(),
         }
     }
 
     pub fn apply(&mut self, action: AppAction) -> Result<(), AppError> {
-        if self.frozen && !matches!(action, AppAction::AckEffect | AppAction::Quit) {
+        if self.frozen
+            && !matches!(
+                action,
+                AppAction::AckEffect | AppAction::AckRecoveryEffect | AppAction::Quit
+            )
+        {
             return self.fail(AppError::Frozen);
         }
         let result = match action {
@@ -231,6 +270,17 @@ impl ApplicationRoot {
             AppAction::SubmitInput { fence, text } => self.submit_input(fence, &text),
             AppAction::Quit => self.quit(),
             AppAction::AckEffect => self.ack_effect(),
+            AppAction::BeginRecovery { now } => self.begin_recovery(now),
+            AppAction::CompleteRecovery {
+                generation,
+                outcome,
+                now,
+                launch,
+            } => self.complete_recovery(generation, outcome, now, launch),
+            AppAction::FireScheduledRecovery { generation, now } => {
+                self.fire_scheduled_recovery(generation, now)
+            }
+            AppAction::AckRecoveryEffect => self.ack_recovery_effect(),
         };
         match result {
             Ok(()) => {
@@ -372,6 +422,43 @@ impl ApplicationRoot {
 
     fn ack_effect(&mut self) -> Result<(), AppError> {
         self.pending_effect = NativeEffect::None;
+        Ok(())
+    }
+
+    fn begin_recovery(&mut self, now: Duration) -> Result<(), AppError> {
+        self.pending_recovery = self.recovery.begin_episode(now);
+        Ok(())
+    }
+
+    fn complete_recovery(
+        &mut self,
+        generation: u64,
+        outcome: AttemptOutcome,
+        now: Duration,
+        launch: Option<LaunchResult>,
+    ) -> Result<(), AppError> {
+        let stale = generation != self.recovery.state().generation;
+        self.pending_recovery = self
+            .recovery
+            .complete_attempt(generation, outcome, now, launch);
+        if stale {
+            return Err(AppError::StaleRecoveryGeneration);
+        }
+        Ok(())
+    }
+
+    fn fire_scheduled_recovery(&mut self, generation: u64, now: Duration) -> Result<(), AppError> {
+        if generation != self.recovery.state().generation {
+            return self.fail(AppError::StaleRecoveryGeneration);
+        }
+        self.pending_recovery = self.recovery.scheduled_fire(generation, now);
+        Ok(())
+    }
+
+    fn ack_recovery_effect(&mut self) -> Result<(), AppError> {
+        if !self.pending_recovery.is_empty() {
+            self.pending_recovery.remove(0);
+        }
         Ok(())
     }
 
@@ -761,5 +848,123 @@ mod tests {
             root.apply(AppAction::Focus { fence }),
             Err(AppError::UnknownPane)
         );
+    }
+
+    #[test]
+    fn recovery_retry_ladder_and_stale_generation_fail_closed() {
+        let mut root = ApplicationRoot::new();
+        root.apply(AppAction::BeginRecovery {
+            now: Duration::ZERO,
+        })
+        .unwrap();
+        let first = root.snapshot();
+        assert_eq!(first.recovery_stage, RecoveryStage::Discovering);
+        assert_eq!(first.recovery_attempts, 1);
+        assert_eq!(
+            first.recovery_effect,
+            Some(RecoveryEffect::PerformAttempt {
+                generation: first.recovery_generation,
+                remaining: Duration::from_secs(1),
+            })
+        );
+
+        root.apply(AppAction::CompleteRecovery {
+            generation: first.recovery_generation,
+            outcome: AttemptOutcome::ControllerBusy,
+            now: Duration::ZERO,
+            launch: None,
+        })
+        .unwrap();
+        let scheduled = root.snapshot();
+        assert_eq!(
+            scheduled.recovery_stage,
+            RecoveryStage::WaitingForController
+        );
+        assert_eq!(
+            scheduled.recovery_effect,
+            Some(RecoveryEffect::Schedule {
+                generation: first.recovery_generation,
+                delay: Duration::from_millis(10),
+            })
+        );
+
+        root.apply(AppAction::BeginRecovery {
+            now: Duration::from_millis(5),
+        })
+        .unwrap();
+        let second = root.snapshot();
+        assert_ne!(second.recovery_generation, first.recovery_generation);
+        assert_eq!(
+            root.apply(AppAction::FireScheduledRecovery {
+                generation: first.recovery_generation,
+                now: Duration::from_millis(15),
+            }),
+            Err(AppError::StaleRecoveryGeneration)
+        );
+        assert_eq!(
+            root.apply(AppAction::CompleteRecovery {
+                generation: first.recovery_generation,
+                outcome: AttemptOutcome::Opened {
+                    handle: 9,
+                    adopted: true,
+                },
+                now: Duration::from_millis(15),
+                launch: None,
+            }),
+            Err(AppError::StaleRecoveryGeneration)
+        );
+        assert_eq!(
+            root.snapshot().recovery_effect,
+            Some(RecoveryEffect::DisposeHandle(9))
+        );
+        assert_eq!(root.snapshot().recovery_stage, RecoveryStage::Discovering);
+        assert_eq!(
+            root.snapshot().recovery_generation,
+            second.recovery_generation
+        );
+    }
+
+    #[test]
+    fn recovery_endpoint_missing_launches_once_then_seven_attempts() {
+        use crate::recovery::{EPISODE_DEADLINE, MAXIMUM_ATTEMPTS, RETRY_DELAYS};
+
+        let mut root = ApplicationRoot::new();
+        root.apply(AppAction::BeginRecovery {
+            now: Duration::ZERO,
+        })
+        .unwrap();
+        let generation = root.snapshot().recovery_generation;
+        let mut now = Duration::ZERO;
+        let mut launches = 0u32;
+        for _ in 0..MAXIMUM_ATTEMPTS {
+            root.apply(AppAction::AckRecoveryEffect).unwrap();
+            root.apply(AppAction::CompleteRecovery {
+                generation,
+                outcome: AttemptOutcome::EndpointMissing,
+                now,
+                launch: Some(LaunchResult::Started),
+            })
+            .unwrap();
+            if matches!(
+                root.snapshot().recovery_effect,
+                Some(RecoveryEffect::LaunchHelper { .. })
+            ) {
+                launches += 1;
+                root.apply(AppAction::AckRecoveryEffect).unwrap();
+            }
+            if let Some(RecoveryEffect::Schedule { delay, .. }) = root.snapshot().recovery_effect {
+                now += delay;
+                if now >= EPISODE_DEADLINE {
+                    break;
+                }
+                root.apply(AppAction::AckRecoveryEffect).unwrap();
+                root.apply(AppAction::FireScheduledRecovery { generation, now })
+                    .unwrap();
+            }
+        }
+        assert_eq!(launches, 1);
+        assert_eq!(root.snapshot().recovery_attempts, MAXIMUM_ATTEMPTS);
+        assert_eq!(root.snapshot().recovery_stage, RecoveryStage::Exhausted);
+        assert_eq!(RETRY_DELAYS.len() as u32 + 1, MAXIMUM_ATTEMPTS);
     }
 }

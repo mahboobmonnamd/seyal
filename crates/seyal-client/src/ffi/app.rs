@@ -1,6 +1,6 @@
 //! Versioned one-Pane application-root C ABI.
 
-use std::{cell::RefCell, collections::HashMap, ptr, slice, str};
+use std::{cell::RefCell, collections::HashMap, ptr, slice, str, time::Duration};
 
 use seyal_core::{AttachmentId, ExecutionId, PaneId};
 
@@ -8,6 +8,7 @@ use crate::app::{
     AppAction, AppError, AppFence, AppSnapshot, ApplicationRoot, BindingEvidence, NativeEffect,
     PresentationEligibility, APP_ABI_VERSION,
 };
+use crate::recovery::{AttemptOutcome, LaunchResult, RecoveryEffect, RecoveryStage};
 
 use super::allocate_handle;
 
@@ -66,6 +67,10 @@ pub struct SeyalAppSnapshot {
     pub output_utf8: *const u8,
     pub output_utf8_len: u32,
     pub reserved: u32,
+    pub recovery_stage: u16,
+    pub recovery_attempts: u16,
+    pub recovery_effect: u32,
+    pub recovery_generation: u64,
 }
 
 #[repr(C)]
@@ -130,6 +135,10 @@ impl SeyalAppSnapshot {
             output_utf8: ptr::null(),
             output_utf8_len: 0,
             reserved: 0,
+            recovery_stage: 0,
+            recovery_attempts: 0,
+            recovery_effect: 0,
+            recovery_generation: 0,
         }
     }
 }
@@ -289,7 +298,48 @@ fn decode_action(action: &SeyalAppAction) -> Result<AppAction, i32> {
         }
         4 => Ok(AppAction::Quit),
         5 => Ok(AppAction::AckEffect),
+        6 => Ok(AppAction::BeginRecovery {
+            now: Duration::from_millis(action.target_pty_generation),
+        }),
+        7 => Ok(AppAction::CompleteRecovery {
+            generation: action.target_execution_lo,
+            outcome: decode_outcome(action.reserved, action.target_attachment_lo)?,
+            now: Duration::from_millis(action.target_pty_generation),
+            launch: decode_launch(action.reserved),
+        }),
+        8 => Ok(AppAction::FireScheduledRecovery {
+            generation: action.target_execution_lo,
+            now: Duration::from_millis(action.target_pty_generation),
+        }),
+        9 => Ok(AppAction::AckRecoveryEffect),
         _ => Err(-6),
+    }
+}
+
+fn decode_outcome(reserved: u32, handle: u64) -> Result<AttemptOutcome, i32> {
+    match reserved & 0xff {
+        0 => Ok(AttemptOutcome::Connected),
+        1 => Ok(AttemptOutcome::Opened {
+            handle,
+            adopted: true,
+        }),
+        2 => Ok(AttemptOutcome::Opened {
+            handle,
+            adopted: false,
+        }),
+        3 => Ok(AttemptOutcome::EndpointMissing),
+        4 => Ok(AttemptOutcome::Retryable),
+        5 => Ok(AttemptOutcome::ControllerBusy),
+        6 => Ok(AttemptOutcome::Blocked),
+        _ => Err(-6),
+    }
+}
+
+fn decode_launch(reserved: u32) -> Option<LaunchResult> {
+    match (reserved >> 8) & 0xff {
+        1 => Some(LaunchResult::Started),
+        2 => Some(LaunchResult::HelperMissing),
+        _ => None,
     }
 }
 
@@ -362,6 +412,26 @@ fn encode_snapshot(snap: &AppSnapshot, output: &[u8]) -> SeyalAppSnapshot {
         },
         output_utf8_len: output.len() as u32,
         reserved: 0,
+        recovery_stage: match snap.recovery_stage {
+            RecoveryStage::Disconnected => 0,
+            RecoveryStage::Discovering => 1,
+            RecoveryStage::StartingRuntime => 2,
+            RecoveryStage::WaitingForController => 3,
+            RecoveryStage::Reconstructing => 4,
+            RecoveryStage::RestoringInteraction => 5,
+            RecoveryStage::Usable => 6,
+            RecoveryStage::Exhausted => 7,
+            RecoveryStage::Blocked => 8,
+        },
+        recovery_attempts: snap.recovery_attempts.min(u32::from(u16::MAX)) as u16,
+        recovery_effect: match snap.recovery_effect {
+            None => 0,
+            Some(RecoveryEffect::PerformAttempt { .. }) => 1,
+            Some(RecoveryEffect::Schedule { .. }) => 2,
+            Some(RecoveryEffect::LaunchHelper { .. }) => 3,
+            Some(RecoveryEffect::DisposeHandle(_)) => 4,
+        },
+        recovery_generation: snap.recovery_generation,
     }
 }
 
@@ -450,6 +520,7 @@ fn error_number(error: AppError) -> i32 {
         AppError::Frozen => 12,
         AppError::NoLiveClient => 13,
         AppError::InvalidPayload => 14,
+        AppError::StaleRecoveryGeneration => 15,
     }
 }
 
@@ -490,8 +561,9 @@ mod tests {
         assert_eq!(align_of::<SeyalAppAction>(), 8);
         assert_eq!(offset_of!(SeyalAppAction, version), 0);
         assert_eq!(offset_of!(SeyalAppAction, payload), 104);
-        assert_eq!(size_of::<SeyalAppSnapshot>(), 96);
+        assert_eq!(size_of::<SeyalAppSnapshot>(), 112);
         assert_eq!(offset_of!(SeyalAppSnapshot, output_utf8), 80);
+        assert_eq!(offset_of!(SeyalAppSnapshot, recovery_generation), 104);
         assert_eq!(size_of::<SeyalAppAxNode>(), 72);
         assert_eq!(size_of::<SeyalAppAccessibility>(), 24);
     }

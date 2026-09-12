@@ -17,8 +17,9 @@ int main(void) {
     REQUIRE(sizeof(SeyalAppAction) == 120);
     REQUIRE(offsetof(SeyalAppAction, version) == 0);
     REQUIRE(offsetof(SeyalAppAction, payload) == 104);
-    REQUIRE(sizeof(SeyalAppSnapshot) == 96);
+    REQUIRE(sizeof(SeyalAppSnapshot) == 112);
     REQUIRE(offsetof(SeyalAppSnapshot, output_utf8) == 80);
+    REQUIRE(offsetof(SeyalAppSnapshot, recovery_generation) == 104);
     REQUIRE(sizeof(SeyalAppAxNode) == 72);
     REQUIRE(sizeof(SeyalAppAccessibility) == 24);
     REQUIRE(sizeof(SeyalAppAction) != 0);

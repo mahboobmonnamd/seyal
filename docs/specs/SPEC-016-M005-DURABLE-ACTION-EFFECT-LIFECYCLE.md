@@ -4,606 +4,533 @@
 - **Architecture:** ADR-012, ADR-013, ADR-014
 - **Parent refinement:** #838
 - **Implementation consumers:** #680, #841, #839, #683
+- **Privacy sibling:** #870 / SPEC-015 is reviewed in parallel but is not normative authority until accepted; this specification must merge only after the accepted privacy contract is available and reconciled.
 
 ## 1. Purpose
 
-This specification defines the observable behavior required for Seyal-controlled effectful Actions.
+This specification defines observable behavior for every **Seyal-controlled effectful operation** that requires durable identity, authorization, dispatch fencing or effect recovery.
 
-It specifies:
+It freezes:
 
-- immutable `ActionIntent` identity;
-- exact authorization/approval binding;
-- single-use approval consumption;
-- atomic transition to `Dispatching`;
-- dispatch fencing/generations;
+- immutable `ActionId` / `ActionIntent` identity;
+- exact authorization and single-use approval consumption;
+- the atomic durable transition to `Dispatching`;
+- AgentRun-binding and Action-dispatch fencing;
+- resource-version enforcement at the actual effect boundary;
 - crash/restart recovery;
-- conservative `EffectUnknown` semantics;
-- executor-specific idempotency/reconciliation;
-- cancellation versus rollback;
-- typed result provenance;
-- retention/privacy interaction;
+- executor idempotency/reconciliation capability evidence;
+- `EffectUnknown` handling;
+- cancellation linearization and compensation;
+- typed result/reconciliation provenance;
 - bounded failure/resource behavior and terminal isolation.
 
-This specification does not create another AgentRun, approval UX, executor, workflow engine or terminal authority.
+It does not create a second AgentRun, PTY, resource, approval UI or workflow authority.
 
 ## 2. Authority boundaries
 
 ```text
-AgentRun authority       -> ADR-012
-Context/privacy authority -> ADR-013 / SPEC-015
-Action/effect authority  -> ADR-014 / this spec
-Attention/Approval UX    -> #680
-Executor/resource truth  -> owning typed resource authority
+WorkItem -> Attempt -> AgentRun       ADR-012 Runtime/domain authority
+Attention / human Approval            #680 human-decision authority
+Context/privacy eligibility            ADR-013 (+ accepted privacy spec when merged)
+ActionId / ActionIntent / effect state ADR-014 Action authority
+resource/executor                      owns the actual resource operation
 ```
 
 Rules:
 
-1. One durable Action authority owns state transitions for Seyal-controlled effects.
-2. Harness/UI/CLI/SDK/MCP/workflow components submit typed intents/observations; they do not own Action state.
-3. Resource authorities execute their own operations and return typed evidence.
-4. `TerminalExecution` remains sole PTY/process/TerminalState authority.
-5. External-agent effects that bypass Seyal control are never relabeled `SeyalEnforced`.
+1. Runtime/domain layer is the sole durable Action transition writer.
+2. Resource executors perform effects and return typed evidence; they do not own Action lifecycle.
+3. Harnesses, UI, MCP, CLI/SDK and workflows submit typed intents/requests but do not create competing state machines.
+4. External CLI-agent effects that bypass Seyal's dispatch boundary are never labeled `SeyalEnforced`.
+5. No Action persistence/executor/model work synchronously gates terminal I/O/rendering.
 
 ## 3. Action identity and immutable intent
 
-Every Seyal-controlled effect uses one stable `ActionId`.
-
-Before authorization, Seyal durably records an immutable normalized `ActionIntent` containing at least:
+Every operation has a stable `ActionId` and immutable `ActionIntent` containing at least:
 
 ```text
 ActionId
 AgentRunId
+AgentRun binding generation at preparation/authorization where relevant
 capability
 resource identity
 resource version / freshness precondition
-normalized arguments or stable argument fingerprint
+normalized arguments or argument fingerprint
 effect class
 policy generation
-privacy/revocation generation when relevant
+privacy/revocation generation dependency
 request provenance
 required authorization class
 created_at
-expiry when applicable
-executor capability reference
+intent expiry, when applicable
+executor capability identity/version, when selected
 ```
 
-Once `Prepared`, materially changing any of the following invalidates the intent as dispatch authority:
+### 3.1 Material change creates a new Action
 
-- capability;
-- target resource;
-- required resource version/fingerprint;
-- normalized arguments;
-- effect class;
-- applicable policy generation;
-- relevant privacy/security payload eligibility.
+After preparation, any material change to capability, target, target version, arguments, effect class, policy assumption or protected payload creates a **new `ActionId` and new immutable `ActionIntent`**.
 
-A materially changed operation is re-prepared and re-authorized; the old Action is not silently edited or widened.
+The old Action is not edited, reused or widened.
+
+A client retry carrying the unchanged existing `ActionId` is a duplicate reference to the same Action, not a request to mutate it.
 
 ## 4. Canonical lifecycle
 
-Observable states:
-
 ```text
 Prepared
-  -> Authorized
-      -> Dispatching
-          -> Succeeded
-          -> FailedKnown
-          -> EffectUnknown
-              -> Succeeded       # authoritative reconciliation
-              -> FailedKnown     # authoritative reconciliation
-          -> CancelledAfterDispatch
-              -> Succeeded       # authoritative reconciliation
-              -> FailedKnown     # authoritative reconciliation
-              -> EffectUnknown   # authoritative reconciliation remains ambiguous
-  -> CancelledBeforeDispatch
+   +--> Authorized
+   |      +--> Prepared             authorization invalidated before dispatch
+   |      +--> Dispatching
+   |             +--> Succeeded
+   |             +--> FailedKnown
+   |             +--> EffectUnknown
+   |             |      +-- reconciliation --> Succeeded
+   |             |      +-- reconciliation --> FailedKnown
+   |             +--> CancelledAfterDispatch
+   |                    +-- reconciliation --> Succeeded
+   |                    +-- reconciliation --> FailedKnown
+   |                    +-- reconciliation --> EffectUnknown
+   +--> CancelledBeforeDispatch
 
-Authorized
-  -> CancelledBeforeDispatch
+Authorized -> CancelledBeforeDispatch
 ```
-
-No other externally meaningful transition is silently inferred.
 
 ### 4.1 State meanings
 
-`Prepared`
-: immutable ActionIntent exists; no consumable dispatch authorization is current.
+- `Prepared`: intent durably exists; no consumable dispatch authorization is current.
+- `Authorized`: exact authorization is bound and eligible, but any single-use approval has not yet been consumed for dispatch.
+- `Dispatching`: the durable conservative boundary after which missing local success cannot prove no external effect.
+- `Succeeded`: authoritative evidence proves successful completion for this Action.
+- `FailedKnown`: authoritative evidence proves a known non-success outcome with sufficiently known effect semantics.
+- `EffectUnknown`: occurrence/partial occurrence/completion cannot safely be established.
+- `CancelledBeforeDispatch`: cancellation linearized before `Dispatching`; no dispatch is permitted through this authority.
+- `CancelledAfterDispatch`: cancellation linearized after `Dispatching`; rollback/no-effect is not implied.
 
-`Authorized`
-: exact authorization is durably bound to this intent; any single-use approval has not yet been consumed for dispatch.
+Audit history retains prior ambiguity/cancellation facts after reconciliation.
 
-`Dispatching`
-: the atomic local dispatch boundary committed. Absence of a later local result cannot prove no external effect occurred.
+## 5. Authorization and exact approval binding
 
-`Succeeded`
-: authoritative typed evidence establishes intended success.
-
-`FailedKnown`
-: authoritative typed evidence establishes a known non-success effect outcome.
-
-`EffectUnknown`
-: Seyal cannot safely establish whether the effect occurred, partially occurred, remains in progress, or did not occur.
-
-`CancelledBeforeDispatch`
-: cancellation prevented the dispatch boundary from being crossed.
-
-`CancelledAfterDispatch`
-: cancellation was requested after dispatch began; no rollback/no-effect claim is implied.
-
-## 5. Exact authorization binding
-
-An authorization consumed by an Action binds at least:
+An authorization/approval that permits dispatch binds at least:
 
 ```text
 ActionId
 AgentRunId
 capability
-resource identity
-resource version/fingerprint precondition
-argument fingerprint
+resource identity + required version/fingerprint
+normalized argument fingerprint
+effect class
 policy generation
-privacy/revocation generation when relevant
-authorization class
+privacy/revocation generation where payload eligibility matters
 expiry
 consumption state
 ```
 
-Rules:
+It is not a bearer token and cannot authorize another Action/resource/version/arguments/AgentRun.
 
-1. Authorization cannot be widened to another Action/resource/version/arguments/AgentRun.
-2. Duplicate UI/reconnect events cannot consume the same approval twice.
-3. Expired authorization is ineligible.
-4. Authorization does not survive a material intent/precondition change.
-5. Authorization is not a general bearer capability.
-6. AgentRun reconnect alone does not invalidate exact authorization if all bound assumptions remain current; stale run bindings still cannot control it.
+Duplicate UI events, reconnects or stale workers cannot consume it twice.
 
-## 6. Atomic pre-dispatch transaction
+## 6. Atomic dispatch transaction
 
-Immediately before dispatch, one atomic local safety transaction performs all of:
+Immediately before external effect invocation, one local safety-critical transaction must atomically:
+
+1. verify Action is current, non-terminal and not cancelled;
+2. verify **intent expiry has not passed**;
+3. verify current AgentRun control/binding generation under ADR-012;
+4. verify capability remains allowed;
+5. verify current policy generation;
+6. verify current privacy/security eligibility under ADR-013 and the accepted privacy contract;
+7. verify target resource identity and required freshness/version precondition;
+8. verify exact approval/authorization is current, unexpired and unconsumed;
+9. acquire a new current Action dispatch generation/ownership fence;
+10. consume the exact single-use approval where required;
+11. durably transition to `Dispatching`.
+
+No intermediate committed state may expose approval consumed without current dispatch ownership/`Dispatching`, or vice versa.
+
+Failure of any precondition leaves the Action undispatched and cannot silently widen authorization.
+
+## 7. Between transaction commit and executor invocation
+
+The executor invocation is bound to **both**:
 
 ```text
-revalidate Action is current/non-terminal
-revalidate current AgentRun control generation
-revalidate target resource identity/version/freshness
-revalidate capability/policy
-revalidate privacy/revocation eligibility
-revalidate exact approval presence/expiry/unconsumed state
-acquire current Action dispatch generation/ownership
-consume single-use approval when required
-durably transition Action -> Dispatching
+exact AgentRun binding generation
+exact Action dispatch generation
 ```
 
-All succeed together or none commits.
+A worker/rebinding event that makes the AgentRun binding stale also invalidates that worker's right to invoke the Action even if it still possesses an Action generation token.
 
-Forbidden intermediate committed states include:
+The Seyal-controlled executor boundary rechecks/fences the current binding immediately before effect invocation. Where an executor boundary cannot enforce the required fence, that executor cannot be treated as safely `SeyalEnforced` for operations requiring this guarantee.
 
-- approval consumed but Action not durably `Dispatching`;
-- `Dispatching` recorded without current dispatch ownership/generation;
-- dispatch ownership acquired while approval/preconditions remain unvalidated.
+A stale worker/dispatcher may submit observational evidence, but cannot cross the effect boundary or commit current Action state.
 
-After the transaction commits, the executor invocation uses the stable `ActionId` and current dispatch-generation/fencing material.
+## 8. Resource-version enforcement at the actual effect boundary
 
-## 7. Crash before `Dispatching`
+The local transaction's version check alone is insufficient if the resource can change before invocation.
 
-If recovery finds:
+For operations whose authorization depends on a resource version/fingerprint, the executor contract must provide one of:
+
+- compare-and-set / conditional mutation on the bound version;
+- an executor-owned lock/fence spanning final version validation and effect;
+- another authoritative atomic freshness primitive with equivalent semantics.
+
+If the actual effect boundary cannot enforce the bound version, the operation fails closed before effect where possible. If uncertainty arises after `Dispatching`, recovery follows `EffectUnknown`; Seyal must not pretend the approved version was mutated.
+
+Tests must cover a resource change between local transaction commit and executor invocation.
+
+## 9. Crash before `Dispatching`
+
+### Prepared
+
+Crash/restart may reconsider the same immutable Action. No dispatch occurred through this authority.
+
+### Authorized but atomic transaction did not commit
+
+Recovery must:
 
 ```text
-state == Authorized
-and no committed Dispatching transaction
+invalidate old consumable authorization
+transition Authorized -> Prepared
+record authorization invalidation reason/provenance
+require fresh authorization before any future dispatch
 ```
 
-then Seyal knows no dispatch occurred **through this Action authority**.
+It must not leave an externally `Authorized` Action that appears ready to dispatch.
 
-However, prior consumable authorization is invalidated for recovery and **fresh authorization is required before the Action can dispatch**.
+## 10. Crash after durable `Dispatching`
 
-Rationale: recovery must not replay a pre-crash authorization across changed policy/resource/privacy/runtime assumptions.
+Absence of a local result never proves no effect.
 
-No external effect is inferred merely from `Authorized`.
+Recovery classifies using authoritative executor evidence:
 
-## 8. Crash after `Dispatching`
+### 10.1 Known not dispatched
 
-Once `Dispatching` is durable, recovery is conservative.
+Only an executor contract may prove that invocation/effect did not occur.
 
-For non-replayable/insufficiently observable actions:
+When proven:
 
-```text
-missing result
-worker death
-transport timeout
-provider timeout
-process crash
-UI disconnect
-```
+- invalidate the old dispatch generation;
+- transition `Dispatching -> Prepared` with durable `known-not-dispatched` reconciliation evidence;
+- require fresh authorization before a future dispatch.
 
-must not cause blind retry.
+### 10.2 Replay-safe continuation of the same Action
 
-Recovery obtains authoritative executor/resource evidence and resolves to:
+Allowed only under a validated executor idempotency/reconciliation contract.
 
-```text
-Succeeded
-FailedKnown
-known-not-dispatched (only if executor contract can prove it)
-replay-safe continuation (only under explicit idempotency contract)
-EffectUnknown
-```
+The Action remains an unresolved dispatched Action while reconciliation establishes a safe continuation. A new dispatch generation may be acquired only through the recovery/reconciliation authority after old generation fencing and all current policy/resource/privacy preconditions are revalidated.
 
-If none can be proved, result is `EffectUnknown`.
+This is continuation/reconciliation of the **same ActionId**, not preparation of changed arguments.
 
-## 9. Dispatch generation and fencing
+### 10.3 Otherwise
 
-Each dispatch attempt/control owner has a monotonically changing Action dispatch generation or equivalent fencing credential.
+Transition/recover to `EffectUnknown`. No blind retry.
 
-Only current dispatch generation may:
+## 11. Executor capability trust
 
-- invoke/reissue under an allowed executor contract;
-- submit authoritative result evidence;
-- complete/reconcile the current dispatch;
-- initiate executor-specific status query/retry where allowed.
+Replay/idempotency/reconciliation capability metadata must be:
 
-A stale generation may submit late observational evidence when policy permits, but cannot mutate current Action state directly.
+- supplied/validated by the owning executor authority, not model narration or an untrusted adapter;
+- authenticated according to the executor integration trust model;
+- bound to executor identity/version and operation/effect class;
+- versioned and current;
+- treated as absent when stale, conflicting, unverifiable or outside its validity window.
 
-`AgentRun` binding generation and Action dispatch generation are separate:
+A UUID generated by Seyal is not proof of external idempotency.
+
+## 12. Idempotency/reconciliation contract
+
+An executor claiming replay-safe semantics specifies at least:
 
 ```text
-AgentRun generation -> who may control the run
-Action generation   -> who may control this effect dispatch
-```
-
-Neither substitutes for the other.
-
-## 10. Executor capability contract
-
-An executor that permits replay/reissue/reconciliation must declare versioned capabilities.
-
-At minimum:
-
-```text
-ExecutorCapabilityVersion
-operation identity mechanism
-idempotency key semantics
+stable operation/idempotency identity
 duplicate-request guarantee
-guarantee validity/expiry
+validity duration/window
 partial-effect semantics
-status/reconciliation query semantics
+authoritative status/reconciliation query
 restart/failover semantics
 resource-version/CAS behavior
-cancellation semantics
+causal evidence available for reconciliation
 ```
 
-A generated UUID alone is not proof of idempotency.
+If any required guarantee is absent/expired/unverifiable, fallback is conservative `EffectUnknown`/manual reconciliation.
 
-If any required guarantee is absent, expired, unsupported or unverifiable, Seyal uses conservative `EffectUnknown` semantics.
+## 13. Result evidence
 
-## 11. Replay classes
-
-### 11.1 Non-replayable
-
-No trusted duplicate-suppression/status proof exists.
-
-After ambiguous dispatch, no automatic replay.
-
-### 11.2 Idempotent-by-resource semantics
-
-Executor/resource guarantees that repeating the exact same operation against the exact allowed resource version cannot widen/duplicate effect.
-
-Replay is allowed only while those preconditions remain current.
-
-### 11.3 Idempotency-key protected
-
-External system contract guarantees duplicate suppression for the exact Action/operation identity within a declared window.
-
-Replay is allowed only inside the verified guarantee window and current policy/resource constraints.
-
-### 11.4 Reconciliation-only
-
-Executor supports authoritative status lookup but not safe replay.
-
-Recovery queries status and resolves or remains `EffectUnknown`.
-
-## 12. Resource/version freshness
-
-The dispatch transaction revalidates target identity/version/fingerprint.
-
-If resource state changed since authorization:
-
-- old authorization is not widened;
-- old Action does not silently target the new version;
-- consumer either cancels/re-prepares a materially new Action or obtains a new exact authorization under current state.
-
-This applies to files, Git refs, processes, deployments, remote resources and other typed authorities.
-
-## 13. Privacy/security use-time check
-
-ADR-013/SPEC-015 privacy eligibility is part of the same atomic pre-dispatch transaction.
-
-If payload/context eligibility is revoked before the transaction commits:
-
-- dispatch fails closed;
-- any authorization tied to old payload assumptions is no longer consumable;
-- Action is re-prepared/re-authorized if the materially changed operation is still wanted.
-
-If privacy revocation occurs after durable `Dispatching`, this spec does not claim the external effect was prevented or unsent. ADR-014 reconciliation semantics apply.
-
-## 14. Result evidence
-
-An authoritative result binds at least:
+Authoritative result evidence binds:
 
 ```text
 ActionId
-AgentRunId
-dispatch generation
-executor identity/capability version
-resource identity
-operation identity/result identity
-observed outcome
-result timestamp
-provenance/authentication evidence
+Action dispatch generation
+AgentRun binding generation or accepted recovery authority
+executor identity/version
+operation/result identity
+resource/version evidence where applicable
+outcome
+observed_at / committed_at
 ```
 
-A result cannot be accepted solely from:
+Terminal text, model narration, display strings and stale adapter events are non-authoritative.
 
-- terminal text;
-- model narration/self-report;
-- display strings;
-- stale adapter events;
-- the resource coincidentally matching desired state.
+## 14. Causal reconciliation
 
-Post-hoc state inspection may be reconciliation evidence, but it must be labeled as reconciliation, not fabricated original execution evidence.
+Post-hoc state inspection may resolve `EffectUnknown` only when the executor contract can causally bind the observed state to this Action, for example through:
 
-## 15. Reconciliation
+- operation/request ID;
+- idempotency record;
+- version/CAS witness;
+- resource transaction ID;
+- another executor-defined authoritative causal marker.
 
-`EffectUnknown` and `CancelledAfterDispatch` may transition only when authoritative reconciliation evidence is obtained.
+Seeing the desired state alone is insufficient because another actor may have produced it.
 
-### 15.1 EffectUnknown exits
+Without causal correlation, remain `EffectUnknown` even if current state looks correct.
+
+## 15. Reconciliation exits
+
+`EffectUnknown` may transition to:
+
+- `Succeeded` with authoritative causal success evidence;
+- `FailedKnown` with authoritative known-failure/no-success evidence.
+
+`CancelledAfterDispatch` may transition to:
+
+- `Succeeded`;
+- `FailedKnown`;
+- `EffectUnknown`;
+
+according to authoritative effect evidence. Cancellation history remains in audit evidence.
+
+## 16. Cancellation linearization
+
+Cancellation is serialized against the durable `Dispatching` transition.
+
+### 16.1 Cancellation wins before `Dispatching`
+
+If cancellation commits first:
 
 ```text
-EffectUnknown -> Succeeded
-EffectUnknown -> FailedKnown
+Prepared/Authorized -> CancelledBeforeDispatch
 ```
 
-If evidence remains insufficient, it stays `EffectUnknown`.
+The atomic dispatch transaction must then fail and no executor invocation may begin.
 
-### 15.2 CancelledAfterDispatch exits
+### 16.2 Dispatch wins first
+
+If `Dispatching` commits first:
 
 ```text
-CancelledAfterDispatch -> Succeeded
-CancelledAfterDispatch -> FailedKnown
-CancelledAfterDispatch -> EffectUnknown
+Dispatching -> CancelledAfterDispatch
 ```
 
-Audit history preserves that cancellation was previously requested and/or ambiguity previously existed.
+Cancellation may request executor stop if supported, but cannot claim rollback/no-effect.
 
-Reconciliation does not rewrite history to pretend no ambiguity/cancellation occurred.
+### 16.3 Completion racing cancellation
 
-## 16. Cancellation semantics
+A current-generation executor completion/reconciliation result remains admissible even if cancellation was requested after dispatch. Cancellation must not suppress authoritative completion evidence.
 
-### Before dispatch
+### 16.4 No reissue after post-dispatch cancellation
 
-Cancellation produces `CancelledBeforeDispatch` and prevents executor invocation.
+`CancelledAfterDispatch` is reconciliation-only for the original Action. It must not be automatically reissued even if an idempotency key exists.
 
-### After dispatch
+Any later attempt to perform the operation again is a **new ActionId** with fresh authorization.
 
-Cancellation means no further work should be initiated and, if supported, an executor cancel request may be sent.
+## 17. Compensation / undo
 
-It does **not** mean:
+Compensation is a new explicit Action with its own immutable intent, policy, authorization, dispatch and evidence.
 
-- effect never happened;
-- partial effect was undone;
-- resource returned to original state.
+It is not an implicit rollback state of the original Action.
 
-If compensation/undo is desired, it is a new Action with its own ActionId, authorization, dispatch and result evidence.
+## 18. Privacy and payload retention
 
-## 17. Recovery matrix
+Until SPEC-015 is accepted, ADR-013 is the normative privacy authority. This PR must not merge ahead of the accepted privacy contract; after that merge the final rebase must use its canonical dispatch hook rather than duplicating one.
+
+Current invariant:
+
+- privacy/security eligibility is a precondition of the atomic dispatch transaction;
+- revocation before `Dispatching` prevents the old protected payload from dispatching;
+- revocation after `Dispatching` cannot be described as unsent/rolled back;
+- Action payload retention/redaction follows ADR-013 policy;
+- hashes/fingerprints do not reconstruct erased payload.
+
+If required payload is deleted before safe reconciliation, that prerequisite is reported unavailable; evidence is not fabricated.
+
+## 19. External-agent enforcement truthfulness
+
+Only operations crossing this Seyal-controlled Action boundary may be labeled `SeyalEnforced`.
+
+An independent external CLI agent may perform shell/network/tool effects outside this boundary. Seyal may observe/request those according to capabilities, but cannot claim this contract prevented or authorized them.
+
+## 20. Duplicate/replay behavior
+
+Receiving the same `ActionId` again:
+
+- never creates a second Action;
+- never consumes approval twice;
+- never dispatches twice merely because the caller retried;
+- returns current durable Action state or joins the current reconciliation path.
+
+Materially changed requests require a new ActionId under §3.1.
+
+## 21. Persistent failure and convergence
+
+### 21.1 Persistence failure before `Dispatching`
+
+If the atomic safety state cannot be durably committed, do not dispatch.
+
+### 21.2 Result persistence failure after effect
+
+The Action remains unresolved dispatched state and is reconciled conservatively. No blind retry.
+
+### 21.3 Automatic reconciliation budget
+
+Automatic reconciliation/retry has a finite policy-defined attempt and/or deadline budget.
+
+On exhaustion:
+
+```text
+Action remains EffectUnknown (or current unresolved post-dispatch state)
+automatic rescheduling stops
+manual/Attention reconciliation may be surfaced
+minimum recovery evidence is retained
+unrelated terminal/execution work continues
+```
+
+The system does not invent a fake terminal lifecycle state merely to stop retry. The durable Action remains truthfully ambiguous until authoritative evidence or explicit operator resolution is available.
+
+No tight loops, unbounded queues or unbounded disk/RSS growth are allowed.
+
+## 22. Recovery matrix
 
 | Failure point | Required recovery |
 |---|---|
 | before durable ActionIntent | no durable Action; nothing may be claimed/replayed |
-| after Prepared, before Authorized | same Action may be reconsidered; no dispatch through authority |
-| after Authorized, before atomic Dispatching commit | old authorization invalidated; fresh authorization required |
-| after durable Dispatching, before executor invocation | conservative ambiguity unless authoritative executor proves not dispatched |
-| during executor call / timeout | reconcile; no blind retry |
-| effect occurred, result persistence failed | unresolved dispatch -> EffectUnknown unless authoritative evidence resolves |
-| after EffectUnknown | reconcile to Succeeded/FailedKnown or remain unknown |
-| after CancelledAfterDispatch | reconcile to Succeeded/FailedKnown/EffectUnknown |
-| after terminal result committed | never redispatch merely during state replay/recovery |
-| stale dispatcher returns | reject state mutation unless processed through current reconciliation contract |
-| durable persistence unavailable | fail closed for new dispatches; bounded retry/degraded state; terminal progresses |
+| after Prepared | no dispatch; may reconsider same intent |
+| after Authorized, before atomic transaction commit | `Authorized -> Prepared`; authorization invalidated; fresh authorization required |
+| after durable Dispatching, before executor invocation | conservative ambiguity unless executor proves known-not-dispatched |
+| during executor call / timeout / channel loss | reconcile; no blind retry |
+| effect occurred, result persistence failed | unresolved/`EffectUnknown` unless executor evidence proves outcome |
+| resource changed after local check | executor CAS/fence decides; otherwise fail closed or reconcile ambiguity |
+| stale AgentRun/Action dispatcher returns | cannot invoke/commit current state |
+| durable success/failure committed | never dispatch external operation again |
+| cancellation races dispatch | §16 linearization decides before/after state |
+| reconciliation budget exhausted | stop automatic retries; remain truthfully unresolved and surface manual path |
 
-## 18. Duplicate/replayed request behavior
+## 23. Security requirements
 
-For the same `ActionId`:
+1. Approval replay/widening fails closed.
+2. Stale AgentRun binding and stale Action dispatch generations cannot effect/commit.
+3. Intent/action expiry is checked before dispatch.
+4. Executor capability claims are trusted only under §11.
+5. Resource-version assumptions are enforced at actual effect boundary.
+6. Reconciliation cannot infer causality from desired state alone.
+7. Raw terminal/OSC/model narration cannot fabricate Action/result authority.
+8. Persistent local safety-state failure prevents new effects but not unrelated terminal progress.
 
-- duplicate prepare request returns existing identity/state or an explicit conflict; it does not create another effect;
-- duplicate approval event is idempotent and cannot consume twice;
-- duplicate dispatch request from stale/same generation cannot invoke twice unless executor contract explicitly allows safe reissue and Action state permits it;
-- duplicate result with same authenticated operation identity is idempotent;
-- conflicting duplicate result requires reconciliation/quarantine, not last-writer-wins.
+## 24. Resource/performance requirements
 
-## 19. External agent boundary
+Action control/effect work stays outside terminal hot paths.
 
-If an external CLI agent invokes effects through its own process/harness outside Seyal dispatch control:
+Required controls:
 
-```text
-Observed / UpstreamRequestable != SeyalEnforced
-```
+- bounded Action queues;
+- bounded per-Action evidence/history according to retention policy;
+- finite retry/reconciliation budgets;
+- cancellable executor calls where supported;
+- stale generation cleanup;
+- CPU/RSS/disk accounting under executor/persistence failure;
+- no synchronous gate from Action persistence/executor/network/approval to PTY/VT/render progress.
 
-Seyal may display typed observations/advisory evidence but cannot claim:
+Concrete budgets are calibrated under #841/#680/#839 consumers before implementation readiness.
 
-- approval prevented the effect;
-- Action fencing controlled it;
-- cancellation stopped it;
-- Action lifecycle is execution truth for that bypassed effect.
+## 25. Required conformance tests
 
-A future adapter may become `SeyalEnforced` only when Seyal actually owns the enforceable dispatch boundary.
+### Intent / authorization
 
-## 20. Payload retention and deletion
+- material argument/resource/policy change -> new ActionId, old intent unchanged;
+- duplicate same ActionId -> no duplicate Action/approval/dispatch;
+- expired ActionIntent while Authorized -> dispatch denied, authorization invalidated/prepared as policy requires;
+- expired approval -> dispatch denied.
 
-Action metadata/payload follows ADR-013/SPEC-015 sensitivity and retention policy.
+### Atomic dispatch
 
-Rules:
+- crash before transaction commit -> old authorization invalidated, `Authorized -> Prepared`;
+- crash after `Dispatching` before invocation -> no blind retry;
+- approval consumption and `Dispatching` cannot persist separately.
 
-1. Keep only data needed for identity, safety, reconciliation, audit and user-visible evidence under policy.
-2. Redaction/deletion cannot turn a replay-unsafe action into replay-safe.
-3. If required reconciliation payload is deleted, report reconciliation prerequisite unavailable; do not reconstruct from hashes.
-4. Action fingerprints prove equality/dependency only; they do not restore erased data.
-5. Logs/errors never retain sensitive arguments unnecessarily.
+### Fencing
 
-## 21. Persistent failure behavior
+- AgentRun rebind between transaction and invocation -> old worker cannot invoke;
+- stale Action dispatcher result -> cannot commit current state;
+- both AgentRun binding generation and Action dispatch generation are validated.
 
-### Action persistence unavailable before dispatch
+### Resource TOCTOU
 
-No new Action may cross the dispatch boundary if safety-critical durable state cannot be committed.
+- resource changes between local check and invocation -> executor CAS/fence rejects or ambiguity reconciles; newer version is never silently mutated under old approval.
 
-### Result persistence unavailable after effect
+### Idempotency trust
 
-Treat result as unresolved; do not blindly retry effect. Preserve/recover through executor reconciliation where possible.
+- untrusted adapter claims idempotency -> treated as absent;
+- stale/expired capability guarantee -> treated as absent;
+- verified guarantee allows only contract-defined same-Action continuation.
 
-### Reconciliation service unavailable
+### Reconciliation
 
-Remain `EffectUnknown`; bounded backoff/retry. Human Attention may be surfaced according to #680, but terminal progress remains independent.
+- effect succeeds but result write fails -> no duplicate effect;
+- state looks correct but lacks causal marker -> remains `EffectUnknown`;
+- operation ID/CAS witness proves success -> may reconcile `Succeeded`;
+- automatic reconciliation budget exhaustion stops rescheduling without fabricating known outcome.
 
-### Repeated failure
+### Cancellation
 
-Retry/backoff is bounded and observable. No tight loops, unbounded queues or unbounded disk/RSS growth.
+- cancel commits before `Dispatching` -> `CancelledBeforeDispatch`, no invocation;
+- `Dispatching` commits before cancel -> `CancelledAfterDispatch`;
+- completion races cancel -> authoritative completion remains admissible;
+- post-dispatch cancelled Action is never reissued; repeat operation requires new ActionId.
 
-## 22. Security requirements
+### Privacy
 
-1. Authorization binding uses canonical normalized arguments/resource identity, not UI strings.
-2. Stale AgentRun/dispatch generations fail closed.
-3. Unauthenticated/untrusted result evidence cannot settle Action outcome.
-4. Unknown/newer durable Action schema is quarantined/ineligible for dispatch.
-5. Logs/traces are sensitivity-aware.
-6. Capability policy cannot be widened by model/provider narration.
-7. Raw terminal escape/text input cannot authorize/complete an Action.
-8. Control-plane replay must be idempotent or explicitly rejected.
+- protected payload revoked before `Dispatching` -> dispatch fails;
+- revocation after `Dispatching` -> no unsent/rollback claim.
 
-## 23. Resource/performance requirements
+### External-agent truthfulness
 
-Action safety work is outside terminal hot paths.
+- direct external CLI effect bypassing Seyal Action -> never labeled `SeyalEnforced`.
 
-Required implementation controls:
+### Failure/resource
 
-- bounded pending Action queues;
-- bounded result/reconciliation records;
-- bounded retry/backoff;
-- cancellation propagation without blocking terminal reactor;
-- resource cleanup after terminal Action states;
-- failure injection under persistence/executor outage;
-- CPU/RSS/disk/latency measurements under active Actions;
-- zero synchronous dependency from PTY/VT/render onto Action storage/executor/network/licensing/cloud.
+- persistent Action-store failure -> fail closed for new effects;
+- executor/reconciliation outage -> bounded resources/retries;
+- active/failing Actions do not block PTY/VT/render.
 
-Concrete budgets are calibrated under #841/#680/#839 implementation readiness.
+## 26. Acceptance criteria
 
-## 24. Required tests
+SPEC-016 is acceptable only when:
 
-### 24.1 Intent/authorization
+- material changes require a new ActionId;
+- lifecycle and recovery transitions are deterministic;
+- intent expiry and authorization expiry are enforced;
+- dispatch transaction is atomic locally;
+- exact AgentRun + Action generations fence invocation/results;
+- resource freshness is enforced at the actual effect boundary;
+- idempotency/reconciliation capability evidence is trusted/versioned and executor-owned;
+- known-not-dispatched and replay-safe recovery have explicit durable behavior;
+- cancellation is linearized and post-dispatch cancellation is reconciliation-only;
+- post-hoc reconciliation requires causal evidence;
+- automatic recovery has finite convergence behavior;
+- external-agent enforcement claims remain truthful;
+- privacy hooks compose with ADR-013 and the accepted SPEC-015 without duplicate authority;
+- security/fault/property tests cover the complete race matrix;
+- terminal hot-path isolation is absolute;
+- Foundation Quality is green on the final exact reviewed head.
 
-- exact ActionIntent round-trip/versioning;
-- materially changed args/resource/version/policy require new preparation/authorization;
-- duplicate approval cannot consume twice;
-- expired approval cannot dispatch;
-- approval for AgentRun A cannot authorize AgentRun B;
-- argument canonicalization ambiguity fails closed.
-
-### 24.2 Atomic dispatch boundary
-
-- injected crash before transaction commit -> remains Authorized/recovers requiring fresh authorization;
-- injected crash after transaction commit before executor call -> Dispatching ambiguity, not blind retry;
-- no state exists with consumed approval but no committed dispatch generation/state;
-- no state exists with committed Dispatching but missing dispatch ownership generation.
-
-### 24.3 Fencing
-
-- stale AgentRun worker cannot dispatch;
-- stale Action dispatch generation cannot invoke/complete;
-- stale result cannot overwrite reconciled current state;
-- replacement dispatcher handles only explicitly authorized reconciliation/reissue.
-
-### 24.4 Effect ambiguity
-
-- executor timeout -> EffectUnknown unless authoritative failure/no-effect proof;
-- effect succeeds but result persistence fails -> recovery reconciles rather than redispatches;
-- missing local result does not imply no effect;
-- model/terminal success string cannot settle state.
-
-### 24.5 Idempotency
-
-- no declared contract -> no automatic replay;
-- expired idempotency guarantee -> no replay;
-- valid duplicate-suppression contract permits safe same-Action reissue only within stated rules;
-- partial-effect-capable executor does not report ordinary failure without reconciliation semantics.
-
-### 24.6 Cancellation/reconciliation
-
-- cancel before dispatch -> executor never invoked;
-- cancel after dispatch + later success -> Succeeded with cancellation history retained;
-- cancel after dispatch + proven known failure -> FailedKnown;
-- cancel after dispatch + uncertain status -> EffectUnknown;
-- compensation creates new ActionId and approval.
-
-### 24.7 Privacy
-
-- revocation before dispatch transaction -> dispatch denied;
-- revocation after Dispatching -> no false unsent/rollback claim;
-- deleted reconciliation payload -> explicit unavailable, no hash reconstruction.
-
-### 24.8 Fault/resource
-
-- persistence outage before dispatch fails closed;
-- persistence outage after external success does not duplicate effect;
-- repeated executor/status failure bounded;
-- queue saturation bounded;
-- fuzz malformed Action/result/authorization records;
-- active/failing Action plane does not stall PTY/VT/render.
-
-## 25. Conformance fixtures
-
-At least these executor fixtures are required before implementation can claim generality:
-
-1. non-replayable executor fixture;
-2. authoritative status-query-only fixture;
-3. idempotency-key fixture with finite guarantee window;
-4. resource-version/CAS fixture;
-5. cancellation-with-ambiguous-effect fixture;
-6. stale dispatcher/result fixture;
-7. persistence crash-injection fixture.
-
-Fixtures may be synthetic/local; they test contracts, not vendor products.
-
-## 26. Compatibility/versioning
-
-- Durable Action schema is versioned.
-- Executor capability contract is versioned independently.
-- Unknown required fields/capability versions fail closed for dispatch.
-- Reader upgrades may interpret older terminal states, but cannot invent missing authorization/effect guarantees.
-- Migration must preserve prior `EffectUnknown`, cancellation and reconciliation audit history.
-
-## 27. Acceptance criteria
-
-SPEC-016 is accepted only when independent review establishes that:
-
-- lifecycle and crash boundaries are complete/deterministic;
-- approval cannot be replayed/widened;
-- atomic dispatch ordering has no TOCTOU hole;
-- stale workers/dispatchers/results are fenced;
-- missing result cannot cause blind retry;
-- idempotency is executor-specific and evidence-backed;
-- cancellation does not imply rollback;
-- reconciliation exits are authoritative and preserve history;
-- context/privacy preconditions consume ADR-013/SPEC-015 rather than duplicate authority;
-- external-agent bypass effects are not mislabeled enforced;
-- failures/resources are bounded and terminal isolation remains absolute;
-- exact-head Foundation Quality is green.
-
-## 28. Explicit non-goals
+## 27. Explicit non-goals
 
 This specification does not define:
 
-- Attention/approval presentation UX;
-- global workflow DAG scheduling;
-- generic undo semantics;
-- executor implementation details for Git/filesystem/process/cloud APIs;
-- model/harness prompting/routing policy;
-- provider-specific action schemas;
-- concrete database/transaction technology;
+- Attention/Approval presentation UX;
+- ContextBundle/MemoryRecord base behavior;
+- provider-specific prompting/routing;
+- executor-specific Git/filesystem/process/cloud implementations;
+- workflow DAG scheduling;
+- concrete storage/transaction technology;
 - production implementation.

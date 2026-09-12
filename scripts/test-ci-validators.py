@@ -134,6 +134,17 @@ def main() -> None:
             "must not mention SeyalShellView",
         )
 
+        thin_boundary = base / "thin-swift-boundary"
+        write(
+            thin_boundary / "macos/Seyal/Sources/NewProductReducer.swift",
+            "enum InspectorMode { case context }\n",
+        )
+        run_negative(
+            ["python3", str(ROOT / "scripts/check-thin-swift-boundary.py")],
+            thin_boundary,
+            "enum InspectorMode",
+        )
+
         workspace = base / "workspace"
         workspace.mkdir()
         run_negative(["python3", str(ROOT / "scripts/test-workspace.py")], workspace, "missing root Cargo.toml")

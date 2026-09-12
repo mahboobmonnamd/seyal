@@ -341,6 +341,212 @@ final class PanePresentationContractTests: XCTestCase {
     )
   }
 
+  func testLiveTailRequestsOpenEndedRangeForRunningBlocks() {
+    let running = NativeBlockRecord(
+      id: 7,
+      command: "seq 1 1000",
+      state: .running,
+      startLine: 11,
+      endLine: nil,
+      exitStatus: 0
+    )
+    let completed = NativeBlockRecord(
+      id: 3,
+      command: "printf hello",
+      state: .completed,
+      startLine: 1,
+      endLine: 2,
+      exitStatus: 0
+    )
+    let first = FlowLiveTailProjection.historyRequests(
+      records: [completed, running],
+      requestedCompleted: []
+    )
+    XCTAssertEqual(
+      first,
+      [
+        .init(blockID: 3, startLine: 1, endLine: 2, kind: .completed),
+        .init(
+          blockID: 7,
+          startLine: 11,
+          endLine: FlowLiveTailProjection.openEndedTail,
+          kind: .liveTail
+        ),
+      ]
+    )
+    let again = FlowLiveTailProjection.historyRequests(
+      records: [completed, running],
+      requestedCompleted: [3]
+    )
+    XCTAssertEqual(
+      again,
+      [
+        .init(
+          blockID: 7,
+          startLine: 11,
+          endLine: FlowLiveTailProjection.openEndedTail,
+          kind: .liveTail
+        )
+      ]
+    )
+  }
+
+  func testLiveTailRefreshIsGenerationCoalescedInFlowOnly() {
+    XCTAssertTrue(
+      FlowLiveTailProjection.shouldRefreshLiveTail(
+        mode: .flow,
+        previousGeneration: nil,
+        frameGeneration: 1,
+        hasRunningBlock: true,
+        liveTailInFlight: false
+      )
+    )
+    XCTAssertFalse(
+      FlowLiveTailProjection.shouldRefreshLiveTail(
+        mode: .flow,
+        previousGeneration: 4,
+        frameGeneration: 4,
+        hasRunningBlock: true,
+        liveTailInFlight: false
+      )
+    )
+    XCTAssertTrue(
+      FlowLiveTailProjection.shouldRefreshLiveTail(
+        mode: .flow,
+        previousGeneration: 4,
+        frameGeneration: 5,
+        hasRunningBlock: true,
+        liveTailInFlight: false
+      )
+    )
+    XCTAssertFalse(
+      FlowLiveTailProjection.shouldRefreshLiveTail(
+        mode: .flow,
+        previousGeneration: 4,
+        frameGeneration: 5,
+        hasRunningBlock: true,
+        liveTailInFlight: true
+      )
+    )
+    XCTAssertFalse(
+      FlowLiveTailProjection.shouldRefreshLiveTail(
+        mode: .raw,
+        previousGeneration: 4,
+        frameGeneration: 5,
+        hasRunningBlock: true,
+        liveTailInFlight: false
+      )
+    )
+  }
+
+  func testLiveTailRejectsUnsafeHistoryStatus() {
+    XCTAssertTrue(FlowLiveTailProjection.acceptsHistoryStatus(0))
+    XCTAssertTrue(FlowLiveTailProjection.acceptsHistoryStatus(1))
+    XCTAssertFalse(FlowLiveTailProjection.acceptsHistoryStatus(2))
+  }
+
+  func testCompletionHandoffReplacesOpenEndedLiveTailWithTrustedEnd() {
+    let running = NativeBlockRecord(
+      id: 7,
+      command: "seq 1 1000",
+      state: .running,
+      startLine: 11,
+      endLine: nil,
+      exitStatus: 0
+    )
+    let completed = NativeBlockRecord(
+      id: 7,
+      command: "seq 1 1000",
+      state: .completed,
+      startLine: 11,
+      endLine: 42,
+      exitStatus: 0
+    )
+    XCTAssertEqual(
+      FlowLiveTailProjection.historyRequests(records: [running], requestedCompleted: []),
+      [
+        .init(
+          blockID: 7,
+          startLine: 11,
+          endLine: FlowLiveTailProjection.openEndedTail,
+          kind: .liveTail
+        )
+      ]
+    )
+    XCTAssertEqual(
+      FlowLiveTailProjection.historyRequests(records: [completed], requestedCompleted: []),
+      [
+        .init(blockID: 7, startLine: 11, endLine: 42, kind: .completed)
+      ]
+    )
+  }
+
+  @MainActor
+  func testLiveTailHistoryGrowthStaysInsideBlockClipWithoutLiveGrid() throws {
+    guard let device = MTLCreateSystemDefaultDevice() else {
+      throw XCTSkip("Metal device unavailable in this environment")
+    }
+    let renderer = try MetalTerminalRenderer(
+      device: device,
+      terminalFont: .canonicalTerminal
+    )
+    renderer.setPresentationPlan(.flow())
+    let cellSize = renderer.cellPixelSize(backingScale: 1)
+    let clip = NSRect(
+      x: 0,
+      y: 0,
+      width: CGFloat(cellSize.width) * 4,
+      height: CGFloat(cellSize.height) * 3
+    )
+    func cell(_ scalar: UInt32) -> NativeHistoryRange.Cell {
+      NativeHistoryRange.Cell(
+        scalar: scalar,
+        foreground: 0xffe9_e1d8,
+        background: 0xff10_0d0b,
+        flags: 0
+      )
+    }
+    let first = NativeHistoryRange(
+      startLine: 11,
+      endLine: FlowLiveTailProjection.openEndedTail,
+      blockID: 42,
+      requestID: 1,
+      revision: 1,
+      rows: [[cell(65)]]
+    )
+    let grown = NativeHistoryRange(
+      startLine: 11,
+      endLine: FlowLiveTailProjection.openEndedTail,
+      blockID: 42,
+      requestID: 2,
+      revision: 2,
+      rows: [[cell(65)], [cell(66)], [cell(67)]]
+    )
+    let region = NativeTranscriptRegion(id: 42, origin: clip.origin, clip: clip)
+    XCTAssertEqual(
+      try renderer.update(historyRange: first, region: region, backingScale: 1),
+      .updated
+    )
+    renderer.setHistoryRegionOrder([42])
+    XCTAssertEqual(
+      try renderer.update(historyRange: grown, region: region, backingScale: 1),
+      .updated
+    )
+    let texture = try XCTUnwrap(
+      renderer.renderOffscreenAndWait(
+        width: cellSize.width * 8,
+        height: cellSize.height * 6
+      )
+    )
+    let paint = renderer.inspectFlowPaint(from: texture)
+    XCTAssertFalse(paint.liveGridSubmitted)
+    XCTAssertFalse(paint.fullGridBackgroundSubmitted)
+    XCTAssertEqual(paint.instancesOutsideClips, 0)
+    XCTAssertEqual(paint.opaquePixelsOutsideClips, 0)
+    XCTAssertGreaterThan(paint.opaquePixelsInsideClips, 0)
+    XCTAssertTrue(paint.isClean)
+  }
+
   @MainActor
   private func descendants<T: NSView>(of type: T.Type, in root: NSView) -> [T] {
     root.subviews.flatMap { child -> [T] in

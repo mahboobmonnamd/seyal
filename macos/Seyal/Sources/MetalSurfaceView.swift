@@ -416,6 +416,10 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
   /// it must never synchronously connect/handshake/attach on the AppKit thread.
   /// The Pane composer keeps the draft when this returns false; the coordinator
   /// owns the bounded episode and the user can submit once the surface is usable.
+  ///
+  /// Explicit composer Return must restart recovery even after an automatic
+  /// episode ended in `.blocked` / `.exhausted`. Leaving those stages sticky
+  /// made Enter look dead while the composer still accepted typing.
   @discardableResult
   func ensureTerminalBridgeConnected() -> Bool {
     guard bridge?.isConnected != true else { return true }
@@ -423,9 +427,7 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
       shouldAttachRuntime,
       bridge?.clientHandle == 0
     else { return false }
-    if !bridgeRecoveryCoordinator.isActive,
-      runtimeRecoveryState.stage != .blocked
-    {
+    if !bridgeRecoveryCoordinator.isActive {
       bridgeRecoveryCoordinator.retry()
     }
     return false
@@ -830,13 +832,14 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
   }
 
   /// Explicit user retry starts a new bounded foreground recovery episode.
-  /// Automatic exhaustion never invokes this method recursively.
+  /// Automatic exhaustion never invokes this method recursively. Reconnect and
+  /// composer Return must be allowed after `.blocked` / `.exhausted`; those
+  /// stages stop *automatic* loops, not human-initiated recovery.
   @discardableResult
   func retryRuntimeConnection() -> Bool {
     guard shouldAttachRuntime,
       bridge?.isConnected != true,
-      bridge?.clientHandle == 0,
-      runtimeRecoveryState.stage != .blocked
+      bridge?.clientHandle == 0
     else { return bridge?.isConnected == true }
     bridgeRecoveryCoordinator.retry()
     return bridge?.isConnected == true

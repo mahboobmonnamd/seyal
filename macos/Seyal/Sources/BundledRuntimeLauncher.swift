@@ -51,6 +51,13 @@ final class BundledRuntimeLauncher {
     return (dictionary[launchErrorThreadKey] as? BundledRuntimeLaunchErrorBox)?.error
   }
 
+  /// Seeds the same thread-local launch outcome `launch` writes. Recovery
+  /// unit tests use this to prove non-terminal spawn races keep discovering
+  /// the canonical endpoint instead of blocking the episode.
+  static func seedLastLaunchErrorForTests(_ error: BundledRuntimeLaunchError?) {
+    recordLaunchError(error)
+  }
+
   private static func recordLaunchError(_ error: BundledRuntimeLaunchError?) {
     let dictionary = Thread.current.threadDictionary
     if let error {

@@ -165,3 +165,81 @@ struct PanePresentationSession: Equatable, Sendable {
     }
   }
 }
+
+/// Bounded Flow live-tail projection policy. Running Blocks request
+/// `startLine…openEndedTail`; completed Blocks use their trusted end anchor.
+/// The Pane compositor still draws only registered Block clips — never a
+/// Pane-wide live grid under Flow.
+enum FlowLiveTailProjection {
+  /// Open-ended primary history end. Runtime truncates/pages the wire range.
+  static let openEndedTail: UInt64 = .max
+
+  struct HistoryRequest: Equatable, Sendable {
+    let blockID: UInt64
+    let startLine: UInt64
+    let endLine: UInt64
+    let kind: Kind
+
+    enum Kind: Equatable, Sendable {
+      case liveTail
+      case completed
+    }
+  }
+
+  /// Build the history requests for one timeline snapshot.
+  /// Completed IDs already present in `requestedCompleted` are skipped.
+  /// Running Blocks always produce a live-tail request when eligible.
+  static func historyRequests(
+    records: [NativeBlockRecord],
+    requestedCompleted: Set<UInt64>
+  ) -> [HistoryRequest] {
+    var requests: [HistoryRequest] = []
+    for record in records {
+      guard record.id != 0, record.startLine != 0 else { continue }
+      switch record.state {
+      case .running:
+        requests.append(
+          HistoryRequest(
+            blockID: record.id,
+            startLine: record.startLine,
+            endLine: openEndedTail,
+            kind: .liveTail
+          )
+        )
+      case .completed:
+        guard let endLine = record.endLine, endLine >= record.startLine else { continue }
+        if requestedCompleted.contains(record.id) { continue }
+        requests.append(
+          HistoryRequest(
+            blockID: record.id,
+            startLine: record.startLine,
+            endLine: endLine,
+            kind: .completed
+          )
+        )
+      }
+    }
+    return requests
+  }
+
+  /// Damage-driven live-tail refresh. Flow only; one request per generation.
+  static func shouldRefreshLiveTail(
+    mode: TerminalPresentationMode,
+    previousGeneration: UInt64?,
+    frameGeneration: UInt64,
+    hasRunningBlock: Bool,
+    liveTailInFlight: Bool
+  ) -> Bool {
+    guard mode == .flow, hasRunningBlock, !liveTailInFlight, frameGeneration != 0 else {
+      return false
+    }
+    guard let previousGeneration else { return true }
+    return frameGeneration != previousGeneration
+  }
+
+  /// History status that must fail closed (no full-grid fallback).
+  static func acceptsHistoryStatus(_ status: UInt32) -> Bool {
+    // 0 = ok, 1 = truncated page continuation (still usable via merge).
+    status == 0 || status == 1
+  }
+}

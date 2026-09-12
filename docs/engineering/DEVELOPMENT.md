@@ -196,6 +196,14 @@ non-`none` `runtime`, `execution`, and `attachment` identities together with
 intentionally fenced because no Runtime-owned execution is attached. A focused
 composer or a passing text-view unit test does not prove that end-to-end path.
 
+Treat that as Class B admission/attach (singleton AlreadyRunning, blocked /
+exhausted recovery, stale socket, InvalidCell), not Class A composer/Metal
+first-responder routing. Explicit Return and Reconnect must restart a bounded
+recovery episode even after automatic recovery ended in `.blocked` /
+`.exhausted`; a rejected submit must keep the draft and surface accessibility
+help rather than look like a dead key. Do not retune Metal focus while AX still
+shows disconnected.
+
 One reproducible development-only trigger is terminating `seyal-runtime` while
 its canonical control socket remains present. Connection then fails with
 `ECONNREFUSED`: current reconnect authority treats that differently from an
@@ -211,6 +219,12 @@ command through the Runtime-owned PTY, and repeats the submission to exercise
 Block reconciliation. In Flow mode also assert full-width, aligned Blocks and
 `flow-paint=ok`; the right-edge black strip is a separate Block/Metal clipping
 failure, not evidence that Return itself was dropped.
+
+Running Flow Blocks use the same Pane Metal history compositor as completed
+Blocks: an open-ended history range from the trusted start anchor through the
+current primary tail, clipped to the Block body. Do not restore a Pane-wide live
+grid under Flow to make streaming output visible. Unsafe history status fails
+closed to the last-good projection.
 
 There are no required private repositories, `seyal-commercial` dependencies, shell-profile assumptions, Homebrew assumptions or hidden environment variables for this canonical product flow. AI-SDLC is an optional public developer-framework dependency materialized only by `make bootstrap-agents`.
 

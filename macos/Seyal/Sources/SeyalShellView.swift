@@ -83,6 +83,12 @@ final class SeyalShellView: NSView {
   var tuiPaneIDs: Set<String> = []
   var pendingComposerRequests: [String: UInt64] = [:]
   var requestedHistoryBlocks: Set<PaneBlockKey> = []
+  /// In-flight open-ended live-tail history requests (running Blocks only).
+  var liveTailInFlight: Set<PaneBlockKey> = []
+  /// Last Candidate-D generation that scheduled a live-tail refresh per Pane.
+  var lastLiveTailGeneration: [String: UInt64] = [:]
+  /// Running Block anchors used to refresh live-tail on frame damage.
+  var runningLiveTailAnchors: [String: (blockID: UInt64, startLine: UInt64)] = [:]
   var renderedBlockIDs: [String: [PaneBlockKey]] = [:]
   var blockBodies: [PaneBlockKey: CommandBlockBodyView] = [:]
   var blockViews: [PaneBlockKey: BlockView] = [:]
@@ -154,6 +160,11 @@ final class SeyalShellView: NSView {
     transcriptDocuments.removeAll()
     blockStacks.removeAll()
     blockViews.removeAll()
+    blockBodies.removeAll()
+    requestedHistoryBlocks.removeAll()
+    liveTailInFlight.removeAll()
+    lastLiveTailGeneration.removeAll()
+    runningLiveTailAnchors.removeAll()
     blockConstraintOwnership.removeAll()
     leftContextPress.reset()
     // TUI takeover belongs to the Pane, not to a transient view tree;

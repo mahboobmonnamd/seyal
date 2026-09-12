@@ -421,6 +421,19 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
     beginEpisode()
   }
 
+  /// Helper path/trust/permission failures cannot be healed by more connect
+  /// attempts in this episode. Spawn races (`launchFailed`) and an already-
+  /// running singleton winner are not terminal — keep polling the canonical
+  /// endpoint for the remaining budget.
+  static func isTerminalLaunchFailure(_ error: BundledRuntimeLaunchError) -> Bool {
+    switch error {
+    case .helperMissing, .helperPathInvalid, .helperTrustInvalid, .launchDenied:
+      return true
+    case .launchFailed:
+      return false
+    }
+  }
+
   func cancel() {
     inFlightAttempt?.cancel()
     inFlightAttempt = nil
@@ -542,11 +555,17 @@ final class RuntimeLifecycleRecoveryCoordinator: @unchecked Sendable {
         }
         if let launchError = BundledRuntimeLauncher.consumeLastLaunchError() {
           blockedLaunchError = launchError
-          cancelScheduled?()
-          cancelScheduled = nil
-          self.deadline = nil
-          state.transition(to: .blocked)
-          return
+          // SPEC-009: when another Runtime already owns the singleton, the
+          // client must keep discovering the canonical endpoint — not treat
+          // a lost spawn race as a permanent GUI block. Only helper path /
+          // trust / permission failures are terminal for this episode.
+          if Self.isTerminalLaunchFailure(launchError) {
+            cancelScheduled?()
+            cancelScheduled = nil
+            self.deadline = nil
+            state.transition(to: .blocked)
+            return
+          }
         }
       }
       scheduleRetry(generation: generation)

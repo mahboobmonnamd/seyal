@@ -14,14 +14,23 @@ extension SeyalShellView {
   @discardableResult
   func submitCommand(_ command: String, paneID: String) -> Bool {
     guard let surface = surfaces[paneID], surface.ensureTerminalBridgeConnected() else {
+      composerViews[paneID]?.reportAdmissionFailure(
+        "Runtime disconnected. Reconnecting — draft kept. Press Return again when connected, or use Reconnect."
+      )
       return false
     }
     let requestID = surface.terminalNextComposerRequestID()
     guard requestID != 0, surface.terminalSubmitComposerCommand(command) == 0
-    else { return false }
+    else {
+      composerViews[paneID]?.reportAdmissionFailure(
+        "Command was not admitted by Runtime. Draft kept."
+      )
+      return false
+    }
     // Runtime owns Block identity/lifecycle. Keep the draft until the
     // authoritative request-correlated result reports acceptance.
     pendingComposerRequests[paneID] = requestID
+    composerViews[paneID]?.reportAdmissionFailure(nil)
     return true
   }
 
@@ -179,25 +188,13 @@ extension SeyalShellView {
           paneID: paneID,
           retainedBlockIDs: records.map(\.id)
         ).reduce(into: Set<PaneBlockKey>()) { $0.insert($1) }
+        self.liveTailInFlight = Set(
+          self.liveTailInFlight.filter { retainedBlockKeys.contains($0) }
+        )
         surface.discardHistoryRequests(except: Set(retainedBlockKeys.map(\.blockID)))
         self.state.applyRuntimeBlocks(records, paneID: paneID)
         self.updateTranscriptBlocks(paneID: paneID)
-        for record in records
-        where record.state == .completed
-          && record.endLine != nil
-          && !self.requestedHistoryBlocks.contains(
-            PaneBlockKey(paneID: paneID, blockID: record.id)
-          )
-        {
-          self.requestedHistoryBlocks.insert(
-            PaneBlockKey(paneID: paneID, blockID: record.id)
-          )
-          _ = surface.requestHistoryRange(
-            startLine: record.startLine,
-            endLine: record.endLine ?? record.startLine,
-            blockID: record.id
-          )
-        }
+        self.scheduleHistoryProjections(paneID: paneID, records: records, surface: surface)
         if let latest = records.last {
           self.composerViews[paneID]?.setBusy(
             latest.state == .running,
@@ -205,11 +202,23 @@ extension SeyalShellView {
           )
         }
       }
+      surface.onFrameChanged = { [weak self] frame in
+        guard let self else { return }
+        self.refreshLiveTailIfNeeded(
+          paneID: paneID,
+          surface: surface,
+          frameGeneration: frame.generation
+        )
+      }
       surface.onHistoryRangeChanged = { [weak self] range in
         let key = PaneBlockKey(paneID: paneID, blockID: range.blockID)
-        guard let self,
-          let body = self.blockBodies[key]
-        else { return }
+        guard let self else { return }
+        self.liveTailInFlight.remove(key)
+        guard FlowLiveTailProjection.acceptsHistoryStatus(range.status) else {
+          // Fail closed: keep last-good projection; never restore Pane-wide grid.
+          return
+        }
+        guard let body = self.blockBodies[key] else { return }
         body.setHistoryRange(range)
         let region = transcript.region(for: range.blockID)
         surface.renderHistoryRange(range, region: region)
@@ -281,5 +290,84 @@ extension SeyalShellView {
     else { return }
     state.focusPane(id: paneID)
     _ = surface.retryRuntimeConnection()
+  }
+
+  /// Issues completed history and open-ended live-tail requests for one
+  /// timeline snapshot. Running Blocks reuse the same clipped history path.
+  func scheduleHistoryProjections(
+    paneID: String,
+    records: [NativeBlockRecord],
+    surface: InteractiveMetalSurfaceView
+  ) {
+    let requestedCompleted = Set(
+      requestedHistoryBlocks
+        .filter { $0.paneID == paneID }
+        .map(\.blockID)
+    )
+    let requests = FlowLiveTailProjection.historyRequests(
+      records: records,
+      requestedCompleted: requestedCompleted
+    )
+    if let running = records.last(where: { $0.state == .running }),
+      running.id != 0,
+      running.startLine != 0
+    {
+      runningLiveTailAnchors[paneID] = (running.id, running.startLine)
+    } else {
+      runningLiveTailAnchors.removeValue(forKey: paneID)
+      lastLiveTailGeneration.removeValue(forKey: paneID)
+    }
+    for request in requests {
+      let key = PaneBlockKey(paneID: paneID, blockID: request.blockID)
+      switch request.kind {
+      case .completed:
+        requestedHistoryBlocks.insert(key)
+        liveTailInFlight.remove(key)
+        _ = surface.requestHistoryRange(
+          startLine: request.startLine,
+          endLine: request.endLine,
+          blockID: request.blockID
+        )
+      case .liveTail:
+        guard !liveTailInFlight.contains(key) else { continue }
+        liveTailInFlight.insert(key)
+        let result = surface.requestHistoryRange(
+          startLine: request.startLine,
+          endLine: request.endLine,
+          blockID: request.blockID
+        )
+        if result != 0 {
+          liveTailInFlight.remove(key)
+        }
+      }
+    }
+  }
+
+  /// Damage-driven live-tail refresh while Flow owns the Pane presentation.
+  func refreshLiveTailIfNeeded(
+    paneID: String,
+    surface: InteractiveMetalSurfaceView,
+    frameGeneration: UInt64
+  ) {
+    guard let anchor = runningLiveTailAnchors[paneID] else { return }
+    let key = PaneBlockKey(paneID: paneID, blockID: anchor.blockID)
+    let shouldRefresh = FlowLiveTailProjection.shouldRefreshLiveTail(
+      mode: surface.presentation.mode,
+      previousGeneration: lastLiveTailGeneration[paneID],
+      frameGeneration: frameGeneration,
+      hasRunningBlock: true,
+      liveTailInFlight: liveTailInFlight.contains(key)
+    )
+    guard shouldRefresh else { return }
+    lastLiveTailGeneration[paneID] = frameGeneration
+    liveTailInFlight.insert(key)
+    let result = surface.requestHistoryRange(
+      startLine: anchor.startLine,
+      endLine: FlowLiveTailProjection.openEndedTail,
+      blockID: anchor.blockID
+    )
+    if result != 0 {
+      liveTailInFlight.remove(key)
+    }
   }
 }

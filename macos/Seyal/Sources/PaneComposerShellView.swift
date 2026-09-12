@@ -302,4 +302,12 @@ final class PaneComposerShellView: NSView, NSTextViewDelegate {
         _ = onSubmit?(command)
         return true
     }
+
+    /// Surfaces a rejected Runtime admission (disconnected / blocked) without
+    /// clearing the draft. Keeps Class B attach failures distinguishable from
+    /// a silent “dead Enter” while the composer still looks usable.
+    func reportAdmissionFailure(_ message: String?) {
+        setAccessibilityHelp(message)
+        editor?.setAccessibilityHelp(message)
+    }
 }

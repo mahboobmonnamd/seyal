@@ -435,6 +435,83 @@ final class SeyalShellComponentTests: XCTestCase {
   }
 
   @MainActor
+  func testLifecycleCoordinatorExplicitRetryRestartsFromBlocked() {
+    let scheduler = RecoveryScheduler()
+    var attempts = 0
+    let coordinator = RuntimeLifecycleRecoveryCoordinator(
+      clock: { scheduler.now },
+      scheduler: { delay, operation in
+        MainActor.assumeIsolated {
+          scheduler.schedule(delay: delay, operation: operation)
+        }
+      },
+      launcher: {},
+      attempt: {
+        attempts += 1
+        return attempts == 1 ? .blocked : .retryable
+      },
+      attemptExecution: .inline
+    )
+
+    coordinator.beginEpisode()
+    XCTAssertEqual(coordinator.state.stage, .blocked)
+    let blockedGeneration = coordinator.state.generation
+    coordinator.retry()
+    XCTAssertGreaterThan(coordinator.state.generation, blockedGeneration)
+    XCTAssertEqual(attempts, 2)
+    XCTAssertEqual(coordinator.state.stage, .discovering)
+  }
+
+  @MainActor
+  func testLifecycleCoordinatorLaunchFailedKeepsDiscoveringCanonicalEndpoint() {
+    let scheduler = RecoveryScheduler()
+    var launches = 0
+    let coordinator = RuntimeLifecycleRecoveryCoordinator(
+      clock: { scheduler.now },
+      scheduler: { delay, operation in
+        MainActor.assumeIsolated {
+          scheduler.schedule(delay: delay, operation: operation)
+        }
+      },
+      launcher: {
+        launches += 1
+        BundledRuntimeLauncher.seedLastLaunchErrorForTests(.launchFailed(35))
+      },
+      attempt: { .endpointMissing },
+      attemptExecution: .inline
+    )
+
+    coordinator.beginEpisode()
+    XCTAssertEqual(launches, 1)
+    XCTAssertEqual(coordinator.blockedLaunchError, .launchFailed(35))
+    XCTAssertNotEqual(coordinator.state.stage, .blocked)
+    XCTAssertTrue(coordinator.hasScheduledAttempt)
+    scheduler.fire(0)
+    XCTAssertEqual(launches, 1, "launch-once accounting must survive a non-terminal spawn race")
+    XCTAssertNotEqual(coordinator.state.stage, .blocked)
+  }
+
+  @MainActor
+  func testComposerSurfacesAdmissionFailureHelpWithoutClearingDraft() {
+    let composer = PaneComposerShellView(
+      mode: .available,
+      draft: "echo while disconnected",
+      visual: previewVisual(),
+      onSubmit: { _ in false }
+    )
+    composer.reportAdmissionFailure(
+      "Runtime disconnected. Reconnecting — draft kept. Press Return again when connected, or use Reconnect."
+    )
+    let editor = try! XCTUnwrap(descendants(of: NSTextView.self, in: composer).first)
+    editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+    XCTAssertEqual(editor.string, "echo while disconnected")
+    XCTAssertEqual(
+      composer.accessibilityHelp(),
+      "Runtime disconnected. Reconnecting — draft kept. Press Return again when connected, or use Reconnect."
+    )
+  }
+
+  @MainActor
   func testLifecycleCoordinatorSuccessCancelsOutstandingRecovery() {
     let scheduler = RecoveryScheduler()
     var outcomes: [RuntimeRecoveryAttemptOutcome] = [.retryable, .connected]

@@ -51,6 +51,9 @@ main() {
   install_pinned_rust_toolchain
   initialize_submodules
   bash "${ROOT}/scripts/check-toolchain.sh"
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    bash "${ROOT}/scripts/check-macos-toolchain.sh"
+  fi
   info "complete"
   info "optional agent/MCP provisioning is separate: make bootstrap-agents"
 }

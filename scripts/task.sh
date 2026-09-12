@@ -32,6 +32,7 @@ case "$cmd" in
   build)
     bash scripts/check-toolchain.sh
     cargo_pinned build --workspace --locked
+    bash scripts/build-macos.sh
     ;;
   test)
     bash scripts/test-tooling.sh
@@ -41,9 +42,10 @@ case "$cmd" in
     bash scripts/check-toolchain.sh
     cargo_pinned test --workspace --locked
     runtime_failure_matrix
+    bash scripts/test-macos-ui.sh
     ;;
   ui-test)
-    echo "[seyal task] ui-test skipped: native Seyal.app host is not in this tree."
+    bash scripts/test-macos-ui.sh
     ;;
   check)
     bash scripts/check-toolchain.sh

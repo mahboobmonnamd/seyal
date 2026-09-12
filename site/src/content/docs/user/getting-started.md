@@ -58,7 +58,11 @@ fallbacks = ["SF Mono", "Menlo"]
 
 Invalid keys or values are ignored or clamped; Seyal always starts from a complete snapshot. This is not a shipped settings product yet.
 
-A headed `Seyal.app` is **not** produced by `make build` on the current recovery branch. Theme/config keys can still be exercised by Rust tests and by the later #883 host. Do not document `open …/Seyal.app` as a supported launch path until that host exists.
+For a one-off override without editing a file, launch with `open --env` (shell `VAR=value open …` does not pass environment into the app):
+
+```sh
+open --env SEYAL_UI_APPEARANCE=light target/macos-derived-data/Build/Products/Debug/Seyal.app
+```
 
 ## Next
 

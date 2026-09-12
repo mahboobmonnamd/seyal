@@ -135,7 +135,7 @@ make bench
 
 `make bootstrap-agents` is optional developer setup for coding-agent/MCP tooling and the pinned AI-SDLC framework; it is never required by terminal/runtime operation.
 
-`make check` validates repository policy, harness/fuzz contracts, Rust formatting/Clippy/tests, and architecture layering. Native `Seyal.app` / Metal hot-path files are required only when `macos/Seyal` exists (#883). Documentation tooling (`make docs-check` / `make docs-build`) is opt-in and outside the product runtime hot path.
+`make check` validates repository policy, harness/fuzz contracts, Rust formatting/Clippy/tests, architecture layering, and native Metal/hot-path/UI-policy files when `macos/Seyal` exists. Headed `Seyal.app` is produced by `make build` on macOS. Documentation tooling (`make docs-check` / `make docs-build`) is opt-in and outside the product runtime hot path.
 
 ## Pull requests
 

@@ -131,6 +131,10 @@ impl LocalDisplayClient {
         self.attachment_id
     }
 
+    pub fn role(&self) -> Role {
+        self.role
+    }
+
     /// Disposable Pass 8 execution-level metadata. This never owns terminal
     /// cells, PTY state, or the Pass 7.1 command transcript.
     pub fn block_state(&self) -> Option<BlockState> {

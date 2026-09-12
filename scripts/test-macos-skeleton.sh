@@ -29,6 +29,8 @@ SOURCES="macos/Seyal/Sources"
 for required in \
   AppDelegate.swift \
   Main.swift \
+  SeyalThinHostView.swift \
+  SeyalProductBridge.swift \
   MetalSurfaceView.swift \
   MetalTerminalRenderer.swift \
   GlyphAtlas.swift \

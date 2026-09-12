@@ -44,10 +44,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // (Metal / IME / helper launch). The new thin host is #883.
         window.appearance = snapshot.nsAppearance
         window.backgroundColor = snapshot.colors.ns(.container)
-        window.title = "Seyal — native glue harness"
-        window.contentView = MetalSurfaceView(
+        window.title = "Seyal"
+        window.contentView = SeyalThinHostView(
             frame: contentRect,
-            paneID: "unbound",
             terminalFont: snapshot.terminalFont
         )
         Self.installProductionApplicationMenu()

@@ -9,6 +9,8 @@
 /* Begin PBXBuildFile section */
 		A10000000000000000000001 /* Main.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* Main.swift */; };
 		A10000000000000000000002 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* AppDelegate.swift */; };
+		A10000000000000000000034 /* SeyalThinHostView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000034 /* SeyalThinHostView.swift */; };
+		A10000000000000000000035 /* SeyalProductBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000035 /* SeyalProductBridge.swift */; };
 		A10000000000000000000003 /* MetalSurfaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000003 /* MetalSurfaceView.swift */; };
 		A10000000000000000000004 /* AppKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* AppKit.framework */; };
 		A10000000000000000000005 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* Metal.framework */; };
@@ -80,6 +82,8 @@
 /* Begin PBXFileReference section */
 		A20000000000000000000001 /* Main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Main.swift; sourceTree = "<group>"; };
 		A20000000000000000000002 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		A20000000000000000000034 /* SeyalThinHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeyalThinHostView.swift; sourceTree = "<group>"; };
+		A20000000000000000000035 /* SeyalProductBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeyalProductBridge.swift; sourceTree = "<group>"; };
 		A20000000000000000000003 /* MetalSurfaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalSurfaceView.swift; sourceTree = "<group>"; };
 		A20000000000000000000004 /* Seyal.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Seyal.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A20000000000000000000005 /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = System/Library/Frameworks/AppKit.framework; sourceTree = SDKROOT; };
@@ -183,6 +187,8 @@
 			children = (
 				A20000000000000000000001 /* Main.swift */,
 				A20000000000000000000002 /* AppDelegate.swift */,
+				A20000000000000000000034 /* SeyalThinHostView.swift */,
+				A20000000000000000000035 /* SeyalProductBridge.swift */,
 				A20000000000000000000003 /* MetalSurfaceView.swift */,
 				A2000000000000000000001B /* SeyalRGBA.swift */,
 				A2000000000000000000001C /* SeyalDepthLevel.swift */,
@@ -392,6 +398,8 @@
 			files = (
 				A10000000000000000000001 /* Main.swift in Sources */,
 				A10000000000000000000002 /* AppDelegate.swift in Sources */,
+				A10000000000000000000034 /* SeyalThinHostView.swift in Sources */,
+				A10000000000000000000035 /* SeyalProductBridge.swift in Sources */,
 				A10000000000000000000003 /* MetalSurfaceView.swift in Sources */,
 				A10000000000000000000025 /* RuntimeLifecycleRecoveryCoordinator.swift in Sources */,
 				A10000000000000000000028 /* Pass9MergeAcceptance.swift in Sources */,

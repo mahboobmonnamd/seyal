@@ -20,6 +20,7 @@
 mod display;
 mod errors;
 mod input;
+mod product;
 mod session;
 mod types;
 
@@ -60,6 +61,11 @@ pub use errors::{
 pub use input::{
     seyal_bridge_propose_geometry, seyal_bridge_retry_resize, seyal_bridge_submit_composer,
     seyal_bridge_submit_key, seyal_bridge_submit_utf8,
+};
+#[allow(unused_imports)]
+pub use product::{
+    seyal_product_create, seyal_product_destroy, seyal_product_set_draft,
+    seyal_product_set_left_panel, seyal_product_snapshot, seyal_product_submit,
 };
 #[allow(unused_imports)]
 pub use session::{

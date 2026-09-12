@@ -219,6 +219,25 @@ uint32_t seyal_bridge_block_count(void);
 SeyalBlockRecord seyal_bridge_block_record(uint32_t index);
 void seyal_bridge_disconnect(void);
 
+typedef struct SeyalProductSnapshot {
+    uint8_t composer_mode;
+    uint8_t can_submit;
+    uint8_t left_panel_tabs;
+    uint8_t presentation_mode;
+    uint64_t composer_epoch;
+    uint8_t workspace_name[64];
+    uint8_t tab_title[64];
+    uint8_t pane_title[64];
+    uint8_t draft[512];
+} SeyalProductSnapshot;
+
+int32_t seyal_product_create(void);
+void seyal_product_destroy(void);
+int32_t seyal_product_set_draft(const uint8_t *bytes, uint32_t len);
+int32_t seyal_product_submit(void);
+int32_t seyal_product_set_left_panel(uint8_t tabs);
+SeyalProductSnapshot seyal_product_snapshot(void);
+
 #ifdef __cplusplus
 }
 #endif

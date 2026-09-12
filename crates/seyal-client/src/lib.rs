@@ -11,6 +11,7 @@
 pub mod chrome;
 pub mod composer;
 pub mod presentation;
+pub mod product;
 pub mod recovery;
 pub mod shell;
 pub mod theme;
@@ -48,5 +49,7 @@ mod ffi;
 #[doc(hidden)]
 pub use ffi::{
     seyal_bridge_adopt_handle, seyal_bridge_disconnect_handle, seyal_bridge_ensure_prepared,
-    seyal_bridge_frame, seyal_bridge_poll, seyal_bridge_select, test_register_pending_client,
+    seyal_bridge_frame, seyal_bridge_poll, seyal_bridge_select, seyal_product_create,
+    seyal_product_destroy, seyal_product_set_draft, seyal_product_set_left_panel,
+    seyal_product_snapshot, seyal_product_submit, test_register_pending_client,
 };

@@ -14,7 +14,7 @@ M001 established the permanent **Swift + AppKit + Metal** application direction:
 
 ## Current M001.1 supported native surface
 
-The rejected Swift product shell is **not** a supported headed `Seyal.app`. `Seyal.app` currently builds as a **native-glue harness** (Metal, IME, Candidate-D client, helper launch). Portable product state lives in Rust. The replacement thin host is #883. Leftover preview/XCTest product models are deleted by #884.
+The rejected Swift product shell is **not** a supported headed `Seyal.app`. The launch path is the new thin host (`SeyalThinHostView`) over Rust snapshots/actions, plus KEEP_NATIVE_GLUE Metal/IME/helper launch. Leftover preview/XCTest product models are deleted by #884. Qualification of the rebuilt app is #885.
 
 The production ownership boundary remains:
 

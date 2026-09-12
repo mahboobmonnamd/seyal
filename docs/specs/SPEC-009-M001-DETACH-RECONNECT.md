@@ -5,7 +5,7 @@
 - **Reconciled:** 2026-09-04 against closed #719 / Pass 10 review candidate `1005bc42397aac485b1aeff08cafd0f67790d969`
 - **Presentation amendment:** proposed by #858 / PR #859 on 2026-09-11; effective only if that architecture amendment merges
 - **Issue:** #717 refinement authority; #719 production implementation (Done)
-- **Architecture authority:** accepted Seyal foundation architecture, ADR-001/004/005/006/007; proposed ADR-009 presentation amendment from #858 / PR #859
+- **Architecture authority:** accepted Seyal foundation architecture, ADR-001/004/005/006/007/015 (ADR-015 governs Rust/native ownership only); ADR-009 and the #858 / PR #859 amendment govern presentation behavior
 - **Depends on:** SPEC-002, SPEC-003, SPEC-004, SPEC-005, SPEC-006 and accepted SPEC-007
 - **Pass 7 authority:** PR #707 merged as `4490d89fd32f96fe5ff04393a5470944c592f546`
 - **Pass 8 authority:** reviewed head `54b3a1748effc7c47c409d1f7cfdcbd547e8d1cc`, merged by PR #721 as `d9d21187e8429bbd3dbeb3e1c7cc4d05c1d147e6`

@@ -21,7 +21,7 @@ PTY
 → Metal renderer
 ```
 
-Native AppKit owns windowing, input, accessibility, and the Adaptive Depth token/theme snapshot. Configuration is parsed once into typed settings; it does not join the terminal path above.
+**Target architecture:** Rust owns portable product/UI behavior while the in-repository Swift host remains a thin macOS adapter ([ADR-015](https://github.com/mahboobmonnamd/seyal/blob/master/docs/architecture/ADR-015-RUST-PRODUCT-UI-THIN-SWIFT-HOST.md)). M001.1 migration remains a separate follow-up program; use current source and accepted implementation slices when describing shipped ownership.
 
 ## State ownership
 

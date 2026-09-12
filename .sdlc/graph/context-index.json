@@ -21,7 +21,7 @@
       "sources": [
         {
           "path": "docs/architecture/README.md",
-          "fingerprint": "dbd5e2f6f36831b44f8ff4e7353a9b7c034a3f66"
+          "fingerprint": "82323d93fe274921e4c0b805ade79e334a36975c"
         }
       ],
       "relationships": [
@@ -86,7 +86,7 @@
       "sources": [
         {
           "path": "docs/architecture/README.md",
-          "fingerprint": "dbd5e2f6f36831b44f8ff4e7353a9b7c034a3f66"
+          "fingerprint": "82323d93fe274921e4c0b805ade79e334a36975c"
         }
       ],
       "relationships": [
@@ -118,6 +118,7 @@
         "ime",
         "reconnect",
         "adr-009",
+        "adr-015",
         "spec-006",
         "spec-008",
         "spec-009"
@@ -129,21 +130,29 @@
         },
         {
           "path": "docs/specs/SPEC-006-M001-NATIVE-INPUT-RESIZE.md",
-          "fingerprint": "506b49abb61dfc5889cd73308b19254bd409b69b"
+          "fingerprint": "6cbebdded12acb3901ddb449824a071be2dafc5f"
         },
         {
           "path": "docs/specs/SPEC-008-M003-COMMAND-BLOCKS.md",
-          "fingerprint": "f451bea6f467938a1d202a2d7c490709c61555dd"
+          "fingerprint": "e663eac082812e23c820f0ecc9678c39e3620046"
         },
         {
           "path": "docs/specs/SPEC-009-M001-DETACH-RECONNECT.md",
-          "fingerprint": "d324dff8d1c8f3f23e41522440cd2c80049048e3"
+          "fingerprint": "a0a14cf80d6df1460f5d7c6711d6a6f38032c799"
+        },
+        {
+          "path": "docs/architecture/ADR-015-RUST-PRODUCT-UI-THIN-SWIFT-HOST.md",
+          "fingerprint": "4db2783f371c7e1a1d2cc746216cec2c68a77eb3"
         }
       ],
       "relationships": [
         {
           "type": "governed_by",
           "target": "DEC-ADR-009"
+        },
+        {
+          "type": "related_to",
+          "target": "DEC-ADR-015"
         },
         {
           "type": "related_to",
@@ -211,6 +220,34 @@
       ]
     },
     {
+      "id": "DEC-ADR-015",
+      "kind": "decision",
+      "title": "ADR-015 Rust product UI authority and thin native host",
+      "summary": "Portable Seyal product/UI state, policy and behavior are Rust-owned; Swift remains a thin macOS adapter for inherently platform-specific AppKit, IME, accessibility, clipboard, Metal/CoreText and OS integration.",
+      "tags": [
+        "adr",
+        "adr-015",
+        "rust",
+        "swift",
+        "ui",
+        "platform",
+        "ownership",
+        "cross-platform"
+      ],
+      "sources": [
+        {
+          "path": "docs/architecture/ADR-015-RUST-PRODUCT-UI-THIN-SWIFT-HOST.md",
+          "fingerprint": "4db2783f371c7e1a1d2cc746216cec2c68a77eb3"
+        }
+      ],
+      "relationships": [
+        {
+          "type": "related_to",
+          "target": "COMP-PANE-PRESENTATION"
+        }
+      ]
+    },
+    {
       "id": "DEC-ADR-003",
       "kind": "decision",
       "title": "ADR-003 OSS/commercial boundary",
@@ -244,7 +281,7 @@
       "sources": [
         {
           "path": "docs/engineering/REPOSITORY-STRUCTURE.md",
-          "fingerprint": "d24e1bc4804e31a75cd88dbd68210373f14267df"
+          "fingerprint": "bde796d2442c19eb20e66d24fb01d54b71ed06e0"
         }
       ],
       "relationships": [

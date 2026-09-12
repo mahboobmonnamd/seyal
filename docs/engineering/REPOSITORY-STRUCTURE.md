@@ -178,7 +178,7 @@ These locations were introduced incrementally by their owning Issues. Issue #11 
 
 Portable terminal/runtime behavior is Rust. macOS-only AppKit/Metal/input/accessibility code stays under the macOS host. Darwin `kqueue` details stay in the existing macOS platform/exec boundary rather than leaking into portable Runtime domain logic. Do not create a generic cross-platform GUI or reactor framework before another platform is under active development.
 
-The native-language default is Swift. Introduce Objective-C/Objective-C++ only when a reviewed Issue demonstrates a specific API or interoperability need that Swift cannot satisfy cleanly. Cross the Rust/native boundary with coarse C-compatible arrays/runs/batches rather than per-cell callbacks.
+The native-language default for the macOS host adapter is Swift. Swift may own only the thin platform list in ADR-015. Introduce Objective-C/Objective-C++ only when a reviewed Issue demonstrates a specific API or interoperability need that Swift cannot satisfy cleanly. Cross the Rust/native boundary with coarse C-compatible arrays/runs/batches rather than per-cell callbacks. Portable product/UI state must not be added to Swift.
 
 ## Agent instructions
 

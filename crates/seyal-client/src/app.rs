@@ -10,6 +10,10 @@ use std::time::Duration;
 
 use seyal_core::{AttachmentId, ExecutionId, PaneId};
 
+use crate::chrome::{
+    AgentId, AttentionId, ChromeAction, ChromeError, ChromeSnapshot, ChromeState, InspectorMode,
+    LeftPanelMode,
+};
 use crate::composer::{
     ComposerAction, ComposerError, ComposerSnapshot, ComposerState, RuntimeBlockRecord,
 };
@@ -47,6 +51,10 @@ pub enum AppError {
     ComposerSubmitDisabled,
     StaleComposerRequest,
     StaleComposerEpoch,
+    UnknownAgent,
+    UnknownAttention,
+    UnknownChromeWorkspace,
+    UnknownChromeTab,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,6 +139,25 @@ pub enum AppAction {
         fence: AppFence,
         records: Vec<RuntimeBlockRecord>,
     },
+    SetLeftPanel {
+        mode: LeftPanelMode,
+    },
+    SetInspectorMode {
+        mode: InspectorMode,
+    },
+    SelectAgent {
+        fence: AppFence,
+        id: AgentId,
+    },
+    OpenAttention {
+        fence: AppFence,
+        id: AttentionId,
+    },
+    ReplaceChrome {
+        fence: AppFence,
+        agents: Vec<crate::chrome::AgentRecord>,
+        attention: Vec<crate::chrome::AttentionItem>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -176,6 +203,7 @@ pub struct AppSnapshot {
     pub recovery_attempts: u32,
     pub recovery_effect: Option<RecoveryEffect>,
     pub composer: Option<ComposerSnapshot>,
+    pub chrome: ChromeSnapshot,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -200,6 +228,7 @@ pub struct ApplicationRoot {
     recovery: RecoveryCoordinator,
     pending_recovery: Vec<RecoveryEffect>,
     composer: ComposerState,
+    chrome: ChromeState,
     #[cfg(target_os = "macos")]
     client: Option<LocalDisplayClient>,
 }
@@ -233,6 +262,7 @@ impl ApplicationRoot {
             recovery: RecoveryCoordinator::default(),
             pending_recovery: Vec::new(),
             composer,
+            chrome: ChromeState::new(),
             #[cfg(target_os = "macos")]
             client: None,
         }
@@ -261,6 +291,7 @@ impl ApplicationRoot {
     pub fn snapshot(&self) -> AppSnapshot {
         let shell = self.shell.snapshot();
         let composer = self.composer.snapshot(shell.focused_pane).ok();
+        let chrome = self.chrome.snapshot(&shell);
         let eligibility = self.eligibility();
         let composer_eligible = eligibility == PresentationEligibility::Flow && !self.frozen;
         AppSnapshot {
@@ -288,6 +319,7 @@ impl ApplicationRoot {
             recovery_attempts: self.recovery.attempt_count(),
             recovery_effect: self.pending_recovery.first().copied(),
             composer,
+            chrome,
         }
     }
 
@@ -335,6 +367,15 @@ impl ApplicationRoot {
             AppAction::ApplyRuntimeBlocks { fence, records } => {
                 self.apply_runtime_blocks(fence, records)
             }
+            AppAction::SetLeftPanel { mode } => self.set_left_panel(mode),
+            AppAction::SetInspectorMode { mode } => self.set_inspector_mode(mode),
+            AppAction::SelectAgent { fence, id } => self.select_agent(fence, id),
+            AppAction::OpenAttention { fence, id } => self.open_attention(fence, id),
+            AppAction::ReplaceChrome {
+                fence,
+                agents,
+                attention,
+            } => self.replace_chrome(fence, agents, attention),
         };
         match result {
             Ok(()) => {
@@ -602,6 +643,77 @@ impl ApplicationRoot {
             .map_err(composer_error)
     }
 
+    fn set_left_panel(&mut self, mode: LeftPanelMode) -> Result<(), AppError> {
+        let shell = self.shell.snapshot();
+        self.chrome
+            .apply(ChromeAction::SetLeftPanel(mode), &shell)
+            .map(|_| ())
+            .map_err(chrome_error)
+    }
+
+    fn set_inspector_mode(&mut self, mode: InspectorMode) -> Result<(), AppError> {
+        let shell = self.shell.snapshot();
+        self.chrome
+            .apply(ChromeAction::SetInspectorMode(mode), &shell)
+            .map(|_| ())
+            .map_err(chrome_error)
+    }
+
+    fn select_agent(&mut self, fence: AppFence, id: AgentId) -> Result<(), AppError> {
+        self.require_fence(fence)?;
+        let shell = self.shell.snapshot();
+        self.chrome
+            .apply(ChromeAction::SelectAgent { id }, &shell)
+            .map(|_| ())
+            .map_err(chrome_error)
+    }
+
+    fn open_attention(&mut self, fence: AppFence, id: AttentionId) -> Result<(), AppError> {
+        self.require_fence(fence)?;
+        let shell = self.shell.snapshot();
+        let effect = self
+            .chrome
+            .apply(ChromeAction::OpenAttention { id }, &shell)
+            .map_err(chrome_error)?;
+        if let Some(workspace) = effect.select_workspace {
+            self.shell
+                .apply(ShellAction::SelectWorkspace { id: workspace })
+                .map_err(|_| AppError::UnknownChromeWorkspace)?;
+        }
+        if let Some(tab) = effect.select_tab {
+            self.shell
+                .apply(ShellAction::SelectTab { id: tab })
+                .map_err(|_| AppError::UnknownChromeTab)?;
+        }
+        let _ = self
+            .chrome
+            .apply(ChromeAction::ContextNavigated, &self.shell.snapshot());
+        Ok(())
+    }
+
+    fn replace_chrome(
+        &mut self,
+        fence: AppFence,
+        agents: Vec<crate::chrome::AgentRecord>,
+        attention: Vec<crate::chrome::AttentionItem>,
+    ) -> Result<(), AppError> {
+        self.require_fence(fence)?;
+        let shell = self.shell.snapshot();
+        self.chrome
+            .apply(
+                ChromeAction::ReplaceAgents {
+                    workspace: shell.active_workspace,
+                    agents,
+                },
+                &shell,
+            )
+            .map_err(chrome_error)?;
+        self.chrome
+            .apply(ChromeAction::ReplaceAttention { items: attention }, &shell)
+            .map(|_| ())
+            .map_err(chrome_error)
+    }
+
     fn apply_runtime_blocks(
         &mut self,
         fence: AppFence,
@@ -660,6 +772,15 @@ impl ApplicationRoot {
     fn fail(&mut self, error: AppError) -> Result<(), AppError> {
         self.last_error = Some(error);
         Err(error)
+    }
+}
+
+fn chrome_error(error: ChromeError) -> AppError {
+    match error {
+        ChromeError::UnknownAgent => AppError::UnknownAgent,
+        ChromeError::UnknownAttention => AppError::UnknownAttention,
+        ChromeError::UnknownWorkspace => AppError::UnknownChromeWorkspace,
+        ChromeError::UnknownTab => AppError::UnknownChromeTab,
     }
 }
 
@@ -1181,5 +1302,65 @@ mod tests {
         assert_eq!(projected[0].id, block);
         assert_eq!(projected[0].state, BlockPresentationState::Completed);
         assert_eq!(projected[0].pane, root.snapshot().pane);
+    }
+
+    #[test]
+    fn chrome_inspector_and_attention_do_not_invent_identities() {
+        use crate::chrome::{
+            AgentActivity, AgentRecord, AttentionItem, InspectorMode, LeftPanelMode,
+        };
+
+        let mut root = ApplicationRoot::new();
+        let workspace = root.snapshot().shell.active_workspace;
+        let tab = root.snapshot().shell.active_tab;
+        root.apply(AppAction::ReplaceChrome {
+            fence: root.fence(),
+            agents: vec![AgentRecord {
+                id: AgentId::new("agent-1"),
+                name: "Reviewer".into(),
+                activity: AgentActivity::Attention,
+            }],
+            attention: vec![AttentionItem {
+                id: AttentionId::new("att-1"),
+                title: "Need review".into(),
+                detail: "diff".into(),
+                workspace: Some(workspace),
+                tab: Some(tab),
+                agent: Some(AgentId::new("agent-1")),
+            }],
+        })
+        .unwrap();
+        root.apply(AppAction::SetLeftPanel {
+            mode: LeftPanelMode::Tabs,
+        })
+        .unwrap();
+        root.apply(AppAction::SetInspectorMode {
+            mode: InspectorMode::Workspace,
+        })
+        .unwrap();
+        let chrome = root.snapshot().chrome;
+        assert_eq!(chrome.left_panel, LeftPanelMode::Tabs);
+        assert_eq!(chrome.inspector_mode, InspectorMode::Workspace);
+        assert!(chrome
+            .inspector_rows
+            .iter()
+            .all(|row| row.id != "runtime-telemetry"));
+        assert_eq!(chrome.attention_items.len(), 1);
+        root.apply(AppAction::OpenAttention {
+            fence: root.fence(),
+            id: AttentionId::new("att-1"),
+        })
+        .unwrap();
+        let after = root.snapshot();
+        assert!(after.chrome.attention_items.is_empty());
+        assert_eq!(after.shell.active_workspace, workspace);
+        assert_eq!(after.shell.active_tab, tab);
+        assert_eq!(
+            root.apply(AppAction::OpenAttention {
+                fence: root.fence(),
+                id: AttentionId::new("missing"),
+            }),
+            Err(AppError::UnknownAttention)
+        );
     }
 }

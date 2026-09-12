@@ -8,6 +8,7 @@ use crate::app::{
     AppAction, AppError, AppFence, AppSnapshot, ApplicationRoot, BindingEvidence, NativeEffect,
     PresentationEligibility, APP_ABI_VERSION,
 };
+use crate::chrome::{AgentId, AttentionId, InspectorMode, LeftPanelMode};
 use crate::composer::ComposerMode;
 use crate::recovery::{AttemptOutcome, LaunchResult, RecoveryEffect, RecoveryStage};
 
@@ -322,6 +323,57 @@ pub extern "C" fn seyal_app_composer(handle: u64) -> SeyalAppComposer {
     })
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SeyalAppChrome {
+    pub version: u16,
+    pub size: u16,
+    pub left_panel: u16,
+    pub inspector_mode: u16,
+    pub agent_count: u32,
+    pub attention_count: u32,
+    pub inspector_row_count: u32,
+    pub reserved: u32,
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_app_chrome(handle: u64) -> SeyalAppChrome {
+    APPS.with(|apps| {
+        let apps = apps.borrow();
+        let Some(state) = apps.get(&handle) else {
+            return SeyalAppChrome {
+                version: APP_ABI_VERSION,
+                size: 0,
+                left_panel: 0,
+                inspector_mode: 0,
+                agent_count: 0,
+                attention_count: 0,
+                inspector_row_count: 0,
+                reserved: 0,
+            };
+        };
+        let chrome = state.root.snapshot().chrome;
+        SeyalAppChrome {
+            version: APP_ABI_VERSION,
+            size: size_of::<SeyalAppChrome>() as u16,
+            left_panel: match chrome.left_panel {
+                LeftPanelMode::Workspaces => 0,
+                LeftPanelMode::Tabs => 1,
+            },
+            inspector_mode: match chrome.inspector_mode {
+                InspectorMode::Context => 0,
+                InspectorMode::Workspace => 1,
+                InspectorMode::Tab => 2,
+                InspectorMode::Pane => 3,
+            },
+            agent_count: chrome.agents.len() as u32,
+            attention_count: chrome.attention_items.len() as u32,
+            inspector_row_count: chrome.visible_inspector_rows.len() as u32,
+            reserved: 0,
+        }
+    })
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn seyal_app_last_error(handle: u64) -> i32 {
     APPS.with(|apps| {
@@ -407,6 +459,34 @@ fn decode_action(action: &SeyalAppAction) -> Result<AppAction, i32> {
         13 => Ok(AppAction::ApplyRuntimeBlocks {
             fence,
             records: Vec::new(),
+        }),
+        14 => Ok(AppAction::SetLeftPanel {
+            mode: if action.reserved == 1 {
+                LeftPanelMode::Tabs
+            } else {
+                LeftPanelMode::Workspaces
+            },
+        }),
+        15 => Ok(AppAction::SetInspectorMode {
+            mode: match action.reserved {
+                1 => InspectorMode::Workspace,
+                2 => InspectorMode::Tab,
+                3 => InspectorMode::Pane,
+                _ => InspectorMode::Context,
+            },
+        }),
+        16 => Ok(AppAction::SelectAgent {
+            fence,
+            id: AgentId::new(read_payload(action.payload, action.payload_len)?),
+        }),
+        17 => Ok(AppAction::OpenAttention {
+            fence,
+            id: AttentionId::new(read_payload(action.payload, action.payload_len)?),
+        }),
+        18 => Ok(AppAction::ReplaceChrome {
+            fence,
+            agents: Vec::new(),
+            attention: Vec::new(),
         }),
         _ => Err(-6),
     }
@@ -620,6 +700,10 @@ fn error_number(error: AppError) -> i32 {
         AppError::ComposerSubmitDisabled => 16,
         AppError::StaleComposerRequest => 17,
         AppError::StaleComposerEpoch => 18,
+        AppError::UnknownAgent => 19,
+        AppError::UnknownAttention => 20,
+        AppError::UnknownChromeWorkspace => 21,
+        AppError::UnknownChromeTab => 22,
     }
 }
 

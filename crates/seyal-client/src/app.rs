@@ -3,15 +3,18 @@
 //! Composes [`ShellState`], [`PresentationSession`], and
 //! [`RecoveryCoordinator`]. Runtime remains the only PTY, VT, `TerminalState`,
 //! attachment/controller, and BlockTimeline authority. This module does not
-//! implement composer/Block lifecycle (#881). Hosts inject clock, launch, and
-//! attach attempts; this crate owns retry/deadline/stage policy.
+//! implement chrome/inspector (#880). Hosts inject clock, launch, attach, and
+//! the native composer editor; this crate owns draft/submit/Block projection.
 
 use std::time::Duration;
 
 use seyal_core::{AttachmentId, ExecutionId, PaneId};
 
+use crate::composer::{
+    ComposerAction, ComposerError, ComposerSnapshot, ComposerState, RuntimeBlockRecord,
+};
 use crate::presentation::{
-    PresentationAction, PresentationIdentity, PresentationMode, PresentationSession,
+    InputRoute, PresentationAction, PresentationIdentity, PresentationMode, PresentationSession,
 };
 use crate::recovery::{
     AttemptOutcome, LaunchResult, RecoveryCoordinator, RecoveryEffect, RecoveryStage,
@@ -41,6 +44,9 @@ pub enum AppError {
     NoLiveClient,
     InvalidPayload,
     StaleRecoveryGeneration,
+    ComposerSubmitDisabled,
+    StaleComposerRequest,
+    StaleComposerEpoch,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -107,6 +113,24 @@ pub enum AppAction {
         now: Duration,
     },
     AckRecoveryEffect,
+    SetComposerDraft {
+        fence: AppFence,
+        text: String,
+        composer_epoch: u64,
+    },
+    SubmitComposer {
+        fence: AppFence,
+        composer_epoch: u64,
+    },
+    ApplyComposerResult {
+        fence: AppFence,
+        request_id: u64,
+        accepted: bool,
+    },
+    ApplyRuntimeBlocks {
+        fence: AppFence,
+        records: Vec<RuntimeBlockRecord>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -151,6 +175,7 @@ pub struct AppSnapshot {
     pub recovery_generation: u64,
     pub recovery_attempts: u32,
     pub recovery_effect: Option<RecoveryEffect>,
+    pub composer: Option<ComposerSnapshot>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -174,6 +199,7 @@ pub struct ApplicationRoot {
     frozen: bool,
     recovery: RecoveryCoordinator,
     pending_recovery: Vec<RecoveryEffect>,
+    composer: ComposerState,
     #[cfg(target_os = "macos")]
     client: Option<LocalDisplayClient>,
 }
@@ -187,6 +213,14 @@ impl Default for ApplicationRoot {
 impl ApplicationRoot {
     pub fn new() -> Self {
         let shell = ShellState::m001_local("local");
+        let pane = shell.snapshot().focused_pane;
+        let mut composer = ComposerState::new();
+        let _ = composer.apply(ComposerAction::EnsurePane { pane });
+        let _ = composer.apply(ComposerAction::ApplyPresentation {
+            pane,
+            mode: PresentationMode::Flow,
+            input_route: InputRoute::Frozen,
+        });
         Self {
             presentation: PresentationSession::new(None, PresentationMode::Flow),
             shell,
@@ -198,6 +232,7 @@ impl ApplicationRoot {
             frozen: false,
             recovery: RecoveryCoordinator::default(),
             pending_recovery: Vec::new(),
+            composer,
             #[cfg(target_os = "macos")]
             client: None,
         }
@@ -225,6 +260,7 @@ impl ApplicationRoot {
 
     pub fn snapshot(&self) -> AppSnapshot {
         let shell = self.shell.snapshot();
+        let composer = self.composer.snapshot(shell.focused_pane).ok();
         let eligibility = self.eligibility();
         let composer_eligible = eligibility == PresentationEligibility::Flow && !self.frozen;
         AppSnapshot {
@@ -251,6 +287,7 @@ impl ApplicationRoot {
             recovery_generation: self.recovery.state().generation,
             recovery_attempts: self.recovery.attempt_count(),
             recovery_effect: self.pending_recovery.first().copied(),
+            composer,
         }
     }
 
@@ -281,6 +318,23 @@ impl ApplicationRoot {
                 self.fire_scheduled_recovery(generation, now)
             }
             AppAction::AckRecoveryEffect => self.ack_recovery_effect(),
+            AppAction::SetComposerDraft {
+                fence,
+                text,
+                composer_epoch,
+            } => self.set_composer_draft(fence, text, composer_epoch),
+            AppAction::SubmitComposer {
+                fence,
+                composer_epoch,
+            } => self.submit_composer(fence, composer_epoch),
+            AppAction::ApplyComposerResult {
+                fence,
+                request_id,
+                accepted,
+            } => self.apply_composer_result(fence, request_id, accepted),
+            AppAction::ApplyRuntimeBlocks { fence, records } => {
+                self.apply_runtime_blocks(fence, records)
+            }
         };
         match result {
             Ok(()) => {
@@ -369,7 +423,9 @@ impl ApplicationRoot {
             controller: evidence.controller,
             pty_generation: evidence.pty_generation,
         });
-        self.derive_presentation(evidence.alternate_screen)
+        self.derive_presentation(evidence.alternate_screen)?;
+        self.sync_composer_presentation();
+        Ok(())
     }
 
     fn refresh(&mut self, fence: AppFence) -> Result<(), AppError> {
@@ -485,8 +541,85 @@ impl ApplicationRoot {
         Ok(())
     }
 
+    fn sync_composer_presentation(&mut self) {
+        let pane = self.shell.snapshot().focused_pane;
+        let _ = self.composer.apply(ComposerAction::EnsurePane { pane });
+        let (mode, input_route) = if self.authority.is_none() || self.frozen {
+            (PresentationMode::Flow, InputRoute::Frozen)
+        } else {
+            let snap = self.presentation.snapshot();
+            (snap.mode, snap.input_route)
+        };
+        let _ = self.composer.apply(ComposerAction::ApplyPresentation {
+            pane,
+            mode,
+            input_route,
+        });
+    }
+
+    fn set_composer_draft(
+        &mut self,
+        fence: AppFence,
+        text: String,
+        composer_epoch: u64,
+    ) -> Result<(), AppError> {
+        self.require_fence(fence)?;
+        self.composer
+            .apply(ComposerAction::SetDraft {
+                pane: fence.pane,
+                text,
+                epoch: composer_epoch,
+            })
+            .map(|_| ())
+            .map_err(composer_error)
+    }
+
+    fn submit_composer(&mut self, fence: AppFence, composer_epoch: u64) -> Result<(), AppError> {
+        self.require_fence(fence)?;
+        self.composer
+            .apply(ComposerAction::Submit {
+                pane: fence.pane,
+                epoch: composer_epoch,
+            })
+            .map(|_| ())
+            .map_err(composer_error)
+    }
+
+    fn apply_composer_result(
+        &mut self,
+        fence: AppFence,
+        request_id: u64,
+        accepted: bool,
+    ) -> Result<(), AppError> {
+        self.require_fence(fence)?;
+        self.composer
+            .apply(ComposerAction::ApplyResult {
+                pane: fence.pane,
+                request_id,
+                accepted,
+            })
+            .map(|_| ())
+            .map_err(composer_error)
+    }
+
+    fn apply_runtime_blocks(
+        &mut self,
+        fence: AppFence,
+        records: Vec<RuntimeBlockRecord>,
+    ) -> Result<(), AppError> {
+        self.require_fence(fence)?;
+        self.composer
+            .apply(ComposerAction::ApplyRuntimeBlocks {
+                pane: fence.pane,
+                records,
+            })
+            .map(|_| ())
+            .map_err(composer_error)
+    }
+
     fn derive_presentation(&mut self, alternate_screen: bool) -> Result<(), AppError> {
         let Some(bound) = self.authority else {
+            self.sync_composer_presentation();
             return Ok(());
         };
         let desired = if alternate_screen {
@@ -496,6 +629,7 @@ impl ApplicationRoot {
         };
         let current = self.presentation.snapshot();
         if current.mode == desired {
+            self.sync_composer_presentation();
             return Ok(());
         }
         let identity = PresentationIdentity::new(bound.execution, bound.pty_generation)
@@ -507,7 +641,9 @@ impl ApplicationRoot {
                 explicit: false,
                 epoch: current.epoch,
             })
-            .map_err(|_| AppError::StalePresentationEpoch)
+            .map_err(|_| AppError::StalePresentationEpoch)?;
+        self.sync_composer_presentation();
+        Ok(())
     }
 
     fn eligibility(&self) -> PresentationEligibility {
@@ -524,6 +660,17 @@ impl ApplicationRoot {
     fn fail(&mut self, error: AppError) -> Result<(), AppError> {
         self.last_error = Some(error);
         Err(error)
+    }
+}
+
+fn composer_error(error: ComposerError) -> AppError {
+    match error {
+        ComposerError::UnknownPane => AppError::UnknownPane,
+        ComposerError::EmptyDraft | ComposerError::SubmitDisabled => {
+            AppError::ComposerSubmitDisabled
+        }
+        ComposerError::StaleRequest => AppError::StaleComposerRequest,
+        ComposerError::StaleEpoch => AppError::StaleComposerEpoch,
     }
 }
 
@@ -966,5 +1113,73 @@ mod tests {
         assert_eq!(root.snapshot().recovery_attempts, MAXIMUM_ATTEMPTS);
         assert_eq!(root.snapshot().recovery_stage, RecoveryStage::Exhausted);
         assert_eq!(RETRY_DELAYS.len() as u32 + 1, MAXIMUM_ATTEMPTS);
+    }
+
+    #[test]
+    fn composer_submit_busy_and_stale_request_are_rust_owned() {
+        use crate::composer::{BlockPresentationState, ComposerMode};
+        use seyal_core::BlockId;
+
+        let mut root = ApplicationRoot::new();
+        root.apply(AppAction::Bind {
+            fence: root.fence(),
+            evidence: evidence(8, true, false),
+        })
+        .unwrap();
+        let epoch = root.snapshot().composer.as_ref().unwrap().epoch;
+        root.apply(AppAction::SetComposerDraft {
+            fence: root.fence(),
+            text: "echo hi".into(),
+            composer_epoch: epoch,
+        })
+        .unwrap();
+        let ready = root.snapshot().composer.unwrap();
+        assert_eq!(ready.mode, ComposerMode::Available);
+        assert!(ready.can_submit);
+        root.apply(AppAction::SubmitComposer {
+            fence: root.fence(),
+            composer_epoch: ready.epoch,
+        })
+        .unwrap();
+        let busy = root.snapshot().composer.unwrap();
+        assert!(!busy.can_submit);
+        assert!(matches!(busy.mode, ComposerMode::Busy { .. }));
+        let request_id = busy.pending_request_id.unwrap();
+        assert_eq!(
+            root.apply(AppAction::ApplyComposerResult {
+                fence: root.fence(),
+                request_id: request_id.wrapping_add(3),
+                accepted: true,
+            }),
+            Err(AppError::StaleComposerRequest)
+        );
+        assert_eq!(root.snapshot().composer.unwrap().draft, "echo hi");
+        root.apply(AppAction::ApplyComposerResult {
+            fence: root.fence(),
+            request_id,
+            accepted: false,
+        })
+        .unwrap();
+        assert_eq!(root.snapshot().composer.unwrap().draft, "echo hi");
+        assert!(root.snapshot().composer.unwrap().can_submit);
+
+        let block = BlockId::from_bytes([0x44; 16]);
+        root.apply(AppAction::ApplyRuntimeBlocks {
+            fence: root.fence(),
+            records: vec![RuntimeBlockRecord {
+                id: block,
+                command: "echo hi".into(),
+                start_line: 1,
+                end_line: Some(1),
+                running: false,
+                exit_status: Some(0),
+            }],
+        })
+        .unwrap();
+        let projected = &root.snapshot().composer.unwrap().blocks;
+        assert_eq!(projected.len(), 1);
+        assert_eq!(projected[0].id, block);
+        assert_eq!(projected[0].state, BlockPresentationState::Completed);
+        assert_eq!(projected[0].pane, root.snapshot().pane);
     }
 }

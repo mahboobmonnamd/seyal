@@ -34,7 +34,12 @@ enum SeyalAppActionKind {
     SEYAL_APP_ACTION_SET_COMPOSER_DRAFT = 10,
     SEYAL_APP_ACTION_SUBMIT_COMPOSER = 11,
     SEYAL_APP_ACTION_APPLY_COMPOSER_RESULT = 12,
-    SEYAL_APP_ACTION_APPLY_RUNTIME_BLOCKS = 13
+    SEYAL_APP_ACTION_APPLY_RUNTIME_BLOCKS = 13,
+    SEYAL_APP_ACTION_SET_LEFT_PANEL = 14,
+    SEYAL_APP_ACTION_SET_INSPECTOR = 15,
+    SEYAL_APP_ACTION_SELECT_AGENT = 16,
+    SEYAL_APP_ACTION_OPEN_ATTENTION = 17,
+    SEYAL_APP_ACTION_REPLACE_CHROME = 18
 };
 
 enum SeyalAppEligibility {
@@ -187,6 +192,17 @@ typedef struct SeyalAppComposer {
     uint32_t block_count;
 } SeyalAppComposer;
 
+typedef struct SeyalAppChrome {
+    uint16_t version;
+    uint16_t size;
+    uint16_t left_panel;
+    uint16_t inspector_mode;
+    uint32_t agent_count;
+    uint32_t attention_count;
+    uint32_t inspector_row_count;
+    uint32_t reserved;
+} SeyalAppChrome;
+
 typedef struct SeyalAppAccessibility {
     uint16_t version;
     uint16_t size;
@@ -200,6 +216,7 @@ int32_t seyal_app_destroy(uint64_t handle);
 int32_t seyal_app_apply(uint64_t handle, const SeyalAppAction *action);
 SeyalAppSnapshot seyal_app_snapshot(uint64_t handle);
 SeyalAppComposer seyal_app_composer(uint64_t handle);
+SeyalAppChrome seyal_app_chrome(uint64_t handle);
 SeyalAppAccessibility seyal_app_accessibility(uint64_t handle);
 int32_t seyal_app_last_error(uint64_t handle);
 

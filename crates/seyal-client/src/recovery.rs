@@ -222,11 +222,14 @@ impl RecoveryCoordinator {
 
     pub fn complete_attempt(
         &mut self,
+        generation: u64,
         outcome: AttemptOutcome,
         now: Duration,
         launch: Option<LaunchResult>,
     ) -> Vec<RecoveryEffect> {
-        let generation = self.state.generation;
+        if generation != self.state.generation {
+            return self.dispose_opened(outcome);
+        }
         let Some(deadline) = self.deadline else {
             return self.dispose_opened(outcome);
         };
@@ -365,9 +368,10 @@ mod tests {
         let mut attempts = 0;
         loop {
             let next = match effects.as_slice() {
-                [RecoveryEffect::PerformAttempt { .. }] => {
+                [RecoveryEffect::PerformAttempt { generation, .. }] => {
+                    let generation = *generation;
                     attempts += 1;
-                    coordinator.complete_attempt(AttemptOutcome::Retryable, now, None)
+                    coordinator.complete_attempt(generation, AttemptOutcome::Retryable, now, None)
                 }
                 [RecoveryEffect::Schedule { generation, delay }] => {
                     let generation = *generation;
@@ -406,11 +410,15 @@ mod tests {
         let mut effects = missing.begin_episode(now);
         for _ in 0..20 {
             let next = match effects.as_slice() {
-                [RecoveryEffect::PerformAttempt { .. }] => missing.complete_attempt(
-                    AttemptOutcome::EndpointMissing,
-                    now,
-                    Some(LaunchResult::Started),
-                ),
+                [RecoveryEffect::PerformAttempt { generation, .. }] => {
+                    let generation = *generation;
+                    missing.complete_attempt(
+                        generation,
+                        AttemptOutcome::EndpointMissing,
+                        now,
+                        Some(LaunchResult::Started),
+                    )
+                }
                 [RecoveryEffect::LaunchHelper, RecoveryEffect::Schedule { generation, delay }] => {
                     let generation = *generation;
                     let delay = *delay;
@@ -435,11 +443,14 @@ mod tests {
         let mut busy = RecoveryCoordinator::default();
         now = Duration::ZERO;
         effects = busy.begin_episode(now);
-        assert!(matches!(
-            effects.as_slice(),
-            [RecoveryEffect::PerformAttempt { .. }]
-        ));
-        effects = busy.complete_attempt(AttemptOutcome::ControllerBusy, now, None);
+        let RecoveryEffect::PerformAttempt {
+            generation: busy_generation,
+            ..
+        } = effects[0]
+        else {
+            panic!("expected attempt");
+        };
+        effects = busy.complete_attempt(busy_generation, AttemptOutcome::ControllerBusy, now, None);
         assert_eq!(busy.state().stage, RecoveryStage::WaitingForController);
         while let Some((generation, delay)) = match effects.as_slice() {
             [RecoveryEffect::Schedule { generation, delay }] => Some((*generation, *delay)),
@@ -447,8 +458,10 @@ mod tests {
         } {
             now += delay;
             effects = busy.scheduled_fire(generation, now);
-            if matches!(effects.as_slice(), [RecoveryEffect::PerformAttempt { .. }]) {
-                effects = busy.complete_attempt(AttemptOutcome::ControllerBusy, now, None);
+            if let [RecoveryEffect::PerformAttempt { generation, .. }] = effects.as_slice() {
+                let generation = *generation;
+                effects =
+                    busy.complete_attempt(generation, AttemptOutcome::ControllerBusy, now, None);
             }
         }
         assert_eq!(launches, 1);
@@ -467,7 +480,12 @@ mod tests {
         else {
             panic!("expected attempt");
         };
-        coordinator.complete_attempt(AttemptOutcome::Retryable, Duration::ZERO, None);
+        coordinator.complete_attempt(
+            first_generation,
+            AttemptOutcome::Retryable,
+            Duration::ZERO,
+            None,
+        );
         assert!(coordinator.has_scheduled_attempt());
         let second = coordinator.begin_episode(Duration::ZERO);
         let RecoveryEffect::PerformAttempt {
@@ -480,15 +498,41 @@ mod tests {
         assert!(second_generation > first_generation);
         assert_eq!(coordinator.attempt_count(), 1);
         assert!(!coordinator.has_scheduled_attempt());
-        let ignored = coordinator.scheduled_fire(first_generation, Duration::from_millis(10));
-        assert!(ignored.is_empty());
+        assert!(coordinator
+            .scheduled_fire(first_generation, Duration::from_millis(10))
+            .is_empty());
+        let stale = coordinator.complete_attempt(
+            first_generation,
+            AttemptOutcome::Connected,
+            Duration::from_millis(10),
+            None,
+        );
+        assert!(stale.is_empty());
+        assert_eq!(coordinator.state().generation, second_generation);
+        assert_eq!(coordinator.state().stage, RecoveryStage::Discovering);
+
+        let opened = coordinator.complete_attempt(
+            first_generation,
+            AttemptOutcome::Opened {
+                handle: 77,
+                adopted: true,
+            },
+            Duration::from_millis(10),
+            None,
+        );
+        assert_eq!(opened, vec![RecoveryEffect::DisposeHandle(77)]);
+        assert_eq!(coordinator.state().stage, RecoveryStage::Discovering);
     }
 
     #[test]
     fn rejected_opened_handle_is_disposed_and_blocked() {
         let mut coordinator = RecoveryCoordinator::default();
-        coordinator.begin_episode(Duration::ZERO);
+        let started = coordinator.begin_episode(Duration::ZERO);
+        let RecoveryEffect::PerformAttempt { generation, .. } = started[0] else {
+            panic!("expected attempt");
+        };
         let effects = coordinator.complete_attempt(
+            generation,
             AttemptOutcome::Opened {
                 handle: 103,
                 adopted: false,
@@ -504,8 +548,12 @@ mod tests {
     #[test]
     fn helper_missing_blocks_without_scheduling() {
         let mut coordinator = RecoveryCoordinator::default();
-        coordinator.begin_episode(Duration::ZERO);
+        let started = coordinator.begin_episode(Duration::ZERO);
+        let RecoveryEffect::PerformAttempt { generation, .. } = started[0] else {
+            panic!("expected attempt");
+        };
         let effects = coordinator.complete_attempt(
+            generation,
             AttemptOutcome::EndpointMissing,
             Duration::ZERO,
             Some(LaunchResult::HelperMissing),

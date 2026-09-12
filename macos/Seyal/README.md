@@ -2,7 +2,9 @@
 
 This directory owns the native macOS application boundary for Seyal.
 
-M001 establishes the permanent **Swift + AppKit + Metal** application direction:
+**M001.1 freeze:** the current AppKit shell in this tree is **deprecated**. It is not product authority. Do not add Workspace/Tab/Pane, Blocks/composer, Flow/Raw/TUI, theme semantics, or recovery-policy features here. Portable product behavior is implemented in Rust (#879–#882). A **new** thin host is written from scratch (#883). This tree is deleted in that replacement PR. See `docs/engineering/M001.1-SWIFT-OWNERSHIP-PARITY-MANIFEST.md`.
+
+M001 established the permanent **Swift + AppKit + Metal** application direction:
 
 - `NSApplication` / `NSWindow` lifecycle;
 - a custom terminal `NSView` backed directly by `CAMetalLayer`;

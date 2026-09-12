@@ -281,13 +281,39 @@
       "sources": [
         {
           "path": "docs/engineering/REPOSITORY-STRUCTURE.md",
-          "fingerprint": "9853e0fc4194fa8544976781e421ac7a32c88590"
+          "fingerprint": "adc1538990d613c708e5edd867405f7a97b3eec2"
         }
       ],
       "relationships": [
         {
           "type": "implements",
           "target": "COMP-TERMINAL-STATE"
+        }
+      ]
+    },
+    {
+      "id": "DOC-M001.1-SWIFT-OWNERSHIP",
+      "kind": "document",
+      "title": "M001.1 Swift ownership and behavior-parity manifest",
+      "summary": "M001.1 freeze map: current Swift shell is deprecated and not product authority. Portable product is built in Rust; a new thin AppKit/Metal host is written from scratch; old shell/XCTest are deleted in the replacement PR.",
+      "tags": [
+        "m001.1",
+        "swift",
+        "macos",
+        "ownership",
+        "adr-015",
+        "migration"
+      ],
+      "sources": [
+        {
+          "path": "docs/engineering/M001.1-SWIFT-OWNERSHIP-PARITY-MANIFEST.md",
+          "fingerprint": "b318f7ff128bba5747d78f5df363da2bde444a1c"
+        }
+      ],
+      "relationships": [
+        {
+          "type": "related_to",
+          "target": "COMP-PANE-PRESENTATION"
         }
       ]
     }

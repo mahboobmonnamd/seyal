@@ -21,7 +21,7 @@ PTY
 → Metal renderer
 ```
 
-**Target architecture:** Rust owns portable product/UI behavior while the in-repository Swift host remains a thin macOS adapter ([ADR-015](https://github.com/mahboobmonnamd/seyal/blob/master/docs/architecture/ADR-015-RUST-PRODUCT-UI-THIN-SWIFT-HOST.md)). M001.1 migration remains a separate follow-up program; use current source and accepted implementation slices when describing shipped ownership.
+**Target architecture:** Rust owns portable product/UI behavior while the in-repository Swift host remains a thin macOS adapter ([ADR-015](https://github.com/mahboobmonnamd/seyal/blob/master/docs/architecture/ADR-015-RUST-PRODUCT-UI-THIN-SWIFT-HOST.md)). The current headed Swift shell is frozen/deprecated under M001.1; portable product is implemented in Rust, then a new thin host is written from scratch (`docs/engineering/M001.1-SWIFT-OWNERSHIP-PARITY-MANIFEST.md`). Configuration parse stays off the terminal path above. Use current source and accepted implementation slices when describing shipped ownership.
 
 ## State ownership
 

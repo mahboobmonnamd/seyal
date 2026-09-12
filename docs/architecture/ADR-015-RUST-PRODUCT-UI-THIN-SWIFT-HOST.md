@@ -175,20 +175,31 @@ stable Pane identity
 Stale pane, execution, attachment, or presentation epochs fail closed. The host
 must not retry them against a newer snapshot.
 
-Product snapshots and terminal prepared frames are separate transfers:
+Product snapshots and terminal prepared frames are **separate transfers**.
+Both are immutable and versioned. Pointer-bearing fields are borrowed only
+through the synchronous FFI consumption operation and only until the next
+mutating call on that explicit handle. The host must copy the data before that
+next mutating call and may retain only its own derived copy. A stale generation
+must not authorize actions. This is the existing `SeyalBridge.h` /
+`seyal-client` FFI borrow policy; it is not a longer-lived Rust buffer lease
+and does not add retain/release of Rust memory.
 
-- Rust owns immutable product snapshots. Native may retain a snapshot only
-  while its generation remains current. Invalidation revokes the generation;
-  native must release the buffer and must not mutate it.
+- Product snapshots carry portable UI/product state. Native may keep only its
+  derived copy. When the snapshot generation is no longer current, that copy
+  is stale: it must not mutate Rust state, authorize a typed action, or be
+  treated as the live product model.
 - Terminal prepared-frame transfer remains the existing Candidate-D /
-  `seyal-render` damage-driven path. It is not a product snapshot and must not
-  wait for one.
+  `seyal-render` damage-driven path governed by SPEC-005 §6. It is not a
+  product snapshot and must not wait for one. One or a few coarse prepared-batch
+  transfers per committed generation/frame are allowed.
 - Native preedit, AX objects, view identities, hover/press state,
   Metal/CoreText objects, and GPU resources are disposable platform state.
 
-The boundary must not become per-cell, per-glyph, per-frame, JSON, or
-synchronously chatty merely to move authority to Rust. Existing coarse
-Candidate-D/prepared-render patterns remain the performance model.
+The boundary must not become per-cell, per-glyph, JSON, or synchronously
+chatty merely to move authority to Rust. Empty polling on every display-link
+tick, and a callback or round-trip loop for each frame opportunity, are
+forbidden. Existing coarse Candidate-D/prepared-render patterns remain the
+performance model.
 
 Terminal input/output/render progress must never synchronously depend on
 product UI state transfer, platform-host acknowledgement, agent work,
@@ -245,7 +256,10 @@ writer/authority is unambiguous and tested.
    Rust but does not change that behavior contract.
 3. Metal remains the production macOS terminal renderer. No NSTextView,
    SwiftUI, or CPU-full-frame terminal engine (`R-011`).
-4. No per-cell/per-glyph/per-frame Rust↔Swift callback on the terminal hot path.
+4. No per-cell or per-glyph Rust↔Swift callback on the terminal hot path.
+   SPEC-005 §6 permits one or a few coarse prepared-batch transfers per
+   committed generation/frame. Empty polling on every display-link tick and a
+   callback/round-trip loop for each frame opportunity remain forbidden.
 5. IME preedit stays ephemeral host state as required by ADR-011. Swift may
    own the `NSTextInputClient` bridge; it may not commit preedit into
    `TerminalState` or own portable composer/terminal semantics.

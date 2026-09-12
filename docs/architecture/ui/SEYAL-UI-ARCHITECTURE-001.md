@@ -393,10 +393,11 @@ objects only realize that snapshot and post platform notifications. Native must
 not invent product roles, labels, or actions.
 
 Product snapshots and terminal prepared frames remain separate transfers.
-Candidate-D and `seyal-render` stay damage-driven. Native may retain an
-immutable product snapshot only while its generation is current; invalidation
-requires release. Pane-sensitive actions carry stable Pane identity plus the
-current execution, attachment, and presentation epochs.
+Candidate-D and `seyal-render` stay damage-driven. Pointer-bearing fields are
+borrowed only until the next mutating call on that handle; the host copies
+synchronously and may retain only its derived copy. A stale generation must
+not authorize actions. Pane-sensitive actions carry stable Pane identity plus
+the current execution, attachment, and presentation epochs.
 
 ---
 

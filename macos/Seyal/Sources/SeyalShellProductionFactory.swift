@@ -1,8 +1,7 @@
 import AppKit
 
-/// Creates the normal application presentation from the real bridge-backed
-/// execution. Preview fixtures remain available only through the explicit
-/// debug preview entry point.
+/// Leftover deprecated factory. Not the supported launch path (#890/#883).
+/// Shared fixtures live in `seyal_client::fixtures` (#884).
 @MainActor
 enum SeyalShellProductionFactory {
     static func make(

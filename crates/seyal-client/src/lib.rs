@@ -10,6 +10,7 @@
 
 pub mod chrome;
 pub mod composer;
+pub mod fixtures;
 pub mod presentation;
 pub mod product;
 pub mod recovery;

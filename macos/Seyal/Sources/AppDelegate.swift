@@ -7,8 +7,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow?
     private var appearance: SeyalAppearanceController?
 
-    /// Deprecated Debug preview flag. Leftover XCTest may still query this
-    /// until #884. The supported launch path never installs `SeyalShellState`.
+    /// Deprecated Debug preview flag. Leftover XCTest may still query this.
+    /// The supported launch path is the thin host, not the frozen product shell.
     static func shouldUseShellPreview(
         arguments: [String],
         environment: [String: String],

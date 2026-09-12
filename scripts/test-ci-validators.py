@@ -120,6 +120,20 @@ def main() -> None:
         write(ui_policy / "scripts/test-macos-ui.sh", "#!/usr/bin/env bash\n")
         run_negative(["python3", str(ROOT / "scripts/check-ui-test-policy.py")], ui_policy, "Xcode project is missing SeyalTests")
 
+        host_fixtures = base / "host-product-fixtures"
+        write(
+            host_fixtures / "macos/Seyal/Sources/AppDelegate.swift",
+            "window.contentView = SeyalShellView()\n",
+        )
+        write(host_fixtures / "macos/Seyal/Sources/Main.swift", "// main\n")
+        write(host_fixtures / "macos/Seyal/Sources/SeyalThinHostView.swift", "// host\n")
+        write(host_fixtures / "macos/Seyal/Sources/SeyalProductBridge.swift", "// bridge\n")
+        run_negative(
+            ["python3", str(ROOT / "scripts/check-host-product-fixtures.py")],
+            host_fixtures,
+            "must not mention SeyalShellView",
+        )
+
         workspace = base / "workspace"
         workspace.mkdir()
         run_negative(["python3", str(ROOT / "scripts/test-workspace.py")], workspace, "missing root Cargo.toml")

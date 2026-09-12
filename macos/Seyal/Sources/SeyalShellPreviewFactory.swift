@@ -1,6 +1,8 @@
 import AppKit
 
 #if DEBUG
+/// Leftover deprecated preview factory. Not product authority and not a host
+/// fixture. Shared fixtures live in `seyal_client::fixtures` (#884).
 @MainActor
 enum SeyalShellPreviewFactory {
     static func make(

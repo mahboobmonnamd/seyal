@@ -37,11 +37,34 @@ final class SeyalHostComponentTests: XCTestCase {
         var hits: [String] = []
         for case let file as URL in enumerator where file.pathExtension == "swift" {
             let text = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
-            if text.contains("SeyalShellState") || text.contains("SeyalShellView") {
+            let forbidden = [
+                "SeyalShellState",
+                "SeyalShellView",
+                "SeyalShellPreviewFactory",
+                "SeyalShellProductionFactory",
+                "SeyalShellModel",
+                "PanePresentationSession",
+            ]
+            if forbidden.contains(where: { text.contains($0) }) {
                 hits.append(file.lastPathComponent)
             }
         }
         XCTAssertTrue(hits.isEmpty, "portable product types leaked into \(hits)")
+    }
+
+    func testNativeTestsConsumeRustApplicationRootFixturesOnly() {
+        let handle = seyal_app_create()
+        defer { XCTAssertEqual(seyal_app_destroy(handle), 0) }
+        let shell = seyal_app_shell(handle)
+        XCTAssertEqual(shell.workspace_count, 1)
+        XCTAssertEqual(shell.tab_count, 1)
+        XCTAssertEqual(shell.pane_count, 1)
+        let chrome = seyal_app_chrome(handle)
+        XCTAssertEqual(chrome.left_panel, 0)
+        let composer = seyal_app_composer(handle)
+        XCTAssertEqual(composer.mode, UInt16(SEYAL_APP_COMPOSER_HIDDEN.rawValue))
+        let inspector = seyal_app_chrome_row(handle, UInt16(SEYAL_APP_ROW_INSPECTOR), 0)
+        XCTAssertGreaterThan(inspector.title_len, 0)
     }
 
     func testBundledRuntimeLauncherUsesFixedHelperPath() {

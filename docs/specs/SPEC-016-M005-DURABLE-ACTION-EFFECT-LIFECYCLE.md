@@ -8,7 +8,7 @@
 
 ## 1. Purpose
 
-This specification defines observable behavior for every **Seyal-controlled effectful operation** that requires durable identity, authorization, dispatch fencing or effect recovery.
+This specification defines observable behavior for every Seyal-controlled operation within ADR-014's effectful-operation boundary that can mutate, start/stop, publish, delete, write, or invoke an external side effect. Durable identity, dispatch fencing and truthful result handling apply even when a particular operation does not require user approval or recovery.
 
 It freezes:
 
@@ -51,7 +51,7 @@ Every operation has a stable `ActionId` and immutable `ActionIntent` containing 
 ```text
 ActionId
 AgentRunId
-AgentRun binding generation at preparation/authorization where relevant
+Current AgentRun binding generation is checked as a mutable dispatch-time fence; it is not immutable ActionIntent identity and a safe worker rebind alone does not invalidate an otherwise-current exact approval.
 capability
 resource identity
 resource version / freshness precondition
@@ -80,6 +80,7 @@ A client retry carrying the unchanged existing `ActionId` is a duplicate referen
 Prepared
    +--> Authorized
    |      +--> Prepared             authorization invalidated before dispatch
+   |      +--> CancelledBeforeDispatch
    |      +--> Dispatching
    |             +--> Prepared      authoritative known-not-dispatched reconciliation; fresh authorization required
    |             +--> Succeeded
@@ -94,6 +95,8 @@ Prepared
    +--> CancelledBeforeDispatch
 
 Authorized -> CancelledBeforeDispatch
+
+`Authorized -> Dispatching` is legal only from the current durable `Authorized` state. Policy-only authorization still creates that state. `Prepared -> Dispatching` is forbidden; no-approval operations must materialize policy authorization as `Authorized` before dispatch.
 ```
 
 `Dispatching -> Prepared` is allowed **only** when the owning executor contract authoritatively proves `known-not-dispatched` for that exact Action/generation as defined by §10.1. It is not a general retry edge.
@@ -136,7 +139,7 @@ Duplicate UI events, reconnects or stale workers cannot consume it twice.
 
 Immediately before external effect invocation, one local safety-critical transaction must atomically:
 
-1. verify Action is current, non-terminal and not cancelled;
+1. verify the current durable state is exactly `Authorized` and the Action is not cancelled;
 2. verify **intent expiry has not passed**;
 3. verify current AgentRun control/binding generation under ADR-012;
 4. verify capability remains allowed;
@@ -150,7 +153,7 @@ Immediately before external effect invocation, one local safety-critical transac
 
 No intermediate committed state may expose approval consumed without current dispatch ownership/`Dispatching`, or vice versa.
 
-Failure of any precondition leaves the Action undispatched and cannot silently widen authorization.
+Failure of any dispatch precondition invalidates the current authorization and transitions `Authorized -> Prepared` (or to `CancelledBeforeDispatch` when cancellation won); fresh authorization is required before another dispatch attempt. It cannot silently preserve stale authorization or widen intent.
 
 ## 7. Between transaction commit and executor invocation
 
@@ -163,7 +166,7 @@ exact Action dispatch generation
 
 A worker/rebinding event that makes the AgentRun binding stale also invalidates that worker's right to invoke the Action even if it still possesses an Action generation token.
 
-The Seyal-controlled executor boundary rechecks/fences the current binding immediately before effect invocation. Where an executor boundary cannot enforce the required fence, that executor cannot be treated as safely `SeyalEnforced` for operations requiring this guarantee.
+The executor boundary must hold an atomic binding/dispatch fence through effect invocation, or the executor itself must reject a credential invalidated by rebind/revocation. A check-then-call with no shared serialization or executor-side rejection is insufficient. Where neither guarantee is available, fail closed before invocation; that executor cannot be treated as safely `SeyalEnforced`.
 
 A stale worker/dispatcher may submit observational evidence, but cannot cross the effect boundary or commit current Action state.
 
@@ -177,7 +180,7 @@ For operations whose authorization depends on a resource version/fingerprint, th
 - an executor-owned lock/fence spanning final version validation and effect;
 - another authoritative atomic freshness primitive with equivalent semantics.
 
-If the actual effect boundary cannot enforce the bound version, the operation fails closed before effect where possible. If uncertainty arises after `Dispatching`, recovery follows `EffectUnknown`; Seyal must not pretend the approved version was mutated.
+If the actual effect boundary cannot enforce the bound version, reject before committing `Dispatching` and before invocation. If uncertainty arises after a valid boundary was established, recovery follows `EffectUnknown`; Seyal must not pretend the approved version was mutated.
 
 Tests must cover a resource change between local transaction commit and executor invocation.
 
@@ -220,7 +223,7 @@ When proven:
 
 Allowed only under a validated executor idempotency/reconciliation contract.
 
-The Action remains an unresolved dispatched Action while reconciliation establishes a safe continuation. A new dispatch generation may be acquired only through the recovery/reconciliation authority after old generation fencing and all current policy/resource/privacy preconditions are revalidated.
+The Action remains an unresolved dispatched Action while reconciliation establishes a safe continuation. A new dispatch generation may be acquired only through the Runtime-issued recovery/reconciliation authority after old generation fencing and revalidation of intent expiry, exact current AgentRun binding/capability, resource version, policy/privacy generation and provider/executor capability. Approval is not consumed a second time for the same immutable Action, but expired/invalidated authorization requires a fresh authorization transition before any new invocation.
 
 This is continuation/reconciliation of the **same ActionId**, not preparation of changed arguments.
 
@@ -264,8 +267,9 @@ Authoritative result evidence binds:
 ```text
 ActionId
 Action dispatch generation
-AgentRun binding generation or accepted recovery authority
+AgentRun binding generation, or a Runtime-issued recovery credential/generation proving the old binding and dispatch generation were fenced
 executor identity/version
+executor-origin authentication/attestation bound to the exact result payload
 operation/result identity
 resource/version evidence where applicable
 outcome
@@ -292,6 +296,7 @@ Without causal correlation, remain `EffectUnknown` even if current state looks c
 
 `EffectUnknown` may transition to:
 
+- `Prepared` only when authenticated executor-origin causal evidence proves that no invocation/effect occurred for the exact Action and dispatch generation; invalidate the old dispatch generation and require fresh authorization;
 - `Succeeded` with authoritative causal success evidence;
 - `FailedKnown` with authoritative known-failure/no-success evidence.
 
@@ -355,7 +360,7 @@ Current invariant:
 - Action payload retention/redaction follows ADR-013 policy;
 - hashes/fingerprints do not reconstruct erased payload.
 
-If required payload is deleted before safe reconciliation, that prerequisite is reported unavailable; evidence is not fabricated.
+Immediately before executor invocation, the effect boundary validates the current privacy/revocation generation in the same serialization domain as revocation commit. If revocation linearizes first, invocation is rejected; if invocation fence linearizes first, the handoff is recorded as already dispatched and cannot be described as unsent. If the generation cannot be atomically fenced, fail closed before invocation. If required payload is deleted before safe reconciliation, that prerequisite is reported unavailable; evidence is not fabricated.
 
 ## 19. External-agent enforcement truthfulness
 
@@ -366,6 +371,8 @@ An independent external CLI agent may perform shell/network/tool effects outside
 ## 20. Duplicate/replay behavior
 
 Receiving the same `ActionId` again is treated as a duplicate only when the caller's canonical immutable intent identity/digest matches the stored `ActionIntent` exactly.
+
+For a reused `ActionId` whose canonical immutable-intent digest differs in any field, reject with a typed identity-mismatch result and perform no mutation, authorization, approval consumption, or dispatch.
 
 For an exact duplicate:
 
@@ -395,7 +402,7 @@ On exhaustion:
 ```text
 Action remains EffectUnknown (or current unresolved post-dispatch state)
 automatic rescheduling stops
-manual/Attention reconciliation may be surfaced
+manual/Attention reconciliation may be surfaced; operator actions may acknowledge, escalate, or request reconciliation only and cannot assert `Succeeded`/`FailedKnown` without the required executor-origin causal evidence
 minimum recovery evidence is retained
 unrelated terminal/execution work continues
 ```

@@ -137,8 +137,22 @@ ReconstructableFromCurrentAuthority
 ReferenceOnly
 Unavailable
 RevokedOrForbidden
+Expired
 Stale
 ```
+
+These states describe use-time availability, not physical byte presence. When more than one description could apply, safety/eligibility precedence is:
+
+```text
+RevokedOrForbidden
+  > Expired
+  > Stale
+  > Unavailable
+  > ReferenceOnly
+  > RetainedPayload / ReconstructableFromCurrentAuthority
+```
+
+A stronger denial state wins; a physically retained payload cannot hide revocation, expiry or staleness.
 
 Meanings:
 
@@ -154,7 +168,7 @@ Reconstructability must be proven by the owning source contract. Hashes, filenam
 
 ### 5.3 `ReferenceOnly`
 
-Only an identifier/reference remains. This may support explainability but does not satisfy a resume prerequisite that requires the original payload.
+Only an identifier/reference remains. This may support explainability or a dependency whose accepted `ContinuationPlan` explicitly declares `ReferenceSufficient`; it does not satisfy a prerequisite whose satisfaction mode requires original payload.
 
 ### 5.4 `Unavailable`
 
@@ -164,17 +178,51 @@ The required retained payload is absent and cannot currently be reconstructed sa
 
 Current privacy/security/policy makes the prerequisite ineligible for reuse even if bytes remain physically present.
 
-### 5.6 `Stale`
+### 5.6 `Expired`
+
+The prerequisite's explicit retention, validity, authorization or provider-capability deadline has passed. Expired material is ineligible for resume even if bytes/reference metadata still exist; re-establishing a current prerequisite requires the owning source/consumer contract to produce a new current generation.
+
+### 5.7 `Stale`
 
 The retained/reconstructable prerequisite is bound to an old source, context, memory, worktree, policy or builder generation and has not been validly refreshed.
 
 Availability is evaluated from current authority at use/recovery time, not inferred from a previous successful build or provider session.
 
-## 6. Retention availability summary
+## 6. ContinuationPlan and retention-availability summary
 
-A working set exposes a deterministic retention-availability summary covering every prerequisite class needed for the next safe continuation step. Runtime supplies a typed `ContinuationPlan` bound to the exact WorkItem/Attempt/AgentRun and binding generation; it enumerates each next-step dependency as `required` or `optional`, its typed source and payload requirement, and the current plan generation. Unknown dependency classes, unknown requiredness, or a missing/stale plan are treated as required-but-unverified and yield `ReconciliationRequired`, never omission by default.
+A working set exposes a deterministic retention-availability summary covering every prerequisite class needed for the next safe continuation step.
 
-At minimum it accounts for relevant classes including:
+Requiredness is not invented by RunWorkingSet or a model. The Runtime/domain authority supplies a typed, versioned `ContinuationPlan` derived from the currently accepted consumer/harness capability contract. The plan is advisory input to resume classification and does not create a second AgentRun transition authority.
+
+A valid `ContinuationPlan` contains at least:
+
+```text
+ContinuationPlanId + schema_version
+plan_generation
+issuer/runtime authority identity + version
+WorkItemId / AttemptId / AgentRunId
+AgentRun binding generation
+consumer/harness capability contract identity + version
+policy/privacy generation dependency
+created_at / expires_at when applicable
+dependencies[] {
+  typed dependency class + identity
+  requiredness: Required | Optional
+  satisfaction: PayloadRequired | ReferenceSufficient | ReconstructableAllowed
+  expected source/dependency generation(s)
+  sensitivity/eligibility requirements
+}
+```
+
+Validation rules:
+
+- the issuer must be the current Runtime/domain authority or an explicitly accepted authority delegated by it; model/provider text cannot issue a plan;
+- schema, issuer, WorkItem/Attempt/AgentRun, binding generation, consumer contract, policy/privacy generations and expiry must all be recognized/current;
+- unknown dependency class, unknown requiredness/satisfaction mode, missing dependency identity, missing/stale/expired plan or generation mismatch is fail-closed and yields `ReconciliationRequired` until Runtime supplies a valid current plan;
+- optional dependencies may be absent only when the plan explicitly marks them optional;
+- a changed requiredness/satisfaction contract produces a new plan generation and invalidates a prior resume classification.
+
+At minimum the plan/summary accounts for relevant classes including:
 
 - user instructions/corrections required to preserve intent;
 - model-visible assistant/context messages required to preserve semantic continuity;
@@ -202,6 +250,7 @@ ContextBundleId + relevant source/dependency generations
 MemoryId + MemoryRecord version/state/revocation generation
 artifact/action/result generation
 policy/privacy generation
+ContinuationPlanId + generation
 provider continuation generation/reference
 builder/compactor version
 ```
@@ -254,33 +303,44 @@ ReconciliationRequired
 ResumeUnavailable
 ```
 
+Classification follows this deterministic precedence after current Runtime liveness/binding and `ContinuationPlan` validation:
+
+1. **ReconciliationRequired first** when the plan is missing/stale/unknown, execution liveness is unknown, an external effect is ambiguous, authoritative dependencies conflict, current validity cannot yet be established, or any required dependency is in a state whose safe satisfaction/reconstructability is unknown.
+2. Otherwise **ResumeUnavailable** when at least one `Required` dependency is `RevokedOrForbidden`, `Expired`, `Unavailable`, irrecoverably `Stale`, or `ReferenceOnly` while its plan mode is `PayloadRequired`, and the plan/owning source contract provides no safe current reconstruction path.
+3. Otherwise **BehavioralResumeAvailable** only when every `Required` dependency satisfies its plan mode with current eligible evidence and all other §9.1 conditions hold.
+
+An `Optional` dependency never makes an otherwise valid resume unavailable, but its absence/degradation is preserved in evidence and cannot be silently promoted to required context later without a new plan generation.
+
 ### 9.1 `BehavioralResumeAvailable`
 
-Allowed only when every prerequisite required for the next continuation step is:
+Allowed only when every prerequisite marked `Required` by the current valid `ContinuationPlan` is:
 
 1. current and policy-eligible; and
-2. either `RetainedPayload` or `ReconstructableFromCurrentAuthority`; and
+2. satisfied by its declared mode: `RetainedPayload`, a policy-permitted `ReferenceOnly` for `ReferenceSufficient`, or `ReconstructableFromCurrentAuthority` where `ReconstructableAllowed`; and
 3. consistent with the current AgentRun binding/recovery state under ADR-012; and
 4. free of unresolved ambiguous external effects that require reconciliation.
 
-The continuation may rebuild locally from eligible retained/current authority. An opaque provider-continuation/session reference never satisfies a required payload prerequisite and never by itself proves hidden state is intact, authorized, current, unexpired, or sufficient for the next step. A provider continuation may be used only as an optional optimization under a typed provider contract that attests the current exact AgentRun binding, checkpoint/content generation, privacy/policy generation, expiry, and required capabilities; otherwise abandon it and rebuild locally or return `ReconciliationRequired`. Provider continuation is never a requirement when local prerequisites suffice.
+Provider continuation cannot compensate for a missing local/source-owned required prerequisite. An opaque provider-continuation/session reference never satisfies a payload-required dependency and never by itself proves hidden state is intact, authorized, current, unexpired or sufficient. A provider continuation may be used only as an optional optimization **after** all required prerequisites already satisfy this classification, under a typed provider contract bound to the exact AgentRun/checkpoint/policy generation. If it cannot be validated, abandon it and continue from eligible local/current authority; provider continuation is never a hidden substitute for missing required state.
 
 ### 9.2 `ReconciliationRequired`
 
 Used when the same AgentRun identity can remain meaningful but a safe next step requires explicit reconciliation before work continues, including cases such as:
 
+- missing/stale/expired/unknown `ContinuationPlan` or unrecognized requiredness/satisfaction metadata;
 - ambiguous action/effect outcome;
 - conflicting retained/current evidence that cannot be deterministically resolved;
 - provider continuation may contain now-ineligible content and must be abandoned while local state needs reconciliation;
 - persisted run metadata and actual worker/execution state disagree after restart;
 - adapter/observation loss leaves prior execution liveness unknown;
-- a required prerequisite may exist but current validity/availability cannot yet be established safely.
+- a required prerequisite may exist but current validity/availability/reconstructability cannot yet be established safely.
 
 Reconciliation cannot fabricate missing payload.
 
 ### 9.3 `ResumeUnavailable`
 
-Used when any required prerequisite is `Unavailable`, `RevokedOrForbidden`, or irrecoverably `Stale`, and safe reconstruction from current authority is not possible. `ResumeUnavailable` does not establish that the prior execution has ended. A fresh retry may begin only after Runtime-authoritative proof that the previous execution terminated or was explicitly cancelled. If execution liveness is unknown, classify `ReconciliationRequired`; if it is known live, preserve the current Attempt/AgentRun and recover or reconcile it rather than starting a fresh retry.
+Used only after the higher-precedence reconciliation conditions above are resolved and at least one required prerequisite is definitively unusable under its plan mode: `Unavailable`, `RevokedOrForbidden`, `Expired`, irrecoverably `Stale`, or `ReferenceOnly` for a `PayloadRequired` dependency with no safe current reconstruction path.
+
+`ResumeUnavailable` does not establish that the prior execution has ended. A fresh retry may begin only after Runtime-authoritative proof that the previous execution terminated or was explicitly cancelled. If execution liveness is unknown, the classification is `ReconciliationRequired`; if it is known live, preserve the current Attempt/AgentRun and recover or reconcile it rather than starting a fresh retry.
 
 The product must not present this as a successful resume merely because:
 
@@ -291,7 +351,7 @@ The product must not present this as a successful resume merely because:
 - an old ContextBundle/working-set snapshot exists;
 - the previous worker once reported success.
 
-Starting work again from scratch follows ADR-012 fresh-retry semantics: new Attempt + new AgentRun. The prior run retains its disposition/evidence and is not rewritten into the new try.
+Starting work again from scratch follows ADR-012 **fresh-retry** semantics: new Attempt + new AgentRun. The prior run retains its disposition/evidence and is not rewritten into the new try.
 
 ## 10. Reconnect, restart and replacement-worker behavior
 
@@ -312,6 +372,7 @@ persisted AgentRun identity/evidence
 actual worker/execution liveness
 current binding generation
 working-set retention availability
+current ContinuationPlan generation/provider contract
 provider continuation eligibility
 pending/ambiguous action state
 ```
@@ -336,9 +397,10 @@ Requirements:
 
 - provider conversation/session/thread IDs never replace WorkItem/Attempt/AgentRun identity;
 - existence of a continuation ID does not prove hidden provider state is intact, current, authorized or sufficient;
+- provider continuation never substitutes for a missing required local/source-owned prerequisite under §9;
 - provider continuation loss does not destroy Seyal identity/evidence;
 - if required local prerequisites remain, Seyal may rebuild context and continue the same AgentRun when ADR-012 and §9 permit it;
-- if required local retained payload is unavailable, provider continuation loss makes behavioral resume unavailable rather than triggering fabricated reconstruction;
+- if required local retained payload is unavailable, provider continuation cannot turn `ResumeUnavailable` into `BehavioralResumeAvailable`;
 - if a provider continuation may contain a revoked/forbidden dependency, that continuation becomes ineligible and is abandoned for future use; rebuild only from still-eligible local sources where sufficient;
 - provider-specific continuation metadata must remain outside provider-neutral durable core semantics.
 
@@ -390,21 +452,39 @@ Persisting a RunWorkingSet is optional product behavior, but if persisted:
 
 No persistence mechanism may claim to restore a live PTY/process/provider stream solely from journaled metadata.
 
-## 15. Failure and degraded behavior
+## 15. Failure, retry and retention-pressure behavior
 
 Required behavior:
 
 - missing optional retained entry -> omit/degrade if continuation correctness permits;
-- missing required retained entry -> `ResumeUnavailable` unless safely reconstructable;
-- stale dependency -> revalidate/rebuild or become reconciliation/unavailable;
+- missing required retained entry -> `ResumeUnavailable` unless safely reconstructable, subject to §9 precedence;
+- expired required entry -> ineligible and mapped by §9; bytes/reference persistence does not make it current;
+- stale dependency -> revalidate/rebuild or become reconciliation/unavailable under §9;
 - invalid/revoked dependency -> remove from eligibility and rebuild/reconcile as allowed;
-- provider continuation unavailable -> local rebuild if sufficient, otherwise unavailable;
+- provider continuation unavailable -> local rebuild if sufficient, otherwise classify from local required prerequisites; provider state cannot compensate;
 - adapter/observation loss while execution is live does not change retention availability or permit `ResumeUnavailable`/fresh retry; unknown liveness is `ReconciliationRequired` until Runtime establishes termination or explicit cancellation;
 - compaction failure -> keep prior current valid generation if policy/limits permit, otherwise reduce availability explicitly;
 - persistence corruption -> quarantine affected derived generation, preserve independent source/memory/run authorities;
-- repeated failure -> bounded retry/backoff; no hot loop;
+- repeated failure -> retry only within a finite policy-defined attempt and/or deadline budget with bounded queued work; on exhaustion automatic retry stops and an explicit `WorkingSetDegraded` operational status is exposed without creating a new AgentRun lifecycle state. A new relevant source/policy/plan generation or an explicit permitted retry starts a fresh bounded budget; exhaustion never extends itself indefinitely;
 - cancellation -> stop background compaction/rebuild without corrupting prior authoritative run evidence;
-- disk/resource pressure -> bounded eviction following retention priority, with resulting resume availability recalculated honestly.
+- disk/resource pressure -> apply the deterministic retention priority below and recalculate resume availability honestly.
+
+### 15.1 Deterministic retention priority
+
+Eviction/compaction decisions are bound to the current `ContinuationPlan` and accepted retention policy. Entries required by the current plan are protected ahead of optional history; the implementation must not arbitrarily choose among equal candidates.
+
+Default priority, strongest first, is:
+
+1. policy/privacy/revocation and ambiguous-effect/reconciliation references required for safety;
+2. required user instruction/correction and current plan/task state;
+3. other `Required` ContextBundle/MemoryRecord/artifact/result prerequisites in stable plan order;
+4. `Optional` typed artifacts/evidence needed for explainability;
+5. optional conversation/history/derived summaries;
+6. rebuildable indexes/caches.
+
+Within one priority class, deterministic tie-breakers are oldest eligible last-access/creation generation as defined by the retention policy, then stable entry identity; the exact direction/value is versioned in retention configuration and cannot depend on map/directory iteration order or model choice.
+
+If a hard byte/resource limit requires dropping a `Required` entry despite compaction, the entry becomes `Unavailable` (or the applicable stronger denial state), the drop is recorded, and §9 classification is recomputed before any continuation. The system never evicts a required prerequisite and still reports the previous `BehavioralResumeAvailable` result.
 
 No degraded path may silently create a new MemoryRecord, claim source truth, retry an ambiguous effect, or gate unrelated terminal progress.
 
@@ -459,7 +539,7 @@ Before #681 becomes Ready, implementation evidence must bound and measure at lea
 - cleanup/expiry/eviction behavior;
 - concurrent independent AgentRun working sets;
 - provider-continuation-loss fallback cost;
-- repeated persistence/provider failure backoff;
+- repeated persistence/provider failure backoff and convergence at the finite retry/deadline budget;
 - queue saturation/backpressure;
 - terminal latency/throughput isolation during active and failing working-set work.
 
@@ -471,9 +551,9 @@ At minimum:
 
 1. RunWorkingSet is bound to exactly one AgentRun/Attempt and cannot alias a sibling run;
 2. provider continuation ID does not replace AgentRun identity;
-3. `ReferenceOnly` prerequisite cannot satisfy a payload-required resume;
-4. a current retained payload can satisfy a resume prerequisite;
-5. deterministic reconstruction from current authorized source can satisfy a reconstructable prerequisite;
+3. `ReferenceOnly` cannot satisfy a `PayloadRequired` prerequisite, while it may satisfy only an explicitly `ReferenceSufficient` dependency;
+4. a current retained payload can satisfy a payload-required resume prerequisite;
+5. deterministic reconstruction from current authorized source can satisfy only a `ReconstructableAllowed` prerequisite;
 6. a hash/source range/provider ID alone cannot make unavailable payload reconstructable;
 7. stale ContextBundle dependency invalidates affected working state;
 8. revoked/superseded/expired MemoryRecord cannot remain eligible through working-set copy/cache;
@@ -486,23 +566,30 @@ At minimum:
 15. replacement worker generation can resume same AgentRun only after safe revalidation;
 16. stale worker generation cannot mutate current working state;
 17. provider continuation loss + sufficient local prerequisites permits same-run continuation when ADR-012 allows;
-18. live execution plus adapter/observation loss preserves retention availability and never starts a fresh retry;
-19. unknown execution liveness after observation loss yields `ReconciliationRequired`; a fresh retry requires Runtime proof of termination or explicit cancellation;
-20. provider continuation loss + missing required retained payload yields `ResumeUnavailable`;
-21. ambiguous external effect yields `ReconciliationRequired`, never blind retry;
-22. fresh retry from scratch creates new Attempt + AgentRun and does not reuse old working set as mutable current state;
-23. provider continuation that may contain revoked content is abandoned for future use;
-24. sibling worktree/workspace/run cannot read another run's working state by path/task/provider coincidence;
-25. unknown/newer persisted schema generation is quarantined;
-26. corruption of RunWorkingSet does not corrupt MemoryStore/source/AgentRun evidence authority;
-27. disk-full/repeated persistence failure yields bounded retries and honest reduced resumability;
-28. bounded eviction recalculates availability deterministically;
-29. cancellation leaves prior current generation coherent;
-30. restart reconciliation rejects stale `current` markers/generations;
-31. malformed dependency/scope/provider identifiers are rejected/fuzzed;
-32. sustained working-set/compaction failure does not synchronously stall terminal progress.
+18. provider continuation cannot compensate for a missing local/source-owned required prerequisite;
+19. live execution plus adapter/observation loss preserves retention availability and never starts a fresh retry;
+20. unknown execution liveness after observation loss yields `ReconciliationRequired`; a fresh retry requires Runtime proof of termination or explicit cancellation;
+21. missing/stale/expired/unknown `ContinuationPlan`, unknown dependency class, or unknown requiredness/satisfaction metadata yields `ReconciliationRequired` and cannot be omitted by default;
+22. expired required prerequisite is never treated as retained/current merely because bytes/reference remain;
+23. `ReferenceOnly` + `PayloadRequired` with no reconstruction yields `ResumeUnavailable` after higher-precedence reconciliation conditions are resolved;
+24. ambiguous external effect yields `ReconciliationRequired`, never blind retry;
+25. classification precedence produces one deterministic result when liveness uncertainty and missing/expired/reference-only dependencies overlap;
+26. fresh retry from scratch creates new Attempt + AgentRun and does not reuse old working set as mutable current state;
+27. provider continuation that may contain revoked content is abandoned for future use;
+28. sibling worktree/workspace/run cannot read another run's working state by path/task/provider coincidence;
+29. unknown/newer persisted schema generation is quarantined;
+30. corruption of RunWorkingSet does not corrupt MemoryStore/source/AgentRun evidence authority;
+31. disk-full/repeated persistence failure stops automatic retries at the finite budget, exposes `WorkingSetDegraded`, bounds queued resources and resumes only after a defined recovery event;
+32. deterministic retention priority/tie-breakers produce the same eviction result for the same plan/configuration;
+33. forced eviction of a required entry changes availability before continuation and never preserves a stale resume-available result;
+34. cancellation leaves prior current generation coherent;
+35. restart reconciliation rejects stale `current` markers/generations;
+36. malformed dependency/scope/provider identifiers are rejected/fuzzed;
+37. full classification/revalidation works with **no model/provider configured**;
+38. a synthetic alternate provider cannot change plan validation or resume classification for identical typed local prerequisites;
+39. sustained working-set/compaction failure does not synchronously stall terminal progress.
 
-Property/fuzz tests are required for generation ordering, dependency-set composition, scope identity, retained-entry decoding and malformed provider/dependency identifiers.
+Property/fuzz tests are required for generation ordering, dependency-set composition, `ContinuationPlan` decoding/validation, scope identity, retained-entry decoding and malformed provider/dependency identifiers.
 
 ## 20. Acceptance criteria
 
@@ -511,16 +598,18 @@ SPEC-014 is acceptable when independent review establishes that:
 - RunWorkingSet is explicitly derived and cannot become a second MemoryStore/source/event authority;
 - sibling run/worktree/workspace payload cannot be read or resumed through path, task, provider or identifier coincidence;
 - AgentRun identity, historical explainability and behavioral resumability are separate facts;
-- retention availability is explicit and deterministic;
-- hashes/provider IDs/summaries cannot falsely reconstruct erased or unavailable payload;
+- `ContinuationPlan` requiredness/satisfaction semantics are Runtime-issued, versioned, fenced and fail closed when missing/stale/unknown;
+- retention availability including `Expired`, `ReferenceOnly` and overlapping denial conditions is explicit and deterministic;
+- behavioral-resume outcomes use the defined precedence and cannot fall through to multiple classifications;
+- hashes/provider IDs/summaries and provider continuation cannot falsely reconstruct or substitute for erased/unavailable required payload;
 - compaction preserves provenance/authority/sensitivity/conflict constraints;
 - stale/revoked dependencies invalidate before reuse;
-- provider continuation is an optimization and never durable Seyal identity;
+- provider continuation is an optimization and never durable Seyal identity or a substitute for missing required local state;
 - reconnect/restart/replacement-worker behavior is consistent with ADR-012;
 - missing required retained state yields reconciliation/unavailable rather than a fabricated resume;
-- fresh restart of the bounded try creates a new Attempt + AgentRun;
-- persistence/resource/failure behavior is bounded and honest;
-- provider/model neutrality is preserved;
+- **fresh retry from scratch** creates a new Attempt + AgentRun;
+- retry, persistence, eviction and resource behavior is finite, deterministic and honest;
+- classification/revalidation works with no model configured and remains provider-neutral;
 - terminal hot-path isolation is explicit and testable;
 - no Action/effect or dedicated privacy-race authority is redefined here.
 
@@ -532,7 +621,7 @@ This specification does not define:
 - ContextBundle selection/ranking/filesystem/LSP invalidation (SPEC-013 / #854);
 - dispatch-time privacy/revocation race and irrevocable external-handoff ordering;
 - physical deletion completion or user-visible forgetting-completion claims;
-- Action/Approval/effect dispatch/reconciliation semantics (ADR-014 and later specs);
+- Action/Approval/effect dispatch/reconciliation semantics: ADR-014 is accepted architecture authority and #871 owns the separate SPEC-016 behavior promotion until accepted;
 - workflow DAG/multi-agent scheduling;
 - provider-specific transcript/message schema;
 - a database/object-store format;

@@ -45,6 +45,10 @@ jobs:
         run: python3 scripts/check-benchmark-contract.py
       - name: Native UI test policy
         run: python3 scripts/check-ui-test-policy.py
+      - name: Host product-fixture fence
+        run: python3 scripts/check-host-product-fixtures.py
+      - name: Thin-Swift product-authority boundary
+        run: python3 scripts/check-thin-swift-boundary.py
       - name: Harness contracts
         run: python3 scripts/test-harnesses.py
       - name: Fuzz registry smoke

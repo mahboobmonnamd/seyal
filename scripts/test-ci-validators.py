@@ -15,10 +15,10 @@ def require(condition: bool, message: str) -> None:
         raise SystemExit(f"[seyal CI validator self-test] ERROR: {message}")
 
 
-def run_negative(command: list[str], fixture_root: Path, expected: str) -> None:
+def run_command(command: list[str], fixture_root: Path) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env[ENV_ROOT] = str(fixture_root)
-    result = subprocess.run(
+    return subprocess.run(
         command,
         cwd=fixture_root,
         env=env,
@@ -27,8 +27,18 @@ def run_negative(command: list[str], fixture_root: Path, expected: str) -> None:
         stderr=subprocess.STDOUT,
         check=False,
     )
+
+
+def run_negative(command: list[str], fixture_root: Path, expected: str) -> None:
+    result = run_command(command, fixture_root)
     require(result.returncode != 0, f"negative fixture unexpectedly passed: {' '.join(command)}")
     require(expected in result.stdout, f"negative fixture failed for the wrong reason; expected {expected!r}, output was:\n{result.stdout}")
+
+
+def run_positive(command: list[str], fixture_root: Path, forbidden: str) -> None:
+    result = run_command(command, fixture_root)
+    require(result.returncode == 0, f"positive fixture unexpectedly failed: {' '.join(command)}\n{result.stdout}")
+    require(forbidden not in result.stdout, f"positive fixture mentioned {forbidden!r}:\n{result.stdout}")
 
 
 def write(path: Path, content: str) -> None:
@@ -93,6 +103,40 @@ def main() -> None:
             "func update() {}\nfunc present() {}\n",
         )
         run_negative(["python3", str(ROOT / "scripts/check-hot-path.py")], hot, "avoidable allocation")
+
+        clean_rust = (
+            "impl TerminalState { pub fn feed(&mut self, bytes: &[u8]) {} pub fn finish_input(&mut self) {} }",
+            "impl Runtime { pub fn poll_once(&mut self) {} }",
+            "impl Runtime { fn drain_control(&mut self) {} fn service_reads(&mut self) {} fn service_writes(&mut self) {} }",
+            "impl InputIngress { pub fn try_submit(&self) {} }",
+            "pub fn encode_snapshot() {} pub fn encode_delta() {} fn encode_rows() {} pub fn encode_snapshot_v2() {} pub fn encode_delta_v2() {} fn encode_cells_v2() {}",
+            "impl Runtime { pub(super) fn publish_display_updates(&mut self) {} }",
+        )
+
+        def write_clean_rust_hot_paths(root: Path) -> None:
+            write(root / "crates/seyal-terminal/src/terminal.rs", clean_rust[0])
+            write(root / "crates/seyal-runtime/src/runtime/mod.rs", clean_rust[1])
+            write(root / "crates/seyal-runtime/src/runtime/reactor_io.rs", clean_rust[2])
+            write(root / "crates/seyal-runtime/src/input.rs", clean_rust[3])
+            write(root / "crates/seyal-runtime/src/display.rs", clean_rust[4])
+            write(root / "crates/seyal-runtime/src/runtime/local/display_publish.rs", clean_rust[5])
+
+        absent_host = base / "hot-path-absent-host"
+        write_clean_rust_hot_paths(absent_host)
+        run_positive(
+            ["python3", str(ROOT / "scripts/check-hot-path.py")],
+            absent_host,
+            "macos/Seyal",
+        )
+
+        present_host_missing_metal = base / "hot-path-present-host"
+        write_clean_rust_hot_paths(present_host_missing_metal)
+        (present_host_missing_metal / "macos/Seyal").mkdir(parents=True)
+        run_negative(
+            ["python3", str(ROOT / "scripts/check-hot-path.py")],
+            present_host_missing_metal,
+            "missing guarded hot-path file: macos/Seyal/Sources/MetalTerminalRenderer.swift",
+        )
 
         benchmark = base / "benchmark-contract"
         write(benchmark / "crates/seyal-terminal/benches/bad.rs", 'fn main() { println!("performance_claim=true"); }\n')

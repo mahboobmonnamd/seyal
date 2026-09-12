@@ -28,7 +28,7 @@ M001 Passes 1–9 have seven justified production Rust ownership boundaries:
 
 `seyal-core` owns only stable identity/value types required across authority and protocol layers. It owns no PTY, VT, Runtime registry, protocol transport or renderer state.
 
-`seyal-terminal` owns the permanent incremental VT/parser/state model introduced by Issue #38. `seyal-exec` owns PTY descriptor ownership, child lifecycle and `TerminalExecution`. `seyal-protocol` owns versioned Candidate-D framing and disposable display-value contracts. `seyal-runtime` owns the headless per-user Runtime, logical attachments, projection production and M001 Workspace/`BlockTimeline` metadata (no separate `seyal-workspace` crate exists yet). `seyal-render` owns portable prepared-surface normalization. `seyal-client` owns disposable local attachment state and atomic `DisplayCache` commit before native render.
+`seyal-terminal` owns the permanent incremental VT/parser/state model introduced by Issue #38. `seyal-exec` owns PTY descriptor ownership, child lifecycle and `TerminalExecution`. `seyal-protocol` owns versioned Candidate-D framing and disposable display-value contracts. `seyal-runtime` owns the headless per-user Runtime, logical attachments, projection production and M001 Workspace/`BlockTimeline` metadata (no separate `seyal-workspace` crate exists yet). `seyal-render` owns portable prepared-surface normalization. `seyal-client` owns disposable local attachment state, atomic `DisplayCache` commit before native render, and the portable headed Workspace/Tab/Pane product reducer. It may depend on `seyal-core` identity types. It does not depend on `seyal-runtime` in production.
 
 Do not create empty diagram-driven packages. A future physical `seyal-workspace` crate is justified only when Workspace/Block ownership needs a process/ABI boundary that Runtime composition cannot keep cleanly.
 
@@ -112,7 +112,7 @@ The exact binaries/packages are decided by active milestones. The architectural 
 - `seyal-protocol`: versioned messages/projection types and validation; no authoritative terminal state.
 - `seyal-render`: derived render preparation; no canonical VT/grid ownership.
 - `seyal-runtime`: per-user authoritative execution registry, logical attachment ownership, bounded multi-execution orchestration and M001 BlockTimeline composition.
-- `seyal-client`: disposable local attachment/client state and DisplayCache commit; no Runtime production dependency.
+- `seyal-client`: disposable local attachment/client state, DisplayCache commit, and portable headed product composition; no Runtime production dependency.
 - `macos/Seyal`: AppKit/native lifecycle/input/Metal surface; consumes derived projection only.
 
 ## Allowed dependency direction

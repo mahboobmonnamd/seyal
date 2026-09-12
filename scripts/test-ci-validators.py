@@ -165,6 +165,17 @@ def main() -> None:
         write(ui_policy / "scripts/test-macos-ui.sh", "#!/usr/bin/env bash\n")
         run_negative(["python3", str(ROOT / "scripts/check-ui-test-policy.py")], ui_policy, "Xcode project is missing SeyalUITests")
 
+        fixtures = base / "host-product-fixtures"
+        write(
+            fixtures / "macos/Seyal/Sources/AppDelegate.swift",
+            "final class SeyalShellPreviewFactory {}\n",
+        )
+        run_negative(
+            ["python3", str(ROOT / "scripts/check-host-product-fixtures.py")],
+            fixtures,
+            "reconstructs portable product fixture token",
+        )
+
         workspace = base / "workspace"
         workspace.mkdir()
         run_negative(["python3", str(ROOT / "scripts/test-workspace.py")], workspace, "missing root Cargo.toml")

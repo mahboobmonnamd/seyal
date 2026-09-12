@@ -3,7 +3,7 @@
 - **Status:** Accepted on merge
 - **Date:** 2026-09-12
 - **Issue:** #877
-- **Depends on:** `R-010`, `R-011`, `R-012`, ADR-004, ADR-007, ADR-009, ADR-011, SPEC-006, SPEC-008, SPEC-009, UI architecture
+- **Depends on:** `R-010`, `R-011`, `R-012`, ADR-004, ADR-007, ADR-009, ADR-011, SPEC-006, SPEC-007, SPEC-008, SPEC-009, [`SEYAL-UI-ARCHITECTURE-001.md`](ui/SEYAL-UI-ARCHITECTURE-001.md)
 - **Coordinates with:** #875 / PR #876 agent and review enforcement; M001.1 parent #878
 
 ## Decision requested

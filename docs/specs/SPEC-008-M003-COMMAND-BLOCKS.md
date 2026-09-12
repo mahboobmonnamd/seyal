@@ -2,7 +2,7 @@
 
 - **Status:** Active implementation specification for accepted ADR-009 baseline; proposed #858 presentation-mode amendment applies only on merge
 - **Date:** 2026-08-28; proposed presentation amendment 2026-09-11
-- **Architecture:** ADR-009 plus ADR-004/005/006/007/008
+- **Architecture:** ADR-009 plus ADR-004/005/006/007/008; ADR-015 governs Rust/native ownership only and does not change this specification's behavior contract
 - **Depends on:** accepted SPEC-001 through SPEC-007 and completed Pass 7
 
 ## 1. Observable contract

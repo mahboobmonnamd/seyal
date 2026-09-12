@@ -21,7 +21,7 @@ PTY
 → Metal renderer
 ```
 
-**Target architecture (ADR-015; M001.1 migration is not complete):** Native AppKit remains the thin host for windowing, native events, IME, accessibility, clipboard/drag-drop, and Metal drawable/surface hookup. Rust is intended to own portable Workspace/Tab/Pane, Block, composer, command, focus/layout, agent/inspector, presentation policy, recovery policy, and theme/config semantics. Rust will parse and validate portable typed configuration; AppKit will realize resolved native colors/fonts/materials and other macOS-specific presentation. Configuration resolution does not join the terminal path above. Until the relevant M001.1 work is accepted, describe current implementation ownership from the source; do not treat this target split as already shipped.
+**Target architecture:** Rust owns portable product/UI behavior while the in-repository Swift host remains a thin macOS adapter ([ADR-015](https://github.com/mahboobmonnamd/seyal/blob/master/docs/architecture/ADR-015-RUST-PRODUCT-UI-THIN-SWIFT-HOST.md)). M001.1 migration remains a separate follow-up program; use current source and accepted implementation slices when describing shipped ownership.
 
 ## State ownership
 

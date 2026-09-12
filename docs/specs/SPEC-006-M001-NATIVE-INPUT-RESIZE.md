@@ -4,7 +4,7 @@
 - **Date:** 2026-08-27
 - **Presentation amendment:** proposed by #858 / PR #859 on 2026-09-11; effective only if that architecture amendment merges
 - **Issue:** #702
-- **Architecture authority:** Foundation Architecture + ADR-001 + ADR-004 + ADR-005 + ADR-006; proposed ADR-009 presentation amendment from #858 / PR #859
+- **Architecture authority:** Foundation Architecture + ADR-001 + ADR-004 + ADR-005 + ADR-006 + ADR-015 (Rust/native ownership only; this specification remains authoritative for input behavior); ADR-009 and the #858 / PR #859 amendment govern presentation behavior
 - **Depends on:** SPEC-001, SPEC-002, SPEC-003, SPEC-004, SPEC-005
 
 ## 0. Presentation-mode applicability of the proposed ADR-009 amendment

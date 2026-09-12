@@ -35,7 +35,7 @@ commands, focus, layout, presentation policy, theme/config semantics, recovery
 or agent/inspector behavior.
 
 #875 / PR #876 already made that split a merge-blocking agent/review rule.
-This ADR is the independent architecture decision those rules enforce.
+This ADR is the independent architecture decision those rules enforce. It defines language ownership only: existing accepted ADRs/specifications remain the behavior authority. In any conflict about which language may own a behavior, ADR-015 governs ownership; in any conflict about behavior, the owning contract governs and must be changed through its own review/merge gate. This ADR does not promote or modify separately proposed behavior amendments.
 
 A prior reading of #877 that would remove all Swift sources, isolate a separate
 Swift UI repository, or keep portable product authority in Swift because macOS
@@ -72,11 +72,11 @@ GUI framework), and Metal as the production renderer (`R-011`).
 
 At minimum:
 
-- Workspace / Tab / Pane model and stable product state
+- Workspace identity and persisted domain state remain under the single Runtime/domain authority defined by ADR-007. Rust owns derived portable Tab/Split/PaneView presentation state that references stable Workspace identity; M001.1 must reuse, not duplicate, the Workspace authority
 - split, focus and navigation policy/actions
 - Block state/lifecycle and portable Block presentation semantics
 - composer draft/submission lifecycle and command submission semantics
-- keyboard command/action decisions after native event normalization
+- portable Seyal command/action decisions and product-state transitions after native event classification/normalization. SPEC-006 native `ApplicationCommand` routing remains in the application layer and never reaches the PTY; any such event that changes portable Seyal state is forwarded as a typed Rust action
 - Flow / Raw / TUI mode, transition, input-route and presentation-epoch policy
 - renderer **intent** and portable presentation policy, including whether full-grid,
   Block-region, cursor or takeover presentation is allowed
@@ -94,7 +94,8 @@ module/crate only when a real ownership/dependency boundary justifies it.
 ### Swift MAY own
 
 - `NSApplication` / `NSWindow` lifecycle and native view construction
-- native event collection and primitive normalization
+- native event collection and primitive normalization;
+- `ApplicationCommand` classification/menu routing required by SPEC-006, forwarding any portable Seyal state transition to Rust as a typed action
 - IME / `NSTextInputClient` bridge, preedit/selection and first-responder handles
 - accessibility adapter / VoiceOver integration
 - clipboard / drag-drop / macOS services
@@ -179,8 +180,7 @@ writer/authority is unambiguous and tested.
 
 1. One `TerminalExecution` owns one PTY and one canonical `TerminalState`.
    The GUI never owns a second VT/grid.
-2. Flow / Raw / TUI remain mutually exclusive presentations over the same execution;
-   ADR-009 and SPEC-008 remain the behavior authority for those semantics.
+2. Flow / Raw / TUI presentation semantics remain governed by ADR-009 and its applicable specifications, including each amendment's own acceptance status. ADR-015 assigns portable presentation-policy ownership to Rust but does not adopt or modify presentation behavior.
 3. Metal remains the production macOS terminal renderer. No NSTextView,
    SwiftUI, or CPU-full-frame terminal engine (`R-011`).
 4. No per-cell/per-glyph/per-frame Rust↔Swift callback on the terminal hot path.

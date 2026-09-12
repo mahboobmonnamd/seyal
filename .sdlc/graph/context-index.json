@@ -142,7 +142,7 @@
         },
         {
           "path": "docs/architecture/ADR-015-RUST-PRODUCT-UI-THIN-SWIFT-HOST.md",
-          "fingerprint": "f2dd9b47e2bbe26c0e704ce7997c9838b22e9625"
+          "fingerprint": "4db2783f371c7e1a1d2cc746216cec2c68a77eb3"
         }
       ],
       "relationships": [
@@ -237,7 +237,7 @@
       "sources": [
         {
           "path": "docs/architecture/ADR-015-RUST-PRODUCT-UI-THIN-SWIFT-HOST.md",
-          "fingerprint": "f2dd9b47e2bbe26c0e704ce7997c9838b22e9625"
+          "fingerprint": "4db2783f371c7e1a1d2cc746216cec2c68a77eb3"
         }
       ],
       "relationships": [

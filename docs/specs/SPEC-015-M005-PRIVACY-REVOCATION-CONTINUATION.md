@@ -8,24 +8,26 @@
 
 ## 1. Purpose
 
-This specification defines observable behavior for privacy/security revocation after context or working state has already been constructed but before it is reused or externally dispatched.
+This specification defines observable behavior when privacy, security or retention eligibility changes after context or working state has already been constructed.
 
-It covers:
+It freezes:
 
-- privacy/policy generation binding;
-- queued `ContextBundle` invalidation;
-- `RunWorkingSet`/summary/compaction/index/cache invalidation;
-- provider-continuation eligibility and abandonment;
-- local forgetting completion semantics;
+- who may commit a revocation;
+- monotonic revocation generations;
+- immediate logical ineligibility;
+- queued `ContextBundle` and `RunWorkingSet` invalidation;
+- provider-request handoff fencing;
+- provider-continuation binding and abandonment;
+- local forgetting completion and degraded cleanup states;
 - same-evidence anti-resurrection;
-- races with memory acceptance/revalidation and Action dispatch;
-- failure/resource behavior and terminal isolation.
+- interaction with ADR-014 `Action` dispatch;
+- bounded failure/resource behavior and terminal isolation.
 
-This specification does not create another context, memory, Action, provider-session or retention authority.
+It does not create a second memory, context, provider-session, Action or retention authority.
 
 ## 2. Authority boundaries
 
-The authoritative planes remain:
+The authoritative planes remain distinct:
 
 ```text
 source / repository / policy authority
@@ -37,428 +39,482 @@ provider continuation/session external optimization state
 Action authority / dispatch boundary
 ```
 
-Rules:
+Requirements:
 
 1. `MemoryStore` remains the only durable semantic-memory authority.
-2. `ContextBundle`, `SelectionTrace`, summaries, embeddings, indexes, caches and provider continuation metadata remain derived/non-authoritative.
-3. `Action` remains the sole Seyal-controlled effect/dispatch authority under ADR-014.
-4. Provider continuation/session identity never replaces `WorkItemId`, `AttemptId`, `AgentRunId` or `ActionId`.
-5. Revocation logic must not synchronously gate `PTY -> VT -> TerminalState -> damage/projection -> Metal`.
+2. `ContextBundle`, `SelectionTrace`, summaries, embeddings, indexes and caches are derived state.
+3. Provider continuation/session identity is optimization metadata only.
+4. ADR-014 `Action` is the only Seyal-controlled authority for effectful tool/resource dispatch.
+5. No revocation, cleanup, provider or model work synchronously gates `PTY -> VT -> TerminalState -> projection -> Metal`.
 
-## 3. Terms
+## 3. Trusted revocation authority
 
-### 3.1 Revocation generation
+A syntactically valid revocation request is not automatically authoritative.
 
-A monotonic generation associated with a policy/scope domain that changes whenever eligibility of previously selectable/transmittable material is revoked, deleted or materially narrowed.
+Only an authenticated, currently authorized authority may commit revocation for a target scope. Depending on the owning domain, that may be:
 
-A generation proves ordering only. It does not prove that every external provider has deleted previously transmitted content.
+- an authorized user action;
+- current policy/security authority;
+- the owning `MemoryStore` transition authority;
+- the Runtime/domain authority acting on an accepted typed request.
 
-### 3.2 Dependency set
+A model, provider, tool, terminal stream, stale worker or adapter may report an observation or request, but cannot directly mutate revocation authority.
 
-The complete policy-safe identities/generations needed to decide whether a derived record may still be reused or dispatched.
-
-A dependency set may include:
+Before commit, the authority validates:
 
 ```text
-scope identity + generation
-policy generation
-privacy/revocation generation
-MemoryId + version/state generation
-source identity + source version/fingerprint
-RunWorkingSet generation
-ContextBundle dependencies
-provider-continuation eligibility generation
+request issuer identity / authority class
+target scope identity
+subject identity
+current scope/policy generation
+current revocation generation
+request provenance
 ```
 
-### 3.3 Local forgetting completion
-
-Local forgetting is complete only when all required local retained payload and derived-state obligations for the revoked semantic content are satisfied according to policy.
-
-It does **not** imply data already transmitted to an external provider has been retroactively erased.
-
-### 3.4 Irreversible external handoff
-
-The point after which Seyal can no longer guarantee that revoked bytes were not externally transmitted or an external effect was not initiated.
-
-For a model/provider request, this is the accepted provider transport handoff defined by the provider adapter.
-
-For a Seyal-controlled effectful `Action`, ADR-014 `Dispatching` remains the durable conservative boundary for effect ambiguity. Privacy eligibility must be revalidated immediately before that safety-critical dispatch transaction.
+Cross-workspace, cross-worktree, cross-user or stale-generation mutation fails closed.
 
 ## 4. Canonical revocation event
 
-A revocation event records at least:
+A committed event contains at least:
 
 ```text
 RevocationEventId
-scope identity
-subject identity / semantic suppression identity
+authorized issuer / authority reference
+target scope identity
+subject identity or policy-safe suppression identity
 prior generation
 new generation
 reason class
 policy generation
+request provenance
 requested_at
 committed_at
-source/provenance reference when safe
 local payload disposition requirement
 provider-continuation disposition requirement
 ```
 
-The revocation event itself must not copy forbidden payload merely to explain the deletion.
+The event never copies forbidden payload merely for explanation.
 
-## 5. Revocation precedence
+## 5. Revocation generation and precedence
 
-When revocation conflicts with concurrent memory/context work, the more restrictive decision wins.
+Each relevant policy/scope domain has a monotonic revocation generation.
+
+Generation is ordering metadata, not authorization and not proof that an external provider deleted previously transmitted content.
 
 Normative rules:
 
-1. A committed revocation wins over concurrent acceptance/revalidation/supersession that was based on an older revocation generation.
-2. A worker operating on generation `N` cannot publish reusable state after generation `N+1` is committed unless it revalidates against `N+1`.
-3. A stale index/cache/summary result cannot make revoked content eligible again.
-4. A failed or delayed background invalidation task does not make old content dispatchable.
-5. Unknown generation/freshness at use time fails closed for the affected content/dispatch.
+1. A committed generation `N+1` dominates work based on `N`.
+2. Acceptance, revalidation, compaction, indexing or bundle building started on `N` cannot publish reusable/current state after `N+1` without full current revalidation.
+3. Revocation wins over concurrent acceptance/revalidation/supersession based on an older generation.
+4. Unknown generation at use time fails closed for affected material.
+5. Failed physical cleanup never restores logical eligibility.
+6. Version-aware/CAS-equivalent mutation is required where durable writers race.
 
-Version-aware/CAS-style mutation semantics are required where concurrent durable updates can conflict. Concrete database technology is not specified.
+## 6. Immediate logical ineligibility
 
-## 6. Revocation propagation contract
-
-After revocation commits, the system must conceptually perform:
+Once revocation commits:
 
 ```text
-commit revocation generation
-  -> memory/source becomes ineligible immediately
-  -> prevent new selection/reuse from old generation
-  -> invalidate queued ContextBundles
-  -> invalidate affected RunWorkingSet compactions/summaries
-  -> invalidate prompt/selection/retrieval caches
-  -> invalidate lexical/vector/semantic derived indexes as needed
-  -> mark provider continuation unsafe when absence cannot be proven
-  -> remove/redact local retained payload according to policy
-  -> retain minimum policy-safe suppression/tombstone metadata
+subject becomes ineligible immediately
+-> queued bundles become stale where dependent
+-> affected working-state derivatives become stale
+-> prompt/retrieval/selection caches become stale
+-> index/embedding entries become logically ineligible
+-> provider continuations become unsafe where absence is not proven
+-> local payload cleanup begins according to policy
 ```
 
-Physical cleanup may complete asynchronously, but **eligibility/dispatch denial is immediate once revocation commits**.
+Physical erasure may be asynchronous. Eligibility denial is not.
 
-## 7. Queued ContextBundle behavior
+## 7. ContextBundle behavior
 
-A `ContextBundle` is immutable.
+A `ContextBundle` remains immutable.
 
-If any dependency was revoked or its relevant privacy/policy generation changed after bundle construction:
+If a material dependency or relevant generation changes after construction:
 
 - the bundle becomes `UndispatchableStale`;
-- it cannot be repaired by deleting one field in place;
-- the consumer must rebuild/revalidate from current eligible sources;
-- old payload retained for debugging/history follows retention/redaction policy and cannot remain a secret archive;
-- a stable bundle hash cannot override current eligibility.
+- it is rebuilt from current eligible authority rather than edited in place;
+- old bundle payload follows source sensitivity/retention policy;
+- a matching hash does not restore eligibility;
+- `SelectionTrace` cannot retain deleted/revoked payload through snippets, embeddings, reconstructable locators or explanation copies.
 
-### 7.1 Final use-time check
+## 8. Provider/model handoff fence
 
-Immediately before model/provider/tool dispatch that consumes a bundle, Seyal verifies:
+### 8.1 Scope
+
+This section governs provider/model payload handoff and other non-effectful external handoffs.
+
+An effectful tool/resource operation must use ADR-014 `Action`; it must not use this provider handoff check as a second effect-dispatch path.
+
+### 8.2 Final check and linearization
+
+Immediately before irreversible provider handoff, the provider adapter validates:
 
 ```text
-bundle generation is current
-all dependency generations remain eligible
-scope identity remains current
-policy generation remains current
-privacy/revocation generation remains current
-required source/memory versions are still eligible
-provider continuation, if used, is still eligible
+exact AgentRun binding is current
+bundle is current and dispatchable
+all dependency generations are eligible
+scope identity is current
+policy generation is current
+privacy/revocation generation is current
+provider continuation checkpoint is eligible, if used
 ```
 
-Any failure stops that dispatch and produces a typed stale/revoked result; it does not silently fall back to old content.
+There must be one explicit handoff linearization contract:
 
-## 8. RunWorkingSet / compaction behavior
+```text
+final eligibility check
++ acquire/validate provider-handoff fence for the checked generation
++ irreversible transport handoff
+```
 
-A `RunWorkingSet`, compaction or summary that depends on revoked content cannot be reused merely because the derived text does not contain an obvious verbatim match.
+A revocation committed before that fence/handoff linearization wins and the request must not be handed off.
+
+If an adapter cannot prove that its eligibility check is fenced against a concurrent revocation before irreversible handoff, it must fail closed for revocable payload rather than claiming the old generation was safely sent.
+
+A revocation after irreversible handoff cannot unsend the request and is represented truthfully.
+
+## 9. RunWorkingSet / compaction behavior
+
+A `RunWorkingSet`, summary or compaction remains derived state.
 
 Rules:
 
-1. Every reusable compaction/summary retains a dependency set sufficient to invalidate it.
-2. Revoked dependency => affected derived payload is unavailable for future use until rebuilt from still-eligible sources.
-3. Compaction cannot launder authority or sensitivity.
-4. Hashes/source ranges do not reconstruct erased payload.
-5. If required retained input no longer exists, SPEC-014 behavioral resumability becomes `ResumeUnavailable` or `ReconciliationRequired` as applicable.
-6. A provider conversation that contains the old compaction is governed by provider-continuation fencing in §10.
+1. Reusable derivatives retain complete policy-safe dependency identities/generations.
+2. A revoked dependency makes the affected derivative unavailable for reuse until rebuilt from still-eligible authority.
+3. Textual absence of the revoked phrase is not proof that a summary is independent of it.
+4. Compaction cannot increase authority or lower sensitivity.
+5. Hashes, source ranges or provider IDs cannot reconstruct erased payload.
+6. Missing required retained input maps to SPEC-014 `ReconciliationRequired` or `ResumeUnavailable` as applicable.
 
-## 9. Index/cache/embedding behavior
+## 10. Derived index/cache behavior
 
-Derived retrieval structures are optimization state only.
+Indexes, embeddings and caches are disposable optimization state.
 
 After revocation:
 
-- old entries are logically ineligible immediately, even before physical deletion completes;
-- query-time filtering/revocation generation checks must prevent stale hits from becoming selected context;
-- background deletion/rebuild is bounded and retry-limited;
-- persisted vectors/embeddings/summaries obey the same sensitivity/retention policy as the source dependency;
-- traces must not keep snippets/locators that reconstruct deleted secret content;
-- unknown/newer schema generations are quarantined/ineligible.
+- stale entries are logically ineligible immediately;
+- query-time generation/state checks prevent stale hits becoming selected context;
+- persisted derivatives obey source sensitivity/retention policy;
+- deletion/rebuild work is bounded and cancellable;
+- unknown/newer schemas are quarantined/ineligible;
+- stale derived state cannot reactivate a revoked `MemoryRecord` or source.
 
-A stale cache hit can never override authoritative `MemoryRecord`/source eligibility.
+## 11. Provider continuation binding
 
-## 10. Provider continuation fencing
+### 11.1 Exact default identity
 
-Provider continuation/session state is external optimization state and may contain content that Seyal cannot inspect or selectively erase.
-
-A provider continuation is eligible only when Seyal can establish that:
+A provider continuation is bound by default to the exact:
 
 ```text
-provider continuation belongs to the same permitted AgentRun scope
-provider continuation reference is still current
-all Seyal-known content dependencies remain eligible
-no relevant revocation generation advanced since the continuation checkpoint
-provider capability/policy permits reuse
+WorkItemId
+AttemptId
+AgentRunId
+provider adapter identity/version
+provider continuation reference
+checkpoint generation
+known dependency set
 ```
 
-If revoked content **may** remain and absence cannot be proven under the provider contract, Seyal must abandon the continuation.
+A continuation from another AgentRun is not reusable merely because it belongs to the same workspace, project or repository.
 
-Abandon means:
+Broader sharing is allowed only through an explicit policy-authorized contract that defines scope, provenance, sensitivity, user-visible semantics and revocation behavior. There is no implicit widening.
 
-- do not send the provider continuation/session identifier for the next turn;
-- rebuild the next request from currently eligible local sources/evidence;
-- if required local state is unavailable, stop/reconcile or create a fresh retry under ADR-012 rather than pretending behavioral continuity.
+### 11.2 Eligibility
 
-Provider cache warmth or cost benefit never overrides this rule.
+A continuation checkpoint is eligible only when:
 
-## 11. External-provider deletion truthfulness
+- the exact binding remains current;
+- every Seyal-known dependency remains eligible;
+- the checkpoint's policy/revocation generation remains valid;
+- provider capability/policy permits reuse.
 
-Seyal distinguishes:
+An old checkpoint never becomes current merely because later cleanup succeeded.
+
+### 11.3 Re-attestation after revocation
+
+If a relevant generation advances, the old checkpoint is permanently invalid for future reuse.
+
+Reuse is possible only if the provider contract supplies authoritative evidence that revoked content is absent from a **new safe continuation state**, after which Seyal creates a new checkpoint bound to:
 
 ```text
-LocalForgotten
+new continuation reference or provider-safe-state identity
+current policy/revocation generation
+current dependency set
+exact AgentRun binding
+provider evidence/provenance
+```
+
+If absence cannot be proven, abandon the continuation and rebuild from eligible local sources.
+
+Provider cache warmth, latency or cost never overrides this rule.
+
+## 12. Abandoned continuation responses
+
+A late response from a continuation that became unsafe is not automatically reusable evidence.
+
+Before local retention or semantic extraction, the response must pass current:
+
+- scope and AgentRun binding checks;
+- privacy/revocation generation checks;
+- sensitivity/retention policy;
+- dependency/lineage eligibility.
+
+If clean lineage cannot be proven, the response is discarded or quarantined as non-reusable according to policy. It cannot recreate forgotten memory, refill a working set, or make the abandoned continuation current again.
+
+## 13. Provider deletion truthfulness
+
+Provider deletion evidence is distinct from local forgetting.
+
+Provider-side evidence states include:
+
+```text
+ProviderDeleteNotRequested
 ProviderDeleteRequested
 ProviderDeleteConfirmed
 ProviderDeleteUnsupported
 ProviderDeleteUnknown
 ```
 
-These are evidence states, not guarantees beyond provider capability.
+Requirements:
 
-Rules:
+1. Provider deletion is attempted only through an authenticated declared provider capability.
+2. `ProviderDeleteConfirmed` means only what the provider contract actually guarantees.
+3. Unsupported/unknown provider deletion is surfaced honestly.
+4. Already transmitted data is never described as unsent.
+5. Seyal does not retain forbidden local payload merely to retry provider deletion.
 
-1. `LocalForgotten` never implies provider deletion.
-2. A provider delete API may be invoked only through the provider's declared capability/security contract.
-3. Provider acknowledgement is recorded as evidence of that provider operation, not proof that all downstream backups/training/log retention ceased unless the provider contract explicitly guarantees it.
-4. Unsupported/unknown provider deletion is surfaced honestly.
-5. Seyal must not keep local forbidden payload merely to retry provider deletion.
+## 14. Same-evidence anti-resurrection
 
-## 12. Same-evidence anti-resurrection
+Forgetting must not be silently undone by the same pre-revocation evidence.
 
-After a semantic memory is revoked/forgotten, pre-revocation retained evidence must not automatically recreate the same semantic memory.
+### 14.1 Suppression identity
 
-### 12.1 Suppression identity
+The suppression identity is stable across later unrelated revocation-generation increments. Revocation generation is ordering metadata, **not part of the semantic identity key used to decide whether old evidence is suppressed**.
 
-Suppression uses a policy-safe, non-reversible semantic identity that does not retain the deleted secret/plaintext claim.
-
-It binds at least:
+The key binds at least:
 
 ```text
 scope identity
 record kind / semantic category
-policy-safe normalized semantic identity
-source/evidence lineage identity or fingerprint
-revocation generation
+opaque semantic token
+source/evidence lineage identity
 ```
 
-A plain hash of raw secret text is not automatically safe; the semantic-key design must not enable offline reconstruction or cross-scope correlation.
+The opaque semantic token must be:
 
-### 12.2 New evidence
+- scope-bound;
+- non-reversible under the threat model;
+- collision-resistant for the intended scope;
+- produced by a policy-approved keyed construction when normalized plaintext would reveal sensitive material;
+- unusable for cross-scope existence enumeration;
+- governed by key/retention lifecycle that does not reintroduce deleted plaintext.
 
-New independent post-revocation evidence may propose a new record only through the normal SPEC-012 creation/acceptance pipeline.
+A raw hash of low-entropy secret/plaintext is insufficient.
 
-The system must distinguish:
+Suppression created at generation `N` dominates the same semantic/evidence lineage at every later generation unless explicit policy permits a new record based on genuinely independent post-revocation evidence.
 
-- same old evidence reappearing;
-- a restatement derived from the same old evidence;
-- genuinely independent new evidence.
+### 14.2 Independent new evidence
 
-Model paraphrase or reformatting does not create independent evidence.
+Model paraphrase, reformatting, summary or derivation from old evidence is not independent evidence.
 
-## 13. Concurrent proposal/acceptance/revalidation races
+Genuinely independent post-revocation evidence may propose a new MemoryRecord only through SPEC-012's normal policy pipeline.
 
-Required ordering:
+## 15. Concurrent memory races
 
-- if proposal extraction started before revocation and completes after revocation, it is stale and cannot publish an eligible proposal without current revalidation;
-- if acceptance started before revocation and the revocation commits first, acceptance fails/retries against the new generation;
-- if acceptance commits first and then revocation commits, revocation wins for future eligibility;
-- revalidation never resurrects `Revoked` without a new MemoryId/new normal proposal path allowed by policy;
-- revocation must be idempotent for duplicate user/policy requests.
+Required behavior:
 
-## 14. Interaction with ADR-014 Action dispatch
+- extraction started before revocation but completed after it cannot publish current proposal state without current revalidation;
+- acceptance based on an older generation loses to a revocation committed first;
+- acceptance committed first may later be revoked normally;
+- revalidation cannot transition a `Revoked` record back to `Accepted`;
+- duplicate revocation requests are idempotent for the same target/decision;
+- stale workers cannot publish current derivatives after replacement without current generation/binding validation.
 
-This specification does not create a second Action state machine.
+## 16. Interaction with ADR-014 Actions
 
-If an Action payload/context depends on revocable material, ADR-014's atomic pre-dispatch transaction must include current privacy/revocation eligibility.
+This specification does not create a second Action lifecycle.
 
-### 14.1 Revocation before `Dispatching`
+For every Seyal-controlled effectful operation, ADR-014 owns dispatch.
 
-If revocation commits before the ADR-014 pre-dispatch transaction commits:
+If Action payload/context depends on revocable material, the ADR-014 atomic pre-dispatch transaction revalidates current privacy/revocation eligibility.
 
-- the precondition fails;
-- the old authorization cannot be silently refreshed;
-- any prior consumable authorization is invalidated as required by ADR-014;
-- the Action must be re-prepared/re-authorized if materially changed current payload/context is still desired.
+### Before `Dispatching`
 
-### 14.2 Revocation after durable `Dispatching`
+A revocation committed before the atomic `Dispatching` transition causes the precondition to fail. Old authorization is not silently widened/refreshed; a materially changed operation is prepared and authorized according to ADR-014/SPEC-016.
 
-After `Dispatching`, Seyal must not claim the external effect/bytes were prevented merely because a later revocation occurred.
+### After `Dispatching`
 
-The Action follows ADR-014 reconciliation/effect rules. Local retained payload still follows deletion policy, but missing payload may make safe reconciliation unavailable; that unavailability is reported honestly.
+A later revocation cannot be represented as rollback or proof that bytes/effects were prevented. The Action follows its effect/reconciliation contract while local retained payload follows current deletion policy.
 
-## 15. Model/provider dispatch race matrix
+## 17. Local forgetting state machine
 
-| Race point | Required behavior |
-|---|---|
-| revoke before bundle build | revoked content is not eligible for selection |
-| revoke during bundle build | build cannot publish dispatchable bundle unless it validates current generation at commit/use |
-| revoke after bundle build, before send | final use-time check rejects old bundle; rebuild required |
-| revoke after transport preparation, before irreversible provider handoff | cancel/prevent send where adapter can still guarantee no handoff; otherwise treat handoff truthfully |
-| revoke after irreversible provider handoff | cannot unsend; mark continuation unsafe and enforce local forgetting/provider evidence semantics |
-| response arrives from now-abandoned continuation | may be retained only under current policy as external evidence; cannot silently reactivate revoked context or continuation |
+Local forgetting has explicit observable states:
 
-## 16. Local deletion completion
+```text
+RevocationRequested
+  -> RevocationCommitted
+       -> CleanupPending
+            -> LocalForgotten
+            -> CleanupDegraded
+```
 
-Local deletion completion requires all applicable obligations to reach a policy-defined terminal disposition.
+Meanings:
 
-At minimum:
+- `RevocationRequested`: request exists but authoritative generation has not committed; no completion claim.
+- `RevocationCommitted`: logical ineligibility is authoritative immediately.
+- `CleanupPending`: required local physical redaction/removal work remains within bounded retry budget.
+- `LocalForgotten`: every required local cleanup obligation reached its policy-defined terminal successful/not-applicable disposition.
+- `CleanupDegraded`: automatic cleanup budget/deadline was exhausted or an obligation cannot currently complete. Logical ineligibility remains permanent; completion is **not** claimed; explicit reconciliation/manual/admin recovery is required.
 
-- authoritative MemoryRecord/source eligibility is revoked;
-- locally retained semantic payload slated for deletion is removed/redacted;
-- affected ContextBundle/SelectionTrace payload is removed/redacted or expired according to policy;
-- affected RunWorkingSet/compaction payload is removed/redacted or made unavailable;
-- prompt/selection/retrieval caches are logically invalidated;
-- derived index/embedding entries are logically invalidated and scheduled for bounded physical cleanup;
-- provider continuation is fenced/abandoned when necessary;
-- minimum tombstone/suppression metadata is policy-safe.
+`CleanupDegraded` never re-enables the content and never restarts an unbounded automatic loop.
 
-Physical derived-index cleanup may lag while logical eligibility remains denied. User-facing completion claims must distinguish logical ineligibility from completed physical erasure if the product exposes that detail.
+A later successful reconciliation may transition `CleanupDegraded -> LocalForgotten` after current authority verifies every obligation.
 
-## 17. Failure behavior
+## 18. Local forgetting obligations
 
-### Persistence failure before revocation commit
+Where applicable, completion requires:
 
-- do not claim forgetting completed;
-- retry with bounded backoff or surface degraded state;
-- no new affected dispatch may rely on an uncommitted revocation claim.
+- source/MemoryRecord eligibility revoked;
+- locally retained semantic payload removed/redacted;
+- affected bundle/trace payload removed/redacted/expired;
+- affected working-set/compaction payload removed/redacted or made unavailable;
+- prompt/retrieval/selection caches invalidated;
+- persisted indexes/embeddings logically invalidated and physically handled per policy;
+- unsafe provider continuation fenced/abandoned;
+- tombstone/suppression metadata satisfies §14;
+- logs/errors do not retain reconstructable forbidden content.
 
-### Persistence failure after generation commit
+Physical cleanup state and logical eligibility remain distinct.
 
-- revoked content remains ineligible;
-- cleanup may be pending/degraded;
-- retry cleanup with bounded backoff;
-- do not re-enable dispatch merely because cleanup storage is unavailable.
+## 19. Failure and retry behavior
 
-### Index/cache deletion failure
+### Before revocation commit
 
-- query/use-time generation checks keep old entry ineligible;
-- physical cleanup retries are bounded;
-- resource growth is monitored/capped.
+Persistence failure means no authoritative revocation has committed. Do not claim completion. Retry is bounded or a degraded request state is surfaced.
 
-### Provider/network failure
+### After revocation commit
 
-- provider deletion may remain `Unknown`/`Requested` according to evidence;
-- provider continuation remains fenced if revocation requires abandonment;
-- terminal progress remains independent.
+Eligibility remains denied even when cleanup persistence/index/provider operations fail.
 
-## 18. Security requirements
+Automatic cleanup/reconciliation must have explicit finite bounds such as attempt count and/or deadline. On exhaustion:
 
-1. Revocation/tombstone metadata must not retain forbidden plaintext or reversible secret identity.
-2. Cross-workspace/worktree/user suppression must not leak semantic existence unless policy explicitly permits it.
-3. Logs/traces/errors contain only minimum policy-safe metadata.
-4. A model/tool/provider cannot override revocation through self-report.
-5. Raw terminal text cannot create/clear revocation authority.
-6. Revocation generation tokens are not reusable authorization capabilities.
-7. Stale workers cannot publish current derived context after replacement without generation revalidation.
+- transition to `CleanupDegraded`;
+- stop automatic rescheduling for that obligation;
+- retain only minimum policy-safe recovery metadata;
+- surface explicit reconciliation/Attention where product policy requires it;
+- keep unrelated terminal/execution progress independent.
 
-## 19. Resource and performance requirements
+Provider/network failure may leave provider deletion `Requested`/`Unknown`, but does not make an unsafe continuation reusable.
 
-Revocation may trigger wide invalidation but must remain bounded.
+## 20. Security requirements
+
+1. Only authorized current authority may commit revocation.
+2. Cross-scope mutation or suppression leakage fails closed.
+3. Tombstones/suppression keys do not retain recoverable forbidden content.
+4. Models/tools/providers/terminal text cannot clear or fabricate revocation authority.
+5. Generation tokens are not authorization credentials.
+6. Provider continuation widening is explicit, never inferred.
+7. Late abandoned-continuation responses cannot bypass current policy.
+8. Provider handoff must satisfy §8 fencing or fail closed.
+
+## 21. Resource/performance requirements
+
+Revocation/invalidation work is bounded, cancellable and priority-aware.
 
 Required controls:
 
 - bounded invalidation batches;
-- cancellable/priority-aware cleanup;
-- retry ceilings + backoff;
-- disk/RSS accounting for pending cleanup;
-- no unbounded full-repository rescans on every revocation unless separately justified/calibrated;
-- terminal input/output/rendering never waits on invalidation, physical erasure, provider deletion or index rebuild.
+- finite retry ceilings/deadlines;
+- bounded pending-cleanup metadata;
+- disk/RSS accounting and cleanup pressure limits;
+- no unbounded full-repository rescans per revocation;
+- no synchronous dependency from terminal I/O/rendering to revocation, persistence, provider deletion or index rebuild.
 
-Implementation readiness requires measured budgets under #681.
+Concrete budgets are calibrated under #681 before implementation readiness.
 
-## 20. Required tests
+## 22. Required conformance tests
 
-### 20.1 Lifecycle / ordering
+### Authority
 
-- revoke Accepted MemoryRecord -> immediately ineligible;
-- revoke Superseded/Expired historical record -> retained payload minimized according to SPEC-012;
-- duplicate revocation request -> idempotent;
-- proposal acceptance racing revocation -> restrictive generation wins;
-- revalidation racing revocation -> revoked cannot become Accepted again.
+- model/provider/stale worker submits well-formed cross-scope revocation -> rejected/non-mutating;
+- authorized current user/policy request -> commits exactly once;
+- stale generation mutation -> rejected.
 
-### 20.2 Bundle / dispatch
+### Bundle/provider handoff
 
-- bundle built at generation N; revoke to N+1 before send -> dispatch denied;
-- bundle with mixed dependencies -> only rebuilt current eligible bundle can dispatch;
-- stale bundle hash equality does not restore eligibility;
-- revoke after bundle build but before Action dispatch transaction -> Action precondition fails.
+- bundle built at `N`, revocation commits `N+1` before handoff fence -> send prevented;
+- revocation races final provider handoff -> deterministic winner at the defined fence;
+- adapter without enforceable handoff fence -> fail closed for revocable payload;
+- effectful tool cannot bypass ADR-014 via provider handoff path.
 
-### 20.3 Working state / continuation
+### Working state / cache
 
-- compaction depends on revoked memory -> compaction unavailable/rebuilt;
-- provider continuation may contain revoked content -> continuation abandoned;
-- provider continuation absence provable under declared provider contract -> only then permitted if all other checks pass;
-- missing retained prerequisite after abandonment -> `ResumeUnavailable`/reconcile, not fabricated reconstruction.
+- revoked dependency invalidates compaction even without verbatim text match;
+- stale cache/vector/index hit cannot restore eligibility;
+- retained bundle/trace cannot reveal revoked payload;
+- deletion failure does not restore selection eligibility.
 
-### 20.4 Cache/index/trace
+### Continuation
 
-- stale lexical/vector hit cannot select revoked content;
-- revoked dependency payload is not retrievable through retained ContextBundle/SelectionTrace;
-- embedding/summary/index cleanup failure does not restore eligibility;
-- logs/traces do not retain excluded secret-bearing snippets/locators.
+- continuation from sibling AgentRun in same workspace -> rejected by default;
+- relevant revocation invalidates old checkpoint permanently;
+- provider proves absence and issues safe state -> new current-generation checkpoint may be created;
+- absence unprovable -> continuation abandoned;
+- late unsafe response -> quarantined/discarded, not memory/context input.
 
-### 20.5 Anti-resurrection
+### Anti-resurrection
 
-- same pre-revocation evidence cannot recreate same forgotten memory;
-- paraphrase derived from same old evidence is still suppressed;
-- different semantic key/evidence is not accidentally suppressed;
-- genuinely independent post-revocation evidence can create a new proposal through normal policy.
+- unrelated later generation increments do not bypass suppression of old evidence;
+- paraphrase/summary of same evidence remains suppressed;
+- opaque suppression identity does not reveal low-entropy secret or allow cross-scope correlation;
+- independent post-revocation evidence may propose through normal policy.
 
-### 20.6 Provider truthfulness
+### Forgetting completion
 
-- local deletion complete + provider deletion unsupported -> states remain distinct;
-- provider delete request timeout -> `ProviderDeleteUnknown/Requested` according to evidence, never `Confirmed`;
-- already transmitted content is never described as unsent.
+- generation commit immediately denies use while cleanup is pending;
+- cleanup succeeds -> `LocalForgotten`;
+- retry/deadline exhausted -> `CleanupDegraded`, no false completion and no infinite automatic retries;
+- later reconciliation can complete degraded cleanup;
+- local forgotten + provider unsupported remains two distinct truths.
 
-### 20.7 Failure/resource
+### Action race
 
-- persistence unavailable before revocation commit -> no false completion claim;
-- persistence unavailable after commit -> dispatch still denied; cleanup degraded;
-- repeated cleanup failure bounded;
-- queue saturation / large invalidation set does not block PTY/VT/render;
-- fuzz malformed dependency/generation records; fail closed/quarantine.
+- Action authorized, revocation commits before `Dispatching` -> dispatch precondition fails;
+- revocation after `Dispatching` -> no false unsent/rollback claim.
 
-## 21. Acceptance criteria
+### Isolation/resource
 
-SPEC-015 is accepted only when independent review establishes that:
+- malformed generation/dependency records fail closed/quarantine;
+- large invalidation and persistent cleanup failure stay within resource budgets;
+- active/failing revocation work does not block PTY/VT/render progress.
 
-- revocation use-time races are deterministic;
-- provider continuation cannot bypass forgetting;
-- local deletion completion is truthful and testable;
-- same-evidence resurrection is prevented without secret-bearing tombstones;
-- ADR-014 dispatch ordering is consumed rather than duplicated;
-- cross-scope privacy isolation is preserved;
-- failure and cleanup behavior are bounded;
-- terminal hot-path isolation is explicit;
-- exact-head Foundation Quality is green.
+## 23. Acceptance criteria
 
-## 22. Explicit non-goals
+SPEC-015 is acceptable only when:
+
+- revocation authority and scope mutation are authenticated and explicit;
+- logical denial is immediate after commit;
+- provider handoff has a deterministic race/linearization contract;
+- effectful tools cannot bypass ADR-014;
+- continuations are exact-AgentRun-bound by default and safely re-attested after revocation only with authoritative provider evidence;
+- suppression is scope-bound, opaque and stable across later generations;
+- local forgetting has explicit pending/completed/degraded states and finite convergence behavior;
+- already transmitted external content is represented truthfully;
+- all derived-state invalidation is dependency/generation fenced;
+- fault/security/property tests cover the race matrix;
+- terminal hot-path isolation is absolute;
+- Foundation Quality is green on the final exact reviewed head.
+
+## 24. Explicit non-goals
 
 This specification does not define:
 
-- provider-specific retention policy or legal guarantees;
-- global cloud data-deletion architecture;
-- MemoryRecord base lifecycle/modes/conflicts;
-- context ranking/retrieval policy;
-- RunWorkingSet compaction algorithm;
-- Action lifecycle/idempotency/reconciliation beyond privacy precondition interaction;
-- user-facing privacy settings UX;
-- concrete persistence/index implementation;
+- SPEC-012 base MemoryRecord lifecycle/modes/conflict rules;
+- SPEC-013 selection/ranking/filesystem/LSP semantics;
+- SPEC-014 general retention/resumability semantics;
+- the general Action lifecycle beyond privacy integration;
+- provider-specific deletion APIs or guarantees;
+- storage/index technology;
+- user-facing privacy UX;
 - production implementation.

@@ -2,7 +2,7 @@
 
 use std::{cell::RefCell, collections::HashMap, ptr, slice, str, time::Duration};
 
-use seyal_core::{AttachmentId, ExecutionId, PaneId};
+use seyal_core::{AttachmentId, ExecutionId, PaneId, TabId, WorkspaceId};
 
 use crate::app::{
     AppAction, AppError, AppFence, AppSnapshot, ApplicationRoot, BindingEvidence, NativeEffect,
@@ -120,12 +120,52 @@ pub struct SeyalAppComposer {
     pub block_count: u32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SeyalAppRow {
+    pub kind: u16,
+    pub flags: u16,
+    pub reserved: u32,
+    pub id_lo: u64,
+    pub id_hi: u64,
+    pub title: *const u8,
+    pub title_len: u32,
+    pub reserved1: u32,
+    pub detail: *const u8,
+    pub detail_len: u32,
+    pub reserved2: u32,
+}
+
+impl SeyalAppRow {
+    const fn empty() -> Self {
+        Self {
+            kind: 0,
+            flags: 0,
+            reserved: 0,
+            id_lo: 0,
+            id_hi: 0,
+            title: ptr::null(),
+            title_len: 0,
+            reserved1: 0,
+            detail: ptr::null(),
+            detail_len: 0,
+            reserved2: 0,
+        }
+    }
+}
+
 struct AppHandle {
     root: ApplicationRoot,
     output: Vec<u8>,
     composer_draft: Vec<u8>,
     ax_nodes: Vec<SeyalAppAxNode>,
     ax_text: Vec<u8>,
+    shell_text: Vec<u8>,
+    chrome_text: Vec<u8>,
+    block_text: Vec<u8>,
+    shell_rows: Vec<SeyalAppRow>,
+    chrome_rows: Vec<SeyalAppRow>,
+    block_rows: Vec<SeyalAppRow>,
 }
 
 thread_local! {
@@ -184,6 +224,12 @@ pub extern "C" fn seyal_app_create() -> u64 {
                 composer_draft: Vec::new(),
                 ax_nodes: Vec::new(),
                 ax_text: Vec::new(),
+                shell_text: Vec::new(),
+                chrome_text: Vec::new(),
+                block_text: Vec::new(),
+                shell_rows: Vec::new(),
+                chrome_rows: Vec::new(),
+                block_rows: Vec::new(),
             },
         );
     });
@@ -374,6 +420,169 @@ pub extern "C" fn seyal_app_chrome(handle: u64) -> SeyalAppChrome {
     })
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SeyalAppShell {
+    pub version: u16,
+    pub size: u16,
+    pub workspace_count: u16,
+    pub tab_count: u16,
+    pub pane_count: u16,
+    pub flags: u16,
+    pub reserved: u32,
+    pub active_workspace_lo: u64,
+    pub active_workspace_hi: u64,
+    pub active_tab_lo: u64,
+    pub active_tab_hi: u64,
+    pub focused_pane_lo: u64,
+    pub focused_pane_hi: u64,
+}
+
+impl SeyalAppShell {
+    const fn empty() -> Self {
+        Self {
+            version: APP_ABI_VERSION,
+            size: 0,
+            workspace_count: 0,
+            tab_count: 0,
+            pane_count: 0,
+            flags: 0,
+            reserved: 0,
+            active_workspace_lo: 0,
+            active_workspace_hi: 0,
+            active_tab_lo: 0,
+            active_tab_hi: 0,
+            focused_pane_lo: 0,
+            focused_pane_hi: 0,
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_app_shell(handle: u64) -> SeyalAppShell {
+    APPS.with(|apps| {
+        let apps = apps.borrow();
+        let Some(state) = apps.get(&handle) else {
+            return SeyalAppShell::empty();
+        };
+        let shell = state.root.snapshot().shell;
+        let workspace = split_id(shell.active_workspace.to_bytes());
+        let tab = split_id(shell.active_tab.to_bytes());
+        let pane = split_id(shell.focused_pane.to_bytes());
+        SeyalAppShell {
+            version: APP_ABI_VERSION,
+            size: size_of::<SeyalAppShell>() as u16,
+            workspace_count: shell.workspaces.len() as u16,
+            tab_count: shell.tabs.len() as u16,
+            pane_count: shell.panes.len() as u16,
+            flags: 0,
+            reserved: 0,
+            active_workspace_lo: workspace.0,
+            active_workspace_hi: workspace.1,
+            active_tab_lo: tab.0,
+            active_tab_hi: tab.1,
+            focused_pane_lo: pane.0,
+            focused_pane_hi: pane.1,
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_app_shell_row(handle: u64, kind: u16, index: u32) -> SeyalAppRow {
+    APPS.with(|apps| {
+        let mut apps = apps.borrow_mut();
+        let Some(state) = apps.get_mut(&handle) else {
+            return SeyalAppRow::empty();
+        };
+        encode_shell_rows(state);
+        state
+            .shell_rows
+            .iter()
+            .copied()
+            .find(|row| row.kind == kind && row.reserved == index)
+            .unwrap_or_else(SeyalAppRow::empty)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_app_chrome_row(handle: u64, kind: u16, index: u32) -> SeyalAppRow {
+    APPS.with(|apps| {
+        let mut apps = apps.borrow_mut();
+        let Some(state) = apps.get_mut(&handle) else {
+            return SeyalAppRow::empty();
+        };
+        encode_chrome_rows(state);
+        state
+            .chrome_rows
+            .iter()
+            .copied()
+            .find(|row| row.kind == kind && row.reserved == index)
+            .unwrap_or_else(SeyalAppRow::empty)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_app_block_row(handle: u64, index: u32) -> SeyalAppRow {
+    APPS.with(|apps| {
+        let mut apps = apps.borrow_mut();
+        let Some(state) = apps.get_mut(&handle) else {
+            return SeyalAppRow::empty();
+        };
+        encode_block_rows(state);
+        state
+            .block_rows
+            .get(index as usize)
+            .copied()
+            .unwrap_or_else(SeyalAppRow::empty)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_app_recovery_param(handle: u64) -> u64 {
+    APPS.with(|apps| {
+        apps.borrow()
+            .get(&handle)
+            .map(|state| recovery_param(state.root.snapshot().recovery_effect))
+            .unwrap_or(0)
+    })
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SeyalAppTheme {
+    pub canvas: u32,
+    pub text: u32,
+    pub accent: u32,
+    pub appearance: u16,
+    pub reserved: u16,
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_app_theme(appearance: u16) -> SeyalAppTheme {
+    use crate::theme::{canonical, AccessibilitySignals, ColorRole, ResolvedAppearance};
+    let resolved_appearance = if appearance == 1 {
+        ResolvedAppearance::Light
+    } else {
+        ResolvedAppearance::Dark
+    };
+    let visual = canonical(resolved_appearance, AccessibilitySignals::default());
+    SeyalAppTheme {
+        canvas: pack_srgb(visual.colors.get(ColorRole::Canvas)),
+        text: pack_srgb(visual.colors.get(ColorRole::TextPrimary)),
+        accent: pack_srgb(visual.colors.get(ColorRole::Focus)),
+        appearance,
+        reserved: 0,
+    }
+}
+
+fn pack_srgb(color: crate::theme::Srgb) -> u32 {
+    let red = (color.red.clamp(0.0, 1.0) * 255.0).round() as u32;
+    let green = (color.green.clamp(0.0, 1.0) * 255.0).round() as u32;
+    let blue = (color.blue.clamp(0.0, 1.0) * 255.0).round() as u32;
+    let alpha = (color.alpha.clamp(0.0, 1.0) * 255.0).round() as u32;
+    (red << 24) | (green << 16) | (blue << 8) | alpha
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn seyal_app_last_error(handle: u64) -> i32 {
     APPS.with(|apps| {
@@ -488,6 +697,24 @@ fn decode_action(action: &SeyalAppAction) -> Result<AppAction, i32> {
             agents: Vec::new(),
             attention: Vec::new(),
         }),
+        19 => Ok(AppAction::SelectWorkspace {
+            id: WorkspaceId::from_bytes(id16(
+                action.target_execution_lo,
+                action.target_execution_hi,
+            )?),
+        }),
+        20 => Ok(AppAction::SelectTab {
+            id: TabId::from_bytes(id16(
+                action.target_execution_lo,
+                action.target_execution_hi,
+            )?),
+        }),
+        21 => Ok(AppAction::FocusPane {
+            id: PaneId::from_bytes(id16(
+                action.target_execution_lo,
+                action.target_execution_hi,
+            )?),
+        }),
         _ => Err(-6),
     }
 }
@@ -587,7 +814,7 @@ fn encode_snapshot(snap: &AppSnapshot, output: &[u8]) -> SeyalAppSnapshot {
             output.as_ptr()
         },
         output_utf8_len: output.len() as u32,
-        reserved: 0,
+        reserved: recovery_param(snap.recovery_effect) as u32,
         recovery_stage: match snap.recovery_stage {
             RecoveryStage::Disconnected => 0,
             RecoveryStage::Discovering => 1,
@@ -608,6 +835,196 @@ fn encode_snapshot(snap: &AppSnapshot, output: &[u8]) -> SeyalAppSnapshot {
             Some(RecoveryEffect::DisposeHandle(_)) => 4,
         },
         recovery_generation: snap.recovery_generation,
+    }
+}
+
+fn recovery_param(effect: Option<RecoveryEffect>) -> u64 {
+    match effect {
+        Some(RecoveryEffect::Schedule { delay, .. }) => delay.as_millis() as u64,
+        Some(RecoveryEffect::DisposeHandle(handle)) => handle,
+        Some(RecoveryEffect::PerformAttempt { remaining, .. }) => remaining.as_millis() as u64,
+        Some(RecoveryEffect::LaunchHelper { generation }) => generation,
+        None => 0,
+    }
+}
+
+fn split_id(bytes: [u8; 16]) -> (u64, u64) {
+    (
+        u64::from_le_bytes(bytes[..8].try_into().unwrap()),
+        u64::from_le_bytes(bytes[8..].try_into().unwrap()),
+    )
+}
+
+struct RowDraft<'a> {
+    kind: u16,
+    index: u32,
+    id: [u8; 16],
+    flags: u16,
+    title: &'a str,
+    detail: &'a str,
+}
+
+fn push_row(rows: &mut Vec<SeyalAppRow>, text: &mut Vec<u8>, draft: RowDraft<'_>) {
+    let title_off = push_text(text, draft.title);
+    let detail_off = push_text(text, draft.detail);
+    let (id_lo, id_hi) = split_id(draft.id);
+    rows.push(SeyalAppRow {
+        kind: draft.kind,
+        flags: draft.flags,
+        reserved: draft.index,
+        id_lo,
+        id_hi,
+        title: title_off.0 as *const u8,
+        title_len: title_off.1,
+        reserved1: 0,
+        detail: detail_off.0 as *const u8,
+        detail_len: detail_off.1,
+        reserved2: 0,
+    });
+}
+
+fn encode_shell_rows(state: &mut AppHandle) {
+    state.shell_text.clear();
+    state.shell_rows.clear();
+    let snap = state.root.snapshot();
+    for (index, workspace) in snap.shell.workspaces.iter().enumerate() {
+        let selected = workspace.id == snap.shell.active_workspace;
+        push_row(
+            &mut state.shell_rows,
+            &mut state.shell_text,
+            RowDraft {
+                kind: 0,
+                index: index as u32,
+                id: workspace.id.to_bytes(),
+                flags: u16::from(selected),
+                title: &workspace.name,
+                detail: workspace.detail.as_deref().unwrap_or(""),
+            },
+        );
+    }
+    for (index, tab) in snap.shell.tabs.iter().enumerate() {
+        let selected = tab.id == snap.shell.active_tab;
+        let pane_count = tab.pane_count.to_string();
+        push_row(
+            &mut state.shell_rows,
+            &mut state.shell_text,
+            RowDraft {
+                kind: 1,
+                index: index as u32,
+                id: tab.id.to_bytes(),
+                flags: u16::from(selected) | (u16::from(tab.attention) << 1),
+                title: &tab.title,
+                detail: &pane_count,
+            },
+        );
+    }
+    for (index, pane) in snap.shell.panes.iter().enumerate() {
+        let selected = pane.id == snap.shell.focused_pane;
+        push_row(
+            &mut state.shell_rows,
+            &mut state.shell_text,
+            RowDraft {
+                kind: 2,
+                index: index as u32,
+                id: pane.id.to_bytes(),
+                flags: u16::from(selected),
+                title: &pane.title,
+                detail: "",
+            },
+        );
+    }
+    relocate_row_pointers(&mut state.shell_rows, state.shell_text.as_ptr());
+}
+
+fn encode_chrome_rows(state: &mut AppHandle) {
+    state.chrome_text.clear();
+    state.chrome_rows.clear();
+    let chrome = state.root.snapshot().chrome;
+    for (index, row) in chrome.visible_inspector_rows.iter().enumerate() {
+        let title = format!("{} · {}", row.section, row.label);
+        push_row(
+            &mut state.chrome_rows,
+            &mut state.chrome_text,
+            RowDraft {
+                kind: 0,
+                index: index as u32,
+                id: [0; 16],
+                flags: 0,
+                title: &title,
+                detail: &row.value,
+            },
+        );
+    }
+    for (index, agent) in chrome.agents.iter().enumerate() {
+        let selected = chrome
+            .selected_agent
+            .as_ref()
+            .is_some_and(|id| id == &agent.id);
+        push_row(
+            &mut state.chrome_rows,
+            &mut state.chrome_text,
+            RowDraft {
+                kind: 1,
+                index: index as u32,
+                id: [0; 16],
+                flags: u16::from(selected),
+                title: agent.id.as_str(),
+                detail: &agent.name,
+            },
+        );
+    }
+    for (index, item) in chrome.attention_items.iter().enumerate() {
+        push_row(
+            &mut state.chrome_rows,
+            &mut state.chrome_text,
+            RowDraft {
+                kind: 2,
+                index: index as u32,
+                id: [0; 16],
+                flags: 0,
+                title: item.id.as_str(),
+                detail: &item.title,
+            },
+        );
+    }
+    relocate_row_pointers(&mut state.chrome_rows, state.chrome_text.as_ptr());
+}
+
+fn encode_block_rows(state: &mut AppHandle) {
+    state.block_text.clear();
+    state.block_rows.clear();
+    let Some(composer) = state.root.snapshot().composer else {
+        return;
+    };
+    for (index, block) in composer.blocks.iter().enumerate() {
+        let label = match block.state {
+            crate::composer::BlockPresentationState::Running => "Running",
+            crate::composer::BlockPresentationState::Completed => "Completed",
+            crate::composer::BlockPresentationState::Failed => "Failed",
+        };
+        push_row(
+            &mut state.block_rows,
+            &mut state.block_text,
+            RowDraft {
+                kind: 0,
+                index: index as u32,
+                id: block.id.to_bytes(),
+                flags: 0,
+                title: &block.command,
+                detail: label,
+            },
+        );
+    }
+    relocate_row_pointers(&mut state.block_rows, state.block_text.as_ptr());
+}
+
+fn relocate_row_pointers(rows: &mut [SeyalAppRow], base: *const u8) {
+    for row in rows {
+        let title_off = row.title as usize;
+        let detail_off = row.detail as usize;
+        // SAFETY: push_row stored offsets before the buffer could reallocate.
+        row.title = unsafe { base.add(title_off) };
+        row.detail = unsafe { base.add(detail_off) };
     }
 }
 
@@ -749,6 +1166,31 @@ mod tests {
         assert_eq!(offset_of!(SeyalAppSnapshot, recovery_generation), 104);
         assert_eq!(size_of::<SeyalAppAxNode>(), 72);
         assert_eq!(size_of::<SeyalAppAccessibility>(), 24);
+        assert_eq!(size_of::<SeyalAppShell>(), 64);
+        assert_eq!(size_of::<SeyalAppRow>(), 56);
+        assert_eq!(size_of::<SeyalAppTheme>(), 16);
+    }
+
+    #[test]
+    fn shell_projection_is_one_local_workspace() {
+        let handle = seyal_app_create();
+        let shell = seyal_app_shell(handle);
+        assert_eq!(shell.workspace_count, 1);
+        assert_eq!(shell.tab_count, 1);
+        assert_eq!(shell.pane_count, 1);
+        let workspace = seyal_app_shell_row(handle, 0, 0);
+        assert_eq!(workspace.flags & 1, 1);
+        let title = unsafe {
+            std::str::from_utf8(std::slice::from_raw_parts(
+                workspace.title,
+                workspace.title_len as usize,
+            ))
+            .unwrap()
+        };
+        assert_eq!(title, "Local");
+        let inspector = seyal_app_chrome_row(handle, 0, 0);
+        assert!(inspector.title_len > 0);
+        assert_eq!(seyal_app_destroy(handle), 0);
     }
 
     #[test]

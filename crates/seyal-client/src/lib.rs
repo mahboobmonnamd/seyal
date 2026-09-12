@@ -48,8 +48,10 @@ mod ffi;
 #[cfg(target_os = "macos")]
 #[doc(hidden)]
 pub use ffi::{
-    seyal_app_accessibility, seyal_app_apply, seyal_app_chrome, seyal_app_composer,
-    seyal_app_create, seyal_app_destroy, seyal_app_last_error, seyal_app_snapshot,
-    seyal_bridge_adopt_handle, seyal_bridge_disconnect_handle, seyal_bridge_ensure_prepared,
-    seyal_bridge_frame, seyal_bridge_poll, seyal_bridge_select, test_register_pending_client,
+    seyal_app_accessibility, seyal_app_apply, seyal_app_block_row, seyal_app_chrome,
+    seyal_app_chrome_row, seyal_app_composer, seyal_app_create, seyal_app_destroy,
+    seyal_app_last_error, seyal_app_recovery_param, seyal_app_shell, seyal_app_shell_row,
+    seyal_app_snapshot, seyal_app_theme, seyal_bridge_adopt_handle, seyal_bridge_disconnect_handle,
+    seyal_bridge_ensure_prepared, seyal_bridge_frame, seyal_bridge_poll, seyal_bridge_select,
+    test_register_pending_client,
 };

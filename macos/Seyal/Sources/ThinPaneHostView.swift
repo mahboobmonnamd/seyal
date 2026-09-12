@@ -5,7 +5,8 @@ import AppKit
 @MainActor
 final class ThinPaneHostView: NSView {
     let inputSurface: InteractiveMetalSurfaceView
-    private let appHandle: UInt64
+    let appHandle: UInt64
+    var onProductChanged: (() -> Void)?
     private var lastBoundExecution = (low: UInt64(0), high: UInt64(0))
 
     override init(frame frameRect: NSRect) {
@@ -30,12 +31,15 @@ final class ThinPaneHostView: NSView {
         inputSurface.onAlternateScreenChanged = { [weak self] alternate in
             self?.inputSurface.observedAlternateScreen = alternate
             self?.bindFromBridgeIfNeeded()
+            self?.onProductChanged?()
         }
         inputSurface.onFrameChanged = { [weak self] _ in
             self?.bindFromBridgeIfNeeded()
+            self?.onProductChanged?()
         }
         inputSurface.onBridgeBecameUsable = { [weak self] in
             self?.bindFromBridgeIfNeeded()
+            self?.onProductChanged?()
         }
     }
 

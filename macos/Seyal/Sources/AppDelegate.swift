@@ -3,10 +3,10 @@ import AppKit
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow?
-    private var host: ThinPaneHostView?
+    private var host: ProductChromeHostView?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let host = ThinPaneHostView(frame: NSRect(x: 0, y: 0, width: 960, height: 640))
+        let host = ProductChromeHostView(frame: NSRect(x: 0, y: 0, width: 1100, height: 720))
         self.host = host
 
         let window = NSWindow(

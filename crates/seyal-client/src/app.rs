@@ -8,7 +8,7 @@
 
 use std::time::Duration;
 
-use seyal_core::{AttachmentId, ExecutionId, PaneId};
+use seyal_core::{AttachmentId, ExecutionId, PaneId, TabId, WorkspaceId};
 
 use crate::chrome::{
     AgentId, AttentionId, ChromeAction, ChromeError, ChromeSnapshot, ChromeState, InspectorMode,
@@ -157,6 +157,15 @@ pub enum AppAction {
         fence: AppFence,
         agents: Vec<crate::chrome::AgentRecord>,
         attention: Vec<crate::chrome::AttentionItem>,
+    },
+    SelectWorkspace {
+        id: WorkspaceId,
+    },
+    SelectTab {
+        id: TabId,
+    },
+    FocusPane {
+        id: PaneId,
     },
 }
 
@@ -376,6 +385,9 @@ impl ApplicationRoot {
                 agents,
                 attention,
             } => self.replace_chrome(fence, agents, attention),
+            AppAction::SelectWorkspace { id } => self.select_workspace(id),
+            AppAction::SelectTab { id } => self.select_tab(id),
+            AppAction::FocusPane { id } => self.focus_pane(id),
         };
         match result {
             Ok(()) => {
@@ -685,6 +697,36 @@ impl ApplicationRoot {
                 .apply(ShellAction::SelectTab { id: tab })
                 .map_err(|_| AppError::UnknownChromeTab)?;
         }
+        let _ = self
+            .chrome
+            .apply(ChromeAction::ContextNavigated, &self.shell.snapshot());
+        Ok(())
+    }
+
+    fn select_workspace(&mut self, id: WorkspaceId) -> Result<(), AppError> {
+        self.shell
+            .apply(ShellAction::SelectWorkspace { id })
+            .map_err(|_| AppError::UnknownChromeWorkspace)?;
+        let _ = self
+            .chrome
+            .apply(ChromeAction::ContextNavigated, &self.shell.snapshot());
+        Ok(())
+    }
+
+    fn select_tab(&mut self, id: TabId) -> Result<(), AppError> {
+        self.shell
+            .apply(ShellAction::SelectTab { id })
+            .map_err(|_| AppError::UnknownChromeTab)?;
+        let _ = self
+            .chrome
+            .apply(ChromeAction::ContextNavigated, &self.shell.snapshot());
+        Ok(())
+    }
+
+    fn focus_pane(&mut self, id: PaneId) -> Result<(), AppError> {
+        self.shell
+            .apply(ShellAction::FocusPane { id })
+            .map_err(|_| AppError::UnknownPane)?;
         let _ = self
             .chrome
             .apply(ChromeAction::ContextNavigated, &self.shell.snapshot());

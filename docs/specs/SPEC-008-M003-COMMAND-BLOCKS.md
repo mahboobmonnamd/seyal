@@ -1,7 +1,7 @@
 # SPEC-008 — M003 command Blocks, Pane composer and presentation modes
 
-- **Status:** Active implementation specification for accepted ADR-009 baseline; proposed #858 presentation-mode amendment applies only on merge
-- **Date:** 2026-08-28; proposed presentation amendment 2026-09-11
+- **Status:** Active implementation specification for accepted ADR-009, including the presentation amendment accepted by #858 / PR #859 (`8d08f2f`)
+- **Date:** 2026-08-28; presentation amendment accepted 2026-09-11
 - **Architecture:** ADR-009 plus ADR-004/005/006/007/008; ADR-015 governs Rust/native ownership only and does not change this specification's behavior contract
 - **Depends on:** accepted SPEC-001 through SPEC-007 and completed Pass 7
 
@@ -17,7 +17,7 @@ completed and running Blocks remain ordered in the Pane transcript.
 The same Pane and `ExecutionId` remain authoritative throughout. A command Block
 is not a terminal session and does not contain copied terminal state.
 
-Under the proposed #858 amendment, Flow, Raw and TUI are mutually exclusive
+Under the accepted #858 amendment, Flow, Raw and TUI are mutually exclusive
 user-visible presentations:
 
 ```text
@@ -123,21 +123,20 @@ the previous input owner is unable to admit another event.
 
 Every transition between Flow, Raw and TUI must execute this logical order:
 
-1. freeze new input admission through the source presentation;
-2. invalidate the source presentation/input epoch or equivalent route token;
-3. cancel/discard source marked/preedit text and active conversion without PTY
-   submission, unless a committed payload was already atomically admitted before
-   the fence;
-4. revoke the source first responder/text-input context and source mouse
-   capture/report route;
-5. reject or ignore stale source callbacks/events that were not already admitted;
-6. validate destination eligibility against current Runtime authority and
-   canonical state;
-7. install the destination presentation/input route;
-8. acquire destination first responder/IME/mouse semantics;
-9. resume input admission through the destination route.
+1. Rust freezes the old route and increments the epoch.
+2. Native revokes input, mouse capture, first responder, AX focus, and marked
+   text without PTY submission, unless a committed payload was already atomically
+   admitted before the fence.
+3. Stale callbacks fail closed.
+4. Rust validates current destination eligibility against current Runtime
+   authority and canonical state.
+5. Native realizes only that destination.
+6. The destination route becomes active.
 
-The destination route must not be enabled before steps 1–5 are complete. One
+Host completion may gate only local route activation. It must never stall PTY,
+VT, or output progress.
+
+The destination route must not be enabled before steps 1–3 are complete. One
 physical/native event may be admitted to at most one route. Events atomically
 admitted before the fence retain normal FIFO semantics; unadmitted stale events
 are never automatically replayed.
@@ -175,7 +174,16 @@ for the current epoch.
 
 ## 4. Composer and input rules
 
+Rust owns the authoritative committed draft, revision, mode, and submission
+correlation. Native `NSTextView` / IME owns only bounded marked text and a
+disposable derived editor cache. Native committed edits are revisioned against
+the Rust draft. Stale edits fail closed and rehydrate from the current Rust
+snapshot.
+
 - exactly one composer state exists per Pane;
+- Return during marked text remains IME-owned;
+- unmarked Return requests a Rust execute action; the host must not submit
+  composer text to the PTY or invent command identity;
 - Return/execute submits the complete committed command only when Flow
   eligibility is negotiated and current under section 3.5, and no
   secret/raw/interactive/TUI state is active;
@@ -195,9 +203,9 @@ for the current epoch.
 
 Direct-terminal event classification, committed-text atomicity, composition-only
 IME document semantics, key encoding, queue bounds and resize transactions remain
-governed by SPEC-006. Under ADR-009/#858 those direct-terminal interaction rules
-apply to the **active Raw/TUI/direct-terminal presentation endpoint**, not to a
-hidden/focusable surface under Flow.
+governed by SPEC-006. Under accepted ADR-009/#858 those direct-terminal
+interaction rules apply to the **active Raw/TUI/direct-terminal presentation
+endpoint**, not to a hidden/focusable surface under Flow.
 
 ## 5. Flow output projection
 

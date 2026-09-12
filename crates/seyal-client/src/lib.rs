@@ -1,13 +1,18 @@
 //! Disposable Seyal.app-side Candidate-D client, renderer-preparation owner,
 //! portable headed product composition (Workspace/Tab/Pane), Flow/Raw/TUI
-//! presentation fencing, and portable theme/config resolution.
+//! presentation fencing, reconnect/recovery policy, portable theme/config
+//! resolution, and the one-Pane application root / versioned host API.
 //!
 //! Runtime/TerminalExecution remain the sole PTY, VT and canonical TerminalState
 //! authority. This crate owns a local socket attachment, an atomically
 //! committed `DisplayCache`, derived `seyal-render` presentation state, and the
 //! host-facing product shell reducer. It is not a second Workspace database.
 
+pub mod app;
+pub mod chrome;
+pub mod composer;
 pub mod presentation;
+pub mod recovery;
 pub mod shell;
 pub mod theme;
 
@@ -43,6 +48,10 @@ mod ffi;
 #[cfg(target_os = "macos")]
 #[doc(hidden)]
 pub use ffi::{
-    seyal_bridge_adopt_handle, seyal_bridge_disconnect_handle, seyal_bridge_ensure_prepared,
-    seyal_bridge_frame, seyal_bridge_poll, seyal_bridge_select, test_register_pending_client,
+    seyal_app_accessibility, seyal_app_apply, seyal_app_block_row, seyal_app_chrome,
+    seyal_app_chrome_row, seyal_app_composer, seyal_app_create, seyal_app_destroy,
+    seyal_app_last_error, seyal_app_recovery_param, seyal_app_shell, seyal_app_shell_row,
+    seyal_app_snapshot, seyal_app_theme, seyal_bridge_adopt_handle, seyal_bridge_disconnect_handle,
+    seyal_bridge_ensure_prepared, seyal_bridge_frame, seyal_bridge_poll, seyal_bridge_select,
+    test_register_pending_client,
 };

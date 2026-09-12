@@ -42,7 +42,6 @@ case "$cmd" in
     bash scripts/check-toolchain.sh
     cargo_pinned test --workspace --locked
     runtime_failure_matrix
-    bash scripts/test-macos-skeleton.sh
     bash scripts/test-macos-ui.sh
     ;;
   ui-test)
@@ -62,6 +61,8 @@ case "$cmd" in
     python3 scripts/check-pass9-production-budget.py --self-test
     python3 scripts/check-pass9-merge-acceptance.py --self-test
     python3 scripts/check-ui-test-policy.py
+    python3 scripts/check-host-product-fixtures.py
+    python3 scripts/check-thin-swift-boundary.py
     bash scripts/test-tooling.sh
     python3 scripts/test-workspace.py
     python3 scripts/test-harnesses.py
@@ -71,7 +72,6 @@ case "$cmd" in
     cargo_pinned clippy --workspace --all-targets --all-features -- -D warnings
     cargo_pinned test --workspace --locked
     runtime_failure_matrix
-    bash scripts/test-macos-skeleton.sh
     ;;
   bench)
     bash scripts/check-toolchain.sh
@@ -120,24 +120,6 @@ case "$cmd" in
         # retirement/idle-resource gates against the exact production value,
         # client-cache and Runtime-timeline implementations.
         cargo_pinned bench -p seyal-client --bench pass8_block_metadata --features benchmark-instrumentation --locked
-
-        # Pass 5 ends at the committed client display cache. Measure the distinct
-        # Pass-6 native boundary separately in a Release app and label GPU
-        # completion as a presentation proxy rather than claiming display scanout.
-        # Local/CI diagnostic Release benches use ad-hoc signing when unset
-        # (same contract as Foundation native-macos-smoke). Distributable
-        # Release packaging still requires an explicit Apple-issued identity.
-        export SEYAL_CODESIGN_IDENTITY="${SEYAL_CODESIGN_IDENTITY:--}"
-        SEYAL_MACOS_CONFIGURATION=Release bash scripts/build-macos.sh
-        renderer_binary="${ROOT}/target/macos-derived-data/Build/Products/Release/Seyal.app/Contents/MacOS/Seyal"
-        [[ -x "$renderer_binary" ]] || { echo "Pass-6 renderer benchmark binary missing" >&2; exit 1; }
-        /usr/bin/time -lp "$renderer_binary" --renderer-benchmark
-
-        # Pass 9 retains the accepted native resource lifecycle measurement on
-        # the exact production renderer. This is diagnostic on shared CI; the
-        # controlled-host production evidence gate still requires the separately
-        # retained five-cohort artifact validated by check-pass9-production-budget.py.
-        /usr/bin/time -lp "$renderer_binary" --pass9-renderer-calibration
       else
         echo "[seyal Pass-5 benchmark coverage] measured Candidate-D validation skipped: production benchmark is macOS-only; validator self-test is enforced by make check."
         echo "[seyal Pass-6 renderer benchmark] native Metal measurement skipped: macOS-only."

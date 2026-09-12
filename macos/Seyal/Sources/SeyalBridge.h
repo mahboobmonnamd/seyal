@@ -2,6 +2,7 @@
 #define SEYAL_BRIDGE_H
 
 #include <stdint.h>
+#include "SeyalApp.h"
 
 #ifdef __cplusplus
 extern "C" {

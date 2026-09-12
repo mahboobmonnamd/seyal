@@ -408,7 +408,7 @@ Required reason classes include at least:
 
 For excluded secret-bearing or denied content, traces must not persist raw snippets, embeddings, reversible hashes, paths/locators or summaries when those would reveal/reconstruct the excluded source.
 
-Explainability cannot become a second retention path. The effective `SelectionTrace` sensitivity is the most restrictive sensitivity of any candidate metadata, source identity, exclusion reason, and selected item represented in the trace; derived traces cannot lower it. Trace retention, expiry and revocation follow the strictest applicable source policy represented in the trace, not a less restrictive bundle/build policy. When retaining a trace would reveal or reconstruct revoked/private material, that material is redacted/removed; a policy-safe minimal audit record may remain only when permitted by ADR-013. A mixed-source trace is not retained unless each contributing policy permits the resulting effective sensitivity and lifetime.
+Explainability cannot become a second retention path. Every retained trace field is classified under the repository's recognized monotonic sensitivity domain; at minimum the baseline is `Public < Internal < Sensitive < Restricted` as defined by the accepted memory/privacy policy. The effective `SelectionTrace` sensitivity is the maximum/most restrictive classification across every retained candidate metadata field, source identity, exclusion reason and selected item represented in the trace; a derived trace can never lower that classification. Retention is the intersection of all applicable contributing-source policies: the trace may exist only for the shortest permitted lifetime and under every applicable scope/revocation restriction. If policies are incomparable, cannot be mapped to the recognized monotonic domain, or have no safe intersection, the affected field is redacted/omitted; if a safe trace cannot be formed, only a minimal policy-safe audit fact permitted by all applicable policies may remain. Revocation/deletion of any contributing protected source removes/redacts trace material that would reveal or reconstruct it. A mixed-source trace is never retained under a less restrictive bundle/build policy merely because another source is public.
 
 ## 17. Optional semantic/model enhancement
 
@@ -441,9 +441,9 @@ selection configuration
 query/task fingerprint where applicable
 ```
 
-Cache hits never bypass eligibility, freshness verification or use-time policy checks required by ADR-013.
+A cached value is usable only when its key **and** stored producer identity/version, cache/schema version, dependency metadata and integrity evidence validate under the current cache contract. Integrity evidence is at minimum a deterministic content/checksum binding against accidental corruption; where the threat model permits an untrusted writer, it must use an authenticated integrity mechanism or an equivalent trusted storage boundary. Missing/unknown producer/schema metadata, incompatible versions, integrity mismatch or unverifiable provenance is a cache miss/corruption, never a usable hit. Cache hits also never bypass eligibility, freshness verification or use-time policy checks required by ADR-013.
 
-On corruption, version mismatch, missing derivative or cache eviction, rebuild from still-authorized source authority. Do not reconstruct erased/private payload from metadata or another scope's cache.
+On corruption, producer/schema/version mismatch, integrity failure, missing derivative or cache eviction, invalidate the derivative and rebuild from still-authorized source authority. Do not reconstruct erased/private payload from metadata or another scope's cache.
 
 Persistent indexes obey the same sensitivity/retention rules as their sources.
 
@@ -460,7 +460,7 @@ Required behavior:
 - stale LSP/index → ignore/rebuild asynchronously; source reads remain authoritative;
 - semantic provider failure → deterministic fallback;
 - cache corruption → invalidate/rebuild derivative;
-- repeated filesystem/index/persistence failure → bounded retry/backoff with visible degraded state;
+- repeated filesystem/index/persistence failure → retry only under a finite policy-defined attempt and/or deadline budget with bounded queued work; on exhaustion automatic retry stops in an explicit degraded build/index state, resources are released to the configured bound, and unrelated terminal/context work continues. A later authoritative source/policy/config generation change or an explicit permitted retry starts a fresh bounded recovery budget rather than extending the exhausted one indefinitely;
 - budget exhaustion → bounded selection or explicit unable-to-build result;
 - cancellation → stop background build work without corrupting source/memory authority.
 
@@ -477,6 +477,7 @@ The implementation must protect against at least:
 - stale submodule/nested-repository reuse;
 - ignored/secret file accidental discovery;
 - cache/index cross-scope poisoning;
+- cache producer/schema/integrity spoofing or corruption;
 - model reranker widening authority;
 - stale LSP/document-generation injection;
 - trace/log leakage of excluded secret content;
@@ -522,7 +523,7 @@ Concrete production budgets are calibrated/refined before #681 becomes Ready, bu
 - CPU/RSS/disk growth under sustained indexing/retrieval;
 - queue/backpressure behavior;
 - LSP/semantic enhancement cost when enabled;
-- repeated failure/backoff behavior;
+- repeated failure/backoff behavior and convergence at the finite retry/deadline budget;
 - terminal latency/throughput isolation during active/failure load.
 
 Background work must be bounded, cancellable and priority-aware.
@@ -557,25 +558,28 @@ At minimum, production implementation must include tests for:
 22. optional budget drops are deterministic and traceable;
 23. oversized optional source chunk/range identity survives selection and invalidates on content/range change;
 24. SelectionTrace for excluded secret does not retain raw/reconstructable payload;
-25. stale/undispatchable bundle and its trace obey source retention/revocation without becoming a payload archive;
-26. cache hit cannot bypass changed scope/policy/source generation or bounded freshness verification;
-27. corrupted cache/index rebuilds from source authority;
-28. semantic/model reranker cannot reintroduce excluded items or increase derived authority/decrease sensitivity;
-29. semantic/model failure falls back deterministically;
-30. source discovery never executes discovered project content;
-31. arbitrary instruction-shaped repository content cannot self-classify as `NormativeInstruction`;
-32. malformed/path-traversal source identity is rejected;
-33. source identity follows the mounted filesystem's case/Unicode equivalence and stable object identity rules; APFS case-sensitive and case-insensitive volumes plus NFC/NFD names do not alias distinct files or scopes;
-34. repeated source/index failure converges under bounded backoff;
-35. cancellation releases build resources;
-36. required source that exists but is ineligible by scope/permission/sensitivity produces the same non-dispatchable required-context outcome as another unavailable required source;
-37. heavy context/index load does not synchronously stall terminal progress.
+25. mixed-source SelectionTrace computes the most restrictive sensitivity and policy intersection deterministically, and incomparable/no-safe-intersection metadata is redacted/omitted;
+26. stale/undispatchable bundle and its trace obey source retention/revocation without becoming a payload archive;
+27. cache hit cannot bypass changed scope/policy/source generation or bounded freshness verification;
+28. cache producer/schema/integrity mismatch is treated as miss/corruption and rebuilt from source authority;
+29. semantic/model reranker cannot reintroduce excluded items or increase derived authority/decrease sensitivity;
+30. semantic/model failure falls back deterministically;
+31. source discovery never executes discovered project content;
+32. arbitrary instruction-shaped repository content cannot self-classify as `NormativeInstruction`;
+33. malformed/path-traversal source identity is rejected;
+34. source identity follows the mounted filesystem's case/Unicode equivalence and stable object identity rules; APFS case-sensitive and case-insensitive volumes plus NFC/NFD names do not alias distinct files or scopes;
+35. repeated source/index failure stops automatically at the finite attempt/deadline budget, exposes degraded state, bounds queued resources, and only a defined recovery event starts a fresh budget;
+36. cancellation releases build resources;
+37. required source that exists but is ineligible by scope/permission/sensitivity produces the same non-dispatchable required-context outcome as another unavailable required source;
+38. heavy context/index load does not synchronously stall terminal progress.
 
 Property/fuzz tests are required for source-identifier normalization, dependency invalidation and scope-key composition where malformed/untrusted input can reach them.
 
-## 24. Acceptance criteria
+## 24. Specification acceptance and downstream conformance
 
-SPEC-013 is satisfied only when implementation evidence proves:
+This specification is accepted as the behavioral contract when its architecture/spec review and exact-head repository checks satisfy #854. Its merge does **not** claim that #681 production implementation or calibration evidence already exists.
+
+Before #681 can become implementation-ready/accepted, production evidence must prove conformance to this accepted contract, including:
 
 - one provenance-first Local Context Engine consumes existing authorities rather than creating another one;
 - scope/policy/sensitivity filtering occurs before relevance/model enhancement;
@@ -587,7 +591,8 @@ SPEC-013 is satisfied only when implementation evidence proves:
 - SelectionTrace is useful but policy-safe and does not outlive source/bundle privacy constraints as a secret-retention path;
 - mandatory context cannot be silently budget-dropped from a valid dispatchable bundle;
 - deterministic provider-free retrieval remains functional;
-- caches/indexes are rebuildable and cannot widen authority or bypass freshness;
+- caches/indexes are rebuildable, integrity-validated and cannot widen authority or bypass freshness;
+- repeated failure converges under finite retry/deadline/resource budgets;
 - source discovery inspects content without executing discovered files, hooks, scripts or commands;
 - required failure/security/property tests pass;
 - calibrated resource/latency evidence is recorded before #681 implementation acceptance;
@@ -600,7 +605,7 @@ This specification does not define:
 - `MemoryRecord` lifecycle, acceptance/conflict/memory-mode semantics (SPEC-012 / #847);
 - `RunWorkingSet` retention/behavioral resumability;
 - dispatch-time privacy/revocation races, provider-continuation abandonment or physical deletion completion;
-- Action/approval/effect authority or retries (ADR-014/#846 and later specs);
+- Action/approval/effect lifecycle or retries: ADR-014 is the accepted architecture authority and #871 owns the separate SPEC-016 behavior promotion until that specification is accepted;
 - workflow DAG/multi-agent scheduling;
 - learned routing/evaluation formulas;
 - a concrete database/vector engine;

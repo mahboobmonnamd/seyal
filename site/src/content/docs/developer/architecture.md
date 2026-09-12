@@ -21,7 +21,7 @@ PTY
 → Metal renderer
 ```
 
-Native AppKit owns windowing, native event collection, IME, accessibility bridging, clipboard/drag-drop, and Metal drawable/surface hookup. Portable Workspace/Tab/Pane, Block, composer, command, focus/layout and agent/inspector behavior is Rust-owned (ADR-015). Configuration is parsed once into typed settings; it does not join the terminal path above.
+Native AppKit owns windowing, native event collection, IME, accessibility bridging, clipboard/drag-drop, and Metal drawable/surface hookup. Portable Workspace/Tab/Pane, Block, composer, command, focus/layout, agent/inspector, presentation policy, recovery policy, and theme/config semantics are Rust-owned (ADR-015). Rust parses and validates portable typed configuration; AppKit only realizes the resolved native colors/fonts/materials and other macOS-specific presentation. Configuration resolution does not join the terminal path above.
 
 ## State ownership
 

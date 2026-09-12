@@ -101,7 +101,7 @@ These stable job names are the Pass-1 required checks on `master`. Foundation Qu
 
 - **`repository-policy`** (ubuntu) — shell syntax, governance structure, local documentation links, architecture layering, hot-path/benchmark/UI-test contracts, harness contracts, fuzz-registry smoke, and controlled negative fixtures proving repository validators reject invalid inputs.
 - **`rust-and-harness-quality`** (ubuntu) — pinned Rust bootstrap, production Rust workspace build, `make check` (format, Clippy with warnings denied, unit tests, layering and harness checks), and `make bench` as a **portable harness smoke** (macOS-only native benches are skipped; no performance claim).
-- **`native-macos-smoke`** (macos-15 + Xcode 16.4) — pinned Rust plus native toolchain bootstrap; Rust + `Seyal.app` build; `make check`; `make test` (Rust unit/PTY, native executable smoke, XCTest, XCUIAutomation); and `make bench` with:
+- **`native-macos-smoke`** (macos-15 + Xcode 16.4) — pinned Rust plus native toolchain bootstrap; Rust + native `Seyal.app` **glue-harness** build (not a headed production product shell during M001.1); `make check`; `make test` (Rust unit/PTY, native executable smoke, native-glue XCTest; product-shell XCUI is skipped); and `make bench` with:
   - `SEYAL_REQUIRE_DISPLAY_LINK_BENCHMARK=0` — hosted runners may be headless and cannot deliver `CAMetalDisplayLink` callbacks; presentation-proxy samples are recorded as `PLATFORM_LIMITED` rather than failing the job;
   - `SEYAL_CODESIGN_IDENTITY=-` — unsigned CI artifact only, not a release/signing proof.
 

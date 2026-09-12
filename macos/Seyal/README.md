@@ -12,9 +12,9 @@ M001 established the permanent **Swift + AppKit + Metal** application direction:
 - native Xcode application target and `.app` bundle;
 - deterministic native smoke and live Runtime validation modes for CI.
 
-## Current M001 production boundary
+## Current M001.1 supported native surface
 
-The macOS host is no longer the pre-Pass-6 scaffold. Through Pass 7.1 it contains the permanent Metal renderer, the Candidate-D local Runtime client, native terminal input/resize handling, the Pane-owned transcript/composer shell, and trusted-shell command Block presentation. Pass 8 adds only a minimal read-only execution-Block metadata seam; it does not create another terminal, transcript, or renderer authority.
+The rejected Swift product shell is **not** a supported headed `Seyal.app`. `Seyal.app` currently builds as a **native-glue harness** (Metal, IME, Candidate-D client, helper launch). Portable product state lives in Rust. The replacement thin host is #883. Leftover preview/XCTest product models are deleted by #884.
 
 The production ownership boundary remains:
 
@@ -48,26 +48,20 @@ On macOS the Debug app is located at:
 target/macos-derived-data/Build/Products/Debug/Seyal.app
 ```
 
-Launch the normal app path with:
+The Debug bundle is a native-glue harness, not a headed production product:
 
 ```sh
 open target/macos-derived-data/Build/Products/Debug/Seyal.app
 ```
 
-For explicit design/decomposition review, the Debug bundle supports a fixture-only shell preview:
-
-```sh
-target/macos-derived-data/Build/Products/Debug/Seyal.app/Contents/MacOS/Seyal --ui-shell-preview
-```
-
-The preview data is deterministic and presentation-only. It is never Runtime, PTY, VT, grid, Block-history, or execution authority. The app stamps its Xcode build configuration into the bundle and honors the preview flag only when that configuration is `Debug`; Release builds ignore the preview flag and environment opt-in.
+Do not treat `--ui-shell-preview` or leftover `SeyalShellState` XCTest/XCUI as product authority.
 
 The native CI path validates several distinct boundaries rather than conflating them:
 
-- `--smoke-test` validates deterministic AppKit/Metal/UI-shell construction;
+- `--smoke-test` validates deterministic AppKit/Metal glue construction;
 - `--renderer-self-test` validates deterministic permanent-renderer/input behavior;
 - `--renderer-live-self-test` connects to a real separately started Runtime and validates Candidate-D through the Metal preparation path, including alternate screen;
 - `--pass8-native-metadata-self-test` connects through the production Rust client/FFI/Swift bridge and validates real Runtime-owned Pass 8 metadata;
-- `make ui-test` executes the XCTest/XCUIAutomation suite through `scripts/test-macos-ui.sh`.
+- `make ui-test` executes native-glue XCTest. Product-shell XCUI is skipped (#890) and is not a headed-product gate.
 
-These test modes do not move terminal authority into the GUI and do not substitute preview fixtures for Runtime-owned state.
+These test modes do not move terminal authority into the GUI and do not treat the deprecated Swift shell as product truth.

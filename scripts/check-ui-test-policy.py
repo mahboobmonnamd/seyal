@@ -9,7 +9,6 @@ ROOT = pathlib.Path(os.environ.get("SEYAL_VALIDATION_ROOT", DEFAULT_ROOT)).resol
 
 REQUIRED = [
     ROOT / "macos/Seyal/Tests/SeyalTests/SeyalShellComponentTests.swift",
-    ROOT / "macos/Seyal/Tests/SeyalUITests/SeyalShellUITests.swift",
     ROOT / "macos/Seyal/Seyal.xcodeproj/xcshareddata/xcschemes/Seyal.xcscheme",
     ROOT / "scripts/test-macos-ui.sh",
 ]
@@ -22,16 +21,14 @@ if missing:
     sys.exit(1)
 
 project = (ROOT / "macos/Seyal/Seyal.xcodeproj/project.pbxproj").read_text()
-for target in ("SeyalTests", "SeyalUITests"):
-    if target not in project:
-        print(f"UI test policy failed: Xcode project is missing {target}", file=sys.stderr)
-        sys.exit(1)
+if "SeyalTests" not in project:
+    print("UI test policy failed: Xcode project is missing SeyalTests", file=sys.stderr)
+    sys.exit(1)
 
-scheme = REQUIRED[2].read_text()
-for target in ("SeyalTests.xctest", "SeyalUITests.xctest"):
-    if target not in scheme:
-        print(f"UI test policy failed: shared scheme does not execute {target}", file=sys.stderr)
-        sys.exit(1)
+scheme = REQUIRED[1].read_text()
+if "SeyalTests.xctest" not in scheme:
+    print("UI test policy failed: shared scheme does not execute SeyalTests.xctest", file=sys.stderr)
+    sys.exit(1)
 
 base_ref = os.environ.get("GITHUB_BASE_REF", "").strip()
 if not base_ref or "SEYAL_VALIDATION_ROOT" in os.environ:
@@ -69,21 +66,9 @@ if not unit_changes:
     print("UI test policy failed: native UI source changed without XCTest component coverage in the same PR.", file=sys.stderr)
     sys.exit(1)
 
-material_ui_sources = [
-    path for path in ui_sources
-    if path.endswith("View.swift")
-    or path.endswith("AppDelegate.swift")
-    or path.endswith("Main.swift")
-]
-ui_test_changes = [
-    path for path in changed
-    if path.startswith("macos/Seyal/Tests/SeyalUITests/") and path.endswith(".swift")
-]
-if material_ui_sources and not ui_test_changes:
-    print("UI test policy failed: visible/interactive macOS UI changed without XCUIAutomation coverage in the same PR.", file=sys.stderr)
-    sys.exit(1)
-
+# Product-shell XCUI is not a supported headed-product gate during the
+# M001.1 reset (#890). Native glue still requires XCTest coverage.
 print(
     f"UI test policy passed ({len(ui_sources)} UI source change(s), "
-    f"{len(unit_changes)} XCTest change(s), {len(ui_test_changes)} XCUI change(s))."
+    f"{len(unit_changes)} XCTest change(s); product-shell XCUI is not a gate)."
 )

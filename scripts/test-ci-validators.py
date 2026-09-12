@@ -115,11 +115,10 @@ def main() -> None:
 
         ui_policy = base / "ui-test-policy"
         write(ui_policy / "macos/Seyal/Tests/SeyalTests/SeyalShellComponentTests.swift", "// fixture\n")
-        write(ui_policy / "macos/Seyal/Tests/SeyalUITests/SeyalShellUITests.swift", "// fixture\n")
-        write(ui_policy / "macos/Seyal/Seyal.xcodeproj/xcshareddata/xcschemes/Seyal.xcscheme", "SeyalTests.xctest SeyalUITests.xctest\n")
-        write(ui_policy / "macos/Seyal/Seyal.xcodeproj/project.pbxproj", "SeyalTests\n")
+        write(ui_policy / "macos/Seyal/Seyal.xcodeproj/xcshareddata/xcschemes/Seyal.xcscheme", "SeyalTests.xctest\n")
+        write(ui_policy / "macos/Seyal/Seyal.xcodeproj/project.pbxproj", "App\n")
         write(ui_policy / "scripts/test-macos-ui.sh", "#!/usr/bin/env bash\n")
-        run_negative(["python3", str(ROOT / "scripts/check-ui-test-policy.py")], ui_policy, "Xcode project is missing SeyalUITests")
+        run_negative(["python3", str(ROOT / "scripts/check-ui-test-policy.py")], ui_policy, "Xcode project is missing SeyalTests")
 
         workspace = base / "workspace"
         workspace.mkdir()

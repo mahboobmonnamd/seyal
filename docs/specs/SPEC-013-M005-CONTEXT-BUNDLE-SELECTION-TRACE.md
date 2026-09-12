@@ -211,6 +211,8 @@ Rules:
 
 Repository/worktree source discovery must preserve real VCS/security boundaries.
 
+A source identity is the tuple of stable repository identity, stable worktree identity (or authorized non-VCS root identity), VCS snapshot/dirty-state identity, canonical root-relative path, and the filesystem object identity when the platform provides one safely. Canonical path comparison follows the mounted volume's actual case-sensitivity and Unicode-normalization behavior; it must not invent case folding or normalize two distinct filesystem objects into one source. Preserve the original path spelling as provenance. If the filesystem cannot prove two names identify the same source, treat them as distinct and invalidate conservatively. Stable file identity supplements path identity and never grants access outside the authorized root.
+
 Each filesystem-derived item records sufficient identity to distinguish at least:
 
 ```text
@@ -406,7 +408,7 @@ Required reason classes include at least:
 
 For excluded secret-bearing or denied content, traces must not persist raw snippets, embeddings, reversible hashes, paths/locators or summaries when those would reveal/reconstruct the excluded source.
 
-Explainability cannot become a second retention path. `SelectionTrace` retention is tied to the same bundle/source sensitivity, retention and revocation constraints that make its identifiers/reasons safe to retain. When retaining a trace would reveal or reconstruct revoked/private material, that material is redacted/removed; a policy-safe minimal audit record may remain only when permitted by ADR-013.
+Explainability cannot become a second retention path. The effective `SelectionTrace` sensitivity is the most restrictive sensitivity of any candidate metadata, source identity, exclusion reason, and selected item represented in the trace; derived traces cannot lower it. Trace retention, expiry and revocation follow the strictest applicable source policy represented in the trace, not a less restrictive bundle/build policy. When retaining a trace would reveal or reconstruct revoked/private material, that material is redacted/removed; a policy-safe minimal audit record may remain only when permitted by ADR-013. A mixed-source trace is not retained unless each contributing policy permits the resulting effective sensitivity and lifetime.
 
 ## 17. Optional semantic/model enhancement
 
@@ -563,7 +565,7 @@ At minimum, production implementation must include tests for:
 30. source discovery never executes discovered project content;
 31. arbitrary instruction-shaped repository content cannot self-classify as `NormativeInstruction`;
 32. malformed/path-traversal source identity is rejected;
-33. identifier normalization covers case-sensitivity policy and Unicode normalization differences (including APFS-relevant case behavior and NFC/NFD paths) without cross-scope aliasing;
+33. source identity follows the mounted filesystem's case/Unicode equivalence and stable object identity rules; APFS case-sensitive and case-insensitive volumes plus NFC/NFD names do not alias distinct files or scopes;
 34. repeated source/index failure converges under bounded backoff;
 35. cancellation releases build resources;
 36. required source that exists but is ineligible by scope/permission/sensitivity produces the same non-dispatchable required-context outcome as another unavailable required source;

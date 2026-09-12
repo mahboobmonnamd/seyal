@@ -127,7 +127,7 @@ else
     -derivedDataPath "$TRUST_DERIVED" \
     ARCHS=arm64 \
     ONLY_ACTIVE_ARCH=YES \
-    -only-testing:SeyalTests/SeyalShellComponentTests/testReleaseTrustRulesRejectAdHocHelpers \
+    -only-testing:SeyalTests/SeyalNativeGlueTests/testReleaseTrustRulesRejectAdHocHelpers \
     test-without-building
 fi
 

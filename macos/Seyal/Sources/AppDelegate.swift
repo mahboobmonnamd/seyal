@@ -1,149 +1,54 @@
 import AppKit
 
+/// Native window/menu host only. Rejected Swift product shell is gone (#890).
+/// This launch path is not a headed Seyal product. #883 writes the thin host.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private static let buildConfigurationKey = "SeyalBuildConfiguration"
-
     private var window: NSWindow?
-    private var appearance: SeyalAppearanceController?
-    #if DEBUG
-    private var previewShortcutController: SeyalPreviewShortcutController?
-    #endif
-
-    static func shouldUseShellPreview(
-        arguments: [String],
-        environment: [String: String],
-        buildConfiguration: String?
-    ) -> Bool {
-        guard buildConfiguration == "Debug" else {
-            return false
-        }
-
-        return arguments.contains("--ui-shell-preview")
-            || environment["SEYAL_UI_SHELL_PREVIEW"] == "1"
-    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let buildConfiguration = Bundle.main.object(
-            forInfoDictionaryKey: Self.buildConfigurationKey
-        ) as? String
-        let environment = ProcessInfo.processInfo.environment
-        let useShellPreview = Self.shouldUseShellPreview(
-            arguments: CommandLine.arguments,
-            environment: environment,
-            buildConfiguration: buildConfiguration
-        )
-
-        let previewWidth: CGFloat
-        if useShellPreview {
-            // The preview must fit the smallest hosted macOS display while still
-            // satisfying the frozen shell's minimum horizontal geometry.
-            let availableWidth = NSScreen.main?.visibleFrame.width ?? 1280
-            previewWidth = min(1280, max(1050, availableWidth - 32))
-        } else {
-            previewWidth = 960
-        }
-        let contentRect = useShellPreview
-            ? NSRect(x: 0, y: 0, width: previewWidth, height: 800)
-            : NSRect(x: 0, y: 0, width: 960, height: 600)
-
+        let contentRect = NSRect(x: 0, y: 0, width: 720, height: 240)
         let window = NSWindow(
             contentRect: contentRect,
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
         )
+        window.title = "Seyal"
+        window.backgroundColor = .windowBackgroundColor
 
-        let loaded = SeyalUIConfiguration.loadFromDisk()
-        let appearance = SeyalAppearanceController(
-            settings: loaded.settings,
-            diagnostics: loaded.diagnostics
-        )
-        self.appearance = appearance
-        let snapshot = appearance.snapshot
+        let label = NSTextField(wrappingLabelWithString: """
+            Native glue harness only.
 
-        if useShellPreview {
-            #if DEBUG
-            window.appearance = snapshot.nsAppearance
-            window.backgroundColor = snapshot.colors.ns(.container)
-            window.title = "Seyal — UI Shell Preview"
+            The rejected Swift product shell (Workspace/Tab/Pane, composer, Blocks, chrome) \
+            is not on the supported path. Metal/IME/helper launch remain for #883. \
+            This window is not a headed Seyal product.
+            """)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.setAccessibilityIdentifier("seyal-native-glue-harness")
+        label.alignment = .left
 
-            let previewState = SeyalShellState.makePreview(
-                includeTestAttention: environment["SEYAL_UI_TEST_FIXTURES"] == "1"
-            )
-            let shell = SeyalShellPreviewFactory.make(
-                frame: contentRect,
-                state: previewState,
-                visual: snapshot
-            )
-            window.contentView = shell
-            window.minSize = NSSize(width: 1050, height: 680)
-
-            let shortcuts = SeyalPreviewShortcutController(window: window, state: previewState)
-            shortcuts.installMenus()
-            previewShortcutController = shortcuts
-            #else
-            window.title = "Seyal"
-            window.contentView = MetalSurfaceView(
-                frame: contentRect,
-                paneID: "unbound",
-                terminalFont: snapshot.terminalFont
-            )
-            #endif
-        } else {
-            window.appearance = snapshot.nsAppearance
-            window.backgroundColor = snapshot.colors.ns(.container)
-            window.title = "Seyal"
-            window.contentView = SeyalShellProductionFactory.make(
-                frame: contentRect,
-                visual: snapshot
-            )
-            Self.installProductionApplicationMenu()
-        }
-        appearance.onChange = { [weak self] next in
-            guard let window = self?.window else { return }
-            window.appearance = next.nsAppearance
-            window.backgroundColor = next.colors.ns(.container)
-            (window.contentView as? SeyalShellView)?.applyVisualConfiguration(next)
-        }
+        let content = NSView(frame: contentRect)
+        content.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
+            label.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
+            label.topAnchor.constraint(equalTo: content.topAnchor, constant: 24),
+            label.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -24),
+        ])
+        window.contentView = content
+        Self.installProductionApplicationMenu()
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         self.window = window
-        window.contentView?.layoutSubtreeIfNeeded()
-        (window.contentView as? SeyalShellView)?.activateRuntimeSurfacesAfterWindowPresentation()
-
-        #if DEBUG
-        if useShellPreview, environment["SEYAL_UI_TEST_FORCE_SHORTCUT_HINTS"] == "1" {
-            // The preview hierarchy is built synchronously above. Present the
-            // test-only overlay from that same authoritative layout instead of
-            // racing a fixed-delay callback against hosted-runner startup.
-            window.contentView?.layoutSubtreeIfNeeded()
-            window.displayIfNeeded()
-            previewShortcutController?.showShortcutHintsForTesting()
-        }
-        #endif
-    }
-
-    func applicationWillTerminate(_ notification: Notification) {
-        (window?.contentView as? SeyalShellView)?.detachRuntimeSurfacesForApplicationTermination()
-    }
-
-    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        (window?.contentView as? SeyalShellView)?.detachRuntimeSurfacesForApplicationTermination()
-        return .terminateNow
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
     }
 
-    private static func installProductionApplicationMenu() {
-        NSApp.mainMenu = makeProductionApplicationMenu()
-    }
-
-    /// Shared with component tests so keyboard coverage cannot silently test a
-    /// hand-written menu that differs from the production responder chain.
     static func makeProductionApplicationMenu() -> NSMenu {
         let appMenu = NSMenu(title: "Seyal")
         let quit = NSMenuItem(
@@ -157,9 +62,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let appItem = NSMenuItem()
         appItem.submenu = appMenu
 
-        // AppKit routes standard editing shortcuts through the main menu and
-        // then down the responder chain. A quit-only menu leaves an otherwise
-        // functional NSTextView unable to receive Command-C/V in production.
         let editMenu = NSMenu(title: "Edit")
         let copy = NSMenuItem(
             title: "Copy",
@@ -190,5 +92,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mainMenu.addItem(appItem)
         mainMenu.addItem(editItem)
         return mainMenu
+    }
+
+    private static func installProductionApplicationMenu() {
+        NSApp.mainMenu = makeProductionApplicationMenu()
     }
 }

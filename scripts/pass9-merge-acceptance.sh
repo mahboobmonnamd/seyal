@@ -54,7 +54,7 @@ xcodebuild \
   -derivedDataPath "$TRUST_DERIVED" \
   ARCHS=arm64 \
   ONLY_ACTIVE_ARCH=YES \
-  -only-testing:SeyalTests/SeyalShellComponentTests/testReleaseTrustRulesRejectAdHocHelpers \
+  -only-testing:SeyalTests/SeyalNativeGlueTests/testReleaseTrustRulesRejectAdHocHelpers \
   test-without-building
 
 RUNTIME_LOG="$(mktemp -t seyal-pass9-runtime)"

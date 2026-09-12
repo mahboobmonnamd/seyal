@@ -25,21 +25,27 @@ SOURCES="macos/Seyal/Sources"
 [[ -f "$SOURCES/SeyalBridge.h" ]] || fail "missing coarse Rust/native bridge header"
 
 for required in \
-  SeyalThemeResolver.swift \
-  SeyalUIConfiguration.swift \
-  SeyalMetrics.swift \
-  SeyalShellModel.swift \
-  BlockView.swift \
-  PaneComposerShellView.swift \
+  AppDelegate.swift \
+  Main.swift \
+  TerminalFont.swift \
   TerminalSurfaceHostView.swift \
-  SeyalShellView.swift \
-  SeyalShellChrome.swift \
-  SeyalShellPaneLayout.swift \
-  SeyalShellTranscriptCoordinator.swift \
-  SeyalShellPreviewFactory.swift \
-  PanePresentationContract.swift; do
-  [[ -f "$SOURCES/$required" ]] || fail "missing native UI shell source: $required"
+  MetalSurfaceView.swift \
+  MetalTerminalRenderer.swift \
+  TerminalInputSurface.swift \
+  RustDisplayBridge.swift \
+  BundledRuntimeLauncher.swift \
+  GlyphAtlas.swift \
+  SeyalBridge.h \
+  TerminalShaders.metal; do
+  [[ -f "$SOURCES/$required" ]] || fail "missing native glue source: $required"
 done
+
+if find "$SOURCES" -name 'SeyalShell*.swift' -print -quit | grep -q .; then
+  fail "rejected Swift product shell must not remain in Sources"
+fi
+if [[ -f "$SOURCES/PaneComposerShellView.swift" || -f "$SOURCES/BlockView.swift" ]]; then
+  fail "rejected Swift composer/Block product views must not remain in Sources"
+fi
 
 if find macos/Seyal -type f \( -name '*.m' -o -name '*.mm' -o -name '*.cc' -o -name '*.cpp' \) -print -quit | grep -q .; then
   fail "native host must remain Swift-only unless a later ADR justifies another language"
@@ -60,80 +66,26 @@ if grep -R -E -q '(^|[^A-Za-z])SwiftUI([^A-Za-z]|$)' "$SOURCES"; then
   fail "temporary SwiftUI terminal surfaces are forbidden"
 fi
 
-# NSTextView is correct for the Pane-local multiline composer editor. It must
-# never become a terminal/Block rendering surface.
 for forbidden_text_surface in \
   "$SOURCES/MetalSurfaceView.swift" \
-  "$SOURCES/TerminalSurfaceHostView.swift" \
-  "$SOURCES/BlockView.swift"; do
+  "$SOURCES/TerminalSurfaceHostView.swift"; do
   if grep -E -q '(^|[^A-Za-z])NSTextView([^A-Za-z]|$)' "$forbidden_text_surface"; then
-    fail "NSTextView is forbidden in terminal/Block rendering surfaces: $forbidden_text_surface"
+    fail "NSTextView is forbidden in terminal rendering surfaces: $forbidden_text_surface"
   fi
 done
-grep -q 'NSTextView' "$SOURCES/PaneComposerShellView.swift" \
-  || fail "Pane composer preview must exercise a real multiline native editor"
 
-if grep -q 'NSScrollView' "$SOURCES/BlockView.swift"; then
-  fail "BlockView must not own nested output scrolling; the Pane transcript is the single normal-scroll owner"
-fi
-
-grep -q 'enum TerminalPresentationMode' "$SOURCES/PanePresentationContract.swift" \
-  || fail "Flow/Raw/TUI presentation contract is missing"
-grep -q 'func applyPresentationMode' "$SOURCES/TerminalInputSurface.swift" \
-  || fail "interactive Metal surface must apply the Flow/Raw/TUI presentation contract"
 grep -q 'func inspectFlowPaint' "$SOURCES/MetalTerminalRenderer.swift" \
   || fail "Flow paint detection must inspect Metal instances/pixels, not XCUI glyph text"
 grep -q 'flow-paint=' "$SOURCES/MetalSurfaceView.swift" \
-  || fail "terminal-surface accessibility must publish flow-paint for XCUI"
-grep -q 'final class PaneTranscriptView: NSScrollView' "$SOURCES/CommandBlockBodyView.swift" \
-  || fail "Pane transcript must remain the single normal-scroll owner"
-grep -q 'NSSegmentedControl' "$SOURCES/SeyalShellChrome.swift" \
-  || fail "compact Workspaces/Tabs switcher is missing from the frozen left-panel model"
-grep -q 'toggle-left-sidebar' "$SOURCES/SeyalShellChrome.swift" \
-  || fail "left context panel must have a functional hide/reopen control"
-grep -q 'toggle-inspector' "$SOURCES/SeyalShellChrome.swift" \
-  || fail "Inspector must have a functional hide/reopen control"
-grep -Fq 'func makeInspectorRail() -> NSView' "$SOURCES/SeyalShellChrome.swift" \
-  || fail "frozen Inspector vertical mode rail builder is missing"
-grep -Fq 'setAccessibilityIdentifier("inspector-mode.\(mode.rawValue)")' "$SOURCES/SeyalShellChrome.swift" \
-  || fail "Inspector rail modes must expose deterministic dynamic accessibility identifiers"
-grep -q 'pane.split.' "$SOURCES/SeyalShellPaneLayout.swift" \
-  || fail "Pane-local split control is missing"
-grep -q 'pane.close.' "$SOURCES/SeyalShellPaneLayout.swift" \
-  || fail "Pane-local close control is missing"
-grep -q 'inspector.trailingAnchor.constraint(equalTo: trailingAnchor)' "$SOURCES/SeyalShellView.swift" \
-  || fail "Inspector must remain pinned to the shell trailing edge"
-grep -q 'NSMenuItem' "$SOURCES/SeyalShellPreviewFactory.swift" \
-  || fail "native shell navigation shortcuts must be discoverable AppKit menu commands"
-grep -q 'keyEquivalentModifierMask' "$SOURCES/SeyalShellPreviewFactory.swift" \
-  || fail "native shell navigation shortcuts must use AppKit key equivalents"
-grep -q 'closeFocusedContext' "$SOURCES/SeyalShellPreviewFactory.swift" \
-  || fail "Command-W must route through hierarchical Pane/Tab/Window close semantics"
-grep -q 'static func closeTarget' "$SOURCES/SeyalShellPreviewFactory.swift" \
-  || fail "hierarchical close target policy must remain explicit and testable"
-grep -q 'SeyalShortcutHintOverlay' "$SOURCES/SeyalShellPreviewFactory.swift" \
-  || fail "Command-hold shortcut hint overlay is missing"
-grep -q 'intentionalHoldDelay: TimeInterval = 0.30' "$SOURCES/SeyalShellPreviewFactory.swift" \
-  || fail "shortcut hints must require the intentional 300 ms Command-only hold"
-grep -q 'addLocalMonitorForEvents(matching: .flagsChanged)' "$SOURCES/SeyalShellPreviewFactory.swift" \
-  || fail "shortcut hint monitor must observe modifier transitions"
-grep -q 'addLocalMonitorForEvents(matching: .keyDown)' "$SOURCES/SeyalShellPreviewFactory.swift" \
-  || fail "shortcut hints must cancel when another key is pressed"
-if grep -q 'override func keyDown' "$SOURCES/SeyalShellPreviewFactory.swift"; then
-  fail "shell navigation shortcuts must not override raw keyDown handling"
-fi
+  || fail "terminal-surface accessibility must publish flow-paint"
 grep -q 'TerminalSurfaceHostView' "$PROJECT/project.pbxproj" \
   || fail "permanent Metal terminal-surface host is missing from the native target"
-grep -q -- '--ui-shell-preview' "$SOURCES/AppDelegate.swift" \
-  || fail "UI shell preview must remain behind an explicit launch path"
-grep -q 'buildConfiguration == "Debug"' "$SOURCES/AppDelegate.swift" \
-  || fail "UI shell preview must be runtime-gated to Debug builds before Pass 6"
-grep -q '#if DEBUG' "$SOURCES/SeyalShellPreviewFactory.swift" \
-  || fail "preview fixtures must remain compiled only in Debug builds before Pass 6"
-grep -q 'SWIFT_ACTIVE_COMPILATION_CONDITIONS='"'"'DEBUG $(inherited)'"'"'' scripts/build-macos.sh \
-  || fail "canonical Debug build must compile the preview-only shell fixtures"
-grep -q 'SWIFT_ACTIVE_COMPILATION_CONDITIONS='"'"'DEBUG $(inherited)'"'"'' scripts/test-macos-ui.sh \
-  || fail "native UI tests must exercise the same Debug preview compilation path"
+if grep -q -- '--ui-shell-preview' "$SOURCES/AppDelegate.swift"; then
+  fail "rejected UI shell preview must not remain on AppDelegate"
+fi
+if grep -q 'SeyalShell' "$SOURCES/AppDelegate.swift"; then
+  fail "AppDelegate must not launch the rejected Swift product shell"
+fi
 
 bash scripts/build-macos.sh
 
@@ -257,4 +209,4 @@ cleanup_runtime
 
 echo "[seyal macOS test] Pass 8 real Runtime-to-Swift metadata acceptance passed."
 echo "[seyal macOS test] AppKit + Candidate-D + permanent Metal renderer acceptance passed."
-echo "[seyal macOS test] Swift + AppKit + Metal + UI shell scaffold acceptance passed."
+echo "[seyal macOS test] Swift + AppKit + Metal native-glue harness acceptance passed."

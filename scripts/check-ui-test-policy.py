@@ -8,8 +8,8 @@ DEFAULT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 ROOT = pathlib.Path(os.environ.get("SEYAL_VALIDATION_ROOT", DEFAULT_ROOT)).resolve()
 
 REQUIRED = [
-    ROOT / "macos/Seyal/Tests/SeyalTests/SeyalShellComponentTests.swift",
-    ROOT / "macos/Seyal/Tests/SeyalUITests/SeyalShellUITests.swift",
+    ROOT / "macos/Seyal/Tests/SeyalTests/SeyalNativeGlueTests.swift",
+    ROOT / "macos/Seyal/Tests/SeyalUITests/SeyalNativeGlueUITests.swift",
     ROOT / "macos/Seyal/Seyal.xcodeproj/xcshareddata/xcschemes/Seyal.xcscheme",
     ROOT / "scripts/test-macos-ui.sh",
 ]

@@ -134,19 +134,19 @@ Current behavior after Passes 1–10 (M001 Pass 10 closeout in progress; #727/#5
 
 - `make bootstrap` provisions/verifies the pinned Rust toolchain and, on macOS, validates full Xcode + Swift + macOS SDK + Metal tooling;
 - `make build` builds the Rust workspace (`seyal-core`, `seyal-terminal`, `seyal-exec`, `seyal-protocol`, `seyal-runtime`, `seyal-render`, `seyal-client`) and, on macOS, builds the native `Seyal.app` Xcode target;
-- `make test` validates repository/tooling/workspace and harness invariants, validates the M001 fuzz registry/corpora, runs Rust workspace unit/integration tests, and on macOS runs the native app smoke plus XCTest/XCUI where configured;
+- `make test` validates repository/tooling/workspace and harness invariants, validates the M001 fuzz registry/corpora, runs Rust workspace unit/integration tests, and on macOS runs the native glue harness smoke plus native-glue XCTest (product-shell XCUI is not a headed-product gate after #890);
 - `make check` runs the deterministic repository checks, harness/fuzz validation, controlled negative fixtures proving custom validators actually reject bad inputs, Rust formatting/Clippy/tests, architecture layering and the macOS native application on Darwin;
 - `make bench` records and round-trips benchmark environment metadata under `target/benchmarks/` and runs the real Cargo benchmark targets that exist for M001 passes;
 - `make docs` starts the local Starlight documentation site after installing its isolated Node dependencies;
 - `make docs-build` and `make docs-check` validate documentation without becoming dependencies of terminal production execution.
 
-The public `Foundation Quality` workflow separates the fast PR gates into `repository-policy`, `rust-and-harness-quality`, and `native-macos-smoke` (Rust + `Seyal.app` build, `make check`, `make test` including XCTest/XCUIAutomation, and display-link-off `make bench`). See `docs/engineering/GITHUB-WORKFLOW.md` for the exact responsibility, required-check contract, path-filtered Docs/fuzz workflows, and controlled-host-only gates. Linux remains a supported portable-core CI host; native AppKit/Metal build/test steps explicitly skip there instead of introducing a cross-platform GUI abstraction.
+The public `Foundation Quality` workflow separates the fast PR gates into `repository-policy`, `rust-and-harness-quality`, and `native-macos-smoke` (Rust + native `Seyal.app` glue-harness build, `make check`, `make test` including native-glue XCTest — product-shell XCUI is not a headed-product gate — and display-link-off `make bench`). See `docs/engineering/GITHUB-WORKFLOW.md` for the exact responsibility, required-check contract, path-filtered Docs/fuzz workflows, and controlled-host-only gates. Linux remains a supported portable-core CI host; native AppKit/Metal build/test steps explicitly skip there instead of introducing a cross-platform GUI abstraction.
 
 Canonical Cargo operations use the pinned toolchain and `--locked` where dependency resolution applies.
 
 The physical Rust workspace is the Passes 1–10 / M001 production surface documented in `docs/engineering/REPOSITORY-STRUCTURE.md`. Crates exist only for justified ownership boundaries; do not pre-create empty diagram-driven packages.
 
-The native host under `macos/Seyal` is **Swift + AppKit + Metal** and now includes the permanent Metal terminal renderer, Candidate-D client attachment, native input/resize/focus/IME seams, minimal Block presentation, and Pass 9 detach/reconnect recovery. Metal shaders use Metal Shading Language. Rust/native interop crosses a coarse C-compatible prepared-frame boundary rather than per-cell language calls.
+The native host under `macos/Seyal` is **Swift + AppKit + Metal** KEEP_NATIVE_GLUE: Metal renderer, Candidate-D client, IME, helper launch, and C ABI. #890 removed the rejected Swift product shell from the supported path; default `Seyal.app` is not a headed product until #883. Metal shaders use Metal Shading Language. Rust/native interop crosses a coarse C-compatible prepared-frame boundary rather than per-cell language calls.
 
 Harness locations under `tests/`, `fuzz/` and `benches/` hold real M001 fixtures, fuzz adapters and pass benchmarks. Pass 10 evidence/protocol docs live under `docs/engineering/M001-PASS10-EVIDENCE.md` and `docs/evidence/`; #727 remains open until final freeze + Phase 2 PASS.
 

@@ -78,4 +78,4 @@ xcodebuild \
   -resultBundlePath "$RESULT_BUNDLE" \
   test-without-building
 
-echo "[seyal macOS UI test] XCTest component + XCUIAutomation E2E passed."
+echo "[seyal macOS UI test] XCTest native-glue tests passed. Product-shell XCUI is not a supported product gate (#890)."

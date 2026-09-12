@@ -1,6 +1,6 @@
 # SPEC-016 — M005 durable Action lifecycle, approval consumption and effect reconciliation
 
-- **Status:** Proposed under #871; accepted on merge only after independent review
+- **Status:** Accepted on merge; specification promotion for #871
 - **Architecture:** ADR-012, ADR-013, ADR-014
 - **Parent refinement:** #838
 - **Implementation consumers:** #680, #841, #839, #683

@@ -2,16 +2,16 @@
 
 - **Status:** Accepted for M001 Pass 7 via PR #703; production implementation completed by PR #707, merged as `4490d89fd32f96fe5ff04393a5470944c592f546`
 - **Date:** 2026-08-27
-- **Presentation amendment:** proposed by #858 / PR #859 on 2026-09-11; effective only if that architecture amendment merges
+- **Presentation amendment:** accepted by #858 / PR #859 (`8d08f2f`) on 2026-09-11
 - **Issue:** #702
-- **Architecture authority:** Foundation Architecture + ADR-001 + ADR-004 + ADR-005 + ADR-006 + ADR-015 (Rust/native ownership only; this specification remains authoritative for input behavior); ADR-009 and the #858 / PR #859 amendment govern presentation behavior
+- **Architecture authority:** Foundation Architecture + ADR-001 + ADR-004 + ADR-005 + ADR-006 + ADR-015 (Rust/native ownership only; this specification remains authoritative for input behavior); accepted ADR-009 including the #858 / PR #859 amendment governs presentation behavior
 - **Depends on:** SPEC-001, SPEC-002, SPEC-003, SPEC-004, SPEC-005
 
-## 0. Presentation-mode applicability of the proposed ADR-009 amendment
+## 0. Presentation-mode applicability of the accepted ADR-009 amendment
 
 Sections 1–20 preserve the accepted Pass 7 mechanics for AppKit event normalization, semantic-key routing, Controller authority, bounded input admission, IME composition and authoritative resize. The historical Pass 7 implementation demonstrated those mechanics with one permanent interactive Metal terminal surface.
 
-If the #858 / PR #859 amendment merges, **“permanent terminal surface” in this historical contract no longer means a raw-terminal viewport/input target that remains visible, focusable or hit-testable underneath Flow**. The permanent authority remains `TerminalExecution` + PTY + canonical `TerminalState`; renderer/compositor resources may be reused, but direct terminal interaction is owned only by the currently selected presentation.
+The accepted #858 / PR #859 (`8d08f2f`) amendment means **“permanent terminal surface” in this historical contract no longer means a raw-terminal viewport/input target that remains visible, focusable or hit-testable underneath Flow**. The permanent authority remains `TerminalExecution` + PTY + canonical `TerminalState`; renderer/compositor resources may be reused, but direct terminal interaction is owned only by the currently selected presentation.
 
 The active input/focus model becomes:
 
@@ -32,23 +32,24 @@ TUI
 
 Controller/attachment authority is transport/runtime mutation authority. Possessing a Controller lease does not authorize a hidden terminal input surface while Flow is active.
 
-Every Flow/Raw/TUI transition must be input-fenced. Before a new route is enabled:
+Every Flow/Raw/TUI transition must be input-fenced in this order:
 
-1. validate the target route against the exact current `ExecutionId`, `AttachmentId` and relevant canonical/presentation generation or state;
-2. disable input admission on the old route;
-3. revoke the old first responder and accessibility focused state;
-4. discard/cancel old marked-text/IME composition when ownership changes;
-5. disable old mouse reporting/hit testing and any direct-terminal event route;
-6. install/activate the new presentation owner;
-7. only then assign its focus/AX/IME/mouse ownership and enable input admission.
+1. Rust freezes the old route and increments the epoch.
+2. Native revokes input, mouse capture, first responder, AX focus, and marked text.
+3. Stale callbacks fail closed.
+4. Rust validates current destination eligibility against the exact current `ExecutionId`, `AttachmentId` and relevant canonical/presentation generation or state.
+5. Native realizes only that destination.
+6. The destination route becomes active.
 
-A delayed callback, event or eligibility result from an old attachment, old presentation generation or uncertain canonical state fails closed. One physical/native event must never reach both the old and new route. Reconnect applies the same rule and is governed by the presentation-aware reconstruction in SPEC-009 once the amendment merges.
+Host completion may gate only local route activation. It must never stall PTY, VT, or output progress.
+
+A delayed callback, event or eligibility result from an old attachment, old presentation generation or uncertain canonical state fails closed. One physical/native event must never reach both the old and new route. Reconnect applies the same rule and is governed by the presentation-aware reconstruction in SPEC-009.
 
 Historical Pass 7 tests/evidence remain valid evidence for the direct-terminal mechanics themselves. They are not evidence that Flow should retain a permanent raw-terminal viewport.
 
 ## 1. Purpose
 
-This specification defines the observable M001 Pass 7 contract for native macOS terminal interaction without moving terminal authority into the GUI. Historically Pass 7 hosted this contract on one permanent Metal terminal surface; under the proposed #858 amendment the direct-terminal parts of this contract apply only when Raw/TUI owns direct terminal interaction, while Flow uses its composer/Block input route.
+This specification defines the observable M001 Pass 7 contract for native macOS terminal interaction without moving terminal authority into the GUI. Historically Pass 7 hosted this contract on one permanent Metal terminal surface; under the accepted #858 amendment the direct-terminal parts of this contract apply only when Raw/TUI owns direct terminal interaction, while Flow uses its composer/Block input route.
 
 The required direct-terminal input path is:
 
@@ -102,7 +103,7 @@ Pass 7 does not create a GUI VT parser, mirrored mode state, client-owned grid, 
 13. `NSTextInputClient` exposes only a bounded ephemeral composition document on the active direct-terminal Raw/TUI route. Terminal/history text is never returned through text-input APIs and never becomes a second editable text model.
 14. No input/resize path waits synchronously for rendering, display projection, Block semantics, persistence, agents, cloud, telemetry or licensing.
 15. Input, marked text and terminal contents are secret-bearing data and are never emitted by latency instrumentation or normal diagnostic logs.
-16. If #858 merges, exactly one presentation route owns input/focus/AX/IME/mouse at a time; Flow cannot coexist with a focusable/hit-testable direct-terminal surface, and stale route callbacks fail closed.
+16. Exactly one presentation route owns input/focus/AX/IME/mouse at a time; Flow cannot coexist with a focusable/hit-testable direct-terminal surface, and stale route callbacks fail closed.
 
 ## 3. Scope
 
@@ -142,9 +143,13 @@ Unsupported
 
 ### 4.1 ApplicationCommand
 
-An application/menu shortcut is handled by the native application layer and is never simultaneously submitted to the PTY.
+Native recognizes AppKit/menu primitives. It never simultaneously submits those events to the PTY.
+
+Rust decides portable pane/tab/window/detach behavior after that native classification. Unavoidable `NSApplication` and `NSPasteboard` operations are returned as typed native effects. The host must not decide portable workspace/tab/pane policy locally.
 
 M001 reserves the Command modifier for application/menu handling. `Command`-modified events must not become `Input` or `TerminalKey` frames merely because AppKit also exposes characters for the event.
+
+Pane-sensitive actions that change portable product state are versioned and size-tagged. They carry stable Pane identity plus the current `ExecutionId`, `AttachmentId` / Controller authority, and presentation epoch. Stale epochs fail closed.
 
 Pass 7 does not define a configurable keybinding system.
 
@@ -1078,11 +1083,11 @@ Pass 7 historical implementation is complete because:
 - no Pass 8+ scope creep;
 - independent final architecture/performance/security review has no unresolved blocker.
 
-If #858 merges, current production presentation must additionally enforce section 0: these accepted mechanics are direct-terminal mechanics for Raw/TUI (or an explicitly authorized future route), not justification for a permanently focusable raw terminal surface in Flow.
+Current production presentation must additionally enforce section 0: these accepted mechanics are direct-terminal mechanics for Raw/TUI (or an explicitly authorized future route), not justification for a permanently focusable raw terminal surface in Flow.
 
 ## 21. M002 keyboard extension contract (#834 → #823)
 
-**Status: accepted specification (2026-09-07, #834); not implemented or advertised.** Sections 1–20 remain the historical accepted M001 mechanics as presentation-scoped by section 0 if #858 merges. This section graduates only the keyboard behaviors listed here for M002; it does not change resize, terminal ownership, mouse, clipboard, or the M003 keybinding product scope. Acceptance of the specification is separate from #823 production acceptance.
+**Status: accepted specification (2026-09-07, #834); not implemented or advertised.** Sections 1–20 remain the historical accepted M001 mechanics as presentation-scoped by accepted section 0. This section graduates only the keyboard behaviors listed here for M002; it does not change resize, terminal ownership, mouse, clipboard, or the M003 keybinding product scope. Acceptance of the specification is separate from #823 production acceptance.
 
 ### 21.1 Ownership and admission
 
@@ -1117,7 +1122,7 @@ Unmodified printable/dead-key/IME text continues as committed UTF-8 `Input`. Leg
 
 Command combinations remain exclusively host actions, including when a terminal requests enhanced keyboard reporting. There is no macOS Meta/Hyper alias and no synthetic Command-to-Super terminal delivery.
 
-Add one cold input-policy value, `input.option_as_alt`, to the existing configuration load/validation boundary. It is a boolean, defaults to false, and is captured outside event handling. The authoritative new typed value is `SeyalInputPolicy { optionAsAlt: Bool }`, owned by the native application composition root and passed immutably into each terminal input adapter. It is not RuntimeConfig, visual/theme state, or a projected terminal mode. Extend the current cold TOML loader to produce this separate typed result from `[input] option_as_alt = true|false`, using the same file selected by `SEYAL_CONFIG` or otherwise `~/.config/seyal/config.toml`. Precedence is the built-in false default then that one file; there is no input-policy environment or Lua overlay. Missing/unreadable/invalid input table/value retains false and reports only the existing non-secret category/key diagnostic; unknown input keys are diagnosed and ignored. Parse and validate once at app startup; all windows share the immutable result until app restart. Theme reload cannot mutate it, and no live policy reload is introduced. The native adapter consumes the value locally; it is never sent as terminal-mode authority. This specification authorizes the typed input extension; the existing visual settings structure is not itself input authority. This is not a keybinding editor or a second configuration engine. When false, Option text goes through AppKit's layout/dead-key/IME path. Option on reliably identified non-text semantic keys may normalize to Alt. When true, unambiguous printable ASCII Option combinations outside composition normalize to Alt plus the layout base/shift result; dead-key, non-ASCII, or ambiguous events remain with AppKit. No layout is reconstructed from a US physical-key map.
+Add one cold input-policy value, `input.option_as_alt`, to the existing configuration load/validation boundary. It is a boolean, defaults to false, and is captured outside event handling. Rust cold configuration owns parsing, validation, and semantic policy. The authoritative typed value is `SeyalInputPolicy { optionAsAlt: Bool }`. Native consumes that immutable routing intent and must not parse, validate, default, or reinterpret the policy. It is not RuntimeConfig, visual/theme state, or a projected terminal mode. Extend the current cold TOML loader in Rust to produce this separate typed result from `[input] option_as_alt = true|false`, using the same file selected by `SEYAL_CONFIG` or otherwise `~/.config/seyal/config.toml`. Precedence is the built-in false default then that one file; there is no input-policy environment or Lua overlay. Missing/unreadable/invalid input table/value retains false and reports only the existing non-secret category/key diagnostic; unknown input keys are diagnosed and ignored. Parse and validate once at app startup; all windows share the immutable result until app restart. Theme reload cannot mutate it, and no live policy reload is introduced. The native adapter consumes the value locally; it is never sent as terminal-mode authority. This specification authorizes the typed input extension; the existing visual settings structure is not itself input authority. This is not a keybinding editor or a second configuration engine. When false, Option text goes through AppKit's layout/dead-key/IME path. Option on reliably identified non-text semantic keys may normalize to Alt. When true, unambiguous printable ASCII Option combinations outside composition normalize to Alt plus the layout base/shift result; dead-key, non-ASCII, or ambiguous events remain with AppKit. No layout is reconstructed from a US physical-key map.
 
 While composition exists, AppKit's text-input context has first opportunity to consume press/repeat/release. A consumed event creates no terminal key. A committed text callback creates exactly one Input transaction. Navigation, Escape and Enter consumed by candidate UI do not leak. Native key-up may be sent as typed intent for a previously routed semantic press; Runtime alone decides whether the canonical protocol requires bytes. Focus loss/detach discards held-key tracking without synthesizing committed text or keys into a new attachment. Held-key tracking is bounded to native key identifiers (maximum 256); overflow rejects the new tracked press visibly under the existing input failure contract. Release of an untracked key produces no terminal input.
 

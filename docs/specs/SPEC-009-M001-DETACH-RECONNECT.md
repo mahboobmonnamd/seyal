@@ -3,33 +3,36 @@
 - **Status:** Accepted and implemented for M001 Pass 9. Original refinement PR #718 merged as `465ee476124a6d6dd6f48b0485c834d550c684f9`; production implementation Issue #719 is closed Done. Production/acceptance landed via PR #743 as `78018027c9251dab09b100386a663c874d7e300b`; release qualification via #736 / PR #745 as `1005bc42397aac485b1aeff08cafd0f67790d969`.
 - **Date:** 2026-08-28
 - **Reconciled:** 2026-09-04 against closed #719 / Pass 10 review candidate `1005bc42397aac485b1aeff08cafd0f67790d969`
-- **Presentation amendment:** proposed by #858 / PR #859 on 2026-09-11; effective only if that architecture amendment merges
+- **Presentation amendment:** accepted by #858 / PR #859 (`8d08f2f`) on 2026-09-11
 - **Issue:** #717 refinement authority; #719 production implementation (Done)
-- **Architecture authority:** accepted Seyal foundation architecture, ADR-001/004/005/006/007/015 (ADR-015 governs Rust/native ownership only); ADR-009 and the #858 / PR #859 amendment govern presentation behavior
+- **Architecture authority:** accepted Seyal foundation architecture, ADR-001/004/005/006/007/015 (ADR-015 governs Rust/native ownership only); accepted ADR-009 including the #858 / PR #859 amendment governs presentation behavior
 - **Depends on:** SPEC-002, SPEC-003, SPEC-004, SPEC-005, SPEC-006 and accepted SPEC-007
 - **Pass 7 authority:** PR #707 merged as `4490d89fd32f96fe5ff04393a5470944c592f546`
 - **Pass 8 authority:** reviewed head `54b3a1748effc7c47c409d1f7cfdcbd547e8d1cc`, merged by PR #721 as `d9d21187e8429bbd3dbeb3e1c7cc4d05c1d147e6`
 - **Pass 9 authority:** #719 closed Done; PR #743 / PR #745; review candidate `1005bc42397aac485b1aeff08cafd0f67790d969`
-- **Numbering note:** SPEC-008 is already the active M003 command-Blocks/composer specification and is intentionally not a Pass 9 dependency historically. If PR #859 merges, SPEC-008 governs presentation selection/routing when this reconnect contract is used by Flow/Raw/TUI.
+- **Numbering note:** SPEC-008 is already the active M003 command-Blocks/composer specification and is intentionally not a Pass 9 dependency historically. SPEC-008 governs presentation selection/routing when this reconnect contract is used by Flow/Raw/TUI.
 
-## 0. Presentation-mode applicability of the proposed ADR-009 amendment
+## 0. Presentation-mode applicability of the accepted ADR-009 amendment
 
 The historical Pass 9 continuity proof remains accepted: GUI loss must not kill the surviving Runtime, PTY, child, `ExecutionId` or authoritative `TerminalState`; reconnect uses a fresh `AttachmentId` and reconstructs disposable client state from Runtime authority.
 
-The proposed #858 / PR #859 architecture amendment changes only the **presentation reconstruction interpretation** of this contract. References below to a recreated terminal surface are historical Pass 9 evidence for direct-terminal interaction; they do not require a permanently visible/focusable raw terminal surface underneath Flow.
+The accepted #858 / PR #859 (`8d08f2f`) architecture amendment changes only the **presentation reconstruction interpretation** of this contract. References below to a recreated terminal surface are historical Pass 9 evidence for direct-terminal interaction; they do not require a permanently visible/focusable raw terminal surface underneath Flow.
 
-If the amendment merges, a reconnecting terminal Pane must select exactly one active presentation before it assigns first responder, accessibility focus, IME/text-input, mouse or terminal-input ownership:
+A reconnecting terminal Pane must select exactly one active presentation before it assigns first responder, accessibility focus, IME/text-input, mouse or terminal-input ownership. The transition uses the accepted fence:
 
 ```text
-fresh authenticated attachment + authoritative current state
-→ validate RuntimeId / ExecutionId / fresh AttachmentId
-→ commit current canonical display/projection state
-→ select exactly one presentation from current truth
-     Flow | Raw | TUI
-→ revoke/confirm absence of every stale prior input route
-→ install the selected presentation
-→ assign focus / AX / IME / mouse / input only to that presentation
-→ Usable
+1. Rust freezes the old route and increments the epoch.
+2. Native revokes input, mouse capture, first responder, AX focus, and marked text.
+3. Stale callbacks fail closed.
+4. Rust validates current destination eligibility from fresh authenticated
+   attachment and authoritative current state (`RuntimeId` / `ExecutionId` /
+   fresh `AttachmentId` plus canonical display/projection).
+5. Native realizes only that destination (`Flow | Raw | TUI`).
+6. The destination route becomes active; focus / AX / IME / mouse / input are
+   assigned only to that presentation.
+
+Host completion may gate only local route activation (`Usable`). It must never
+stall PTY, VT, or output progress.
 ```
 
 Mode ownership after selection is:
@@ -63,7 +66,7 @@ live Seyal.app terminal Pane
 → resume rendering + permitted input + resize
 ```
 
-The proof uses the permanent Runtime, Candidate-D local transport, Pass 7 input/resize/focus/IME mechanics, Pass 8 Block metadata seam and reusable Metal renderer/compositor. No temporary reconnect terminal engine or second VT/grid is permitted. Under the proposed presentation amendment, the permanent terminal **authority** and reusable renderer do not imply a permanent raw-terminal viewport/input target in Flow.
+The proof uses the permanent Runtime, Candidate-D local transport, Pass 7 input/resize/focus/IME mechanics, Pass 8 Block metadata seam and reusable Metal renderer/compositor. No temporary reconnect terminal engine or second VT/grid is permitted. Under the accepted presentation amendment, the permanent terminal **authority** and reusable renderer do not imply a permanent raw-terminal viewport/input target in Flow.
 
 Runtime-crash live-PTY survival is explicitly outside M001 Pass 9.
 
@@ -83,7 +86,8 @@ Runtime-crash live-PTY survival is explicitly outside M001 Pass 9.
 12. Pass 8 Workspace association, Block identity, logical anchor and state remain continuous for the surviving execution; presentation loss/reappearance is not a Block lifecycle transition.
 13. Native first-responder, accessibility and IME state are reconstructed as presentation state; they never become terminal authority.
 14. Seyal OSS remains independent of commercial code.
-15. Under the proposed #858 amendment, reconnect selects one current `Flow | Raw | TUI` presentation before focus/AX/IME/mouse/input ownership is enabled; stale or uncertain ownership fails closed and no raw terminal input target remains active underneath Flow.
+15. Reconnect selects one current `Flow | Raw | TUI` presentation before focus/AX/IME/mouse/input ownership is enabled; stale or uncertain ownership fails closed and no raw terminal input target remains active underneath Flow.
+16. Cmd-Q / application termination: Rust freezes input and requests bounded detach/cleanup before native application termination. Native must not terminate the process while that bounded cleanup is still owed. This never stalls PTY/VT progress for surviving executions.
 
 ## 3. Scope
 
@@ -97,7 +101,7 @@ Pass 9 covers:
 - Controller-lease release and safe reacquisition;
 - same-Runtime/same-execution identity proof;
 - current-state reconstruction through SPEC-004 Candidate D;
-- Pass 7 input/resize/focus/accessibility/IME usability after reattach, scoped to the active direct-terminal presentation when #858 applies;
+- Pass 7 input/resize/focus/accessibility/IME usability after reattach, scoped to the active selected presentation;
 - Pass 8 Block identity/state continuity;
 - detached live output and detached execution-exit behavior;
 - stale-authority and failure-injection coverage;
@@ -386,7 +390,7 @@ A reconnecting client may show bounded reconnect/loading chrome, but it must not
 
 Reconnect preserves the accepted SPEC-006 native mechanics by **recreating mode-appropriate presentation state**, not by carrying old state across the dead connection/process and not by always recreating/focusing a conventional terminal surface.
 
-Before transition from `RendererReady` to `Usable` under the proposed #858 amendment:
+Before transition from `RendererReady` to `Usable` under the accepted #858 amendment, apply the ADR-009 six-step fence. The reconnect elaboration is:
 
 1. validate the current `RuntimeId`, `ExecutionId`, fresh `AttachmentId`, committed projection generation and relevant canonical state used for presentation selection;
 2. select exactly one `Flow | Raw | TUI` presentation from current canonical state and trusted integration; unknown/stale/unsafe Flow eligibility selects the safe non-Flow presentation required by SPEC-008 rather than guessing;
@@ -485,7 +489,7 @@ Runtime retains only live execution state already required without a GUI plus bo
 ### Identity/lifecycle
 
 - normal window close keeps Runtime/PTY/child/`ExecutionId` alive;
-- app quit keeps the same live execution alive;
+- app quit keeps the same live execution alive after Rust freezes input and requests bounded detach/cleanup;
 - GUI `SIGKILL`/forced crash keeps the same live execution alive;
 - `RuntimeId` remains unchanged across surviving-Runtime reconnect;
 - new `AttachmentId` differs and old identity is rejected;
@@ -622,7 +626,7 @@ Pass 9 production implementation is complete only when all are true:
 - reopen observes same `RuntimeId`, same `ExecutionId`, fresh `AttachmentId` for the surviving-Runtime path;
 - stale controller/attachment/request identities are rejected;
 - current authoritative display is reconstructed without PTY replay or another VT/grid;
-- under #858, reconnect selects one current Flow/Raw/TUI presentation before focus/AX/IME/mouse/input activation and rejects stale route callbacks;
+- reconnect selects one current Flow/Raw/TUI presentation before focus/AX/IME/mouse/input activation and rejects stale route callbacks;
 - Flow reconnect has no hidden/coexisting raw-terminal focus/input target; Raw/TUI reconnect exposes the selected full-Pane terminal interaction surface;
 - input, Control-C where applicable and authoritative resize work after reconnect;
 - detached output advances canonical state and is reflected within M001 bounded-state limits;
@@ -638,10 +642,10 @@ Pass 9 production implementation is complete only when all are true:
 
 ## 18. Documentation impact
 
-Pass 9 production behavior exists on `master`. Pass 10 / M001 closeout documentation is complete (#727 / #5 closed). Do not reopen this SPEC's historical production gate. The proposed #858 amendment narrows how its native presentation wording is interpreted without invalidating the continuity evidence:
+Pass 9 production behavior exists on `master`. Pass 10 / M001 closeout documentation is complete (#727 / #5 closed). Do not reopen this SPEC's historical production gate. The accepted #858 amendment narrows how its native presentation wording is interpreted without invalidating the continuity evidence:
 
 - **User Guide:** document only observable reconnect/lifecycle behavior that has passed its milestone gates; do not claim Runtime-crash PTY survival.
-- **Developer Guide:** Runtime-vs-GUI lifetime, endpoint discovery ownership and reconnect/native interaction lifecycle are governed by this SPEC plus the Pass 9 evidence retained under `docs/evidence/pass9-*` and Issue #719. If #858 merges, current Flow/Raw/TUI presentation ownership additionally follows ADR-009/SPEC-008.
+- **Developer Guide:** Runtime-vs-GUI lifetime, endpoint discovery ownership and reconnect/native interaction lifecycle are governed by this SPEC plus the Pass 9 evidence retained under `docs/evidence/pass9-*` and Issue #719. Current Flow/Raw/TUI presentation ownership additionally follows ADR-009/SPEC-008.
 - **Authoritative engineering docs:** this SPEC, the specs index, and M001 Pass 10 protocols continue to present Pass 9 continuity as Done; Pass 10 / M001 closeout is also Done (#727 / #5 closed). The presentation amendment does not retroactively claim that historical Pass 9 tested a Block-first Flow UI.
 - **Media/screenshots/video:** add only when the reconnect UX is stable enough for procedural user docs.
 

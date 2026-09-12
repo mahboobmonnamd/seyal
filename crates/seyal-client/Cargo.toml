@@ -16,6 +16,7 @@ benchmark-instrumentation = []
 crate-type = ["rlib", "staticlib"]
 
 [dependencies]
+seyal-core = { path = "../seyal-core" }
 seyal-protocol = { path = "../seyal-protocol" }
 seyal-render = { path = "../seyal-render" }
 

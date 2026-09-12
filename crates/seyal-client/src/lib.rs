@@ -1,8 +1,12 @@
-//! Disposable Seyal.app-side Candidate-D client and renderer-preparation owner.
+//! Disposable Seyal.app-side Candidate-D client, renderer-preparation owner,
+//! and portable headed product composition (Workspace/Tab/Pane).
 //!
 //! Runtime/TerminalExecution remain the sole PTY, VT and canonical TerminalState
-//! authority. This crate owns only a local socket attachment, an atomically
-//! committed `DisplayCache`, and derived `seyal-render` presentation state.
+//! authority. This crate owns a local socket attachment, an atomically
+//! committed `DisplayCache`, derived `seyal-render` presentation state, and the
+//! host-facing product shell reducer. It is not a second Workspace database.
+
+pub mod shell;
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod block_cache;

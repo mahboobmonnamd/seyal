@@ -281,7 +281,7 @@
       "sources": [
         {
           "path": "docs/engineering/REPOSITORY-STRUCTURE.md",
-          "fingerprint": "adc1538990d613c708e5edd867405f7a97b3eec2"
+          "fingerprint": "67ecaba0ad56177295e9739e37129c9ee0830306"
         }
       ],
       "relationships": [
@@ -294,8 +294,8 @@
     {
       "id": "DOC-M001.1-SWIFT-OWNERSHIP",
       "kind": "document",
-      "title": "M001.1 Swift ownership and behavior-parity manifest",
-      "summary": "M001.1 freeze map: current Swift shell is deprecated and not product authority. Portable product is built in Rust; a new thin AppKit/Metal host is written from scratch; old shell/XCTest are deleted in the replacement PR.",
+      "title": "M001.1 Swift ownership freeze ledger",
+      "summary": "Exhaustive M001.1 freeze map: existing Swift product shell is rejected. Classify REIMPLEMENT_IN_RUST / KEEP_NATIVE_GLUE / DELETE / REFERENCE_ONLY. Rust product first; independent shell removal (#890); new thin host from scratch (#883).",
       "tags": [
         "m001.1",
         "swift",
@@ -307,7 +307,7 @@
       "sources": [
         {
           "path": "docs/engineering/M001.1-SWIFT-OWNERSHIP-PARITY-MANIFEST.md",
-          "fingerprint": "b318f7ff128bba5747d78f5df363da2bde444a1c"
+          "fingerprint": "b7b079314306d72b4c1552f07a8eb15281642881"
         }
       ],
       "relationships": [

@@ -2,7 +2,7 @@
 
 This directory owns the native macOS application boundary for Seyal.
 
-**M001.1 freeze:** the current AppKit shell in this tree is **deprecated**. It is not product authority. Do not add Workspace/Tab/Pane, Blocks/composer, Flow/Raw/TUI, theme semantics, or recovery-policy features here. Portable product behavior is implemented in Rust (#879–#882). A **new** thin host is written from scratch (#883). This tree is deleted in that replacement PR. See `docs/engineering/M001.1-SWIFT-OWNERSHIP-PARITY-MANIFEST.md`.
+**M001.1 freeze:** the current AppKit **product** shell in this tree is **deprecated**. It is not product authority and is not an XCTest/XCUI oracle. Do not add Workspace/Tab/Pane, Blocks/composer, Flow/Raw/TUI, theme semantics, or recovery-policy features here. Portable product behavior is implemented in Rust (#879/#880/#740/#861/#881/#882). A **new** thin host is written from scratch (#883). Rejected product sources are removed from the supported path by #890 (that may temporarily leave `master` without a headed `Seyal.app`). Do not delete classified Metal/IME/accessibility glue until the ledger says so. See `docs/engineering/M001.1-SWIFT-OWNERSHIP-PARITY-MANIFEST.md`.
 
 M001 established the permanent **Swift + AppKit + Metal** application direction:
 

@@ -130,19 +130,19 @@
         },
         {
           "path": "docs/specs/SPEC-006-M001-NATIVE-INPUT-RESIZE.md",
-          "fingerprint": "506b49abb61dfc5889cd73308b19254bd409b69b"
+          "fingerprint": "6cbebdded12acb3901ddb449824a071be2dafc5f"
         },
         {
           "path": "docs/specs/SPEC-008-M003-COMMAND-BLOCKS.md",
-          "fingerprint": "f451bea6f467938a1d202a2d7c490709c61555dd"
+          "fingerprint": "e663eac082812e23c820f0ecc9678c39e3620046"
         },
         {
           "path": "docs/specs/SPEC-009-M001-DETACH-RECONNECT.md",
-          "fingerprint": "d324dff8d1c8f3f23e41522440cd2c80049048e3"
+          "fingerprint": "a0a14cf80d6df1460f5d7c6711d6a6f38032c799"
         },
         {
           "path": "docs/architecture/ADR-015-RUST-PRODUCT-UI-THIN-SWIFT-HOST.md",
-          "fingerprint": "bd8e486ad3b560b1aa9bfc97d473c2c65204fd45"
+          "fingerprint": "f2dd9b47e2bbe26c0e704ce7997c9838b22e9625"
         }
       ],
       "relationships": [
@@ -237,7 +237,7 @@
       "sources": [
         {
           "path": "docs/architecture/ADR-015-RUST-PRODUCT-UI-THIN-SWIFT-HOST.md",
-          "fingerprint": "bd8e486ad3b560b1aa9bfc97d473c2c65204fd45"
+          "fingerprint": "f2dd9b47e2bbe26c0e704ce7997c9838b22e9625"
         }
       ],
       "relationships": [

@@ -36,7 +36,9 @@ ADR-006 keeps the macOS PTY readiness-composition mechanism inside `seyal-exec`;
 
 ## Current physical native macOS layout
 
-`macos/Seyal` is the permanent native application boundary (**Swift + AppKit + Metal**). Pass 1 established the skeleton; Passes 6–9 added the permanent Metal terminal surface, Candidate-D client bridge, native input/resize/focus/IME, minimal Block presentation and detach/reconnect recovery:
+`macos/Seyal` is the permanent native application boundary (**Swift + AppKit + Metal**). Pass 1 established the skeleton; Passes 6–9 added the permanent Metal terminal surface, Candidate-D client bridge, native input/resize/focus/IME, minimal Block presentation and detach/reconnect recovery.
+
+M001.1 freezes the current AppKit **product** shell as deprecated (not product authority), implements portable product behavior in Rust, removes the rejected shell from the supported path (#890; may temporarily omit a headed app), then replaces the host with a new thin adapter (#883). The freeze/authority map is `docs/engineering/M001.1-SWIFT-OWNERSHIP-PARITY-MANIFEST.md`; it does not replace this layout document.
 
 ```text
 macos/Seyal/

@@ -281,13 +281,39 @@
       "sources": [
         {
           "path": "docs/engineering/REPOSITORY-STRUCTURE.md",
-          "fingerprint": "9853e0fc4194fa8544976781e421ac7a32c88590"
+          "fingerprint": "67ecaba0ad56177295e9739e37129c9ee0830306"
         }
       ],
       "relationships": [
         {
           "type": "implements",
           "target": "COMP-TERMINAL-STATE"
+        }
+      ]
+    },
+    {
+      "id": "DOC-M001.1-SWIFT-OWNERSHIP",
+      "kind": "document",
+      "title": "M001.1 Swift ownership freeze ledger",
+      "summary": "Exhaustive M001.1 freeze map: existing Swift product shell is rejected. Classify REIMPLEMENT_IN_RUST / KEEP_NATIVE_GLUE / DELETE / REFERENCE_ONLY. Rust product first; independent shell removal (#890); new thin host from scratch (#883).",
+      "tags": [
+        "m001.1",
+        "swift",
+        "macos",
+        "ownership",
+        "adr-015",
+        "migration"
+      ],
+      "sources": [
+        {
+          "path": "docs/engineering/M001.1-SWIFT-OWNERSHIP-PARITY-MANIFEST.md",
+          "fingerprint": "b7b079314306d72b4c1552f07a8eb15281642881"
+        }
+      ],
+      "relationships": [
+        {
+          "type": "related_to",
+          "target": "COMP-PANE-PRESENTATION"
         }
       ]
     }

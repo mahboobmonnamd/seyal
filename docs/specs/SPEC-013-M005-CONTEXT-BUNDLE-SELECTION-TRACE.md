@@ -1,6 +1,6 @@
 # SPEC-013 — M005 ContextBundle, SelectionTrace and source invalidation
 
-- **Status:** Proposed for acceptance
+- **Status:** Accepted on merge; specification promotion for #854
 - **Issue:** #854
 - **Architecture:** `docs/architecture/ADR-013-CONTEXT-DURABLE-MEMORY.md`
 - **Parent refinement:** #838
@@ -276,7 +276,7 @@ A rename may preserve a higher-level logical identity only if the source adapter
 
 Invalidation marks derived items/bundles stale or removes their reuse eligibility. It never mutates external source truth.
 
-Freshness must be positively established by a bounded authoritative check appropriate to the source before a cached item/bundle is reused. Filesystem watchers, editor notifications and similar event streams are invalidation hints only; missed/coalesced events cannot be the sole proof that a dependency is still current. The accepted implementation must define a bounded freshness policy per source class (for example source generation/version comparison, repository/index generation, stat/content identity as appropriate) and fail closed to rebuild/exclusion when required freshness cannot be established.
+Freshness must be positively established by a bounded authoritative check appropriate to the source before a cached item/bundle is reused. Filesystem watchers, editor notifications and similar event streams are invalidation hints only; missed/coalesced events cannot be the sole proof that a dependency is still current. The accepted implementation must define a bounded freshness policy per source class (for example source generation/version comparison or repository/index generation). Metadata-only checks such as modification time and size are sufficient only when the source adapter can establish that the filesystem's identity and timestamp granularity make them authoritative; otherwise freshness requires an authoritative content/version check. It must fail closed to rebuild/exclusion when required freshness cannot be established.
 
 ## 12. LSP, symbol and language-index sources
 
@@ -584,6 +584,7 @@ SPEC-013 is satisfied only when implementation evidence proves:
 - mandatory context cannot be silently budget-dropped from a valid dispatchable bundle;
 - deterministic provider-free retrieval remains functional;
 - caches/indexes are rebuildable and cannot widen authority or bypass freshness;
+- source discovery inspects content without executing discovered files, hooks, scripts or commands;
 - required failure/security/property tests pass;
 - calibrated resource/latency evidence is recorded before #681 implementation acceptance;
 - terminal hot-path isolation is demonstrated under normal and failure load.

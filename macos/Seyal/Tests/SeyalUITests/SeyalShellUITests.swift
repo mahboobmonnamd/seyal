@@ -1421,4 +1421,148 @@ final class SeyalShellUITests: XCTestCase {
         )
         attachHeadedPNG(surface, name: "m002-819-headed-live-resize")
     }
+
+    /// #865: running live-tail output must stay inside one Flow Block region
+    /// with flow-paint confinement, then remain confined after completion.
+    @MainActor
+    func testProductionFlowLiveTailKeepsRunningOutputInsideBlockRegion() throws {
+        app.terminate()
+        terminateOrphanedRuntimes()
+        let runtime = try startExternalZshRuntime()
+        defer {
+            if runtime.isRunning { runtime.terminate() }
+            runtime.waitUntilExit()
+        }
+
+        let surface = launchProductionApp()
+        let markerURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "seyal-865-live-tail-\(UUID().uuidString)"
+        )
+        try? FileManager.default.removeItem(at: markerURL)
+        defer { try? FileManager.default.removeItem(at: markerURL) }
+
+        // Slow enough to observe a running Block before completion; one
+        // command → one Block under the Pane scroll owner (SPEC-008).
+        submitProductionShellCommand(
+            "for i in $(seq 1 80); do printf 'live-tail-%03d\\n' \"$i\"; usleep 40000; done; printf done > \(markerURL.path)",
+            surface: surface
+        )
+
+        let block = waitForVisibleCommandBlock()
+        XCTAssertTrue(
+            wait(timeout: 5) {
+                block.frame.width > 0
+                    && block.frame.height > 0
+                    && abs(block.frame.width - (surface.frame.width - 16)) <= 2
+                    && block.frame.intersects(surface.frame)
+                    && self.recoveryFields(surface)?["flow-paint"] == "ok"
+                    && self.recoveryFields(surface)?["connection"] == "usable"
+            },
+            "running live-tail Block was not confined inside the Flow surface; "
+                + "block=\(block.frame) surface=\(surface.frame) "
+                + "recovery=\(surface.value ?? "<none>")"
+        )
+        XCTAssertEqual(block.frame.width, surface.frame.width - 16, accuracy: 2)
+        XCTAssertEqual(block.frame.minX, surface.frame.minX + 8, accuracy: 2)
+        XCTAssertEqual(recoveryFields(surface)?["flow-paint"], "ok")
+        attachHeadedPNG(surface, name: "issue-865-flow-live-tail-running")
+
+        XCTAssertTrue(
+            wait(timeout: 12) {
+                (try? String(contentsOf: markerURL, encoding: .utf8)) == "done"
+            },
+            "live-tail workload did not finish writing its completion marker"
+        )
+        XCTAssertTrue(
+            wait(timeout: 5) {
+                abs(block.frame.width - (surface.frame.width - 16)) <= 2
+                    && block.frame.intersects(surface.frame)
+                    && self.recoveryFields(surface)?["flow-paint"] == "ok"
+                    && self.recoveryFields(surface)?["connection"] == "usable"
+            },
+            "completed live-tail Block left Flow paint confinement"
+        )
+        let blocks = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier CONTAINS '.block.'")
+        )
+        XCTAssertEqual(
+            blocks.count,
+            1,
+            "seq-style live-tail must remain one bounded Block, not a Pane-wide grid"
+        )
+        attachHeadedPNG(surface, name: "issue-865-flow-live-tail-completed")
+    }
+
+    /// #865 Class B: disconnected Return keeps the draft (and AX help when
+    /// readable); when attach already reached connection=usable, Return must
+    /// admit through the production path without inventing a fake Runtime.
+    @MainActor
+    func testProductionClassBAdmissionPreservesDraftOrAcceptsReturnWhenUsable() throws {
+        app.terminate()
+        terminateOrphanedRuntimes()
+
+        let surface = launchProductionApp(requireUsableConnection: false)
+        let composer = app.textViews["composer.pane-local"]
+        XCTAssertTrue(
+            composer.waitForExistence(timeout: 10),
+            "pane-owned composer must remain discoverable for Class B admission"
+        )
+
+        let reachedUsable = wait(timeout: 8) {
+            self.recoveryFields(surface)?["connection"] == "usable"
+        }
+
+        if reachedUsable {
+            // Prefer the headed usable path: external Runtime when present,
+            // otherwise the packaged helper that reached connection=usable.
+            let markerURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "seyal-865-class-b-usable-\(UUID().uuidString)"
+            )
+            try? FileManager.default.removeItem(at: markerURL)
+            defer { try? FileManager.default.removeItem(at: markerURL) }
+
+            composer.click()
+            let command = "printf CLASS_B_USABLE; printf ok > \(markerURL.path)"
+            composer.typeText(command)
+            composer.typeKey(.return, modifierFlags: [])
+
+            XCTAssertTrue(
+                wait(timeout: 8) {
+                    (try? String(contentsOf: markerURL, encoding: .utf8)) == "ok"
+                },
+                "usable Class B Return did not reach the Runtime-owned PTY; "
+                    + "recovery=\(surface.value ?? "<none>")"
+            )
+            XCTAssertTrue(
+                wait(timeout: 5) { (composer.value as? String) == "" },
+                "accepted usable Class B draft was not cleared"
+            )
+            XCTAssertEqual(recoveryFields(surface)?["connection"], "usable")
+            XCTAssertEqual(recoveryFields(surface)?["flow-paint"], "ok")
+            _ = waitForVisibleCommandBlock()
+            return
+        }
+
+        // Disconnected path: Return must not look like a dead key — draft stays.
+        XCTAssertEqual(
+            recoveryFields(surface)?["connection"],
+            "disconnected",
+            "expected disconnected Class B fence; recovery=\(surface.value ?? "<none>")"
+        )
+        composer.click()
+        let draft = "echo class-b-draft-while-disconnected"
+        composer.typeText(draft)
+        XCTAssertEqual(composer.value as? String, draft)
+        composer.typeKey(.return, modifierFlags: [])
+
+        XCTAssertTrue(
+            wait(timeout: 2) { (composer.value as? String) == draft },
+            "disconnected Class B Return cleared the composer draft"
+        )
+        // AXHelp surfacing is covered by SeyalShellComponentTests; XCUI proves
+        // the observable Class B contract that Enter does not silently drop
+        // the draft while connection remains disconnected.
+        XCTAssertEqual(composer.value as? String, draft)
+        attachHeadedPNG(surface, name: "issue-865-class-b-disconnected-draft-kept")
+    }
 }

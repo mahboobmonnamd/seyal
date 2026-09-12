@@ -23,7 +23,7 @@
 8. Blocks are structured metadata/presentation over one execution and its canonical history; a Block never implies another PTY, VT, grid, process, or transcript copy. (`R-006`)
 9. Alternate-screen/TUI applications remain real terminal applications using the same canonical `TerminalState`. (`R-007`)
 10. Agents and future multi-agent orchestration interact through stable capabilities/events and never own PTYs, terminal state, scrollback, or rendering. (`R-008`, `R-009`)
-11. macOS uses Rust for portable terminal/runtime logic, Swift + AppKit for native host/input/IME/accessibility, and the smallest practical native Metal bridge. (`R-010`)
+11. macOS uses Rust for portable terminal/runtime logic **and** portable product/UI state and behavior; Swift + AppKit is a thin in-repo native host for windowing, native events, IME, accessibility, clipboard/drag-drop and Metal drawable/surface hookup only. (`R-010`, ADR-015)
 12. The portable Rust core is designed now for Linux, Windows, cloud, and embedding, but there is no premature universal GUI abstraction. (`R-012`, `R-013`)
 13. iOS/Android are future first-class **remote controller/viewer clients** for terminals running on a user machine or in Seyal Cloud; mobile does not become terminal-state authority. (`R-014`, `R-031`)
 14. TOML is the canonical static configuration format. Lua provides programmable customization only through cold typed config overlays and asynchronous typed actions; Lua never joins terminal hot paths. (`R-017`–`R-020`)
@@ -488,16 +488,26 @@ Choose:
 ```text
 Rust
   → PTY/runtime/VT/history/Blocks/protocol/render preparation
+  → Workspace/Tab/Pane, composer, command, focus/navigation, split/layout,
+    Agent/Inspector and other portable product/UI behavior
 
-Swift + AppKit
-  → application lifecycle, windows, native menus, keyboard/mouse, IME, accessibility, platform APIs
+Swift + AppKit (thin host in this repository; no separate Swift UI tree)
+  → NSApplication/NSWindow lifecycle
+  → native event collection
+  → IME / NSTextInputClient bridge
+  → accessibility adapter
+  → clipboard / drag-drop
+  → Metal drawable/surface creation
+  → other inherently macOS-specific APIs
 
 small Objective-C++/native bridge where Metal/C++ interop materially requires it
 ```
 
+ADR-015 is the independent lifecycle for this product-vs-platform split.
+
 Do not build the terminal surface with SwiftUI/NSTextView as a temporary renderer.
 
-SwiftUI may be used later for appropriate non-hot-path product UI only when it does not compromise input, accessibility, rendering, or performance.
+SwiftUI may be used later only for non-authoritative, non-hot-path chrome that still does not own product/UI state, and only when it does not compromise input, accessibility, rendering, or performance.
 
 ---
 

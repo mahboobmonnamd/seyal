@@ -399,6 +399,7 @@ Accessibility must be designed into Metal-backed terminal presentation; it is no
 14. If Flow cannot safely preserve required character-level input semantics, switch the Pane to Raw instead of passing input through a hidden terminal surface.
 15. Presentation transitions revoke the source input/focus/IME/mouse route before the destination route can admit events.
 16. Presentation eligibility is fenced to current execution/attachment/controller and relevant canonical/integration generation.
+17. Headed product/UI state is Rust-owned; Swift in this repository is only a thin macOS adapter (ADR-015). There is no separate Swift UI product tree.
 
 ---
 

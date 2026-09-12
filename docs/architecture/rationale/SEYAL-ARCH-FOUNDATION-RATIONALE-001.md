@@ -115,13 +115,13 @@ Future ADRs that change a foundation rule should cite the relevant `R-xxx` recor
 
 ### R-010 — Native macOS host + Rust portable core
 
-**Decision:** Rust owns portable runtime/terminal logic; AppKit/Swift owns macOS application/platform behavior; Metal is native.
+**Decision:** Rust owns portable runtime/terminal logic and portable product/UI state/behavior. AppKit/Swift remains in this repository as a thin macOS host only (window/app lifecycle, native events, IME, accessibility, clipboard/drag-drop, Metal drawable/surface, macOS-specific APIs). Metal is native. The detailed MAY/MUST NOT lists live in ADR-015.
 
-**Why:** this minimizes language crossings while preserving first-class Apple integration.
+**Why:** this minimizes language crossings while preserving first-class Apple integration, without letting Swift become the Seyal product/UI authority.
 
-**Failure prevented:** portable abstraction weakening IME/accessibility/input or Swift owning terminal state.
+**Failure prevented:** portable abstraction weakening IME/accessibility/input; Swift owning terminal state; Swift owning Workspace/Tab/Pane, Blocks, composer, commands, focus/layout or agent/inspector logic; a second Swift UI tree or deletion of the required native host.
 
-**Reopen only if:** measured integration or maintenance evidence shows a different native boundary is superior.
+**Reopen only if:** measured integration or maintenance evidence shows a different native boundary is superior. Product-vs-platform list changes go through ADR-015.
 
 ### R-011 — No temporary text renderer
 

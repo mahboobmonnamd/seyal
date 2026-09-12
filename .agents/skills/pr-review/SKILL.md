@@ -13,7 +13,7 @@ This is Seyal's user-facing final PR review entrypoint. A caller asking whether 
 
 For every PR that adds, changes, moves, or depends on product/UI behavior, explicitly trace ownership before considering merge readiness.
 
-The reviewer must establish all of the following:
+The reviewer must establish all of the following, using ADR-015 as the ownership authority:
 
 - the authoritative portable state/behavior lives in Rust;
 - native macOS Swift is limited to inherently platform-specific integration;

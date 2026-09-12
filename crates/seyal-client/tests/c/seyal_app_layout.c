@@ -24,6 +24,9 @@ int main(void) {
     REQUIRE(sizeof(SeyalAppAccessibility) == 24);
     REQUIRE(sizeof(SeyalAppComposer) == 40);
     REQUIRE(sizeof(SeyalAppChrome) == 24);
+    REQUIRE(sizeof(SeyalAppTheme) == 16);
+    REQUIRE(sizeof(SeyalAppShell) == 64);
+    REQUIRE(sizeof(SeyalAppRow) == 56);
     REQUIRE(sizeof(SeyalAppAction) != 0);
     puts("seyal_app_layout ok");
     return 0;

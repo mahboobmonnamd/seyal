@@ -13,6 +13,18 @@ final class SeyalHostComponentTests: XCTestCase {
         XCTAssertEqual(snapshot.version, UInt16(SEYAL_APP_ABI_VERSION))
         XCTAssertEqual(snapshot.eligibility, UInt16(SEYAL_APP_ELIGIBILITY_UNBOUND.rawValue))
         XCTAssertEqual(seyal_app_destroy(handle), 0)
+        let theme = seyal_app_theme(0)
+        XCTAssertNotEqual(theme.canvas, theme.text)
+        XCTAssertEqual(MemoryLayout<SeyalAppComposer>.size, 40)
+        XCTAssertEqual(MemoryLayout<SeyalAppChrome>.size, 24)
+        XCTAssertEqual(MemoryLayout<SeyalAppShell>.size, 64)
+        XCTAssertEqual(MemoryLayout<SeyalAppRow>.size, 56)
+        let live = seyal_app_create()
+        let shell = seyal_app_shell(live)
+        XCTAssertEqual(shell.workspace_count, 1)
+        let workspace = seyal_app_shell_row(live, UInt16(SEYAL_APP_ROW_WORKSPACE), 0)
+        XCTAssertGreaterThan(workspace.title_len, 0)
+        XCTAssertEqual(seyal_app_destroy(live), 0)
     }
 
     func testHostHasNoSeyalShellProductTypes() {

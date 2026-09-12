@@ -39,7 +39,10 @@ enum SeyalAppActionKind {
     SEYAL_APP_ACTION_SET_INSPECTOR = 15,
     SEYAL_APP_ACTION_SELECT_AGENT = 16,
     SEYAL_APP_ACTION_OPEN_ATTENTION = 17,
-    SEYAL_APP_ACTION_REPLACE_CHROME = 18
+    SEYAL_APP_ACTION_REPLACE_CHROME = 18,
+    SEYAL_APP_ACTION_SELECT_WORKSPACE = 19,
+    SEYAL_APP_ACTION_SELECT_TAB = 20,
+    SEYAL_APP_ACTION_FOCUS_PANE = 21
 };
 
 enum SeyalAppEligibility {
@@ -211,13 +214,65 @@ typedef struct SeyalAppAccessibility {
     uint32_t reserved;
 } SeyalAppAccessibility;
 
+typedef struct SeyalAppTheme {
+    uint32_t canvas;
+    uint32_t text;
+    uint32_t accent;
+    uint16_t appearance;
+    uint16_t reserved;
+} SeyalAppTheme;
+
+typedef struct SeyalAppShell {
+    uint16_t version;
+    uint16_t size;
+    uint16_t workspace_count;
+    uint16_t tab_count;
+    uint16_t pane_count;
+    uint16_t flags;
+    uint32_t reserved;
+    uint64_t active_workspace_lo;
+    uint64_t active_workspace_hi;
+    uint64_t active_tab_lo;
+    uint64_t active_tab_hi;
+    uint64_t focused_pane_lo;
+    uint64_t focused_pane_hi;
+} SeyalAppShell;
+
+#define SEYAL_APP_ROW_WORKSPACE 0u
+#define SEYAL_APP_ROW_TAB 1u
+#define SEYAL_APP_ROW_PANE 2u
+#define SEYAL_APP_ROW_INSPECTOR 0u
+#define SEYAL_APP_ROW_AGENT 1u
+#define SEYAL_APP_ROW_ATTENTION 2u
+#define SEYAL_APP_ROW_SELECTED 1u
+
+typedef struct SeyalAppRow {
+    uint16_t kind;
+    uint16_t flags;
+    uint32_t reserved;
+    uint64_t id_lo;
+    uint64_t id_hi;
+    const uint8_t *title;
+    uint32_t title_len;
+    uint32_t reserved1;
+    const uint8_t *detail;
+    uint32_t detail_len;
+    uint32_t reserved2;
+} SeyalAppRow;
+
 uint64_t seyal_app_create(void);
 int32_t seyal_app_destroy(uint64_t handle);
 int32_t seyal_app_apply(uint64_t handle, const SeyalAppAction *action);
 SeyalAppSnapshot seyal_app_snapshot(uint64_t handle);
 SeyalAppComposer seyal_app_composer(uint64_t handle);
 SeyalAppChrome seyal_app_chrome(uint64_t handle);
+SeyalAppShell seyal_app_shell(uint64_t handle);
+SeyalAppRow seyal_app_shell_row(uint64_t handle, uint16_t kind, uint32_t index);
+SeyalAppRow seyal_app_chrome_row(uint64_t handle, uint16_t kind, uint32_t index);
+SeyalAppRow seyal_app_block_row(uint64_t handle, uint32_t index);
+uint64_t seyal_app_recovery_param(uint64_t handle);
 SeyalAppAccessibility seyal_app_accessibility(uint64_t handle);
+SeyalAppTheme seyal_app_theme(uint16_t appearance);
 int32_t seyal_app_last_error(uint64_t handle);
 
 #ifdef __cplusplus

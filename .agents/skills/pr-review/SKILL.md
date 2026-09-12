@@ -9,6 +9,23 @@ Follow the canonical generic merge-readiness procedure in `.sdlc/framework/skill
 
 This is Seyal's user-facing final PR review entrypoint. A caller asking whether a PR is ready to merge should use this skill; the generic orchestrator will run or consume focused `code-review`, `verification`, and only the specialist reviews required by risk and project policy.
 
+## Mandatory cross-platform UI ownership gate
+
+For every PR that adds, changes, moves, or depends on product/UI behavior, explicitly trace ownership before considering merge readiness.
+
+The reviewer must establish all of the following:
+
+- the authoritative portable state/behavior lives in Rust;
+- native macOS Swift is limited to inherently platform-specific integration;
+- actions/events cross into Rust rather than being decided independently in Swift;
+- presentation state returned to Swift is derived from the authoritative Rust model;
+- no duplicate Workspace/Tab/Pane, Block, composer, focus/navigation, split/layout, agent, inspector, activity, or keyboard-command product authority exists in Swift;
+- the contract can be implemented by future Windows/Linux hosts without reimplementing Seyal product semantics.
+
+Legitimate Swift responsibilities include AppKit window/application lifecycle, native event capture/forwarding, IME/text-input bridging, accessibility bridging, clipboard/drag-drop, macOS system integration, and Metal drawable/surface hookup.
+
+**If a PR introduces, preserves, or moves portable Seyal product behavior/state into Swift without explicit accepted architecture authority, return `CHANGES_REQUIRED`.** Existing Swift implementation, passing UI tests, local convenience, or macOS-first delivery are not justification. If ownership is ambiguous or the Rust authority cannot be traced, return `INCONCLUSIVE` or `CHANGES_REQUIRED`; never infer portability from green CI.
+
 Apply only these Seyal-specific rules on top of the generic procedure:
 
 1. Review the owning GitHub Issue, `AGENTS.md`, and every governing architecture/ADR/spec/milestone source before accepting implementation rationale or completion claims.

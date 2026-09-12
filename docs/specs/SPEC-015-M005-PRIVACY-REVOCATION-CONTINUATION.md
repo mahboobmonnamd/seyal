@@ -13,7 +13,7 @@ This specification defines observable behavior when privacy, security or retenti
 It freezes:
 
 - who may commit a revocation;
-- monotonic revocation generations;
+- monotonic revocation generations and complete generation vectors;
 - immediate logical ineligibility;
 - queued `ContextBundle` and `RunWorkingSet` invalidation;
 - provider-request handoff fencing;
@@ -66,8 +66,8 @@ Before commit, the authority validates:
 request issuer identity / authority class
 target scope identity
 subject identity
-current scope/policy generation
-current revocation generation
+current composite policy generation
+current revocation-generation vector
 request provenance
 ```
 
@@ -82,8 +82,8 @@ RevocationEventId
 authorized issuer / authority reference
 target scope identity
 subject identity or policy-safe suppression identity
-prior generation
-new generation
+prior revocation-generation vector
+new revocation-generation vector
 reason class
 policy generation
 request provenance
@@ -95,18 +95,35 @@ provider-continuation disposition requirement
 
 The event never copies forbidden payload merely for explanation.
 
-## 5. Revocation generation and precedence
+## 5. Revocation generation, vector completeness and precedence
 
-Each relevant policy/scope domain has a monotonic revocation generation.
+Each policy/scope domain that can make the subject ineligible has its own monotonic revocation generation. A derived object or handoff never binds a single convenient generation when multiple scopes can apply.
+
+The canonical `RevocationFence`/generation vector contains every applicable domain determined by the current policy graph for that subject/build, including applicable user, project/repository, workspace, worktree, WorkItem, Attempt or other accepted ancestor/overlapping policy domains. Entries are sorted by stable domain-type + stable scope identity and contain at least:
+
+```text
+domain identity
+domain generation
+policy-generation dependency where applicable
+```
+
+Rules:
+
+- the policy authority, not a model/provider, determines the complete applicable-domain set;
+- adding/removing an applicable domain changes the vector identity even if existing generation numbers are unchanged;
+- every bundle, working-state derivative, queued provider handoff and continuation checkpoint binds the full vector relevant to its payload;
+- use-time revalidation compares every current applicable entry and verifies that no newly applicable domain is missing;
+- if the complete applicable set cannot be established, affected material fails closed as ineligible/undispatchable;
+- vector compression is permitted only if it is collision-safe and preserves exact invalidation semantics.
 
 Generation is ordering metadata, not authorization and not proof that an external provider deleted previously transmitted content.
 
-Normative rules:
+Normative precedence rules:
 
-1. A committed generation `N+1` dominates work based on `N`.
-2. Acceptance, revalidation, compaction, indexing or bundle building started on `N` cannot publish reusable/current state after `N+1` without full current revalidation.
-3. Revocation wins over concurrent acceptance/revalidation/supersession based on an older generation.
-4. Unknown generation at use time fails closed for affected material.
+1. A committed generation advance in any applicable domain dominates work based on the older vector.
+2. Acceptance, revalidation, compaction, indexing or bundle building started on the old vector cannot publish reusable/current state after the advance without full current revalidation.
+3. Revocation wins over concurrent acceptance/revalidation/supersession based on an older vector.
+4. Unknown/missing generation or incomplete vector at use time fails closed for affected material.
 5. Failed physical cleanup never restores logical eligibility.
 6. Version-aware/CAS-equivalent mutation is required where durable writers race.
 
@@ -146,7 +163,7 @@ This section governs provider/model payload handoff and other non-effectful exte
 
 An effectful tool/resource operation must use ADR-014 `Action`; it must not use this provider handoff check as a second effect-dispatch path.
 
-### 8.2 Final check and linearization
+### 8.2 Serializable final check and linearization
 
 Immediately before irreversible provider handoff, the provider adapter validates:
 
@@ -156,21 +173,19 @@ bundle is current and dispatchable
 all dependency generations are eligible
 scope identity is current
 policy generation is current
-privacy/revocation generation is current
+complete RevocationFence vector is current
 provider continuation checkpoint is eligible, if used
 ```
 
-There must be one explicit handoff linearization contract:
+The Runtime/privacy authority owns one serializable provider-handoff gate for revocable payload. Implementations may realize it with a lock, generation lease, one-shot fence token or equivalent, but semantics are mandatory:
 
-```text
-final eligibility check
-+ acquire/validate provider-handoff fence for the checked generation
-+ irreversible transport handoff
-```
+1. under the same serialization domain used by revocation commit, validate the exact current `RevocationFence` and acquire a one-shot handoff fence bound to the exact AgentRun binding, bundle/payload identity, provider adapter identity/version, vector and finite expiry;
+2. the adapter must cross the irreversible local transport boundary only while that fence is current; it must not release bytes using a detached check-then-send path after the fence is released;
+3. revocation commit and irreversible handoff are totally ordered by that gate: if revocation linearizes first, fence acquisition/use fails; if handoff linearizes first, the event is durably/auditably represented as already handed off before revocation;
+4. a stale/expired/revoked fence cannot be reused for another payload/request;
+5. if the adapter/transport cannot provide this enforceable local send boundary, fail closed for revocable payload.
 
-A revocation committed before that fence/handoff linearization wins and the request must not be handed off.
-
-If an adapter cannot prove that its eligibility check is fenced against a concurrent revocation before irreversible handoff, it must fail closed for revocable payload rather than claiming the old generation was safely sent.
+The implementation must not hold terminal hot-path resources while waiting for this gate. The gate covers only the final control-plane eligibility/handoff transition; external provider processing after irreversible transport is outside local rollback authority.
 
 A revocation after irreversible handoff cannot unsend the request and is represented truthfully.
 
@@ -180,7 +195,7 @@ A `RunWorkingSet`, summary or compaction remains derived state.
 
 Rules:
 
-1. Reusable derivatives retain complete policy-safe dependency identities/generations.
+1. Reusable derivatives retain complete policy-safe dependency identities/generations, including the full applicable revocation vector.
 2. A revoked dependency makes the affected derivative unavailable for reuse until rebuilt from still-eligible authority.
 3. Textual absence of the revoked phrase is not proof that a summary is independent of it.
 4. Compaction cannot increase authority or lower sensitivity.
@@ -214,6 +229,7 @@ provider adapter identity/version
 provider continuation reference
 checkpoint generation
 known dependency set
+complete RevocationFence vector
 ```
 
 A continuation from another AgentRun is not reusable merely because it belongs to the same workspace, project or repository.
@@ -226,7 +242,7 @@ A continuation checkpoint is eligible only when:
 
 - the exact binding remains current;
 - every Seyal-known dependency remains eligible;
-- the checkpoint's policy/revocation generation remains valid;
+- the checkpoint's complete policy/revocation vector remains valid and complete for the current applicable-domain set;
 - provider capability/policy permits reuse.
 
 An old checkpoint never becomes current merely because later cleanup succeeded.
@@ -239,7 +255,7 @@ Reuse is possible only if the provider contract supplies authoritative evidence 
 
 ```text
 new continuation reference or provider-safe-state identity
-current policy/revocation generation
+current policy generation + complete RevocationFence vector
 current dependency set
 exact AgentRun binding
 provider evidence/provenance
@@ -256,11 +272,11 @@ A late response from a continuation that became unsafe is not automatically reus
 Before local retention or semantic extraction, the response must pass current:
 
 - scope and AgentRun binding checks;
-- privacy/revocation generation checks;
+- complete privacy/revocation vector checks;
 - sensitivity/retention policy;
 - dependency/lineage eligibility.
 
-If clean lineage cannot be proven, the response is discarded or quarantined as non-reusable according to policy. It cannot recreate forgotten memory, refill a working set, or make the abandoned continuation current again.
+If clean lineage cannot be proven, the response payload is discarded. “Quarantine” may retain only bounded policy-safe, non-reconstructive metadata such as response/event identity, provider/adapter identity, timestamps and a typed rejection reason; it must not retain response text, embeddings, summaries, reversible hashes/locators or other material capable of reconstructing the revoked payload. If an accepted security/forensic policy requires retaining protected bytes, that storage becomes an explicit restricted cleanup obligation outside ordinary MemoryStore/RunWorkingSet/context reuse and cannot feed semantic extraction. The unsafe response cannot recreate forgotten memory, refill a working set, or make the abandoned continuation current again.
 
 ## 13. Provider deletion truthfulness
 
@@ -362,23 +378,35 @@ Local forgetting has explicit observable states:
 
 ```text
 RevocationRequested
-  -> RevocationCommitted
-       -> CleanupPending
-            -> LocalForgotten
-            -> CleanupDegraded
+  |\
+  | +--> RevocationRequestDegraded
+  |
+  +--> RevocationCommitUnknown
+  |      |\
+  |      | +-- authoritative reconciliation: committed --> RevocationCommitted
+  |      +---- authoritative reconciliation: not committed --> RevocationRequested / RevocationRequestDegraded
+  |
+  +--> RevocationCommitted
+          -> CleanupPending
+               |\
+               | +--> LocalForgotten
+               +----> CleanupDegraded
+                         +-- later authoritative reconciliation --> LocalForgotten
 ```
+
+There is no ordinary `LocalForgotten -> CleanupDegraded` transition. `LocalForgotten` is claimed only after all then-known required local obligations have already reached a successful/not-applicable terminal disposition. Discovery of a previously unknown obligation after such a claim is an integrity/audit incident and starts a new explicit cleanup/reconciliation obligation; it does not rewrite history as though the earlier state had never been claimed.
 
 Meanings:
 
 - `RevocationRequested`: request exists but authoritative generation has not committed; no completion claim.
+- `RevocationRequestDegraded`: bounded automatic pre-commit attempts are exhausted or the request cannot currently reach the durable authority; no authoritative revocation commit is claimed.
+- `RevocationCommitUnknown`: failure/timeout/crash occurred after the durable commit boundary may have been crossed, so commit outcome is unknown. Affected material fails closed as ineligible/undispatchable until authoritative generation reconciliation proves committed or not committed; the request is not blindly reissued as a fresh decision.
 - `RevocationCommitted`: logical ineligibility is authoritative immediately.
 - `CleanupPending`: required local physical redaction/removal work remains within bounded retry budget.
 - `LocalForgotten`: every required local cleanup obligation reached its policy-defined terminal successful/not-applicable disposition.
 - `CleanupDegraded`: automatic cleanup budget/deadline was exhausted or an obligation cannot currently complete. Logical ineligibility remains permanent; completion is **not** claimed; explicit reconciliation/manual/admin recovery is required.
 
-`CleanupDegraded` never re-enables the content and never restarts an unbounded automatic loop.
-
-A later successful reconciliation may transition `CleanupDegraded -> LocalForgotten` after current authority verifies every obligation.
+`RevocationRequestDegraded`, `RevocationCommitUnknown` and `CleanupDegraded` never re-enable content and never restart an unbounded automatic loop. Once commit is known to have occurred, logical ineligibility remains authoritative regardless of cleanup outcome.
 
 ## 18. Local forgetting obligations
 
@@ -392,15 +420,18 @@ Where applicable, completion requires:
 - persisted indexes/embeddings logically invalidated and physically handled per policy;
 - unsafe provider continuation fenced/abandoned;
 - tombstone/suppression metadata satisfies §14;
-- logs/errors do not retain reconstructable forbidden content.
+- logs/errors do not retain reconstructable forbidden content;
+- any accepted forensic/quarantine payload obligation from §12 reaches its separate restricted cleanup disposition.
 
 Physical cleanup state and logical eligibility remain distinct.
 
-## 19. Failure and retry behavior
+## 19. Failure, ambiguity and retry behavior
 
-### Before revocation commit
+### Before or around revocation commit
 
-Persistence failure means no authoritative revocation has committed. Do not claim completion. Retry is bounded or a degraded request state is surfaced.
+A failure that is authoritatively proven to occur **before** the durable revocation commit boundary leaves the request in `RevocationRequested`; no authoritative revocation has committed. Retry is permitted only within a finite attempt/deadline budget, after which the request becomes `RevocationRequestDegraded`.
+
+A timeout/crash/persistence error for which the system cannot prove whether the durable commit boundary was crossed becomes `RevocationCommitUnknown`. Do not infer “not committed” from missing acknowledgement. Affected material fails closed while the Runtime/owning revocation authority reconciles the current durable generation/vector. If reconciliation proves the event committed, enter `RevocationCommitted`; if it proves it did not commit, return to `RevocationRequested` only when retry budget remains, otherwise `RevocationRequestDegraded`. No duplicate semantic revocation decision is created merely because an acknowledgement was lost.
 
 ### After revocation commit
 
@@ -424,8 +455,10 @@ Provider/network failure may leave provider deletion `Requested`/`Unknown`, but 
 4. Models/tools/providers/terminal text cannot clear or fabricate revocation authority.
 5. Generation tokens are not authorization credentials.
 6. Provider continuation widening is explicit, never inferred.
-7. Late abandoned-continuation responses cannot bypass current policy.
-8. Provider handoff must satisfy §8 fencing or fail closed.
+7. Late abandoned-continuation responses cannot retain/reuse unsafe payload through quarantine.
+8. Provider handoff must satisfy the serializable §8 fencing contract or fail closed.
+9. Revocation vectors cover every currently applicable policy/scope domain and fail closed when completeness cannot be established.
+10. Unknown durable commit outcome is reconciled; it is never treated as proof of no commit.
 
 ## 21. Resource/performance requirements
 
@@ -434,8 +467,8 @@ Revocation/invalidation work is bounded, cancellable and priority-aware.
 Required controls:
 
 - bounded invalidation batches;
-- finite retry ceilings/deadlines;
-- bounded pending-cleanup metadata;
+- finite pre-commit, cleanup and reconciliation retry ceilings/deadlines;
+- bounded pending/unknown/degraded metadata;
 - disk/RSS accounting and cleanup pressure limits;
 - no unbounded full-repository rescans per revocation;
 - no synchronous dependency from terminal I/O/rendering to revocation, persistence, provider deletion or index rebuild.
@@ -444,16 +477,19 @@ Concrete budgets are calibrated under #681 before implementation readiness.
 
 ## 22. Required conformance tests
 
-### Authority
+### Authority / generation vector
 
 - model/provider/stale worker submits well-formed cross-scope revocation -> rejected/non-mutating;
 - authorized current user/policy request -> commits exactly once;
-- stale generation mutation -> rejected.
+- stale generation mutation -> rejected;
+- subject affected by user + workspace + worktree policy binds all applicable generations; advancing any one invalidates old work;
+- newly applicable ancestor/overlapping policy domain invalidates a vector that omitted it; incomplete applicable-domain enumeration fails closed.
 
 ### Bundle/provider handoff
 
-- bundle built at `N`, revocation commits `N+1` before handoff fence -> send prevented;
-- revocation races final provider handoff -> deterministic winner at the defined fence;
+- bundle built at vector `V`, revocation advances to `V+` before handoff fence -> send prevented;
+- revocation races final provider handoff -> deterministic winner at the Runtime/privacy serialization gate;
+- adapter cannot release bytes after fence invalidation or outside the one-shot exact payload/AgentRun binding;
 - adapter without enforceable handoff fence -> fail closed for revocable payload;
 - effectful tool cannot bypass ADR-014 via provider handoff path.
 
@@ -468,9 +504,9 @@ Concrete budgets are calibrated under #681 before implementation readiness.
 
 - continuation from sibling AgentRun in same workspace -> rejected by default;
 - relevant revocation invalidates old checkpoint permanently;
-- provider proves absence and issues safe state -> new current-generation checkpoint may be created;
+- provider proves absence and issues safe state -> new current-vector checkpoint may be created;
 - absence unprovable -> continuation abandoned;
-- late unsafe response -> quarantined/discarded, not memory/context input.
+- late unsafe response -> payload discarded; any quarantine retains only bounded non-reconstructive metadata and is not memory/context input.
 
 ### Anti-resurrection
 
@@ -480,12 +516,17 @@ Concrete budgets are calibrated under #681 before implementation readiness.
 - opaque suppression identity does not reveal low-entropy secret or allow cross-scope correlation;
 - independent post-revocation evidence may propose through normal policy.
 
-### Forgetting completion
+### Forgetting completion / persistence ambiguity
 
+- proven pre-commit persistence failure -> bounded `RevocationRequested` retry then `RevocationRequestDegraded`, no false commit claim;
+- timeout/crash with possible durable commit -> `RevocationCommitUnknown`, affected use fails closed and no blind duplicate request;
+- reconciliation of unknown outcome finds committed generation -> `RevocationCommitted`;
+- reconciliation proves no commit -> retry only if budget remains, otherwise `RevocationRequestDegraded`;
 - generation commit immediately denies use while cleanup is pending;
 - cleanup succeeds -> `LocalForgotten`;
 - retry/deadline exhausted -> `CleanupDegraded`, no false completion and no infinite automatic retries;
-- later reconciliation can complete degraded cleanup;
+- later reconciliation can transition `CleanupDegraded -> LocalForgotten`;
+- ordinary state machine never transitions `LocalForgotten -> CleanupDegraded`;
 - local forgotten + provider unsupported remains two distinct truths.
 
 ### Action race
@@ -504,12 +545,14 @@ Concrete budgets are calibrated under #681 before implementation readiness.
 SPEC-015 is acceptable only when:
 
 - revocation authority and scope mutation are authenticated and explicit;
-- logical denial is immediate after commit;
-- provider handoff has a deterministic race/linearization contract;
+- complete applicable revocation-generation vectors are canonical and fail closed when incomplete;
+- logical denial is immediate after known commit, and unknown commit outcomes fail closed pending reconciliation;
+- provider handoff has a deterministic serializable race/linearization contract owned by Runtime/privacy authority;
 - effectful tools cannot bypass ADR-014;
 - continuations are exact-AgentRun-bound by default and safely re-attested after revocation only with authoritative provider evidence;
+- unsafe late continuation payload cannot survive through ordinary quarantine;
 - suppression matching is scope-bound, opaque, kind-independent, applicability-aware and stable across changed lineage/fingerprint/later generations;
-- local forgetting has explicit pending/completed/degraded states and finite convergence behavior;
+- local forgetting has explicit requested/unknown/degraded/pending/completed states and finite convergence behavior;
 - already transmitted external content is represented truthfully;
 - all derived-state invalidation is dependency/generation fenced;
 - fault/security/property tests cover the race matrix;

@@ -2,19 +2,21 @@ import XCTest
 
 @MainActor
 final class SeyalHostUITests: XCTestCase {
-    override func setUp() async throws {
+    override func setUp() {
         continueAfterFailure = false
-        XCUIApplication().terminate()
     }
 
-    override func tearDown() async throws {
-        XCUIApplication().terminate()
-        try await super.tearDown()
+    /// Kill a leftover Seyal.app from the previous case before launch.
+    /// Must run on the test's MainActor isolation, not XCTest's sync tearDown.
+    private func hostedApp() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.terminate()
+        app.launch()
+        return app
     }
 
     func testApplicationLaunchesOnePaneHost() throws {
-        let app = XCUIApplication()
-        app.launch()
+        let app = hostedApp()
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
         // Attach/resize used to recurse into SIGSEGV within ~250ms of a real
         // `open`. Chrome existence is not enough; the process must stay up.
@@ -48,8 +50,7 @@ final class SeyalHostUITests: XCTestCase {
     }
 
     func testFlowSurfaceIsComposerAndBlocks() throws {
-        let app = XCUIApplication()
-        app.launch()
+        let app = hostedApp()
         XCTAssertTrue(app.descendants(matching: .any)["seyal-composer"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.descendants(matching: .any)["seyal-blocks-scroll"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["seyal-blocks"].waitForExistence(timeout: 5))
@@ -60,8 +61,7 @@ final class SeyalHostUITests: XCTestCase {
     }
 
     func testComposerSubmitAndTerminalFocusStayOnRustEligibility() throws {
-        let app = XCUIApplication()
-        app.launch()
+        let app = hostedApp()
         waitForUsablePty(in: app)
         let composer = app.descendants(matching: .any)["seyal-composer"]
         XCTAssertTrue(composer.waitForExistence(timeout: 12))
@@ -110,8 +110,7 @@ final class SeyalHostUITests: XCTestCase {
     }
 
     func testAlternateScreenTakeoverDoesNotCrashTheHost() throws {
-        let app = XCUIApplication()
-        app.launch()
+        let app = hostedApp()
         waitForUsablePty(in: app)
         let composer = app.descendants(matching: .any)["seyal-composer"]
         XCTAssertTrue(composer.waitForExistence(timeout: 12))
@@ -174,8 +173,7 @@ final class SeyalHostUITests: XCTestCase {
     }
 
     func testCopyPasteAndQuitMenusAreWired() throws {
-        let app = XCUIApplication()
-        app.launch()
+        let app = hostedApp()
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
         app.typeKey("c", modifierFlags: .command)
         app.typeKey("v", modifierFlags: .command)

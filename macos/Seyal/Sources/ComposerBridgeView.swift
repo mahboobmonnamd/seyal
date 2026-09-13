@@ -106,6 +106,9 @@ final class ComposerBridgeView: NSView, NSTextViewDelegate {
         isHidden = direct
         let available = composer.mode == UInt16(SEYAL_APP_COMPOSER_AVAILABLE.rawValue)
         let busy = composer.mode == UInt16(SEYAL_APP_COMPOSER_BUSY.rawValue)
+        if direct || composer.epoch != lastEpoch {
+            textView.inputContext?.discardMarkedText()
+        }
         textView.isEditable = available
         execute.title = copyString(UInt16(SEYAL_APP_COPY_COMPOSER_EXECUTE))
         execute.isEnabled = composer.flags & UInt16(SEYAL_APP_COMPOSER_CAN_SUBMIT) != 0

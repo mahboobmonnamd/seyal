@@ -153,6 +153,20 @@ final class SeyalHostComponentTests: XCTestCase {
         XCTAssertTrue(valid.isValid)
         XCTAssertEqual(valid.regionIDs, [7])
     }
+
+    func testFlowSurfaceDoesNotAcceptFirstResponderWhileUnbound() {
+        let handle = seyal_app_create()
+        defer { XCTAssertEqual(seyal_app_destroy(handle), 0) }
+        XCTAssertEqual(
+            seyal_app_snapshot(handle).eligibility,
+            UInt16(SEYAL_APP_ELIGIBILITY_UNBOUND.rawValue)
+        )
+        let surface = InteractiveMetalSurfaceView(frame: .zero, appHandle: handle)
+        XCTAssertFalse(
+            surface.acceptsFirstResponder,
+            "Flow/unbound IME belongs to the composer, not the Metal surface"
+        )
+    }
 }
 
 private func utf8(_ row: SeyalAppRow) -> String {

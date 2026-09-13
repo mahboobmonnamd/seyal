@@ -6,6 +6,7 @@ import QuartzCore
 final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTextInputClient {
     private let appHandle: UInt64
     private var marked = ""
+    private var discardingMark = false
     var onBridgeBecameUsable: (() -> Void)?
     var onRequestComposerFocus: (() -> Void)?
     var observedAlternateScreen = false
@@ -22,6 +23,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
 
     override func restoreNativeInteractionAfterRendererReady() -> Bool {
         if seyal_app_snapshot(appHandle).eligibility == UInt16(SEYAL_APP_ELIGIBILITY_FLOW.rawValue) {
+            discardUncommittedMark()
             onRequestComposerFocus?()
             return true
         }
@@ -40,14 +42,22 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
         }
     }
 
-    override var acceptsFirstResponder: Bool { true }
+    override var acceptsFirstResponder: Bool { allowsDirectTerminalInput }
 
     override func becomeFirstResponder() -> Bool {
+        guard allowsDirectTerminalInput else { return false }
         let became = super.becomeFirstResponder()
         if became {
             inputContext?.activate()
         }
         return became
+    }
+
+    override func resignFirstResponder() -> Bool {
+        if !allowsDirectTerminalInput {
+            discardUncommittedMark()
+        }
+        return super.resignFirstResponder()
     }
 
     override func keyDown(with event: NSEvent) {
@@ -79,9 +89,20 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
     }
 
     func unmarkText() {
+        if discardingMark {
+            marked = ""
+            return
+        }
         let committed = marked
         marked = ""
         submitIfAllowed(committed)
+    }
+
+    private func discardUncommittedMark() {
+        discardingMark = true
+        marked = ""
+        inputContext?.discardMarkedText()
+        discardingMark = false
     }
 
     func validAttributesForMarkedText() -> [NSAttributedString.Key] { [] }

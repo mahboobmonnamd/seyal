@@ -11,6 +11,7 @@
 pub mod app;
 pub mod chrome;
 pub mod composer;
+pub mod live_tail;
 pub mod presentation;
 pub mod recovery;
 pub mod shell;

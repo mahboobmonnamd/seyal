@@ -10,7 +10,11 @@ use crate::app::{
     PresentationEligibility, APP_ABI_VERSION,
 };
 use crate::chrome::{AgentId, AttentionId, InspectorMode, LeftPanelMode};
-use crate::composer::{ComposerMode, RuntimeBlockRecord, BLOCK_PROMPT, COMPOSER_EXECUTE_LABEL};
+use crate::composer::{
+    BlockPresentationState, ComposerMode, RuntimeBlockRecord, BLOCK_PROMPT, COMPOSER_EXECUTE_LABEL,
+};
+use crate::live_tail::{project_block_history, LiveTailProjection};
+use crate::presentation::PresentationMode;
 use crate::recovery::{AttemptOutcome, LaunchResult, RecoveryEffect, RecoveryStage};
 
 use super::{allocate_handle, with_active_client};
@@ -581,24 +585,47 @@ pub struct SeyalAppBlockSpan {
 pub extern "C" fn seyal_app_block_span(handle: u64, index: u32) -> SeyalAppBlockSpan {
     APPS.with(|apps| {
         let apps = apps.borrow();
-        let Some(composer) = apps
-            .get(&handle)
-            .and_then(|state| state.root.snapshot().composer)
+        let Some(snapshot) = apps.get(&handle).map(|state| state.root.snapshot()) else {
+            return SeyalAppBlockSpan {
+                start_line: 0,
+                end_line: 0,
+            };
+        };
+        let Some(block) = snapshot
+            .composer
+            .as_ref()
+            .and_then(|composer| composer.blocks.get(index as usize))
         else {
             return SeyalAppBlockSpan {
                 start_line: 0,
                 end_line: 0,
             };
         };
-        let Some(block) = composer.blocks.get(index as usize) else {
-            return SeyalAppBlockSpan {
+        let mode = match snapshot.eligibility {
+            PresentationEligibility::Flow => PresentationMode::Flow,
+            PresentationEligibility::Raw => PresentationMode::Raw,
+            PresentationEligibility::Tui => PresentationMode::Tui,
+            PresentationEligibility::Unbound => {
+                return SeyalAppBlockSpan {
+                    start_line: 0,
+                    end_line: 0,
+                };
+            }
+        };
+        match project_block_history(
+            mode,
+            block.start_line,
+            block.end_line,
+            block.state == BlockPresentationState::Running,
+        ) {
+            LiveTailProjection::Span(span) => SeyalAppBlockSpan {
+                start_line: span.start_line,
+                end_line: span.end_line,
+            },
+            LiveTailProjection::FailClosed => SeyalAppBlockSpan {
                 start_line: 0,
                 end_line: 0,
-            };
-        };
-        SeyalAppBlockSpan {
-            start_line: block.start_line,
-            end_line: block.end_line.unwrap_or(0),
+            },
         }
     })
 }

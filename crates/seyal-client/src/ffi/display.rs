@@ -245,8 +245,11 @@ pub extern "C" fn seyal_bridge_flush_writable() -> i32 {
     }
 }
 
-/// Request a bounded canonical primary-history range for a completed Block.
-/// The response is delivered asynchronously into the disposable client cache.
+/// Request a bounded canonical primary-history range.
+///
+/// Completed Blocks pass a trusted finite `end_line`. Running Flow live tails
+/// pass `end_line == u64::MAX`. The response is delivered asynchronously into
+/// the disposable client cache.
 #[unsafe(no_mangle)]
 pub extern "C" fn seyal_bridge_request_history_range(
     block_id: u64,

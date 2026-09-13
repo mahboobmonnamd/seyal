@@ -298,6 +298,7 @@ SeyalAppRow seyal_app_copy(uint64_t handle, uint16_t kind);
 
 typedef struct SeyalAppBlockSpan {
     uint64_t start_line;
+    /* Inclusive end. UINT64_MAX is an open running Flow live tail. */
     uint64_t end_line;
 } SeyalAppBlockSpan;
 

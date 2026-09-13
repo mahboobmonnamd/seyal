@@ -58,6 +58,34 @@ pub enum BlockPresentationState {
     Failed,
 }
 
+impl BlockPresentationState {
+    /// C07 status copy. Duration is omitted until Runtime publishes it.
+    pub fn transcript_status(self) -> &'static str {
+        match self {
+            Self::Running => "/ running",
+            Self::Completed => "",
+            Self::Failed => "/ failed",
+        }
+    }
+}
+
+impl ComposerMode {
+    /// C09 editor placeholder. Hidden still uses the available prompt because
+    /// first-UI Flow shows the composer before a Pane is fully eligible.
+    pub fn editor_placeholder(&self) -> &'static str {
+        match self {
+            Self::Busy { .. } => "Command running...",
+            Self::Available | Self::Hidden => "Type a command...",
+        }
+    }
+}
+
+/// C07 prompt glyph. Not a shell prompt and not part of the Runtime command.
+pub const BLOCK_PROMPT: &str = "$";
+
+/// C09 execute affordance.
+pub const COMPOSER_EXECUTE_LABEL: &str = "⏎";
+
 /// Canonical Runtime/Workspace Block metadata consumed by the projection.
 /// This type does not create, complete, or own Blocks.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -702,6 +730,32 @@ mod tests {
             }),
             Err(ComposerError::UnknownPane)
         );
+    }
+
+    #[test]
+    fn adaptive_depth_block_and_composer_copy_match_c07_c09() {
+        assert_eq!(
+            BlockPresentationState::Running.transcript_status(),
+            "/ running"
+        );
+        assert_eq!(BlockPresentationState::Completed.transcript_status(), "");
+        assert_eq!(
+            BlockPresentationState::Failed.transcript_status(),
+            "/ failed"
+        );
+        assert_eq!(
+            ComposerMode::Available.editor_placeholder(),
+            "Type a command..."
+        );
+        assert_eq!(
+            ComposerMode::Busy {
+                process: "sleep".into()
+            }
+            .editor_placeholder(),
+            "Command running..."
+        );
+        assert_eq!(BLOCK_PROMPT, "$");
+        assert_eq!(COMPOSER_EXECUTE_LABEL, "⏎");
     }
 
     #[test]

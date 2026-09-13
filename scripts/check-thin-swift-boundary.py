@@ -59,6 +59,13 @@ def main() -> int:
                 errors.append(f"{rel} introduces portable product authority token {token!r}")
         if re.search(r"enum\s+Workspace(Id|Mode|State)\b", text):
             errors.append(f"{rel} introduces a Swift Workspace product enum")
+        if path.name == "ProductChromeHostView.swift":
+            for token in ("NativeBlockRecord", "currentTimeline("):
+                if token in text:
+                    errors.append(
+                        f"{rel} owns Block presentation from {token!r}; "
+                        "paint seyal_app_block_row only"
+                    )
     if errors:
         print("Thin-Swift boundary failed:", file=sys.stderr)
         for error in errors:

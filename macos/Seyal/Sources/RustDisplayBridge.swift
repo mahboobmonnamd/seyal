@@ -364,7 +364,7 @@ private final class RustBridgeTeardownCoordinator: @unchecked Sendable {
 @MainActor
 final class RustDisplayBridge {
   typealias FrameHandler = @MainActor (SeyalPreparedFrame) -> Void
-  typealias TimelineHandler = @MainActor ([NativeBlockRecord]) -> Void
+  typealias TimelineHandler = @MainActor () -> Void
   typealias HistoryHandler = @MainActor (NativeHistoryRange) -> Void
   typealias ComposerResultHandler = @MainActor (NativeComposerResult) -> Void
   typealias ErrorHandler = @MainActor (Int32) -> Void
@@ -499,7 +499,7 @@ final class RustDisplayBridge {
     onFrame: @escaping FrameHandler,
     onError: @escaping ErrorHandler,
     onStatusChanged: @escaping StatusHandler = {},
-    onTimeline: @escaping TimelineHandler = { _ in },
+    onTimeline: @escaping TimelineHandler = {},
     onHistory: @escaping HistoryHandler = { _ in },
     onComposerResult: @escaping ComposerResultHandler = { _ in },
     paneID: String = "unbound",
@@ -1114,13 +1114,13 @@ final class RustDisplayBridge {
       runtimeBlockMetadata = currentBlockMetadata()
       publishHistoryRanges()
       publishComposerResult()
+      let revision = seyal_bridge_block_timeline_revision()
+      if revision != lastTimelineRevision {
+        lastTimelineRevision = revision
+        onTimeline()
+      }
       if result == 1 {
         publishCurrentFrame()
-        let revision = seyal_bridge_block_timeline_revision()
-        if revision != lastTimelineRevision {
-          lastTimelineRevision = revision
-          onTimeline(currentTimeline())
-        }
         continue
       }
       if result == 0 {

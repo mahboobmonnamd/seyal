@@ -1,4 +1,6 @@
-//! Portable shell chrome: agents, inspector, attention, and left-panel mode.
+//! Portable shell chrome: agents, inspector, attention, left-panel mode, and
+//! which shell regions are visible. M001 first UI recedes sidebar/inspector/tab
+//! strip (`docs/architecture/ui/M001-FIRST-UI-DESIGN.md`).
 //!
 //! This module derives inspector/attention projections from authoritative
 //! [`crate::shell::ShellSnapshot`] plus activity rows supplied by the host.
@@ -147,6 +149,12 @@ pub enum ChromeAction {
     /// Host applied a Workspace/Tab/Pane navigation action. Clears agent
     /// selection without inventing new composition identities.
     ContextNavigated,
+    /// Shell-region visibility. Receded is the M001 first-UI default.
+    SetShellVisibility {
+        left: bool,
+        inspector: bool,
+        tab_strip: bool,
+    },
 }
 
 /// Navigation the host must apply to [`crate::shell::ShellState`].
@@ -160,6 +168,9 @@ pub struct ChromeEffect {
 pub struct ChromeSnapshot {
     pub left_panel: LeftPanelMode,
     pub inspector_mode: InspectorMode,
+    pub left_visible: bool,
+    pub inspector_visible: bool,
+    pub tab_strip_visible: bool,
     pub selected_agent: Option<AgentId>,
     pub agents: Vec<AgentRecord>,
     pub inspector_rows: Vec<InspectorRow>,
@@ -173,6 +184,9 @@ pub struct ChromeSnapshot {
 pub struct ChromeState {
     left_panel: LeftPanelMode,
     inspector_mode: InspectorMode,
+    left_visible: bool,
+    inspector_visible: bool,
+    tab_strip_visible: bool,
     selected_agent: Option<AgentId>,
     agents: HashMap<WorkspaceId, Vec<AgentRecord>>,
     attention: Vec<AttentionItem>,
@@ -184,6 +198,9 @@ impl Default for ChromeState {
         Self {
             left_panel: LeftPanelMode::Workspaces,
             inspector_mode: InspectorMode::Context,
+            left_visible: false,
+            inspector_visible: false,
+            tab_strip_visible: false,
             selected_agent: None,
             agents: HashMap::new(),
             attention: Vec::new(),
@@ -245,6 +262,16 @@ impl ChromeState {
                 self.selected_agent = None;
                 Ok(ChromeEffect::default())
             }
+            ChromeAction::SetShellVisibility {
+                left,
+                inspector,
+                tab_strip,
+            } => {
+                self.left_visible = left;
+                self.inspector_visible = inspector;
+                self.tab_strip_visible = tab_strip;
+                Ok(ChromeEffect::default())
+            }
         }
     }
 
@@ -254,6 +281,9 @@ impl ChromeState {
         ChromeSnapshot {
             left_panel: self.left_panel,
             inspector_mode: self.inspector_mode,
+            left_visible: self.left_visible,
+            inspector_visible: self.inspector_visible,
+            tab_strip_visible: self.tab_strip_visible,
             selected_agent: self.selected_agent.clone(),
             agents: self.agents_for(shell.active_workspace).to_vec(),
             inspector_rows,
@@ -625,6 +655,31 @@ mod tests {
             .unwrap();
         assert_eq!(shell.snapshot().active_tab, tab(2));
         assert!(chrome.snapshot(&shell.snapshot()).selected_agent.is_none());
+    }
+
+    #[test]
+    fn first_ui_recedes_shell_chrome_until_an_action_shows_it() {
+        let shell = seed_shell();
+        let snap = shell.snapshot();
+        let mut chrome = ChromeState::new();
+        let initial = chrome.snapshot(&snap);
+        assert!(!initial.left_visible);
+        assert!(!initial.inspector_visible);
+        assert!(!initial.tab_strip_visible);
+        chrome
+            .apply(
+                ChromeAction::SetShellVisibility {
+                    left: true,
+                    inspector: true,
+                    tab_strip: true,
+                },
+                &snap,
+            )
+            .unwrap();
+        let shown = chrome.snapshot(&snap);
+        assert!(shown.left_visible);
+        assert!(shown.inspector_visible);
+        assert!(shown.tab_strip_visible);
     }
 
     #[test]

@@ -122,3 +122,26 @@ final class ThinPaneHostView: NSView {
     }
 }
 
+extension SeyalAppAction {
+    /// Copy snapshot identity into the action fence. Snapshot flags are not
+    /// action flags; SNAP_* must be translated to FLAG_*.
+    mutating func applySnapshotFence(_ snapshot: SeyalAppSnapshot) {
+        fence_pane_lo = snapshot.pane_lo
+        fence_pane_hi = snapshot.pane_hi
+        fence_execution_lo = snapshot.execution_lo
+        fence_execution_hi = snapshot.execution_hi
+        fence_attachment_lo = snapshot.attachment_lo
+        fence_attachment_hi = snapshot.attachment_hi
+        fence_epoch = snapshot.epoch
+        if snapshot.flags & UInt16(SEYAL_APP_SNAP_HAS_EXECUTION) != 0 {
+            flags |= UInt16(SEYAL_APP_FLAG_HAS_EXECUTION)
+        }
+        if snapshot.flags & UInt16(SEYAL_APP_SNAP_HAS_ATTACHMENT) != 0 {
+            flags |= UInt16(SEYAL_APP_FLAG_HAS_ATTACHMENT)
+        }
+        if snapshot.flags & UInt16(SEYAL_APP_SNAP_CONTROLLER) != 0 {
+            flags |= UInt16(SEYAL_APP_FLAG_CONTROLLER)
+        }
+    }
+}
+

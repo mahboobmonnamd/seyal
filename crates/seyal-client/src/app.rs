@@ -167,6 +167,11 @@ pub enum AppAction {
     FocusPane {
         id: PaneId,
     },
+    SetShellVisibility {
+        left: bool,
+        inspector: bool,
+        tab_strip: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -388,6 +393,11 @@ impl ApplicationRoot {
             AppAction::SelectWorkspace { id } => self.select_workspace(id),
             AppAction::SelectTab { id } => self.select_tab(id),
             AppAction::FocusPane { id } => self.focus_pane(id),
+            AppAction::SetShellVisibility {
+                left,
+                inspector,
+                tab_strip,
+            } => self.set_shell_visibility(left, inspector, tab_strip),
         };
         match result {
             Ok(()) => {
@@ -667,6 +677,26 @@ impl ApplicationRoot {
         let shell = self.shell.snapshot();
         self.chrome
             .apply(ChromeAction::SetInspectorMode(mode), &shell)
+            .map(|_| ())
+            .map_err(chrome_error)
+    }
+
+    fn set_shell_visibility(
+        &mut self,
+        left: bool,
+        inspector: bool,
+        tab_strip: bool,
+    ) -> Result<(), AppError> {
+        let shell = self.shell.snapshot();
+        self.chrome
+            .apply(
+                ChromeAction::SetShellVisibility {
+                    left,
+                    inspector,
+                    tab_strip,
+                },
+                &shell,
+            )
             .map(|_| ())
             .map_err(chrome_error)
     }
@@ -952,6 +982,9 @@ mod tests {
         assert!(!snap.composer_eligible);
         assert_eq!(snap.generation, 1);
         assert_eq!(root.snapshot(), root.snapshot());
+        assert!(!snap.chrome.left_visible);
+        assert!(!snap.chrome.inspector_visible);
+        assert!(!snap.chrome.tab_strip_visible);
     }
 
     #[test]

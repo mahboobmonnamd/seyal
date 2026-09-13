@@ -10,6 +10,7 @@ final class ProductChromeHostView: NSView {
     private let left = NSView()
     private let inspector = NSStackView()
     private let attention = NSStackView()
+    private let transcript = NSScrollView()
     private let blocks = NSStackView()
     private let composer: ComposerBridgeView
     private let workspacesButton = NSButton(title: "Workspaces", target: nil, action: nil)
@@ -19,9 +20,20 @@ final class ProductChromeHostView: NSView {
     private let inspectorColumn = NSView()
     private let centerColumn = NSView()
     private var recoveryTimer: Timer?
-    private var nativeBlocks: [NativeBlockRecord] = []
     private var lastSnapshotGeneration: UInt64 = .max
     private var lastEligibility: UInt16 = .max
+    private var lastProjectedExecution = (lo: UInt64(0), hi: UInt64(0))
+    private var lastBlockCount: Int = 0
+    private var blockCards: [UInt64: CommandBlockView] = [:]
+    private var transcriptFrameRevision: UInt64 = 0
+    private var paneFollowsTranscript: [NSLayoutConstraint] = []
+    private var paneFillsCenter: [NSLayoutConstraint] = []
+    private var centerLeadingHost: NSLayoutConstraint!
+    private var centerTrailingHost: NSLayoutConstraint!
+    private var centerTopHost: NSLayoutConstraint!
+    private var centerLeadingLeft: NSLayoutConstraint!
+    private var centerTrailingInspector: NSLayoutConstraint!
+    private var centerTopTab: NSLayoutConstraint!
 
     override init(frame frameRect: NSRect) {
         pane = ThinPaneHostView(frame: frameRect)
@@ -79,18 +91,37 @@ final class ProductChromeHostView: NSView {
         inspectorColumn.wantsLayer = true
         inspectorColumn.addSubview(inspector)
         inspectorColumn.addSubview(attention)
-        inspectorColumn.addSubview(recoveryLabel)
 
         blocks.orientation = .vertical
-        blocks.alignment = .leading
-        blocks.spacing = 8
+        blocks.alignment = .width
+        blocks.spacing = 22
+        blocks.edgeInsets = NSEdgeInsets(top: 8, left: 0, bottom: 8, right: 0)
         blocks.translatesAutoresizingMaskIntoConstraints = false
         expose(blocks, identifier: "seyal-blocks")
         composer.setAccessibilityIdentifier("seyal-composer")
 
+        let clip = TranscriptClipView()
+        clip.drawsBackground = false
+        clip.copiesOnScroll = false
+        clip.postsBoundsChangedNotifications = true
+        transcript.contentView = clip
+        transcript.drawsBackground = false
+        transcript.borderType = .noBorder
+        transcript.hasVerticalScroller = true
+        transcript.hasHorizontalScroller = false
+        transcript.autohidesScrollers = true
+        transcript.automaticallyAdjustsContentInsets = false
+        transcript.translatesAutoresizingMaskIntoConstraints = false
+        transcript.documentView = blocks
+        transcript.setAccessibilityRole(.scrollArea)
+        transcript.setAccessibilityIdentifier("seyal-blocks-scroll")
+
         centerColumn.translatesAutoresizingMaskIntoConstraints = false
         centerColumn.wantsLayer = true
-        centerColumn.addSubview(blocks)
+        // Transcript chrome sits under the Pane Metal compositor. Flow clears
+        // the drawable to transparent and paints only Block-body clips, so
+        // command headers remain AppKit while output glyphs composite on top.
+        centerColumn.addSubview(transcript)
         centerColumn.addSubview(pane)
         centerColumn.addSubview(composer)
 
@@ -98,12 +129,15 @@ final class ProductChromeHostView: NSView {
         addSubview(left)
         addSubview(centerColumn)
         addSubview(inspectorColumn)
+        addSubview(recoveryLabel)
+        recoveryLabel.alphaValue = 0
+        recoveryLabel.setAccessibilityElement(true)
 
         pane.setContentHuggingPriority(.defaultLow, for: .vertical)
         pane.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
         composer.setContentHuggingPriority(.required, for: .vertical)
-        blocks.setContentHuggingPriority(.defaultHigh, for: .vertical)
-        let paneFill = pane.heightAnchor.constraint(greaterThanOrEqualToConstant: 240)
+        transcript.setContentHuggingPriority(NSLayoutConstraint.Priority(1), for: .vertical)
+        transcript.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
 
         NSLayoutConstraint.activate([
             material.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -141,27 +175,46 @@ final class ProductChromeHostView: NSView {
             attention.leadingAnchor.constraint(equalTo: inspector.leadingAnchor),
             attention.trailingAnchor.constraint(equalTo: inspector.trailingAnchor),
             attention.topAnchor.constraint(equalTo: inspector.bottomAnchor, constant: 12),
-            recoveryLabel.leadingAnchor.constraint(equalTo: inspector.leadingAnchor),
-            recoveryLabel.trailingAnchor.constraint(equalTo: inspector.trailingAnchor),
-            recoveryLabel.bottomAnchor.constraint(equalTo: inspectorColumn.bottomAnchor, constant: -10),
+            recoveryLabel.leadingAnchor.constraint(equalTo: leadingAnchor),
+            recoveryLabel.topAnchor.constraint(equalTo: topAnchor),
+            recoveryLabel.widthAnchor.constraint(equalToConstant: 1),
+            recoveryLabel.heightAnchor.constraint(equalToConstant: 1),
 
-            centerColumn.leadingAnchor.constraint(equalTo: left.trailingAnchor),
-            centerColumn.trailingAnchor.constraint(equalTo: inspectorColumn.leadingAnchor),
-            centerColumn.topAnchor.constraint(equalTo: tabStrip.bottomAnchor),
             centerColumn.bottomAnchor.constraint(equalTo: bottomAnchor),
-            blocks.leadingAnchor.constraint(equalTo: centerColumn.leadingAnchor, constant: 12),
-            blocks.trailingAnchor.constraint(equalTo: centerColumn.trailingAnchor, constant: -12),
-            blocks.topAnchor.constraint(equalTo: centerColumn.topAnchor, constant: 10),
-            blocks.heightAnchor.constraint(greaterThanOrEqualToConstant: 8),
-            pane.leadingAnchor.constraint(equalTo: centerColumn.leadingAnchor, constant: 8),
-            pane.trailingAnchor.constraint(equalTo: centerColumn.trailingAnchor, constant: -8),
-            pane.topAnchor.constraint(equalTo: blocks.bottomAnchor, constant: 8),
-            paneFill,
-            composer.leadingAnchor.constraint(equalTo: centerColumn.leadingAnchor, constant: 12),
-            composer.trailingAnchor.constraint(equalTo: centerColumn.trailingAnchor, constant: -12),
-            composer.topAnchor.constraint(equalTo: pane.bottomAnchor, constant: 8),
-            composer.bottomAnchor.constraint(equalTo: centerColumn.bottomAnchor, constant: -10),
+            transcript.leadingAnchor.constraint(equalTo: centerColumn.leadingAnchor, constant: 20),
+            transcript.trailingAnchor.constraint(equalTo: centerColumn.trailingAnchor, constant: -20),
+            transcript.topAnchor.constraint(equalTo: centerColumn.topAnchor, constant: 16),
+            transcript.heightAnchor.constraint(greaterThanOrEqualToConstant: 240),
+            composer.leadingAnchor.constraint(equalTo: centerColumn.leadingAnchor, constant: 24),
+            composer.trailingAnchor.constraint(equalTo: centerColumn.trailingAnchor, constant: -24),
+            composer.topAnchor.constraint(equalTo: transcript.bottomAnchor, constant: 12),
+            composer.bottomAnchor.constraint(equalTo: centerColumn.bottomAnchor, constant: -16),
+            blocks.topAnchor.constraint(equalTo: transcript.contentView.topAnchor),
+            blocks.leadingAnchor.constraint(equalTo: transcript.contentView.leadingAnchor),
+            blocks.widthAnchor.constraint(equalTo: transcript.contentView.widthAnchor),
         ])
+        centerLeadingHost = centerColumn.leadingAnchor.constraint(equalTo: leadingAnchor)
+        centerTrailingHost = centerColumn.trailingAnchor.constraint(equalTo: trailingAnchor)
+        centerTopHost = centerColumn.topAnchor.constraint(equalTo: topAnchor)
+        centerLeadingLeft = centerColumn.leadingAnchor.constraint(equalTo: left.trailingAnchor)
+        centerTrailingInspector = centerColumn.trailingAnchor.constraint(
+            equalTo: inspectorColumn.leadingAnchor
+        )
+        centerTopTab = centerColumn.topAnchor.constraint(equalTo: tabStrip.bottomAnchor)
+        paneFollowsTranscript = [
+            pane.leadingAnchor.constraint(equalTo: transcript.leadingAnchor),
+            pane.trailingAnchor.constraint(equalTo: transcript.trailingAnchor),
+            pane.topAnchor.constraint(equalTo: transcript.topAnchor),
+            pane.bottomAnchor.constraint(equalTo: transcript.bottomAnchor),
+        ]
+        paneFillsCenter = [
+            pane.leadingAnchor.constraint(equalTo: centerColumn.leadingAnchor),
+            pane.trailingAnchor.constraint(equalTo: centerColumn.trailingAnchor),
+            pane.topAnchor.constraint(equalTo: centerColumn.topAnchor),
+            pane.bottomAnchor.constraint(equalTo: centerColumn.bottomAnchor),
+        ]
+        NSLayoutConstraint.activate(paneFollowsTranscript)
+        applyShellChrome(seyal_app_chrome(pane.appHandle))
 
         composer.onSubmitComposer = { [weak self] command in
             self?.pane.inputSurface.terminalSubmitComposerCommand(command) ?? -10
@@ -172,9 +225,13 @@ final class ProductChromeHostView: NSView {
         pane.inputSurface.onRequestComposerFocus = { [weak self] in
             self?.composer.focusEditor()
         }
-        pane.inputSurface.onTimelineChanged = { [weak self] records in
-            self?.nativeBlocks = records
-            self?.rebuildBlocks()
+        pane.inputSurface.onTimelineChanged = { [weak self] in
+            self?.projectRuntimeBlocks()
+            self?.reconcileChrome()
+            self?.refreshRunningBlockOutput()
+        }
+        pane.inputSurface.onHistoryRangeChanged = { [weak self] range in
+            self?.applyHistoryRange(range)
         }
         pane.inputSurface.onComposerResultChanged = { [weak self] result in
             let accepted = result.code == .accepted || result.code == .unsupported
@@ -184,11 +241,21 @@ final class ProductChromeHostView: NSView {
         pane.onProductChanged = { [weak self] in
             self?.reconcileChrome()
         }
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(transcriptDidScroll),
+            name: NSView.boundsDidChangeNotification,
+            object: clip
+        )
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("ProductChromeHostView is programmatic")
+    }
+
+    @objc private func transcriptDidScroll() {
+        publishBlockOutputFrame()
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -210,16 +277,24 @@ final class ProductChromeHostView: NSView {
     func detachForTermination() { pane.detachForTermination() }
 
     func reconcileChrome() {
-        let snapshot = seyal_app_snapshot(pane.appHandle)
+        var snapshot = seyal_app_snapshot(pane.appHandle)
+        let bound = (lo: snapshot.execution_lo, hi: snapshot.execution_hi)
+        if snapshot.flags & UInt16(SEYAL_APP_SNAP_HAS_EXECUTION) != 0,
+           bound != lastProjectedExecution
+        {
+            lastProjectedExecution = bound
+            projectRuntimeBlocks()
+            snapshot = seyal_app_snapshot(pane.appHandle)
+        }
         let eligibilityChanged = snapshot.eligibility != lastEligibility
         if snapshot.generation == lastSnapshotGeneration && !eligibilityChanged {
         composer.reconcile()
         driveRecovery()
-        rebuildBlocksIfNeeded()
         return
         }
         lastSnapshotGeneration = snapshot.generation
         let chrome = seyal_app_chrome(pane.appHandle)
+        applyShellChrome(chrome)
         let shell = seyal_app_shell(pane.appHandle)
         workspacesButton.state = chrome.left_panel == 0 ? .on : .off
         tabsButton.state = chrome.left_panel == 1 ? .on : .off
@@ -227,6 +302,7 @@ final class ProductChromeHostView: NSView {
         rebuildInspector(chrome)
         rebuildTabStrip(shell: shell)
         rebuildBlocks()
+        applyTranscriptPresentation(snapshot)
         recoveryLabel.stringValue = recoveryText(snapshot)
         composer.reconcile()
         driveRecovery()
@@ -347,26 +423,165 @@ final class ProductChromeHostView: NSView {
         }
     }
 
-    private func rebuildBlocksIfNeeded() {
-        let records = pane.inputSurface.currentTimeline()
-        if records.map(\.id) != nativeBlocks.map(\.id)
-            || records.map(\.state) != nativeBlocks.map(\.state)
-        {
-            nativeBlocks = records
-            rebuildBlocks()
+    private func applyShellChrome(_ chrome: SeyalAppChrome) {
+        let leftOn = chrome.reserved & UInt32(SEYAL_APP_CHROME_LEFT_VISIBLE) != 0
+        let inspectorOn = chrome.reserved & UInt32(SEYAL_APP_CHROME_INSPECTOR_VISIBLE) != 0
+        let tabOn = chrome.reserved & UInt32(SEYAL_APP_CHROME_TAB_STRIP_VISIBLE) != 0
+        left.isHidden = !leftOn
+        left.setAccessibilityElement(leftOn)
+        inspectorColumn.isHidden = !inspectorOn
+        inspectorColumn.setAccessibilityElement(inspectorOn)
+        inspector.setAccessibilityElement(inspectorOn)
+        tabStrip.isHidden = !tabOn
+        tabStrip.setAccessibilityElement(tabOn)
+        centerLeadingHost.isActive = !leftOn
+        centerLeadingLeft.isActive = leftOn
+        centerTrailingHost.isActive = !inspectorOn
+        centerTrailingInspector.isActive = inspectorOn
+        centerTopHost.isActive = !tabOn
+        centerTopTab.isActive = tabOn
+    }
+
+    private func projectRuntimeBlocks() {
+        let snapshot = seyal_app_snapshot(pane.appHandle)
+        var action = SeyalAppAction()
+        action.version = UInt16(SEYAL_APP_ABI_VERSION)
+        action.size = UInt16(MemoryLayout<SeyalAppAction>.size)
+        action.kind = UInt16(SEYAL_APP_ACTION_APPLY_RUNTIME_BLOCKS.rawValue)
+        action.applySnapshotFence(snapshot)
+        _ = seyal_app_apply(pane.appHandle, &action)
+    }
+
+    private func applyTranscriptPresentation(_ snapshot: SeyalAppSnapshot) {
+        let direct = snapshot.eligibility == UInt16(SEYAL_APP_ELIGIBILITY_RAW.rawValue)
+            || snapshot.eligibility == UInt16(SEYAL_APP_ELIGIBILITY_TUI.rawValue)
+        transcript.isHidden = direct
+        if direct {
+            NSLayoutConstraint.deactivate(paneFollowsTranscript)
+            NSLayoutConstraint.activate(paneFillsCenter)
+            pane.inputSurface.applyRendererPresentation(.fullPane(.raw))
+            pane.inputSurface.removeTranscriptRegions(except: [])
+        } else {
+            NSLayoutConstraint.deactivate(paneFillsCenter)
+            NSLayoutConstraint.activate(paneFollowsTranscript)
+            pane.inputSurface.applyRendererPresentation(.flow())
+            layoutSubtreeIfNeeded()
+            publishBlockOutputFrame()
         }
     }
 
     private func rebuildBlocks() {
         blocks.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        let records = nativeBlocks.isEmpty ? pane.inputSurface.currentTimeline() : nativeBlocks
-        nativeBlocks = records
-        blocks.isHidden = false
-        for (index, record) in records.enumerated() {
-            let card = CommandBlockView(record: record)
+        blockCards.removeAll()
+        let composer = seyal_app_composer(pane.appHandle)
+        let count = Int(composer.block_count)
+        let cellHeight = pane.inputSurface.terminalPresentationCellSize().height
+        var retained = Set<UInt64>()
+        for index in 0..<count {
+            let row = seyal_app_block_row(pane.appHandle, UInt32(index))
+            let span = seyal_app_block_span(pane.appHandle, UInt32(index))
+            let title = copyUTF8(row.title, row.title_len) ?? "command"
+            let detail = copyUTF8(row.detail, row.detail_len) ?? ""
+            let promptRow = seyal_app_copy(pane.appHandle, UInt16(SEYAL_APP_COPY_BLOCK_PROMPT))
+            let prompt = copyUTF8(promptRow.title, promptRow.title_len) ?? "$"
+            let blockID = row.id_lo
+            let lines = outputLineCount(span)
+            let card = CommandBlockView(
+                prompt: prompt,
+                title: title,
+                detail: detail,
+                state: row.flags,
+                cellHeight: cellHeight,
+                lines: lines
+            )
             card.setAccessibilityIdentifier("seyal-block-\(index)")
+            card.body.setAccessibilityIdentifier("seyal-block-\(index)-body")
             blocks.addArrangedSubview(card)
+            if blockID != 0 {
+                blockCards[blockID] = card
+                retained.insert(blockID)
+                requestBlockOutput(blockID: blockID, span: span)
+            }
         }
+        pane.inputSurface.discardHistoryRequests(except: retained)
+        layoutSubtreeIfNeeded()
+        publishBlockOutputFrame()
+        if count > lastBlockCount {
+            scrollTranscriptToLiveEnd()
+        }
+        lastBlockCount = count
+    }
+
+    private func outputLineCount(_ span: SeyalAppBlockSpan) -> Int {
+        guard span.start_line > 0 else { return 1 }
+        if span.end_line >= span.start_line {
+            return Int(min(span.end_line - span.start_line + 1, 512))
+        }
+        return 8
+    }
+
+    private func refreshRunningBlockOutput() {
+        let composer = seyal_app_composer(pane.appHandle)
+        for index in 0..<Int(composer.block_count) {
+            let row = seyal_app_block_row(pane.appHandle, UInt32(index))
+            let span = seyal_app_block_span(pane.appHandle, UInt32(index))
+            guard row.id_lo != 0, span.start_line > 0, span.end_line == 0 else { continue }
+            requestBlockOutput(blockID: row.id_lo, span: span)
+        }
+    }
+
+    private func requestBlockOutput(blockID: UInt64, span: SeyalAppBlockSpan) {
+        guard span.start_line > 0 else { return }
+        let end = span.end_line >= span.start_line
+            ? span.end_line
+            : span.start_line &+ 511
+        _ = pane.inputSurface.requestHistoryRange(
+            startLine: span.start_line,
+            endLine: max(end, span.start_line),
+            blockID: blockID
+        )
+    }
+
+    private func applyHistoryRange(_ range: NativeHistoryRange) {
+        pane.inputSurface.retainHistoryRange(range)
+        let cellHeight = pane.inputSurface.terminalPresentationCellSize().height
+        if let card = blockCards[range.blockID] {
+            card.setOutputLines(max(range.rows.count, 1), cellHeight: cellHeight)
+        }
+        layoutSubtreeIfNeeded()
+        publishBlockOutputFrame()
+    }
+
+    private func publishBlockOutputFrame() {
+        let snapshot = seyal_app_snapshot(pane.appHandle)
+        let direct = snapshot.eligibility == UInt16(SEYAL_APP_ELIGIBILITY_RAW.rawValue)
+            || snapshot.eligibility == UInt16(SEYAL_APP_ELIGIBILITY_TUI.rawValue)
+        guard !direct else { return }
+        let surface = pane.inputSurface
+        var regions: [NativeTranscriptRegion] = []
+        for (blockID, card) in blockCards {
+            let clip = card.body.convert(card.body.bounds, to: surface)
+            guard clip.width > 0, clip.height > 0 else { continue }
+            regions.append(NativeTranscriptRegion(id: blockID, origin: clip.origin, clip: clip))
+        }
+        regions.sort { $0.id < $1.id }
+        transcriptFrameRevision &+= 1
+        surface.setTranscriptFrame(
+            NativeTranscriptFrame(
+                revision: transcriptFrameRevision,
+                regions: regions,
+                surfaceIdentity: ObjectIdentifier(surface)
+            )
+        )
+    }
+
+    private func scrollTranscriptToLiveEnd() {
+        let document = transcript.documentView ?? blocks
+        let visible = transcript.contentView.bounds.height
+        let height = document.fittingSize.height
+        let y = max(height - visible, 0)
+        transcript.contentView.scroll(to: NSPoint(x: 0, y: y))
+        transcript.reflectScrolledClipView(transcript.contentView)
     }
 
     private func applyTheme() {
@@ -380,6 +595,7 @@ final class ProductChromeHostView: NSView {
         inspectorColumn.layer?.backgroundColor = theme.utility.cgColor
         tabStrip.layer?.backgroundColor = theme.container.cgColor
         centerColumn.layer?.backgroundColor = theme.canvas.cgColor
+        transcript.backgroundColor = .clear
         left.layer?.borderWidth = 0
         composer.apply(theme: theme)
         for view in blocks.arrangedSubviews {
@@ -542,9 +758,7 @@ final class ProductChromeHostView: NSView {
         action.version = UInt16(SEYAL_APP_ABI_VERSION)
         action.size = UInt16(MemoryLayout<SeyalAppAction>.size)
         action.kind = kind
-        action.fence_pane_lo = snapshot.pane_lo
-        action.fence_pane_hi = snapshot.pane_hi
-        action.fence_epoch = snapshot.epoch
+        action.applySnapshotFence(snapshot)
         let utf8 = Array(text.utf8)
         utf8.withUnsafeBufferPointer { buffer in
             action.payload = buffer.baseAddress
@@ -609,6 +823,10 @@ final class ProductChromeHostView: NSView {
     }
 }
 
+private final class TranscriptClipView: NSClipView {
+    override var isFlipped: Bool { true }
+}
+
 private final class IdentityButton: NSButton {
     var kind: UInt16 = 0
     var idLo: UInt64 = 0
@@ -616,42 +834,84 @@ private final class IdentityButton: NSButton {
 }
 
 private final class CommandBlockView: NSView {
+    let body = NSView()
+    private let header = NSView()
+    private let prompt = NSTextField(labelWithString: "")
     private let command = NSTextField(labelWithString: "")
     private let status = NSTextField(labelWithString: "")
     private let seam = NSView()
+    private let state: UInt16
+    private var bodyHeight: NSLayoutConstraint!
 
-    init(record: NativeBlockRecord) {
+    init(
+        prompt: String,
+        title: String,
+        detail: String,
+        state: UInt16,
+        cellHeight: CGFloat,
+        lines: Int
+    ) {
+        self.state = state
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
-        wantsLayer = true
+        wantsLayer = false
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
-        command.stringValue = record.command.isEmpty ? "command" : record.command
+        self.prompt.stringValue = prompt
+        self.prompt.font = .monospacedSystemFont(ofSize: 13, weight: .medium)
+        self.prompt.setContentHuggingPriority(.required, for: .horizontal)
+        self.prompt.translatesAutoresizingMaskIntoConstraints = false
+        command.stringValue = title.isEmpty ? "command" : title
         setAccessibilityLabel(command.stringValue)
-        command.font = .monospacedSystemFont(ofSize: 12, weight: .medium)
+        command.font = .monospacedSystemFont(ofSize: 13, weight: .medium)
+        command.lineBreakMode = .byTruncatingTail
         command.translatesAutoresizingMaskIntoConstraints = false
-        status.stringValue = record.state == .running ? "running" : (record.exitStatus == 0 ? "ok" : "exit \(record.exitStatus)")
-        status.font = .systemFont(ofSize: 11, weight: .regular)
-        status.tag = 1
+        status.stringValue = detail
+        status.isHidden = detail.isEmpty
+        status.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        status.tag = 2
+        status.setContentHuggingPriority(.required, for: .horizontal)
         status.translatesAutoresizingMaskIntoConstraints = false
         seam.translatesAutoresizingMaskIntoConstraints = false
         seam.wantsLayer = true
+        header.translatesAutoresizingMaskIntoConstraints = false
+        body.translatesAutoresizingMaskIntoConstraints = false
+        body.wantsLayer = true
+        body.layer?.isOpaque = false
+        body.layer?.backgroundColor = NSColor.clear.cgColor
+        body.setAccessibilityElement(true)
+        body.setAccessibilityRole(.group)
+        header.addSubview(self.prompt)
+        header.addSubview(command)
+        header.addSubview(status)
+        addSubview(header)
+        addSubview(body)
         addSubview(seam)
-        addSubview(command)
-        addSubview(status)
+        bodyHeight = body.heightAnchor.constraint(
+            equalToConstant: max(cellHeight, 1) * CGFloat(max(lines, 1))
+        )
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(greaterThanOrEqualToConstant: 36),
+            header.leadingAnchor.constraint(equalTo: leadingAnchor),
+            header.trailingAnchor.constraint(equalTo: trailingAnchor),
+            header.topAnchor.constraint(equalTo: topAnchor),
+            header.heightAnchor.constraint(greaterThanOrEqualToConstant: 22),
+            self.prompt.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            self.prompt.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            command.leadingAnchor.constraint(equalTo: self.prompt.trailingAnchor, constant: 8),
+            command.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            status.trailingAnchor.constraint(equalTo: header.trailingAnchor),
+            status.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            command.trailingAnchor.constraint(lessThanOrEqualTo: status.leadingAnchor, constant: -12),
+            body.leadingAnchor.constraint(equalTo: command.leadingAnchor),
+            body.trailingAnchor.constraint(equalTo: trailingAnchor),
+            body.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 4),
+            bodyHeight,
             seam.leadingAnchor.constraint(equalTo: leadingAnchor),
-            seam.topAnchor.constraint(equalTo: topAnchor, constant: 4),
-            seam.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
-            seam.widthAnchor.constraint(equalToConstant: 2),
-            command.leadingAnchor.constraint(equalTo: seam.trailingAnchor, constant: 10),
-            command.centerYAnchor.constraint(equalTo: centerYAnchor),
-            status.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            status.centerYAnchor.constraint(equalTo: centerYAnchor),
-            command.trailingAnchor.constraint(lessThanOrEqualTo: status.leadingAnchor, constant: -8),
+            seam.trailingAnchor.constraint(equalTo: trailingAnchor),
+            seam.topAnchor.constraint(equalTo: body.bottomAnchor, constant: 12),
+            seam.bottomAnchor.constraint(equalTo: bottomAnchor),
+            seam.heightAnchor.constraint(equalToConstant: 1),
         ])
-        seam.identifier = NSUserInterfaceItemIdentifier(record.state == .running ? "running" : "completed")
     }
 
     @available(*, unavailable)
@@ -659,12 +919,22 @@ private final class CommandBlockView: NSView {
         fatalError("CommandBlockView is programmatic")
     }
 
+    func setOutputLines(_ lines: Int, cellHeight: CGFloat) {
+        bodyHeight.constant = max(cellHeight, 1) * CGFloat(max(lines, 1))
+    }
+
     func apply(theme: NativeTheme) {
-        layer?.backgroundColor = theme.container.cgColor
-        command.textColor = theme.text
-        status.textColor = theme.secondary
-        let running = seam.identifier?.rawValue == "running"
-        seam.layer?.backgroundColor = running ? theme.warning.cgColor : theme.success.cgColor
+        body.layer?.isOpaque = false
+        body.layer?.backgroundColor = NSColor.clear.cgColor
+        prompt.textColor = theme.accent
+        command.textColor = theme.accent
+        if state == UInt16(SEYAL_APP_BLOCK_STATE_FAILED) {
+            status.textColor = theme.danger
+            seam.layer?.backgroundColor = theme.danger.withAlphaComponent(0.45).cgColor
+        } else {
+            status.textColor = theme.muted
+            seam.layer?.backgroundColor = theme.seam.cgColor
+        }
     }
 }
 

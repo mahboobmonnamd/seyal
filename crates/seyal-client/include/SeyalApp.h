@@ -42,7 +42,8 @@ enum SeyalAppActionKind {
     SEYAL_APP_ACTION_REPLACE_CHROME = 18,
     SEYAL_APP_ACTION_SELECT_WORKSPACE = 19,
     SEYAL_APP_ACTION_SELECT_TAB = 20,
-    SEYAL_APP_ACTION_FOCUS_PANE = 21
+    SEYAL_APP_ACTION_FOCUS_PANE = 21,
+    SEYAL_APP_ACTION_SET_SHELL_CHROME = 22
 };
 
 enum SeyalAppEligibility {
@@ -131,6 +132,16 @@ typedef struct SeyalAppAction {
 #define SEYAL_APP_FLAG_ALTERNATE_SCREEN 8u
 #define SEYAL_APP_FLAG_TARGET_CONTROLLER 16u
 
+/*
+ * Snapshot flags (SeyalAppSnapshot.flags). Distinct from SeyalAppAction.flags.
+ * Hosts must translate SNAP_* into FLAG_* when filling an identity fence.
+ */
+#define SEYAL_APP_SNAP_COMPOSER 1u
+#define SEYAL_APP_SNAP_CONTROLLER 2u
+#define SEYAL_APP_SNAP_FROZEN 4u
+#define SEYAL_APP_SNAP_HAS_EXECUTION 8u
+#define SEYAL_APP_SNAP_HAS_ATTACHMENT 16u
+
 typedef struct SeyalAppSnapshot {
     uint16_t version;
     uint16_t size;
@@ -183,6 +194,14 @@ enum SeyalAppComposerMode {
 #define SEYAL_APP_COMPOSER_CAN_SUBMIT 1u
 #define SEYAL_APP_COMPOSER_DIRECT_TERMINAL 2u
 
+#define SEYAL_APP_COPY_COMPOSER_PLACEHOLDER 0u
+#define SEYAL_APP_COPY_COMPOSER_EXECUTE 1u
+#define SEYAL_APP_COPY_BLOCK_PROMPT 2u
+
+#define SEYAL_APP_BLOCK_STATE_RUNNING 1u
+#define SEYAL_APP_BLOCK_STATE_COMPLETED 2u
+#define SEYAL_APP_BLOCK_STATE_FAILED 3u
+
 typedef struct SeyalAppComposer {
     uint16_t version;
     uint16_t size;
@@ -203,8 +222,13 @@ typedef struct SeyalAppChrome {
     uint32_t agent_count;
     uint32_t attention_count;
     uint32_t inspector_row_count;
+    /* SEYAL_APP_CHROME_* visibility bits. Zero is M001 first-UI receded chrome. */
     uint32_t reserved;
 } SeyalAppChrome;
+
+#define SEYAL_APP_CHROME_LEFT_VISIBLE 1u
+#define SEYAL_APP_CHROME_INSPECTOR_VISIBLE 2u
+#define SEYAL_APP_CHROME_TAB_STRIP_VISIBLE 4u
 
 typedef struct SeyalAppAccessibility {
     uint16_t version;
@@ -270,6 +294,14 @@ SeyalAppShell seyal_app_shell(uint64_t handle);
 SeyalAppRow seyal_app_shell_row(uint64_t handle, uint16_t kind, uint32_t index);
 SeyalAppRow seyal_app_chrome_row(uint64_t handle, uint16_t kind, uint32_t index);
 SeyalAppRow seyal_app_block_row(uint64_t handle, uint32_t index);
+SeyalAppRow seyal_app_copy(uint64_t handle, uint16_t kind);
+
+typedef struct SeyalAppBlockSpan {
+    uint64_t start_line;
+    uint64_t end_line;
+} SeyalAppBlockSpan;
+
+SeyalAppBlockSpan seyal_app_block_span(uint64_t handle, uint32_t index);
 uint64_t seyal_app_recovery_param(uint64_t handle);
 SeyalAppAccessibility seyal_app_accessibility(uint64_t handle);
 SeyalAppTheme seyal_app_theme(uint16_t appearance);

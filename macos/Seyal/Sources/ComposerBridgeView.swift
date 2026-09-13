@@ -25,7 +25,9 @@ final class ComposerBridgeView: NSView, NSTextViewDelegate {
         layer?.masksToBounds = true
         focusRingType = .none
         setAccessibilityIdentifier("seyal-composer")
-        setAccessibilityRole(.textArea)
+        // Group, not a leaf textArea: XCUI must see both the dock and the
+        // execute control. A leaf role hid `seyal-composer-execute`.
+        setAccessibilityRole(.group)
         setAccessibilityElement(true)
 
         placeholder.font = .monospacedSystemFont(ofSize: 13, weight: .regular)

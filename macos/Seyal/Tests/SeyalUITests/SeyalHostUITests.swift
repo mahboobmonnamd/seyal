@@ -4,6 +4,12 @@ import XCTest
 final class SeyalHostUITests: XCTestCase {
     override func setUp() {
         continueAfterFailure = false
+        XCUIApplication().terminate()
+    }
+
+    override func tearDown() {
+        XCUIApplication().terminate()
+        super.tearDown()
     }
 
     func testApplicationLaunchesOnePaneHost() throws {
@@ -133,6 +139,17 @@ final class SeyalHostUITests: XCTestCase {
             "Seyal.app crashed entering alternate-screen/TUI takeover"
         )
         XCTAssertTrue(app.descendants(matching: .any)["seyal-thin-pane"].exists)
+        // Leave Flow, not TUI. A surviving Runtime helper is reused by the next
+        // launch; leftover alternate-screen hides the composer and fails later tests.
+        let terminal = app.descendants(matching: .any)["terminal-input"]
+        XCTAssertTrue(terminal.waitForExistence(timeout: 5))
+        terminal.firstMatch.click()
+        app.typeText("printf '\\033[?1049l'")
+        app.typeKey("\r", modifierFlags: [])
+        XCTAssertTrue(
+            composer.waitForExistence(timeout: 12),
+            "composer did not return after leaving alternate-screen"
+        )
     }
 
     /// Metal does not expose PTY bytes as AX text. The live connection token on

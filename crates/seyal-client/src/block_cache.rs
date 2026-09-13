@@ -145,6 +145,12 @@ mod tests {
 
     use super::*;
 
+    fn quarantine_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: Mutex<()> = Mutex::new(());
+        LOCK.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     fn execution(value: u128) -> ExecutionId {
         ExecutionId::from_bytes(value.to_le_bytes())
     }
@@ -263,6 +269,7 @@ mod tests {
 
     #[test]
     fn quarantine_is_scoped_to_runtime_and_execution_epoch() {
+        let _guard = quarantine_test_lock();
         let execution_id = execution(0xabc);
         quarantine_epoch(10, execution_id);
         assert!(is_epoch_quarantined(10, execution_id));
@@ -272,6 +279,7 @@ mod tests {
 
     #[test]
     fn quarantine_registry_is_strictly_bounded() {
+        let _guard = quarantine_test_lock();
         let runtime_id = 0xfeed_u128;
         for ordinal in 1..=(MAX_QUARANTINED_EPOCHS + 1) {
             quarantine_epoch(runtime_id, execution(ordinal as u128));

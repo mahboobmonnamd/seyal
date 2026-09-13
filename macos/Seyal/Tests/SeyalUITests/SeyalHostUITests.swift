@@ -2,14 +2,14 @@ import XCTest
 
 @MainActor
 final class SeyalHostUITests: XCTestCase {
-    override func setUp() {
+    override func setUp() async throws {
         continueAfterFailure = false
         XCUIApplication().terminate()
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         XCUIApplication().terminate()
-        super.tearDown()
+        try await super.tearDown()
     }
 
     func testApplicationLaunchesOnePaneHost() throws {

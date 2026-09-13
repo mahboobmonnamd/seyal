@@ -6,7 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var host: ProductChromeHostView?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let host = ProductChromeHostView(frame: NSRect(x: 0, y: 0, width: 1100, height: 720))
+        let host = ProductChromeHostView(frame: NSRect(x: 0, y: 0, width: 1280, height: 800))
         self.host = host
 
         let window = NSWindow(
@@ -16,10 +16,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             defer: false
         )
         window.title = "Seyal"
+        window.minSize = NSSize(width: 960, height: 640)
+        window.appearance = NSAppearance(named: .darkAqua)
         window.contentView = host
         window.center()
         window.makeKeyAndOrderFront(nil)
-        window.makeFirstResponder(host.inputSurface)
         self.window = window
 
         installMenus()

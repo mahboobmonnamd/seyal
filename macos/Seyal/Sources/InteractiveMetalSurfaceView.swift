@@ -7,6 +7,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
     private let appHandle: UInt64
     private var marked = ""
     var onBridgeBecameUsable: (() -> Void)?
+    var onRequestComposerFocus: (() -> Void)?
     var observedAlternateScreen = false
 
     init(frame frameRect: NSRect, appHandle: UInt64) {
@@ -19,7 +20,11 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
     }
 
     override func restoreNativeInteractionAfterRendererReady() -> Bool {
-        window?.makeFirstResponder(self) ?? false
+        if seyal_app_snapshot(appHandle).eligibility == UInt16(SEYAL_APP_ELIGIBILITY_FLOW.rawValue) {
+            onRequestComposerFocus?()
+            return true
+        }
+        return window?.makeFirstResponder(self) ?? false
     }
 
     override func terminalBridgeStatusDidChange() {
@@ -45,7 +50,11 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
     }
 
     override func mouseDown(with event: NSEvent) {
-        window?.makeFirstResponder(self)
+        if allowsDirectTerminalInput {
+            window?.makeFirstResponder(self)
+        } else {
+            onRequestComposerFocus?()
+        }
         super.mouseDown(with: event)
     }
 

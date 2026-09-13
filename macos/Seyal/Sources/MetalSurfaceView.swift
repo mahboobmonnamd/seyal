@@ -383,7 +383,14 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
   func terminalBridgeStatusDidChange() {
     refreshRecoveryAccessibilityValue()
     guard !isDetachingRuntimeConnection else { return }
-    guard bridge?.isConnected != true else { return }
+    if bridge?.isConnected == true {
+      // Propose from `layout()` only. `proposeGeometry` always finishes with
+      // `onStatusChanged`, so calling it here re-enters this method until the
+      // stack overflows (EXC_BAD_ACCESS on the guard page).
+      needsLayout = true
+      return
+    }
+    lastProposedGeometry = .null
     // History/composer/display correlations are disposable connection state;
     // logical pane and Block identity remain owned by Runtime and are not
     // cleared here.
@@ -438,6 +445,10 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
 
   func terminalSubmitComposerCommand(_ text: String) -> Int32 {
     bridge?.submitComposerCommand(text) ?? -10
+  }
+
+  func currentTimeline() -> [NativeBlockRecord] {
+    bridge?.currentTimeline() ?? []
   }
 
   func terminalNextComposerRequestID() -> UInt64 {
@@ -676,6 +687,7 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
       return
     }
     updateDrawableSize()
+    proposeCurrentGeometry()
     guard shouldRender,
       hasPreparedState,
       renderer.persistentDisplayFailure == nil,
@@ -1161,6 +1173,32 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
     let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
     metalLayer.contentsScale = scale
     metalLayer.drawableSize = convertToBacking(bounds).size
+  }
+
+  private var lastProposedGeometry = CGRect.null
+  private var proposingGeometry = false
+
+  private func proposeCurrentGeometry() {
+    guard !proposingGeometry else { return }
+    guard terminalBridgeIsConnected, bounds.width > 8, bounds.height > 8 else { return }
+    let rounded = bounds.integral
+    guard rounded != lastProposedGeometry else { return }
+    let cell = terminalPresentationCellSize()
+    guard cell.width > 0, cell.height > 0 else { return }
+    proposingGeometry = true
+    defer { proposingGeometry = false }
+    let result = terminalProposeGeometry(
+      viewportWidth: Double(rounded.width),
+      viewportHeight: Double(rounded.height),
+      horizontalInsets: 0,
+      verticalInsets: 0,
+      cellWidth: Double(cell.width),
+      cellHeight: Double(cell.height),
+      meaningfulLayoutEpoch: true
+    )
+    if result == 0 {
+      lastProposedGeometry = rounded
+    }
   }
 
   static func smokeTest() -> Bool {

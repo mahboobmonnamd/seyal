@@ -25,6 +25,11 @@ final class SeyalHostComponentTests: XCTestCase {
         let workspace = seyal_app_shell_row(live, UInt16(SEYAL_APP_ROW_WORKSPACE), 0)
         XCTAssertGreaterThan(workspace.title_len, 0)
         XCTAssertEqual(seyal_app_destroy(live), 0)
+        let dark = seyal_app_theme(0)
+        let light = seyal_app_theme(1)
+        XCTAssertNotEqual(dark.canvas, light.canvas)
+        XCTAssertNotEqual(dark.canvas, dark.text)
+        XCTAssertNotEqual(dark.accent, 0)
     }
 
     func testHostHasNoSeyalShellProductTypes() {

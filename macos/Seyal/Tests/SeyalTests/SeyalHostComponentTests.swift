@@ -88,6 +88,47 @@ final class SeyalHostComponentTests: XCTestCase {
         XCTAssertGreaterThan(inspector.title_len, 0)
     }
 
+    func testRefreshAlternateScreenAfterBindDerivesTui() {
+        let handle = seyal_app_create()
+        defer { XCTAssertEqual(seyal_app_destroy(handle), 0) }
+        var snap = seyal_app_snapshot(handle)
+        var bind = SeyalAppAction()
+        bind.version = UInt16(SEYAL_APP_ABI_VERSION)
+        bind.size = UInt16(MemoryLayout<SeyalAppAction>.size)
+        bind.kind = UInt16(SEYAL_APP_ACTION_BIND.rawValue)
+        bind.flags = UInt16(SEYAL_APP_FLAG_TARGET_CONTROLLER)
+        bind.fence_pane_lo = snap.pane_lo
+        bind.fence_pane_hi = snap.pane_hi
+        bind.fence_epoch = snap.epoch
+        bind.target_execution_lo = 1
+        bind.target_attachment_lo = 2
+        bind.target_pty_generation = 1
+        XCTAssertEqual(seyal_app_apply(handle, &bind), 0)
+        snap = seyal_app_snapshot(handle)
+        XCTAssertEqual(snap.eligibility, UInt16(SEYAL_APP_ELIGIBILITY_FLOW.rawValue))
+        var refresh = SeyalAppAction()
+        refresh.version = bind.version
+        refresh.size = bind.size
+        refresh.kind = UInt16(SEYAL_APP_ACTION_REFRESH.rawValue)
+        refresh.applySnapshotFence(snap)
+        refresh.flags |= UInt16(SEYAL_APP_FLAG_ALTERNATE_SCREEN)
+        XCTAssertEqual(seyal_app_apply(handle, &refresh), 0)
+        let tui = seyal_app_snapshot(handle)
+        XCTAssertEqual(tui.eligibility, UInt16(SEYAL_APP_ELIGIBILITY_TUI.rawValue))
+        XCTAssertEqual(tui.flags & UInt16(SEYAL_APP_SNAP_COMPOSER), 0)
+        XCTAssertEqual(
+            seyal_app_composer(handle).mode,
+            UInt16(SEYAL_APP_COMPOSER_HIDDEN.rawValue)
+        )
+    }
+
+    @MainActor
+    func testProductChromeReconcileIsReentrant() {
+        let view = ProductChromeHostView(frame: NSRect(x: 0, y: 0, width: 800, height: 560))
+        view.reconcileChrome()
+        view.reconcileChrome()
+    }
+
     func testBundledRuntimeLauncherUsesFixedHelperPath() {
         XCTAssertEqual(BundledRuntimeLauncher.helperRelativePath, "Contents/Helpers/seyal-runtime")
         XCTAssertEqual(BundledRuntimeLauncher.helperIdentifier, "dev.seyal.Seyal.runtime")

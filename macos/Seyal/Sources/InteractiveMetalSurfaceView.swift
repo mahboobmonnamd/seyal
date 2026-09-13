@@ -9,6 +9,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
     var onBridgeBecameUsable: (() -> Void)?
     var onRequestComposerFocus: (() -> Void)?
     var observedAlternateScreen = false
+    private var announcedBridgeUsable = false
 
     init(frame frameRect: NSRect, appHandle: UInt64) {
         self.appHandle = appHandle
@@ -29,8 +30,13 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
 
     override func terminalBridgeStatusDidChange() {
         super.terminalBridgeStatusDidChange()
-        if terminalBridgeIsConnected {
+        let connected = terminalBridgeIsConnected
+        if connected {
+            guard !announcedBridgeUsable else { return }
+            announcedBridgeUsable = true
             onBridgeBecameUsable?()
+        } else {
+            announcedBridgeUsable = false
         }
     }
 

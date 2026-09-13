@@ -24,6 +24,7 @@ final class ProductChromeHostView: NSView {
     private var lastEligibility: UInt16 = .max
     private var lastProjectedExecution = (lo: UInt64(0), hi: UInt64(0))
     private var lastBlockCount: Int = 0
+    private var isReconcilingChrome = false
     private var blockCards: [UInt64: CommandBlockView] = [:]
     private var transcriptFrameRevision: UInt64 = 0
     private var paneFollowsTranscript: [NSLayoutConstraint] = []
@@ -277,6 +278,9 @@ final class ProductChromeHostView: NSView {
     func detachForTermination() { pane.detachForTermination() }
 
     func reconcileChrome() {
+        guard !isReconcilingChrome else { return }
+        isReconcilingChrome = true
+        defer { isReconcilingChrome = false }
         var snapshot = seyal_app_snapshot(pane.appHandle)
         let bound = (lo: snapshot.execution_lo, hi: snapshot.execution_hi)
         if snapshot.flags & UInt16(SEYAL_APP_SNAP_HAS_EXECUTION) != 0,
@@ -288,11 +292,17 @@ final class ProductChromeHostView: NSView {
         }
         let eligibilityChanged = snapshot.eligibility != lastEligibility
         if snapshot.generation == lastSnapshotGeneration && !eligibilityChanged {
-        composer.reconcile()
-        driveRecovery()
-        return
+            composer.reconcile()
+            driveRecovery()
+            return
         }
         lastSnapshotGeneration = snapshot.generation
+        // Stamp eligibility before Block history requests. Those calls notify
+        // bridge status, which used to re-enter here with eligibilityChanged
+        // still true and overflow the main-thread stack (nvim TUI takeover).
+        if eligibilityChanged {
+            lastEligibility = snapshot.eligibility
+        }
         let chrome = seyal_app_chrome(pane.appHandle)
         applyShellChrome(chrome)
         let shell = seyal_app_shell(pane.appHandle)
@@ -301,13 +311,16 @@ final class ProductChromeHostView: NSView {
         rebuildLeft(shell: shell, leftPanel: chrome.left_panel)
         rebuildInspector(chrome)
         rebuildTabStrip(shell: shell)
-        rebuildBlocks()
+        let direct = snapshot.eligibility == UInt16(SEYAL_APP_ELIGIBILITY_RAW.rawValue)
+            || snapshot.eligibility == UInt16(SEYAL_APP_ELIGIBILITY_TUI.rawValue)
+        if !direct {
+            rebuildBlocks()
+        }
         applyTranscriptPresentation(snapshot)
         recoveryLabel.stringValue = recoveryText(snapshot)
         composer.reconcile()
         driveRecovery()
         if eligibilityChanged {
-            lastEligibility = snapshot.eligibility
             routeFocus()
         }
         applyTheme()
@@ -459,8 +472,11 @@ final class ProductChromeHostView: NSView {
         if direct {
             NSLayoutConstraint.deactivate(paneFollowsTranscript)
             NSLayoutConstraint.activate(paneFillsCenter)
-            pane.inputSurface.applyRendererPresentation(.fullPane(.raw))
+            let mode: TerminalPresentationMode =
+                snapshot.eligibility == UInt16(SEYAL_APP_ELIGIBILITY_TUI.rawValue) ? .tui : .raw
+            pane.inputSurface.applyRendererPresentation(.fullPane(mode))
             pane.inputSurface.removeTranscriptRegions(except: [])
+            layoutSubtreeIfNeeded()
         } else {
             NSLayoutConstraint.deactivate(paneFillsCenter)
             NSLayoutConstraint.activate(paneFollowsTranscript)
@@ -521,6 +537,12 @@ final class ProductChromeHostView: NSView {
     }
 
     private func refreshRunningBlockOutput() {
+        let snapshot = seyal_app_snapshot(pane.appHandle)
+        if snapshot.eligibility == UInt16(SEYAL_APP_ELIGIBILITY_RAW.rawValue)
+            || snapshot.eligibility == UInt16(SEYAL_APP_ELIGIBILITY_TUI.rawValue)
+        {
+            return
+        }
         let composer = seyal_app_composer(pane.appHandle)
         for index in 0..<Int(composer.block_count) {
             let row = seyal_app_block_row(pane.appHandle, UInt32(index))

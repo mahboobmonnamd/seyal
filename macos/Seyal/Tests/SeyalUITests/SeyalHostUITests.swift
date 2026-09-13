@@ -103,6 +103,38 @@ final class SeyalHostUITests: XCTestCase {
         }
     }
 
+    func testAlternateScreenTakeoverDoesNotCrashTheHost() throws {
+        let app = XCUIApplication()
+        app.launch()
+        waitForUsablePty(in: app)
+        let composer = app.descendants(matching: .any)["seyal-composer"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 12))
+        let composerReady = NSPredicate(format: "value == 'available'")
+        let becameReady = expectation(for: composerReady, evaluatedWith: composer, handler: nil)
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [becameReady], timeout: 12),
+            .completed,
+            "composer never became available; value=\(composer.value ?? "nil")"
+        )
+        composer.firstMatch.click()
+        let editor = app.descendants(matching: .any)["seyal-composer-editor"]
+        if editor.waitForExistence(timeout: 2), editor.firstMatch.isHittable {
+            editor.firstMatch.click()
+            editor.firstMatch.typeText("printf '\\033[?1049h'")
+            editor.firstMatch.typeKey("\r", modifierFlags: [])
+        } else {
+            composer.firstMatch.typeText("printf '\\033[?1049h'")
+            app.typeKey("\r", modifierFlags: [])
+        }
+        RunLoop.current.run(until: Date().addingTimeInterval(2))
+        XCTAssertEqual(
+            app.state,
+            .runningForeground,
+            "Seyal.app crashed entering alternate-screen/TUI takeover"
+        )
+        XCTAssertTrue(app.descendants(matching: .any)["seyal-thin-pane"].exists)
+    }
+
     /// Metal does not expose PTY bytes as AX text. The live connection token on
     /// `terminal-input` is the host-observable proof that Runtime attached.
     private func waitForUsablePty(in app: XCUIApplication, timeout: TimeInterval = 20) {

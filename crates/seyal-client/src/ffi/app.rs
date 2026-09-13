@@ -724,7 +724,10 @@ fn decode_action(action: &SeyalAppAction) -> Result<AppAction, i32> {
                 alternate_screen: action.flags & FLAG_ALTERNATE_SCREEN != 0,
             },
         }),
-        2 => Ok(AppAction::Refresh { fence }),
+        2 => Ok(AppAction::Refresh {
+            fence,
+            alternate_screen: action.flags & FLAG_ALTERNATE_SCREEN != 0,
+        }),
         3 => {
             let text = read_payload(action.payload, action.payload_len)?;
             Ok(AppAction::SubmitInput { fence, text })
@@ -1503,6 +1506,48 @@ mod tests {
         assert_eq!(copy_text(placeholder), "Type a command...");
         assert_eq!(copy_text(execute), "⏎");
         assert_eq!(copy_text(prompt), "$");
+        assert_eq!(seyal_app_destroy(handle), 0);
+    }
+
+    #[test]
+    fn refresh_alternate_screen_after_bind_derives_tui() {
+        let handle = seyal_app_create();
+        let snap = seyal_app_snapshot(handle);
+        let bind = SeyalAppAction {
+            version: APP_ABI_VERSION,
+            size: size_of::<SeyalAppAction>() as u16,
+            kind: 1,
+            flags: FLAG_TARGET_CONTROLLER,
+            fence_pane_lo: snap.pane_lo,
+            fence_pane_hi: snap.pane_hi,
+            fence_execution_lo: 0,
+            fence_execution_hi: 0,
+            fence_attachment_lo: 0,
+            fence_attachment_hi: 0,
+            fence_epoch: snap.epoch,
+            target_execution_lo: 1,
+            target_execution_hi: 0,
+            target_attachment_lo: 2,
+            target_attachment_hi: 0,
+            target_pty_generation: 1,
+            payload: ptr::null(),
+            payload_len: 0,
+            reserved: 0,
+        };
+        assert_eq!(unsafe { seyal_app_apply(handle, &bind) }, 0);
+        let bound = seyal_app_snapshot(handle);
+        assert_eq!(bound.eligibility, 1);
+        let mut refresh = identity_fence(2, &bound);
+        refresh.flags |= FLAG_ALTERNATE_SCREEN;
+        assert_eq!(unsafe { seyal_app_apply(handle, &refresh) }, 0);
+        let tui = seyal_app_snapshot(handle);
+        assert_eq!(tui.eligibility, 3);
+        assert_eq!(tui.flags & SNAP_COMPOSER, 0);
+        assert_eq!(seyal_app_composer(handle).mode, 0);
+        refresh.flags &= !FLAG_ALTERNATE_SCREEN;
+        refresh.fence_epoch = tui.epoch;
+        assert_eq!(unsafe { seyal_app_apply(handle, &refresh) }, 0);
+        assert_eq!(seyal_app_snapshot(handle).eligibility, 1);
         assert_eq!(seyal_app_destroy(handle), 0);
     }
 

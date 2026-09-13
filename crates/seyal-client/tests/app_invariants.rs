@@ -32,7 +32,10 @@ fn apply_step(root: &mut ApplicationRoot, step: Step, seed: u8) -> Result<(), Ap
             fence,
             evidence: evidence(seed, seed.is_multiple_of(2)),
         }),
-        Step::Refresh => root.apply(AppAction::Refresh { fence }),
+        Step::Refresh => root.apply(AppAction::Refresh {
+            fence,
+            alternate_screen: false,
+        }),
         Step::Submit => root.apply(AppAction::SubmitInput {
             fence,
             text: "x".into(),
@@ -46,7 +49,10 @@ fn apply_step(root: &mut ApplicationRoot, step: Step, seed: u8) -> Result<(), Ap
         Step::StaleExecution => {
             let mut stale = fence;
             stale.execution = Some(ExecutionId::from_bytes([0xdd; 16]));
-            root.apply(AppAction::Refresh { fence: stale })
+            root.apply(AppAction::Refresh {
+                fence: stale,
+                alternate_screen: false,
+            })
         }
     }
 }

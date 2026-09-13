@@ -31,6 +31,7 @@ final class ThinPaneHostView: NSView {
         inputSurface.onAlternateScreenChanged = { [weak self] alternate in
             self?.inputSurface.observedAlternateScreen = alternate
             self?.bindFromBridgeIfNeeded()
+            self?.refreshAlternateScreen(alternate)
             self?.onProductChanged?()
         }
         inputSurface.onFrameChanged = { [weak self] _ in
@@ -107,6 +108,22 @@ final class ThinPaneHostView: NSView {
         guard seyal_app_apply(appHandle, &action) == 0 else { return }
         lastBoundExecution = (executionLow, executionHigh)
         announceAccessibility()
+    }
+
+    /// Candidate-D already observed alternate-screen; Bind only samples it once.
+    /// Refresh is the post-bind presentation fence (ADR-009 / M001 TUI takeover).
+    private func refreshAlternateScreen(_ alternate: Bool) {
+        let snapshot = seyal_app_snapshot(appHandle)
+        guard snapshot.flags & UInt16(SEYAL_APP_SNAP_HAS_EXECUTION) != 0 else { return }
+        var action = SeyalAppAction()
+        action.version = UInt16(SEYAL_APP_ABI_VERSION)
+        action.size = UInt16(MemoryLayout<SeyalAppAction>.size)
+        action.kind = UInt16(SEYAL_APP_ACTION_REFRESH.rawValue)
+        action.applySnapshotFence(snapshot)
+        if alternate {
+            action.flags |= UInt16(SEYAL_APP_FLAG_ALTERNATE_SCREEN)
+        }
+        _ = seyal_app_apply(appHandle, &action)
     }
 
     private func announceAccessibility() {

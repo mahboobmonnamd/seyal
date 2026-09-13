@@ -100,6 +100,7 @@ pub enum AppAction {
     },
     Refresh {
         fence: AppFence,
+        alternate_screen: bool,
     },
     SubmitInput {
         fence: AppFence,
@@ -349,7 +350,10 @@ impl ApplicationRoot {
         let result = match action {
             AppAction::Focus { fence } => self.focus(fence),
             AppAction::Bind { fence, evidence } => self.bind(fence, evidence),
-            AppAction::Refresh { fence } => self.refresh(fence),
+            AppAction::Refresh {
+                fence,
+                alternate_screen,
+            } => self.refresh(fence, alternate_screen),
             AppAction::SubmitInput { fence, text } => self.submit_input(fence, &text),
             AppAction::Quit => self.quit(),
             AppAction::AckEffect => self.ack_effect(),
@@ -491,14 +495,14 @@ impl ApplicationRoot {
         Ok(())
     }
 
-    fn refresh(&mut self, fence: AppFence) -> Result<(), AppError> {
+    fn refresh(&mut self, fence: AppFence, alternate_screen: bool) -> Result<(), AppError> {
         self.require_fence(fence)?;
         #[cfg(target_os = "macos")]
         if let Some(client) = self.client.as_ref() {
             self.output_utf8 = project_cache_text(client.cache());
             return self.derive_presentation(client.cache().alternate_screen);
         }
-        self.derive_presentation(self.eligibility() == PresentationEligibility::Tui)
+        self.derive_presentation(alternate_screen)
     }
 
     fn submit_input(&mut self, fence: AppFence, text: &str) -> Result<(), AppError> {
@@ -1054,6 +1058,34 @@ mod tests {
     }
 
     #[test]
+    fn refresh_alternate_screen_takeover_is_not_latched_at_bind() {
+        let mut root = ApplicationRoot::new();
+        root.apply(AppAction::Bind {
+            fence: root.fence(),
+            evidence: evidence(2, true, false),
+        })
+        .unwrap();
+        assert_eq!(root.snapshot().eligibility, PresentationEligibility::Flow);
+        assert!(root.snapshot().composer_eligible);
+        root.apply(AppAction::Refresh {
+            fence: root.fence(),
+            alternate_screen: true,
+        })
+        .unwrap();
+        let tui = root.snapshot();
+        assert_eq!(tui.eligibility, PresentationEligibility::Tui);
+        assert!(!tui.composer_eligible);
+        root.apply(AppAction::Refresh {
+            fence: root.fence(),
+            alternate_screen: false,
+        })
+        .unwrap();
+        let flow = root.snapshot();
+        assert_eq!(flow.eligibility, PresentationEligibility::Flow);
+        assert!(flow.composer_eligible);
+    }
+
+    #[test]
     fn stale_identities_fail_closed_and_are_not_retried() {
         let mut root = ApplicationRoot::new();
         let unbound = root.fence();
@@ -1082,7 +1114,8 @@ mod tests {
         stale_attach.attachment = Some(AttachmentId::from_bytes([0xab; 16]));
         assert_eq!(
             root.apply(AppAction::Refresh {
-                fence: stale_attach
+                fence: stale_attach,
+                alternate_screen: false,
             }),
             Err(AppError::StaleAttachment)
         );
@@ -1091,7 +1124,8 @@ mod tests {
         stale_controller.controller = false;
         assert_eq!(
             root.apply(AppAction::Refresh {
-                fence: stale_controller
+                fence: stale_controller,
+                alternate_screen: false,
             }),
             Err(AppError::StaleController)
         );
@@ -1099,7 +1133,10 @@ mod tests {
         let mut stale_epoch = current;
         stale_epoch.presentation_epoch = current.presentation_epoch.wrapping_add(9);
         assert_eq!(
-            root.apply(AppAction::Refresh { fence: stale_epoch }),
+            root.apply(AppAction::Refresh {
+                fence: stale_epoch,
+                alternate_screen: false,
+            }),
             Err(AppError::StalePresentationEpoch)
         );
         assert_eq!(

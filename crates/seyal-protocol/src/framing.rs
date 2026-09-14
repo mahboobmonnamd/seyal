@@ -575,6 +575,11 @@ pub enum MessageType {
     HistoryRangeSnapshot = 25,
     DisplaySnapshotV2 = 27,
     DisplayDeltaV2 = 28,
+    /// Host clipboard paste. Same payload layout as `Input`; Runtime wraps
+    /// the bytes using canonical bracketed-paste mode before PTY admission.
+    /// Type 26 is Pass 8 block-state metadata (not a control MessageType).
+    /// Type 29 is reserved for TerminalKeyV2 (#823).
+    Paste = 30,
 }
 impl MessageType {
     pub fn from_u16(value: u16) -> Option<Self> {
@@ -606,6 +611,7 @@ impl MessageType {
             25 => Self::HistoryRangeSnapshot,
             27 => Self::DisplaySnapshotV2,
             28 => Self::DisplayDeltaV2,
+            30 => Self::Paste,
             _ => return None,
         })
     }
@@ -640,6 +646,7 @@ pub enum Message<'a> {
     ComposerStatus(ComposerStatus),
     HistoryRangeRequest(HistoryRangeRequest),
     HistoryRangeSnapshot(HistoryRangeSnapshot),
+    Paste(InputRef<'a>),
 }
 
 pub fn decode_message<'a>(
@@ -695,6 +702,7 @@ pub fn decode_message<'a>(
         MessageType::HistoryRangeSnapshot => {
             Message::HistoryRangeSnapshot(HistoryRangeSnapshot::decode(payload)?)
         }
+        MessageType::Paste => Message::Paste(InputRef::decode(payload)?),
     })
 }
 
@@ -774,6 +782,22 @@ mod tests {
             Some(MessageType::DisplaySnapshotV2)
         );
         assert_eq!(MessageType::from_u16(28), Some(MessageType::DisplayDeltaV2));
+        assert_eq!(MessageType::from_u16(26), None);
+        assert_eq!(MessageType::from_u16(30), Some(MessageType::Paste));
+    }
+
+    #[test]
+    fn paste_reuses_input_layout() {
+        let payload = InputRef {
+            attachment_id: attach_id(),
+            bytes: b"paste",
+        }
+        .encode();
+        let header = FrameHeader::new(MessageType::Paste as u16, payload.len() as u32);
+        match decode_message(&header, &payload).unwrap() {
+            Message::Paste(paste) => assert_eq!(paste.bytes, b"paste"),
+            other => panic!("expected Paste, got {other:?}"),
+        }
     }
 
     #[test]

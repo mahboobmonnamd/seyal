@@ -2,7 +2,7 @@ use std::{env, fs, path::PathBuf};
 
 use seyal_protocol::framing::{
     decode_message, BlockTimeline, ComposerCommandRef, ComposerResult, ComposerStatus, FrameHeader,
-    HistoryRangeRequest, HistoryRangeSnapshot, MessageType, ResizeRequest, ResizeResult,
+    HistoryRangeRequest, HistoryRangeSnapshot, InputRef, MessageType, ResizeRequest, ResizeResult,
     TerminalKey, HEADER_LEN,
 };
 
@@ -40,6 +40,9 @@ fn decode_pass7_payload(kind: MessageType, payload: &[u8]) {
         }
         MessageType::HistoryRangeSnapshot => {
             let _ = HistoryRangeSnapshot::decode(payload);
+        }
+        MessageType::Paste => {
+            let _ = InputRef::decode(payload);
         }
         _ => {}
     }

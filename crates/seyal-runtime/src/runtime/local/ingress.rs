@@ -9,6 +9,8 @@ use crate::{
     RuntimeError,
 };
 
+use seyal_exec::PasteError;
+
 use super::super::shell_integration::ComposerAdmission;
 use super::super::Runtime;
 
@@ -78,6 +80,75 @@ impl Runtime {
                 token,
                 ErrorCode::InvalidExecution,
                 MessageType::Input as u16,
+            ),
+        }
+    }
+
+    pub(super) fn handle_paste(&mut self, token: u64, payload: &[u8]) {
+        let Ok(input) = framing::InputRef::decode(payload) else {
+            self.send_error(
+                token,
+                ErrorCode::MalformedPayload,
+                MessageType::Paste as u16,
+            );
+            return;
+        };
+        let execution_id = match self.local_ipc.as_ref().map(|state| {
+            state
+                .attachments
+                .authorize_mutation(token, input.attachment_id)
+        }) {
+            Some(Ok(id)) => id,
+            Some(Err(AttachmentError::PermissionDenied)) => {
+                self.send_error(
+                    token,
+                    ErrorCode::PermissionDenied,
+                    MessageType::Paste as u16,
+                );
+                return;
+            }
+            _ => {
+                self.send_error(token, ErrorCode::StaleIdentity, MessageType::Paste as u16);
+                return;
+            }
+        };
+        let Some(entry) = self.entries.get(&execution_id) else {
+            self.send_error(
+                token,
+                ErrorCode::InvalidExecution,
+                MessageType::Paste as u16,
+            );
+            return;
+        };
+        let wrapped = match entry.execution.terminal().encode_host_paste(input.bytes) {
+            Ok(bytes) => bytes,
+            Err(PasteError::Empty) => {
+                self.send_error(
+                    token,
+                    ErrorCode::MalformedPayload,
+                    MessageType::Paste as u16,
+                );
+                return;
+            }
+            Err(PasteError::TooLarge) => {
+                self.send_error(
+                    token,
+                    ErrorCode::CapacityExceeded,
+                    MessageType::Paste as u16,
+                );
+                return;
+            }
+        };
+        match self.input_ingress(execution_id) {
+            Ok(ingress) => {
+                if ingress.try_submit(wrapped).is_err() {
+                    self.send_error(token, ErrorCode::Backpressure, MessageType::Paste as u16);
+                }
+            }
+            Err(_) => self.send_error(
+                token,
+                ErrorCode::InvalidExecution,
+                MessageType::Paste as u16,
             ),
         }
     }

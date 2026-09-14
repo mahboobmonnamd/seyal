@@ -119,7 +119,10 @@ impl ConnectionState {
             (self, message_type),
             (Self::AwaitHello, ClientHello)
                 | (Self::Ready, ListExecutions | Attach | Goodbye)
-                | (Self::Attached, Input | Resize | Resync | Detach | Goodbye)
+                | (
+                    Self::Attached,
+                    Input | Paste | Resize | Resync | Detach | Goodbye
+                )
         );
         allowed.then_some(()).ok_or(StateError::InvalidState)
     }

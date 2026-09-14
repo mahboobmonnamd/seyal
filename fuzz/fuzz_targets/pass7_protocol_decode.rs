@@ -3,7 +3,7 @@
 use libfuzzer_sys::fuzz_target;
 use seyal_protocol::framing::{
     BlockTimeline, ComposerCommandRef, ComposerResult, ComposerStatus, FrameHeader, HEADER_LEN,
-    HistoryRangeRequest, HistoryRangeSnapshot, MessageType, ResizeRequest, ResizeResult,
+    HistoryRangeRequest, HistoryRangeSnapshot, InputRef, MessageType, ResizeRequest, ResizeResult,
     TerminalKey, decode_message,
 };
 
@@ -37,6 +37,9 @@ fn decode_pass7_payload(kind: MessageType, payload: &[u8]) {
         }
         MessageType::HistoryRangeSnapshot => {
             let _ = HistoryRangeSnapshot::decode(payload);
+        }
+        MessageType::Paste => {
+            let _ = InputRef::decode(payload);
         }
         _ => {}
     }
@@ -83,4 +86,5 @@ fuzz_target!(|data: &[u8]| {
     decode_pass7_payload(MessageType::BlockTimeline, data);
     decode_pass7_payload(MessageType::HistoryRangeRequest, data);
     decode_pass7_payload(MessageType::HistoryRangeSnapshot, data);
+    decode_pass7_payload(MessageType::Paste, data);
 });

@@ -6,6 +6,8 @@ pub struct ModeState {
     pub unicode_core: bool,
     /// DEC private mode 7 (DECAWM) — autowrap when set.
     pub wraparound: bool,
+    /// DEC private mode 2004 — bracketed paste when set.
+    pub bracketed_paste: bool,
 }
 
 impl Default for ModeState {
@@ -17,6 +19,8 @@ impl Default for ModeState {
             unicode_core: true,
             // DECAWM defaults to set (wrap); fixtures explicitly reset it.
             wraparound: true,
+            // Bracketed paste starts reset; shells/TUIs enable it explicitly.
+            bracketed_paste: false,
         }
     }
 }

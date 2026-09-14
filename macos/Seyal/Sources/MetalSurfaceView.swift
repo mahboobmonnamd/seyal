@@ -331,11 +331,20 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
         onStatusChanged: { [weak self] in
           self?.terminalBridgeStatusDidChange()
         },
-        onTimeline: { [weak self] records in
-          self?.onTimelineChanged?(records)
+        onTimeline: { [weak self] in
+          self?.onTimelineChanged?()
         },
         onHistory: { [weak self] range in
-          self?.onHistoryRangeChanged?(range)
+          guard let self else { return }
+          // Retain rows before chrome publishes clips. `setTranscriptFrame`
+          // only re-encodes ranges already stored here; dropping this store
+          // leaves Block bodies empty even after Runtime history arrives.
+          self.retainHistoryRange(range)
+          if let onHistoryRangeChanged {
+            onHistoryRangeChanged(range)
+          } else {
+            self.renderHistoryRange(range)
+          }
         },
         onComposerResult: { [weak self] result in
           self?.onComposerResultChanged?(result)
@@ -411,7 +420,7 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
   /// AppKit uses this to switch the surrounding Pane chrome.
   var onAlternateScreenChanged: ((Bool) -> Void)?
   var onFrameChanged: ((NativePreparedFrame) -> Void)?
-  var onTimelineChanged: (([NativeBlockRecord]) -> Void)?
+  var onTimelineChanged: (() -> Void)?
   var onHistoryRangeChanged: ((NativeHistoryRange) -> Void)?
   var onComposerResultChanged: ((NativeComposerResult) -> Void)?
 
@@ -447,16 +456,16 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
     bridge?.submitComposerCommand(text) ?? -10
   }
 
-  func currentTimeline() -> [NativeBlockRecord] {
-    bridge?.currentTimeline() ?? []
-  }
-
   func terminalNextComposerRequestID() -> UInt64 {
     bridge?.nextComposerRequestID() ?? 0
   }
 
   func requestHistoryRange(startLine: UInt64, endLine: UInt64, blockID: UInt64) -> Int32 {
     bridge?.requestHistoryRange(startLine: startLine, endLine: endLine, blockID: blockID) ?? -10
+  }
+
+  func retainHistoryRange(_ range: NativeHistoryRange) {
+    historyRanges[PaneBlockKey(paneID: paneID, blockID: range.blockID)] = range
   }
 
   func discardHistoryRequests(except blockIDs: Set<UInt64>) {
@@ -518,8 +527,7 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
   /// bridge boundary but preparation itself remains main-thread confined with
   /// the rest of AppKit/Metal ownership.
   func renderHistoryRange(_ range: NativeHistoryRange, region: NativeTranscriptRegion? = nil) {
-    let key = PaneBlockKey(paneID: paneID, blockID: range.blockID)
-    historyRanges[key] = range
+    retainHistoryRange(range)
     let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
     do {
       let rendererRegion: NativeTranscriptRegion
@@ -570,7 +578,23 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
     layer?.isOpaque = plan.drawsFullGridBackground
     if let metalLayer = layer as? CAMetalLayer {
       metalLayer.isOpaque = plan.drawsFullGridBackground
+      // Flow composites glyphs over AppKit Block chrome. The compositor must
+      // be able to sample alpha; framebuffer-only drawables skip that path.
+      metalLayer.framebufferOnly = plan.drawsFullGridBackground
     }
+  }
+
+  override var isOpaque: Bool {
+    inspectRendererPresentation().drawsFullGridBackground
+  }
+
+  override func hitTest(_ point: NSPoint) -> NSView? {
+    // Flow paints terminal pixels over Block bodies. Chrome owns scrolling
+    // and composer hit-testing, so the compositor must not swallow events.
+    if inspectRendererPresentation().drawsLiveGrid {
+      return super.hitTest(point)
+    }
+    return nil
   }
 
   func inspectRendererPresentation() -> RendererPresentationInspection {

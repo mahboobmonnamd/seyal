@@ -2,17 +2,18 @@
 
 use std::{cell::RefCell, collections::HashMap, ptr, slice, str, time::Duration};
 
-use seyal_core::{AttachmentId, ExecutionId, PaneId, TabId, WorkspaceId};
+use seyal_core::{AttachmentId, BlockId, ExecutionId, PaneId, TabId, WorkspaceId};
+use seyal_protocol::framing::{CommandBlock, CommandBlockState};
 
 use crate::app::{
     AppAction, AppError, AppFence, AppSnapshot, ApplicationRoot, BindingEvidence, NativeEffect,
     PresentationEligibility, APP_ABI_VERSION,
 };
 use crate::chrome::{AgentId, AttentionId, InspectorMode, LeftPanelMode};
-use crate::composer::ComposerMode;
+use crate::composer::{ComposerMode, RuntimeBlockRecord, BLOCK_PROMPT, COMPOSER_EXECUTE_LABEL};
 use crate::recovery::{AttemptOutcome, LaunchResult, RecoveryEffect, RecoveryStage};
 
-use super::allocate_handle;
+use super::{allocate_handle, with_active_client};
 
 const FLAG_HAS_EXECUTION: u16 = 1;
 const FLAG_HAS_ATTACHMENT: u16 = 2;
@@ -415,7 +416,7 @@ pub extern "C" fn seyal_app_chrome(handle: u64) -> SeyalAppChrome {
             agent_count: chrome.agents.len() as u32,
             attention_count: chrome.attention_items.len() as u32,
             inspector_row_count: chrome.visible_inspector_rows.len() as u32,
-            reserved: 0,
+            reserved: chrome_visibility_flags(&chrome),
         }
     })
 }
@@ -538,6 +539,71 @@ pub extern "C" fn seyal_app_block_row(handle: u64, index: u32) -> SeyalAppRow {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn seyal_app_copy(handle: u64, kind: u16) -> SeyalAppRow {
+    let mode = APPS.with(|apps| {
+        apps.borrow()
+            .get(&handle)
+            .and_then(|state| state.root.snapshot().composer)
+            .map(|composer| composer.mode)
+    });
+    let text = match kind {
+        0 => match &mode {
+            Some(mode) => mode.editor_placeholder(),
+            None => ComposerMode::Available.editor_placeholder(),
+        },
+        1 => COMPOSER_EXECUTE_LABEL,
+        2 => BLOCK_PROMPT,
+        _ => "",
+    };
+    SeyalAppRow {
+        kind,
+        flags: 0,
+        reserved: 0,
+        id_lo: 0,
+        id_hi: 0,
+        title: text.as_ptr(),
+        title_len: text.len() as u32,
+        reserved1: 0,
+        detail: ptr::null(),
+        detail_len: 0,
+        reserved2: 0,
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SeyalAppBlockSpan {
+    pub start_line: u64,
+    pub end_line: u64,
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_app_block_span(handle: u64, index: u32) -> SeyalAppBlockSpan {
+    APPS.with(|apps| {
+        let apps = apps.borrow();
+        let Some(composer) = apps
+            .get(&handle)
+            .and_then(|state| state.root.snapshot().composer)
+        else {
+            return SeyalAppBlockSpan {
+                start_line: 0,
+                end_line: 0,
+            };
+        };
+        let Some(block) = composer.blocks.get(index as usize) else {
+            return SeyalAppBlockSpan {
+                start_line: 0,
+                end_line: 0,
+            };
+        };
+        SeyalAppBlockSpan {
+            start_line: block.start_line,
+            end_line: block.end_line.unwrap_or(0),
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn seyal_app_recovery_param(handle: u64) -> u64 {
     APPS.with(|apps| {
         apps.borrow()
@@ -594,6 +660,34 @@ pub extern "C" fn seyal_app_last_error(handle: u64) -> i32 {
     })
 }
 
+fn runtime_blocks_from_active_client() -> Vec<RuntimeBlockRecord> {
+    with_active_client(|client| {
+        client
+            .block_timeline()
+            .records
+            .iter()
+            .map(runtime_block_from_command)
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+fn runtime_block_from_command(record: &CommandBlock) -> RuntimeBlockRecord {
+    let mut bytes = [0u8; 16];
+    bytes[..8].copy_from_slice(&record.id.to_le_bytes());
+    RuntimeBlockRecord {
+        id: BlockId::from_bytes(bytes),
+        command: record.command.clone(),
+        start_line: record.start_line,
+        end_line: record.end_line,
+        running: matches!(record.state, CommandBlockState::Running),
+        exit_status: match record.state {
+            CommandBlockState::Running => None,
+            CommandBlockState::Completed { exit_status } => Some(exit_status),
+        },
+    }
+}
+
 fn decode_action(action: &SeyalAppAction) -> Result<AppAction, i32> {
     let fence = AppFence {
         pane: id16(action.fence_pane_lo, action.fence_pane_hi).map(PaneId::from_bytes)?,
@@ -630,7 +724,10 @@ fn decode_action(action: &SeyalAppAction) -> Result<AppAction, i32> {
                 alternate_screen: action.flags & FLAG_ALTERNATE_SCREEN != 0,
             },
         }),
-        2 => Ok(AppAction::Refresh { fence }),
+        2 => Ok(AppAction::Refresh {
+            fence,
+            alternate_screen: action.flags & FLAG_ALTERNATE_SCREEN != 0,
+        }),
         3 => {
             let text = read_payload(action.payload, action.payload_len)?;
             Ok(AppAction::SubmitInput { fence, text })
@@ -667,7 +764,7 @@ fn decode_action(action: &SeyalAppAction) -> Result<AppAction, i32> {
         }),
         13 => Ok(AppAction::ApplyRuntimeBlocks {
             fence,
-            records: Vec::new(),
+            records: runtime_blocks_from_active_client(),
         }),
         14 => Ok(AppAction::SetLeftPanel {
             mode: if action.reserved == 1 {
@@ -714,6 +811,11 @@ fn decode_action(action: &SeyalAppAction) -> Result<AppAction, i32> {
                 action.target_execution_lo,
                 action.target_execution_hi,
             )?),
+        }),
+        22 => Ok(AppAction::SetShellVisibility {
+            left: action.reserved & 1 != 0,
+            inspector: action.reserved & 2 != 0,
+            tab_strip: action.reserved & 4 != 0,
         }),
         _ => Err(-6),
     }
@@ -936,6 +1038,20 @@ fn encode_shell_rows(state: &mut AppHandle) {
     relocate_row_pointers(&mut state.shell_rows, state.shell_text.as_ptr());
 }
 
+fn chrome_visibility_flags(chrome: &crate::chrome::ChromeSnapshot) -> u32 {
+    let mut flags = 0u32;
+    if chrome.left_visible {
+        flags |= 1;
+    }
+    if chrome.inspector_visible {
+        flags |= 2;
+    }
+    if chrome.tab_strip_visible {
+        flags |= 4;
+    }
+    flags
+}
+
 fn encode_chrome_rows(state: &mut AppHandle) {
     state.chrome_text.clear();
     state.chrome_rows.clear();
@@ -997,10 +1113,10 @@ fn encode_block_rows(state: &mut AppHandle) {
         return;
     };
     for (index, block) in composer.blocks.iter().enumerate() {
-        let label = match block.state {
-            crate::composer::BlockPresentationState::Running => "Running",
-            crate::composer::BlockPresentationState::Completed => "Completed",
-            crate::composer::BlockPresentationState::Failed => "Failed",
+        let flags = match block.state {
+            crate::composer::BlockPresentationState::Running => 1,
+            crate::composer::BlockPresentationState::Completed => 2,
+            crate::composer::BlockPresentationState::Failed => 3,
         };
         push_row(
             &mut state.block_rows,
@@ -1009,9 +1125,9 @@ fn encode_block_rows(state: &mut AppHandle) {
                 kind: 0,
                 index: index as u32,
                 id: block.id.to_bytes(),
-                flags: 0,
+                flags,
                 title: &block.command,
-                detail: label,
+                detail: block.state.transcript_status(),
             },
         );
     }
@@ -1168,7 +1284,45 @@ mod tests {
         assert_eq!(size_of::<SeyalAppAccessibility>(), 24);
         assert_eq!(size_of::<SeyalAppShell>(), 64);
         assert_eq!(size_of::<SeyalAppRow>(), 56);
+        assert_eq!(size_of::<SeyalAppBlockSpan>(), 16);
         assert_eq!(size_of::<SeyalAppTheme>(), 16);
+    }
+
+    #[test]
+    fn first_ui_chrome_ffi_is_receded() {
+        let handle = seyal_app_create();
+        let chrome = seyal_app_chrome(handle);
+        assert_eq!(chrome.reserved, 0);
+        let mut show = SeyalAppAction {
+            version: APP_ABI_VERSION,
+            size: size_of::<SeyalAppAction>() as u16,
+            kind: 22,
+            flags: 0,
+            fence_pane_lo: 0,
+            fence_pane_hi: 0,
+            fence_execution_lo: 0,
+            fence_execution_hi: 0,
+            fence_attachment_lo: 0,
+            fence_attachment_hi: 0,
+            fence_epoch: 0,
+            target_execution_lo: 0,
+            target_execution_hi: 0,
+            target_attachment_lo: 0,
+            target_attachment_hi: 0,
+            target_pty_generation: 0,
+            payload: ptr::null(),
+            payload_len: 0,
+            reserved: 1 | 2 | 4,
+        };
+        assert_eq!(unsafe { seyal_app_apply(handle, &show) }, 0);
+        let shown = seyal_app_chrome(handle);
+        assert_eq!(shown.reserved & 1, 1);
+        assert_eq!(shown.reserved & 2, 2);
+        assert_eq!(shown.reserved & 4, 4);
+        show.reserved = 0;
+        assert_eq!(unsafe { seyal_app_apply(handle, &show) }, 0);
+        assert_eq!(seyal_app_chrome(handle).reserved, 0);
+        assert_eq!(seyal_app_destroy(handle), 0);
     }
 
     #[test]
@@ -1248,9 +1402,160 @@ mod tests {
         let bound = seyal_app_snapshot(handle);
         assert_eq!(bound.eligibility, 1);
         assert_eq!(bound.flags & SNAP_COMPOSER, SNAP_COMPOSER);
+        assert_eq!(bound.flags & SNAP_HAS_EXECUTION, SNAP_HAS_EXECUTION);
         action.kind = 0;
         assert_eq!(unsafe { seyal_app_apply(handle, &action) }, -4);
         assert_eq!(seyal_app_last_error(handle), 3);
+
+        let composer = seyal_app_composer(handle);
+        let mut draft = identity_fence(10, &bound);
+        draft.target_pty_generation = composer.epoch;
+        let text = b"echo hi";
+        draft.payload = text.as_ptr();
+        draft.payload_len = text.len() as u32;
+        let mut unfenced = draft;
+        unfenced.flags = 0;
+        unfenced.fence_execution_lo = 0;
+        unfenced.fence_execution_hi = 0;
+        unfenced.fence_attachment_lo = 0;
+        unfenced.fence_attachment_hi = 0;
+        assert_eq!(unsafe { seyal_app_apply(handle, &unfenced) }, -4);
+        assert_eq!(seyal_app_last_error(handle), 3);
+        assert_eq!(unsafe { seyal_app_apply(handle, &draft) }, 0);
+
+        let blocks = identity_fence(13, &seyal_app_snapshot(handle));
+        assert_eq!(unsafe { seyal_app_apply(handle, &blocks) }, 0);
+        assert_eq!(seyal_app_composer(handle).block_count, 0);
+        let span = seyal_app_block_span(handle, 0);
+        assert_eq!(span.start_line, 0);
+        assert_eq!(span.end_line, 0);
         assert_eq!(seyal_app_destroy(handle), 0);
+    }
+
+    fn identity_fence(kind: u16, snap: &SeyalAppSnapshot) -> SeyalAppAction {
+        let mut flags = 0u16;
+        if snap.flags & SNAP_HAS_EXECUTION != 0 {
+            flags |= FLAG_HAS_EXECUTION;
+        }
+        if snap.flags & SNAP_HAS_ATTACHMENT != 0 {
+            flags |= FLAG_HAS_ATTACHMENT;
+        }
+        if snap.flags & SNAP_CONTROLLER != 0 {
+            flags |= FLAG_CONTROLLER;
+        }
+        SeyalAppAction {
+            version: APP_ABI_VERSION,
+            size: size_of::<SeyalAppAction>() as u16,
+            kind,
+            flags,
+            fence_pane_lo: snap.pane_lo,
+            fence_pane_hi: snap.pane_hi,
+            fence_execution_lo: snap.execution_lo,
+            fence_execution_hi: snap.execution_hi,
+            fence_attachment_lo: snap.attachment_lo,
+            fence_attachment_hi: snap.attachment_hi,
+            fence_epoch: snap.epoch,
+            target_execution_lo: 0,
+            target_execution_hi: 0,
+            target_attachment_lo: 0,
+            target_attachment_hi: 0,
+            target_pty_generation: 0,
+            payload: ptr::null(),
+            payload_len: 0,
+            reserved: 0,
+        }
+    }
+
+    #[test]
+    fn runtime_block_from_command_preserves_protocol_lifecycle() {
+        let running = CommandBlock {
+            id: 7,
+            command: "echo hi".into(),
+            start_line: 3,
+            end_line: None,
+            state: CommandBlockState::Running,
+        };
+        let projected = runtime_block_from_command(&running);
+        assert_eq!(projected.command, "echo hi");
+        assert!(projected.running);
+        assert_eq!(projected.exit_status, None);
+        assert_eq!(projected.start_line, 3);
+        let mut expected = [0u8; 16];
+        expected[..8].copy_from_slice(&7u64.to_le_bytes());
+        assert_eq!(projected.id, BlockId::from_bytes(expected));
+
+        let failed = CommandBlock {
+            id: 8,
+            command: "false".into(),
+            start_line: 4,
+            end_line: Some(4),
+            state: CommandBlockState::Completed { exit_status: 1 },
+        };
+        let projected = runtime_block_from_command(&failed);
+        assert!(!projected.running);
+        assert_eq!(projected.exit_status, Some(1));
+        assert_eq!(projected.end_line, Some(4));
+    }
+
+    #[test]
+    fn adaptive_depth_copy_is_rust_owned() {
+        let handle = seyal_app_create();
+        let placeholder = seyal_app_copy(handle, 0);
+        let execute = seyal_app_copy(handle, 1);
+        let prompt = seyal_app_copy(handle, 2);
+        assert_eq!(copy_text(placeholder), "Type a command...");
+        assert_eq!(copy_text(execute), "⏎");
+        assert_eq!(copy_text(prompt), "$");
+        assert_eq!(seyal_app_destroy(handle), 0);
+    }
+
+    #[test]
+    fn refresh_alternate_screen_after_bind_derives_tui() {
+        let handle = seyal_app_create();
+        let snap = seyal_app_snapshot(handle);
+        let bind = SeyalAppAction {
+            version: APP_ABI_VERSION,
+            size: size_of::<SeyalAppAction>() as u16,
+            kind: 1,
+            flags: FLAG_TARGET_CONTROLLER,
+            fence_pane_lo: snap.pane_lo,
+            fence_pane_hi: snap.pane_hi,
+            fence_execution_lo: 0,
+            fence_execution_hi: 0,
+            fence_attachment_lo: 0,
+            fence_attachment_hi: 0,
+            fence_epoch: snap.epoch,
+            target_execution_lo: 1,
+            target_execution_hi: 0,
+            target_attachment_lo: 2,
+            target_attachment_hi: 0,
+            target_pty_generation: 1,
+            payload: ptr::null(),
+            payload_len: 0,
+            reserved: 0,
+        };
+        assert_eq!(unsafe { seyal_app_apply(handle, &bind) }, 0);
+        let bound = seyal_app_snapshot(handle);
+        assert_eq!(bound.eligibility, 1);
+        let mut refresh = identity_fence(2, &bound);
+        refresh.flags |= FLAG_ALTERNATE_SCREEN;
+        assert_eq!(unsafe { seyal_app_apply(handle, &refresh) }, 0);
+        let tui = seyal_app_snapshot(handle);
+        assert_eq!(tui.eligibility, 3);
+        assert_eq!(tui.flags & SNAP_COMPOSER, 0);
+        assert_eq!(seyal_app_composer(handle).mode, 0);
+        refresh.flags &= !FLAG_ALTERNATE_SCREEN;
+        refresh.fence_epoch = tui.epoch;
+        assert_eq!(unsafe { seyal_app_apply(handle, &refresh) }, 0);
+        assert_eq!(seyal_app_snapshot(handle).eligibility, 1);
+        assert_eq!(seyal_app_destroy(handle), 0);
+    }
+
+    fn copy_text(row: SeyalAppRow) -> String {
+        if row.title.is_null() || row.title_len == 0 {
+            return String::new();
+        }
+        let bytes = unsafe { slice::from_raw_parts(row.title, row.title_len as usize) };
+        String::from_utf8_lossy(bytes).into_owned()
     }
 }

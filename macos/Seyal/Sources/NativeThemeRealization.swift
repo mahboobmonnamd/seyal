@@ -41,6 +41,7 @@ enum NativeThemeRealization {
         )
     }
 
+    @MainActor
     static func apply(to view: NSView, material: NSVisualEffectView, appearance: NSAppearance) {
         let theme = theme(for: appearance)
         view.window?.backgroundColor = theme.canvas
@@ -52,6 +53,7 @@ enum NativeThemeRealization {
         applyColors(in: view, theme: theme)
     }
 
+    @MainActor
     private static func applyColors(in view: NSView, theme: NativeTheme) {
         if let field = view as? NSTextField {
             field.textColor = field.tag == 2 ? theme.muted : (field.tag == 1 ? theme.secondary : theme.text)

@@ -31,6 +31,7 @@ final class ThinPaneHostView: NSView {
         inputSurface.onAlternateScreenChanged = { [weak self] alternate in
             self?.inputSurface.observedAlternateScreen = alternate
             self?.bindFromBridgeIfNeeded()
+            self?.refreshAlternateScreen(alternate)
             self?.onProductChanged?()
         }
         inputSurface.onFrameChanged = { [weak self] _ in
@@ -109,6 +110,22 @@ final class ThinPaneHostView: NSView {
         announceAccessibility()
     }
 
+    /// Candidate-D already observed alternate-screen; Bind only samples it once.
+    /// Refresh is the post-bind presentation fence (ADR-009 / M001 TUI takeover).
+    private func refreshAlternateScreen(_ alternate: Bool) {
+        let snapshot = seyal_app_snapshot(appHandle)
+        guard snapshot.flags & UInt16(SEYAL_APP_SNAP_HAS_EXECUTION) != 0 else { return }
+        var action = SeyalAppAction()
+        action.version = UInt16(SEYAL_APP_ABI_VERSION)
+        action.size = UInt16(MemoryLayout<SeyalAppAction>.size)
+        action.kind = UInt16(SEYAL_APP_ACTION_REFRESH.rawValue)
+        action.applySnapshotFence(snapshot)
+        if alternate {
+            action.flags |= UInt16(SEYAL_APP_FLAG_ALTERNATE_SCREEN)
+        }
+        _ = seyal_app_apply(appHandle, &action)
+    }
+
     private func announceAccessibility() {
         let tree = seyal_app_accessibility(appHandle)
         guard tree.node_count > 0, let nodes = tree.nodes else { return }
@@ -119,6 +136,29 @@ final class ThinPaneHostView: NSView {
             as: UTF8.self
         )
         SeyalAccessibilityAnnouncement.post(label, element: self)
+    }
+}
+
+extension SeyalAppAction {
+    /// Copy snapshot identity into the action fence. Snapshot flags are not
+    /// action flags; SNAP_* must be translated to FLAG_*.
+    mutating func applySnapshotFence(_ snapshot: SeyalAppSnapshot) {
+        fence_pane_lo = snapshot.pane_lo
+        fence_pane_hi = snapshot.pane_hi
+        fence_execution_lo = snapshot.execution_lo
+        fence_execution_hi = snapshot.execution_hi
+        fence_attachment_lo = snapshot.attachment_lo
+        fence_attachment_hi = snapshot.attachment_hi
+        fence_epoch = snapshot.epoch
+        if snapshot.flags & UInt16(SEYAL_APP_SNAP_HAS_EXECUTION) != 0 {
+            flags |= UInt16(SEYAL_APP_FLAG_HAS_EXECUTION)
+        }
+        if snapshot.flags & UInt16(SEYAL_APP_SNAP_HAS_ATTACHMENT) != 0 {
+            flags |= UInt16(SEYAL_APP_FLAG_HAS_ATTACHMENT)
+        }
+        if snapshot.flags & UInt16(SEYAL_APP_SNAP_CONTROLLER) != 0 {
+            flags |= UInt16(SEYAL_APP_FLAG_CONTROLLER)
+        }
     }
 }
 

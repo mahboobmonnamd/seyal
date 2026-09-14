@@ -167,7 +167,10 @@ fn section_21_6_enumerates_and_classifies_every_valid_row() {
                 };
                 for key in &keys {
                     rows += 1;
-                    mix(&mut digest, &[flags, application_cursor as u8, application_keypad as u8]);
+                    mix(
+                        &mut digest,
+                        &[flags, application_cursor as u8, application_keypad as u8],
+                    );
                     mix(&mut digest, &(key.kind as u16).to_le_bytes());
                     mix(&mut digest, &key.modifiers.bits().to_le_bytes());
                     mix(&mut digest, &key.value.to_le_bytes());
@@ -203,7 +206,10 @@ fn section_21_6_enumerates_and_classifies_every_valid_row() {
         }
     }
 
-    assert_eq!(rows, EXPECTED_VALID_ROWS, "§21.6 valid-row cardinality drifted");
+    assert_eq!(
+        rows, EXPECTED_VALID_ROWS,
+        "§21.6 valid-row cardinality drifted"
+    );
     assert_eq!(
         exact_bytes + no_byte + unsupported,
         EXPECTED_VALID_ROWS,
@@ -232,7 +238,10 @@ fn section_21_6_prose_examples_match_exact_bytes() {
         shifted_ascii: 0,
         action_id: 1,
     };
-    assert_eq!(encode_terminal_key_v2(escape, flags3).unwrap(), b"\x1b[27;1u");
+    assert_eq!(
+        encode_terminal_key_v2(escape, flags3).unwrap(),
+        b"\x1b[27;1u"
+    );
 
     let control_i = TerminalKeyV2 {
         kind: TerminalKeyV2Kind::Ascii,
@@ -240,7 +249,10 @@ fn section_21_6_prose_examples_match_exact_bytes() {
         value: b'i' as u32,
         ..escape
     };
-    assert_eq!(encode_terminal_key_v2(control_i, flags3).unwrap(), b"\x1b[105;5u");
+    assert_eq!(
+        encode_terminal_key_v2(control_i, flags3).unwrap(),
+        b"\x1b[105;5u"
+    );
 
     let up = TerminalKeyV2 {
         kind: TerminalKeyV2Kind::ArrowUp,
@@ -293,17 +305,15 @@ fn section_21_6_prose_examples_match_exact_bytes() {
         ..escape
     };
     assert_eq!(encode_terminal_key_v2(tab, flags3).unwrap(), b"\t");
-    assert!(
-        encode_terminal_key_v2(
-            TerminalKeyV2 {
-                event: TerminalKeyV2Event::Release,
-                ..tab
-            },
-            flags3
-        )
-        .unwrap()
-        .is_empty()
-    );
+    assert!(encode_terminal_key_v2(
+        TerminalKeyV2 {
+            event: TerminalKeyV2Event::Release,
+            ..tab
+        },
+        flags3
+    )
+    .unwrap()
+    .is_empty());
 }
 
 #[test]

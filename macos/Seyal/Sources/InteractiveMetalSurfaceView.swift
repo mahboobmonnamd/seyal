@@ -417,7 +417,10 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
             )
         {
             if heldKeyboardKinds[event.keyCode] == nil {
-                guard heldKeyboardKinds.count < Self.maxHeldKeyboardKinds else { return }
+                guard heldKeyboardKinds.count < Self.maxHeldKeyboardKinds else {
+                    rejectHeldKeyOverflow()
+                    return
+                }
                 heldKeyboardKinds[event.keyCode] = key
             }
             guard let actionID = takeNextKeyboardActionID() else { return }
@@ -587,6 +590,14 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
         guard allowsDirectTerminalInput, !text.isEmpty else { return }
         if text.utf8.count > maxCompositionUTF8Bytes { return }
         _ = terminalSubmitCommittedText(text)
+    }
+
+    /// SPEC-006 §21.3: held-key overflow rejects the new press under the
+    /// existing client-backpressure input-failure wording, VoiceOver-visible.
+    private func rejectHeldKeyOverflow() {
+        let message = "Input not sent: terminal client is busy. Retry the input."
+        setAccessibilityValue(message)
+        SeyalAccessibilityAnnouncement.post(message, element: self)
     }
 
     private func takeNextKeyboardActionID() -> UInt32? {

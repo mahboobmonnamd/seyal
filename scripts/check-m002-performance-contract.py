@@ -263,7 +263,7 @@ def evaluate_record(path: Path, schema: dict) -> str:
                 raise SystemExit(f"M002 raw cohort {cohort_file.name} contains invalid samples")
             cohort_numbers.append(number)
             raw_values.extend(float(value) for value in samples)
-        if len(cohort_files) != schema["raw_cohorts"]["file_count"] or cohort_numbers != list(range(1, 6)):
+        if len(cohort_files) != schema["raw_cohorts"]["file_count"] or sorted(cohort_numbers) != list(range(1, 6)):
             raise SystemExit(f"M002 performance result {field} must contain cohorts 1 through 5 exactly")
         if len(raw_values) != record["sample_count"]:
             raise SystemExit(f"M002 {field} observations do not match sample_count")

@@ -396,6 +396,28 @@ def main() -> None:
             "accepted-ceiling in-policy record was not evaluated as PASS",
         )
 
+        unordered_cohort_names = base / "m002-performance-unordered-cohort-names"
+        shutil.copytree(accepted_pass, unordered_cohort_names)
+        for directory in ("cohorts", "baseline-cohorts"):
+            cohort_dir = unordered_cohort_names / directory
+            for cohort in range(1, 6):
+                (cohort_dir / f"cohort-{cohort}.toml").rename(
+                    cohort_dir / f"{'edcba'[cohort - 1]}.toml"
+                )
+        result = subprocess.run(
+            ["python3", str(ROOT / "scripts/check-m002-performance-contract.py"), "--record", "record.toml"],
+            cwd=unordered_cohort_names,
+            env={**os.environ, ENV_ROOT: str(unordered_cohort_names)},
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+        require(
+            result.returncode == 0 and "M002 performance result: PASS" in result.stdout,
+            "valid cohorts were rejected because filenames sort differently from cohort numbers",
+        )
+
         incomplete_matrix = base / "m002-performance-incomplete-matrix"
         write(
             incomplete_matrix / "docs/evidence/M002-PERFORMANCE-CONTRACT-V1.md",

@@ -126,20 +126,13 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
     }
 
     func copy(_ sender: Any?) {
-        let snapshot = seyal_app_snapshot(appHandle)
-        guard snapshot.output_utf8_len > 0, let bytes = snapshot.output_utf8 else { return }
-        let text = String(
-            decoding: UnsafeBufferPointer(start: bytes, count: Int(snapshot.output_utf8_len)),
-            as: UTF8.self
-        )
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+        _ = terminalSubmitHostSelection(action: 4)
     }
 
     func paste(_ sender: Any?) {
         guard allowsDirectTerminalInput else { return }
-        if let text = NSPasteboard.general.string(forType: .string) {
-            submitIfAllowed(text)
+        if let text = NSPasteboard.general.string(forType: .string), !text.isEmpty {
+            _ = terminalSubmitPaste(text)
         }
     }
 

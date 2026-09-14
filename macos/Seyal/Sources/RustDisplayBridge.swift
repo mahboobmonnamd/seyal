@@ -449,6 +449,7 @@ final class RustDisplayBridge {
   private let onComposerResult: ComposerResultHandler
   private let onError: ErrorHandler
   var onStatusChanged: StatusHandler
+  var onCopiedText: ((String) -> Void)?
   private var readSource: DispatchSourceRead?
   private var writeSource: DispatchSourceWrite?
   private var socketFileDescriptor: Int32 = -1
@@ -1185,6 +1186,10 @@ final class RustDisplayBridge {
       runtimeBlockMetadata = currentBlockMetadata()
       publishHistoryRanges()
       publishComposerResult()
+      if let text = copiedText() {
+        onCopiedText?(text)
+        _ = consumeCopiedText()
+      }
       let revision = seyal_bridge_block_timeline_revision()
       if revision != lastTimelineRevision {
         lastTimelineRevision = revision

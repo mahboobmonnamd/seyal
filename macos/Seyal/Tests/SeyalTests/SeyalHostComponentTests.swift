@@ -134,6 +134,10 @@ final class SeyalHostComponentTests: XCTestCase {
         XCTAssertEqual(BundledRuntimeLauncher.helperIdentifier, "dev.seyal.Seyal.runtime")
     }
 
+    func testNativeKeyClassifierAndActionIDs() {
+        XCTAssertTrue(InteractiveMetalSurfaceView.pass7InputSelfTest())
+    }
+
     func testTranscriptFrameRejectsZeroBlockIdentity() {
         let invalid = NativeTranscriptFrame(
             revision: 1,

@@ -280,7 +280,7 @@ enum TerminalNativeKeyClassifier {
         return matchesControlBase(normalized) ? normalized : nil
     }
 
-    static func semanticKey(
+    fileprivate static func semanticKey(
         specialKey: NSEvent.SpecialKey?,
         charactersIgnoringModifiers: String?,
         modifierFlags: NSEvent.ModifierFlags

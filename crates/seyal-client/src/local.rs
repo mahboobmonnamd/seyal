@@ -16,14 +16,18 @@ use seyal_runtime::{
     local_ipc::framing::{
         encode_frame, BlockTimeline, ComposerResult, ComposerResultCode, ErrorCode, FrameHeader,
         HistoryRangeRequest, HistoryRangeSnapshot, Lifecycle, MessageType, ResizeResult, Role,
-        TerminalKeyV2Event, TerminalKeyV2Kind, TerminalKeyV2Modifiers, HEADER_LEN,
-        MAX_FRAME_PAYLOAD,
+        HEADER_LEN, MAX_FRAME_PAYLOAD,
     },
     pass8::{BlockLifecycle, BlockState, BLOCK_STATE_MESSAGE_TYPE},
     AttachmentId, ExecutionId,
 };
 
 use crate::block_cache::{quarantine_epoch, BlockApply, BlockCache};
+
+#[cfg(test)]
+use seyal_runtime::local_ipc::framing::{
+    TerminalKeyV2Event, TerminalKeyV2Kind, TerminalKeyV2Modifiers,
+};
 
 pub use discovery::DiscoveryFailure;
 pub use input_resize::{derive_grid_geometry, GridGeometry, InputAdmissionFailure, ResizeFailure};

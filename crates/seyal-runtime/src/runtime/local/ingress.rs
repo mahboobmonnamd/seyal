@@ -6,8 +6,8 @@ use crate::{
         attachment::AttachmentError,
         framing::{
             self, ComposerCommandRef, ComposerResult, ComposerResultCode, ErrorCode, MessageType,
-            TerminalKey as WireTerminalKey, TerminalKeyKind, TerminalKeyV2, TerminalKeyV2Event,
-            TerminalKeyV2Kind, CAP_COMMAND_BLOCKS, CAP_EXTENDED_TERMINAL_KEY,
+            TerminalKey as WireTerminalKey, TerminalKeyKind, TerminalKeyV2, CAP_COMMAND_BLOCKS,
+            CAP_EXTENDED_TERMINAL_KEY,
         },
     },
     RuntimeError,

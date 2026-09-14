@@ -2,9 +2,9 @@ use crate::{
     local_ipc::{
         attachment::AttachmentError,
         framing::{
-            self, ComposerCommandRef, ComposerResult, ComposerResultCode, ErrorCode,
+            self, ComposerCommandRef, ComposerResult, ComposerResultCode, ErrorCode, HostSearch,
             HostSelectionAction, MessageType, TerminalKey as WireTerminalKey, TerminalKeyKind,
-            CAP_COMMAND_BLOCKS,
+            CAP_COMMAND_BLOCKS, MAX_INPUT_BYTES,
         },
     },
     RuntimeError,
@@ -208,7 +208,7 @@ impl Runtime {
                 return;
             }
         };
-        if self.intercept_copy_mode_key(execution_id, key.kind) {
+        if self.intercept_copy_mode_key(token, execution_id, key.kind, key.attachment_id) {
             return;
         }
         let bytes = encode_terminal_key(key);
@@ -262,50 +262,173 @@ impl Runtime {
                 return;
             }
         };
-        let Some(entry) = self.entries.get_mut(&execution_id) else {
+        let mut copied = None;
+        let mut malformed_kind = false;
+        let mut yank_failed = false;
+        {
+            let Some(entry) = self.entries.get_mut(&execution_id) else {
+                self.send_error(
+                    token,
+                    ErrorCode::InvalidExecution,
+                    MessageType::HostSelection as u16,
+                );
+                return;
+            };
+            match command.action {
+                HostSelectionAction::EnterCopyMode => entry.execution.enter_copy_mode(),
+                HostSelectionAction::ExitCopyMode => entry.execution.exit_copy_mode(),
+                HostSelectionAction::ToggleAnchor => entry.execution.copy_mode_toggle_anchor(),
+                HostSelectionAction::ToggleKind => entry.execution.copy_mode_toggle_kind(),
+                HostSelectionAction::Clear => entry.execution.clear_selection(),
+                HostSelectionAction::SetVisual => {
+                    let start = seyal_exec::VisualPos {
+                        col: command.start_col,
+                        row: command.start_row,
+                    };
+                    let end = seyal_exec::VisualPos {
+                        col: command.end_col,
+                        row: command.end_row,
+                    };
+                    match command.kind {
+                        0 => entry.execution.set_linear_selection(start, end),
+                        1 => entry.execution.set_rectangular_selection(start, end),
+                        _ => malformed_kind = true,
+                    }
+                }
+                HostSelectionAction::Yank => match entry.execution.yank_selection() {
+                    Ok(text) => copied = Some(text),
+                    Err(_) => yank_failed = true,
+                },
+            }
+        }
+        if malformed_kind {
             self.send_error(
                 token,
-                ErrorCode::InvalidExecution,
+                ErrorCode::MalformedPayload,
                 MessageType::HostSelection as u16,
+            );
+        }
+        if yank_failed {
+            self.send_error(
+                token,
+                ErrorCode::InvalidState,
+                MessageType::HostSelection as u16,
+            );
+        }
+        if let Some(text) = copied {
+            self.emit_copied_text(token, command.attachment_id, &text);
+        }
+    }
+
+    pub(super) fn handle_host_search(&mut self, token: u64, payload: &[u8]) {
+        let Ok(search) = HostSearch::decode(payload) else {
+            self.send_error(
+                token,
+                ErrorCode::MalformedPayload,
+                MessageType::HostSearch as u16,
             );
             return;
         };
-        match command.action {
-            HostSelectionAction::EnterCopyMode => entry.execution.enter_copy_mode(),
-            HostSelectionAction::ExitCopyMode => entry.execution.exit_copy_mode(),
-            HostSelectionAction::ToggleAnchor => entry.execution.copy_mode_toggle_anchor(),
-            HostSelectionAction::ToggleKind => entry.execution.copy_mode_toggle_kind(),
-            HostSelectionAction::Yank => {
-                if entry.execution.yank_selection().is_err() {
-                    self.send_error(
-                        token,
-                        ErrorCode::InvalidState,
-                        MessageType::HostSelection as u16,
-                    );
-                }
+        let execution_id = match self.local_ipc.as_ref().map(|state| {
+            state
+                .attachments
+                .authorize_mutation(token, search.attachment_id)
+        }) {
+            Some(Ok(id)) => id,
+            Some(Err(AttachmentError::PermissionDenied)) => {
+                self.send_error(
+                    token,
+                    ErrorCode::PermissionDenied,
+                    MessageType::HostSearch as u16,
+                );
+                return;
             }
+            _ => {
+                self.send_error(
+                    token,
+                    ErrorCode::StaleIdentity,
+                    MessageType::HostSearch as u16,
+                );
+                return;
+            }
+        };
+        let missed = {
+            let Some(entry) = self.entries.get_mut(&execution_id) else {
+                self.send_error(
+                    token,
+                    ErrorCode::InvalidExecution,
+                    MessageType::HostSearch as u16,
+                );
+                return;
+            };
+            entry
+                .execution
+                .search_and_select(search.needle, search.forward)
+                .is_none()
+                && !search.needle.is_empty()
+        };
+        if missed {
+            self.send_error(
+                token,
+                ErrorCode::InvalidState,
+                MessageType::HostSearch as u16,
+            );
         }
+    }
+
+    fn emit_copied_text(&mut self, token: u64, attachment_id: crate::AttachmentId, text: &str) {
+        if text.len() > MAX_INPUT_BYTES as usize {
+            self.send_error(
+                token,
+                ErrorCode::CapacityExceeded,
+                MessageType::CopiedText as u16,
+            );
+            return;
+        }
+        let payload = framing::InputRef {
+            attachment_id,
+            bytes: text.as_bytes(),
+        }
+        .encode();
+        let _ = self.send_mandatory_frame(
+            token,
+            framing::encode_frame(MessageType::CopiedText, &payload),
+        );
     }
 
     fn intercept_copy_mode_key(
         &mut self,
+        token: u64,
         execution_id: crate::ExecutionId,
         kind: TerminalKeyKind,
+        attachment_id: crate::AttachmentId,
     ) -> bool {
-        let Some(entry) = self.entries.get_mut(&execution_id) else {
-            return false;
-        };
-        if !entry.execution.copy_mode_active() {
-            return false;
-        }
-        match copy_mode_key_action(kind) {
-            CopyModeKeyAction::Exit => entry.execution.exit_copy_mode(),
-            CopyModeKeyAction::Yank => {
-                let _ = entry.execution.yank_selection();
+        let copied = {
+            let Some(entry) = self.entries.get_mut(&execution_id) else {
+                return false;
+            };
+            if !entry.execution.copy_mode_active() {
+                return false;
             }
-            CopyModeKeyAction::ToggleAnchor => entry.execution.copy_mode_toggle_anchor(),
-            CopyModeKeyAction::Motion(motion) => entry.execution.copy_mode_motion(motion),
-            CopyModeKeyAction::Swallow => {}
+            match copy_mode_key_action(kind) {
+                CopyModeKeyAction::Exit => {
+                    entry.execution.exit_copy_mode();
+                    None
+                }
+                CopyModeKeyAction::Yank => entry.execution.yank_selection().ok(),
+                CopyModeKeyAction::ToggleAnchor => {
+                    entry.execution.copy_mode_toggle_anchor();
+                    None
+                }
+                CopyModeKeyAction::Motion(motion) => {
+                    entry.execution.copy_mode_motion(motion);
+                    None
+                }
+                CopyModeKeyAction::Swallow => None,
+            }
+        };
+        if let Some(text) = copied {
+            self.emit_copied_text(token, attachment_id, &text);
         }
         true
     }

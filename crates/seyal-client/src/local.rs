@@ -15,8 +15,8 @@ use seyal_runtime::{
     display::{decode_chunk, DisplayCache},
     local_ipc::framing::{
         encode_frame, BlockTimeline, ComposerResult, ComposerResultCode, ErrorCode, FrameHeader,
-        HistoryRangeRequest, HistoryRangeSnapshot, Lifecycle, MessageType, ResizeResult, Role,
-        HEADER_LEN, MAX_FRAME_PAYLOAD,
+        HistoryRangeRequest, HistoryRangeSnapshot, InputRef, Lifecycle, MessageType, ResizeResult,
+        Role, HEADER_LEN, MAX_FRAME_PAYLOAD,
     },
     pass8::{BlockLifecycle, BlockState, BLOCK_STATE_MESSAGE_TYPE},
     AttachmentId, ExecutionId,
@@ -112,6 +112,7 @@ pub struct LocalDisplayClient {
     pub(crate) history_ranges: HashMap<(u64, u64), HistoryRangeSnapshot>,
     pub(crate) history_requests: HashMap<u64, (u64, u64, u64)>,
     pub(crate) next_history_request_id: u64,
+    pub(crate) copied_text: Vec<u8>,
 }
 
 impl LocalDisplayClient {
@@ -406,6 +407,14 @@ impl LocalDisplayClient {
                             return Err(self.quarantine_block_metadata());
                         }
                     }
+                    MessageType::CopiedText => {
+                        let copied = InputRef::decode(&frame[HEADER_LEN..])
+                            .map_err(|_| ClientError::Protocol)?;
+                        if copied.attachment_id != self.attachment_id {
+                            return Err(ClientError::Protocol);
+                        }
+                        self.copied_text = copied.bytes.to_vec();
+                    }
                     _ => return Err(ClientError::Protocol),
                 }
                 self.read_offset = frame_end;
@@ -546,6 +555,7 @@ mod tests {
             history_ranges: HashMap::new(),
             history_requests: HashMap::new(),
             next_history_request_id: 1,
+            copied_text: Vec::new(),
         }
     }
 

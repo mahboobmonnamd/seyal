@@ -498,16 +498,20 @@ pub enum HostSelectionAction {
     ToggleAnchor = 2,
     ToggleKind = 3,
     Yank = 4,
+    SetVisual = 5,
+    Clear = 6,
 }
 
 impl HostSelectionAction {
-    fn from_u8(value: u8) -> Result<Self, FramingError> {
+    pub fn from_u8(value: u8) -> Result<Self, FramingError> {
         match value {
             0 => Ok(Self::EnterCopyMode),
             1 => Ok(Self::ExitCopyMode),
             2 => Ok(Self::ToggleAnchor),
             3 => Ok(Self::ToggleKind),
             4 => Ok(Self::Yank),
+            5 => Ok(Self::SetVisual),
+            6 => Ok(Self::Clear),
             _ => Err(FramingError::MalformedPayload),
         }
     }
@@ -517,27 +521,93 @@ impl HostSelectionAction {
 pub struct HostSelection {
     pub attachment_id: AttachmentId,
     pub action: HostSelectionAction,
+    pub kind: u8,
+    pub start_col: u16,
+    pub start_row: u16,
+    pub end_col: u16,
+    pub end_row: u16,
 }
 
 impl HostSelection {
-    pub const WIRE_LEN: usize = 24;
+    pub const WIRE_LEN: usize = 32;
 
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(Self::WIRE_LEN);
         out.extend_from_slice(&self.attachment_id.to_bytes());
         out.push(self.action as u8);
-        out.extend_from_slice(&[0u8; 7]);
+        out.push(self.kind);
+        out.extend_from_slice(&self.start_col.to_le_bytes());
+        out.extend_from_slice(&self.start_row.to_le_bytes());
+        out.extend_from_slice(&self.end_col.to_le_bytes());
+        out.extend_from_slice(&self.end_row.to_le_bytes());
+        out.extend_from_slice(&[0u8; 6]);
         out
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self, FramingError> {
         exact_len(bytes, Self::WIRE_LEN)?;
-        if bytes[17..24] != [0u8; 7] {
+        if bytes[26..32] != [0u8; 6] {
             return Err(FramingError::MalformedPayload);
         }
         Ok(Self {
             attachment_id: attachment_id_from(&bytes[..16]),
             action: HostSelectionAction::from_u8(bytes[16])?,
+            kind: bytes[17],
+            start_col: u16::from_le_bytes(bytes[18..20].try_into().unwrap()),
+            start_row: u16::from_le_bytes(bytes[20..22].try_into().unwrap()),
+            end_col: u16::from_le_bytes(bytes[22..24].try_into().unwrap()),
+            end_row: u16::from_le_bytes(bytes[24..26].try_into().unwrap()),
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HostSearch<'a> {
+    pub attachment_id: AttachmentId,
+    pub forward: bool,
+    pub needle: &'a str,
+}
+
+impl<'a> HostSearch<'a> {
+    pub const HEADER_LEN: usize = 24;
+
+    pub fn encode(&self) -> Vec<u8> {
+        let bytes = self.needle.as_bytes();
+        let mut out = Vec::with_capacity(Self::HEADER_LEN + bytes.len());
+        out.extend_from_slice(&self.attachment_id.to_bytes());
+        out.push(u8::from(self.forward));
+        out.extend_from_slice(&[0u8; 3]);
+        out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        out.extend_from_slice(bytes);
+        out
+    }
+
+    pub fn decode(bytes: &'a [u8]) -> Result<Self, FramingError> {
+        if bytes.len() < Self::HEADER_LEN {
+            return Err(FramingError::TruncatedPayload);
+        }
+        if bytes[17..20] != [0u8; 3] {
+            return Err(FramingError::MalformedPayload);
+        }
+        let forward = match bytes[16] {
+            0 => false,
+            1 => true,
+            _ => return Err(FramingError::MalformedPayload),
+        };
+        let byte_count = u32::from_le_bytes(bytes[20..24].try_into().unwrap());
+        if byte_count > MAX_INPUT_BYTES {
+            return Err(FramingError::OversizedPayload);
+        }
+        let expected = Self::HEADER_LEN
+            .checked_add(byte_count as usize)
+            .ok_or(FramingError::LengthOverflow)?;
+        exact_len(bytes, expected)?;
+        let needle =
+            std::str::from_utf8(&bytes[24..]).map_err(|_| FramingError::MalformedPayload)?;
+        Ok(Self {
+            attachment_id: attachment_id_from(&bytes[..16]),
+            forward,
+            needle,
         })
     }
 }
@@ -634,6 +704,10 @@ pub enum MessageType {
     Paste = 30,
     /// Host selection/copy-mode commands. Never written to the PTY.
     HostSelection = 31,
+    /// Runtime→client yanked/copied UTF-8. Same payload layout as `Input`.
+    CopiedText = 32,
+    /// Host history search. Never written to the PTY.
+    HostSearch = 33,
 }
 impl MessageType {
     pub fn from_u16(value: u16) -> Option<Self> {
@@ -667,6 +741,8 @@ impl MessageType {
             28 => Self::DisplayDeltaV2,
             30 => Self::Paste,
             31 => Self::HostSelection,
+            32 => Self::CopiedText,
+            33 => Self::HostSearch,
             _ => return None,
         })
     }
@@ -703,6 +779,8 @@ pub enum Message<'a> {
     HistoryRangeSnapshot(HistoryRangeSnapshot),
     Paste(InputRef<'a>),
     HostSelection(HostSelection),
+    CopiedText(InputRef<'a>),
+    HostSearch(HostSearch<'a>),
 }
 
 pub fn decode_message<'a>(
@@ -760,6 +838,8 @@ pub fn decode_message<'a>(
         }
         MessageType::Paste => Message::Paste(InputRef::decode(payload)?),
         MessageType::HostSelection => Message::HostSelection(HostSelection::decode(payload)?),
+        MessageType::CopiedText => Message::CopiedText(InputRef::decode(payload)?),
+        MessageType::HostSearch => Message::HostSearch(HostSearch::decode(payload)?),
     })
 }
 
@@ -842,6 +922,8 @@ mod tests {
         assert_eq!(MessageType::from_u16(26), None);
         assert_eq!(MessageType::from_u16(30), Some(MessageType::Paste));
         assert_eq!(MessageType::from_u16(31), Some(MessageType::HostSelection));
+        assert_eq!(MessageType::from_u16(32), Some(MessageType::CopiedText));
+        assert_eq!(MessageType::from_u16(33), Some(MessageType::HostSearch));
     }
 
     #[test]
@@ -863,19 +945,30 @@ mod tests {
         let command = HostSelection {
             attachment_id: attach_id(),
             action: HostSelectionAction::EnterCopyMode,
+            kind: 0,
+            start_col: 0,
+            start_row: 0,
+            end_col: 0,
+            end_row: 0,
         };
         assert_eq!(HostSelection::decode(&command.encode()).unwrap(), command);
         assert_eq!(MessageType::from_u16(31), Some(MessageType::HostSelection));
         let mut reserved = command.encode();
-        reserved[17] = 1;
+        reserved[26] = 1;
         assert_eq!(
             HostSelection::decode(&reserved),
             Err(FramingError::MalformedPayload)
         );
         assert_eq!(
-            HostSelectionAction::from_u8(5),
+            HostSelectionAction::from_u8(7),
             Err(FramingError::MalformedPayload)
         );
+        let search = HostSearch {
+            attachment_id: attach_id(),
+            forward: true,
+            needle: "one",
+        };
+        assert_eq!(HostSearch::decode(&search.encode()).unwrap(), search);
     }
 
     #[test]

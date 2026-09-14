@@ -76,6 +76,38 @@ impl TerminalExecution {
         self.terminal.yank_selection()
     }
 
+    pub fn take_copy_buffer(&mut self) -> Option<String> {
+        self.terminal.take_copy_buffer()
+    }
+
+    pub fn set_linear_selection(
+        &mut self,
+        start: seyal_terminal::VisualPos,
+        end: seyal_terminal::VisualPos,
+    ) {
+        self.terminal.set_linear_selection(start, end);
+    }
+
+    pub fn set_rectangular_selection(
+        &mut self,
+        start: seyal_terminal::VisualPos,
+        end: seyal_terminal::VisualPos,
+    ) {
+        self.terminal.set_rectangular_selection(start, end);
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.terminal.clear_selection();
+    }
+
+    pub fn search_and_select(
+        &mut self,
+        needle: &str,
+        forward: bool,
+    ) -> Option<seyal_terminal::HistoryMatch> {
+        self.terminal.search_and_select(needle, forward)
+    }
+
     /// Stable canonical primary-screen logical line present when this
     /// execution was created. It is immutable across scroll, resize,
     /// alternate-screen transitions, projection resync, detach and reattach.

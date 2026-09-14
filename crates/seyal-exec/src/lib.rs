@@ -43,7 +43,7 @@ pub use readiness::Readiness;
 pub use seyal_terminal::{
     CellRole, Color, CopyModeMotion, HistoryRangeError, HistoryWireCell, HostPresentationEvent,
     LineId, PasteError, PresentationPayload, ProtocolReply, ShellIntegrationEvent,
-    ShellIntegrationToken, HISTORY_PER_EXECUTION_DERIVED_INDEX_CAP,
+    ShellIntegrationToken, VisualPos, HISTORY_PER_EXECUTION_DERIVED_INDEX_CAP,
     HISTORY_RUNTIME_AGGREGATE_BYTE_CAP, HISTORY_RUNTIME_DERIVED_INDEX_CAP,
 };
 pub use winsize::WindowSize;

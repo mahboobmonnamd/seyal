@@ -188,25 +188,24 @@ impl SelectionSession {
             return false;
         }
         let last_col = cols.saturating_sub(1);
-        let (row_start, row_end) = if self.kind == SelectionKind::Rectangular
-            || (row == min_row && row == max_row)
-        {
-            (start.col.min(end.col), start.col.max(end.col))
-        } else if row == min_row {
-            if (start.row, start.col) <= (end.row, end.col) {
-                (start.col, last_col)
+        let (row_start, row_end) =
+            if self.kind == SelectionKind::Rectangular || (row == min_row && row == max_row) {
+                (start.col.min(end.col), start.col.max(end.col))
+            } else if row == min_row {
+                if (start.row, start.col) <= (end.row, end.col) {
+                    (start.col, last_col)
+                } else {
+                    (end.col, last_col)
+                }
+            } else if row == max_row {
+                if (start.row, start.col) <= (end.row, end.col) {
+                    (0, end.col)
+                } else {
+                    (0, start.col)
+                }
             } else {
-                (end.col, last_col)
-            }
-        } else if row == max_row {
-            if (start.row, start.col) <= (end.row, end.col) {
-                (0, end.col)
-            } else {
-                (0, start.col)
-            }
-        } else {
-            (0, last_col)
-        };
+                (0, last_col)
+            };
         col >= row_start && col <= row_end
     }
 }

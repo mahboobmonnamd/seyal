@@ -1,10 +1,10 @@
 use std::{slice, str};
 
-use seyal_runtime::local_ipc::framing::TerminalKeyKind;
+use seyal_runtime::local_ipc::framing::{HostSelectionAction, TerminalKeyKind};
 
 use crate::{local::derive_grid_geometry, LocalDisplayClient};
 
-use super::{error_code, with_active_client_mut};
+use super::{error_code, with_active_client, with_active_client_mut, SeyalCopiedText};
 
 /// Atomically submit one already-committed UTF-8 native text action.
 ///
@@ -33,6 +33,92 @@ pub unsafe extern "C" fn seyal_bridge_submit_utf8(bytes: *const u8, len: u32) ->
     };
     with_active_client_mut(|client| client.submit_committed_text(text))
         .map_or(-1, |result| result.map_or_else(error_code, |_| 0))
+}
+
+/// Submit host clipboard bytes. Runtime sanitizes and applies bracketed paste.
+///
+/// # Safety
+/// Same readable-range contract as `seyal_bridge_submit_utf8`. Bytes need not
+/// be UTF-8; Runtime paste sanitization owns NUL and bracket-marker stripping.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn seyal_bridge_submit_paste(bytes: *const u8, len: u32) -> i32 {
+    if len == 0 || bytes.is_null() {
+        return -4;
+    }
+    let Ok(len) = usize::try_from(len) else {
+        return -11;
+    };
+    let bytes = unsafe { slice::from_raw_parts(bytes, len) };
+    with_active_client_mut(|client| client.submit_paste(bytes))
+        .map_or(-1, |result| result.map_or_else(error_code, |_| 0))
+}
+
+/// Host copy-mode / visual-selection command. `action` uses HostSelectionAction
+/// values. Never written to the PTY.
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_submit_host_selection(
+    action: u8,
+    kind: u8,
+    start_col: u16,
+    start_row: u16,
+    end_col: u16,
+    end_row: u16,
+) -> i32 {
+    let Ok(action) = HostSelectionAction::from_u8(action) else {
+        return -4;
+    };
+    with_active_client_mut(|client| {
+        client.submit_host_selection(action, kind, start_col, start_row, end_col, end_row)
+    })
+    .map_or(-1, |result| result.map_or_else(error_code, |_| 0))
+}
+
+/// Search retained history and select the next/previous match.
+///
+/// # Safety
+/// `bytes` must be readable UTF-8 for `len` bytes when `len != 0`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn seyal_bridge_submit_host_search(
+    bytes: *const u8,
+    len: u32,
+    forward: u8,
+) -> i32 {
+    if len != 0 && bytes.is_null() {
+        return -4;
+    }
+    let Ok(len) = usize::try_from(len) else {
+        return -11;
+    };
+    let needle = if len == 0 {
+        ""
+    } else {
+        let bytes = unsafe { slice::from_raw_parts(bytes, len) };
+        let Ok(text) = str::from_utf8(bytes) else {
+            return -4;
+        };
+        text
+    };
+    with_active_client_mut(|client| client.submit_host_search(needle, forward != 0))
+        .map_or(-1, |result| result.map_or_else(error_code, |_| 0))
+}
+
+/// Borrowed yanked text until the next mutating bridge call.
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_copied_text() -> SeyalCopiedText {
+    with_active_client(|client| match client.copied_text() {
+        Some(bytes) => SeyalCopiedText {
+            utf8: bytes.as_ptr(),
+            len: bytes.len() as u32,
+            reserved: 0,
+        },
+        None => SeyalCopiedText::empty(),
+    })
+    .unwrap_or_else(SeyalCopiedText::empty)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_copied_text_consume() -> i32 {
+    with_active_client_mut(LocalDisplayClient::take_copied_text).map_or(-1, |_| 0)
 }
 
 /// Submit one complete command from the Pane composer through the

@@ -36,9 +36,9 @@ use std::{
 use crate::LocalDisplayClient;
 
 pub(crate) use types::{
-    SeyalBlockRecord, SeyalComposerResult, SeyalExecutionBlockMetadata, SeyalHistoryCell,
-    SeyalHistoryRange, SeyalHistoryRow, SeyalHistorySidecar, SeyalPass9DiagSnapshot,
-    SeyalPreparedFrame, SeyalRecoveryResult,
+    SeyalBlockRecord, SeyalComposerResult, SeyalCopiedText, SeyalExecutionBlockMetadata,
+    SeyalHistoryCell, SeyalHistoryRange, SeyalHistoryRow, SeyalHistorySidecar,
+    SeyalPass9DiagSnapshot, SeyalPreparedFrame, SeyalRecoveryResult,
 };
 
 #[allow(unused_imports)]
@@ -66,8 +66,10 @@ pub use errors::{
 };
 #[allow(unused_imports)]
 pub use input::{
-    seyal_bridge_propose_geometry, seyal_bridge_retry_resize, seyal_bridge_submit_composer,
-    seyal_bridge_submit_key, seyal_bridge_submit_utf8,
+    seyal_bridge_copied_text, seyal_bridge_copied_text_consume, seyal_bridge_propose_geometry,
+    seyal_bridge_retry_resize, seyal_bridge_submit_composer, seyal_bridge_submit_host_search,
+    seyal_bridge_submit_host_selection, seyal_bridge_submit_key, seyal_bridge_submit_paste,
+    seyal_bridge_submit_utf8,
 };
 #[allow(unused_imports)]
 pub use session::{
@@ -159,7 +161,7 @@ mod adversarial_ffi_misuse_tests {
     use super::{
         seyal_bridge_adopt_handle, seyal_bridge_disconnect_handle, seyal_bridge_frame,
         seyal_bridge_poll, seyal_bridge_select, seyal_bridge_submit_composer,
-        seyal_bridge_submit_utf8, SeyalPreparedFrame,
+        seyal_bridge_submit_paste, seyal_bridge_submit_utf8, SeyalPreparedFrame,
     };
 
     #[test]
@@ -172,6 +174,12 @@ mod adversarial_ffi_misuse_tests {
     fn submit_utf8_accepts_empty_without_pointer() {
         let code = unsafe { seyal_bridge_submit_utf8(ptr::null(), 0) };
         assert_eq!(code, 0);
+    }
+
+    #[test]
+    fn submit_paste_rejects_null_or_empty() {
+        assert_eq!(unsafe { seyal_bridge_submit_paste(ptr::null(), 0) }, -4);
+        assert_eq!(unsafe { seyal_bridge_submit_paste(ptr::null(), 3) }, -4);
     }
 
     #[test]

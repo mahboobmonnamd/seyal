@@ -491,6 +491,58 @@ impl Resize {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum HostSelectionAction {
+    EnterCopyMode = 0,
+    ExitCopyMode = 1,
+    ToggleAnchor = 2,
+    ToggleKind = 3,
+    Yank = 4,
+}
+
+impl HostSelectionAction {
+    fn from_u8(value: u8) -> Result<Self, FramingError> {
+        match value {
+            0 => Ok(Self::EnterCopyMode),
+            1 => Ok(Self::ExitCopyMode),
+            2 => Ok(Self::ToggleAnchor),
+            3 => Ok(Self::ToggleKind),
+            4 => Ok(Self::Yank),
+            _ => Err(FramingError::MalformedPayload),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HostSelection {
+    pub attachment_id: AttachmentId,
+    pub action: HostSelectionAction,
+}
+
+impl HostSelection {
+    pub const WIRE_LEN: usize = 24;
+
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(Self::WIRE_LEN);
+        out.extend_from_slice(&self.attachment_id.to_bytes());
+        out.push(self.action as u8);
+        out.extend_from_slice(&[0u8; 7]);
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, FramingError> {
+        exact_len(bytes, Self::WIRE_LEN)?;
+        if bytes[17..24] != [0u8; 7] {
+            return Err(FramingError::MalformedPayload);
+        }
+        Ok(Self {
+            attachment_id: attachment_id_from(&bytes[..16]),
+            action: HostSelectionAction::from_u8(bytes[16])?,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LifecycleMessage {
     pub execution_id: ExecutionId,
     pub lifecycle: Lifecycle,
@@ -580,6 +632,8 @@ pub enum MessageType {
     /// Type 26 is Pass 8 block-state metadata (not a control MessageType).
     /// Type 29 is reserved for TerminalKeyV2 (#823).
     Paste = 30,
+    /// Host selection/copy-mode commands. Never written to the PTY.
+    HostSelection = 31,
 }
 impl MessageType {
     pub fn from_u16(value: u16) -> Option<Self> {
@@ -612,6 +666,7 @@ impl MessageType {
             27 => Self::DisplaySnapshotV2,
             28 => Self::DisplayDeltaV2,
             30 => Self::Paste,
+            31 => Self::HostSelection,
             _ => return None,
         })
     }
@@ -647,6 +702,7 @@ pub enum Message<'a> {
     HistoryRangeRequest(HistoryRangeRequest),
     HistoryRangeSnapshot(HistoryRangeSnapshot),
     Paste(InputRef<'a>),
+    HostSelection(HostSelection),
 }
 
 pub fn decode_message<'a>(
@@ -703,6 +759,7 @@ pub fn decode_message<'a>(
             Message::HistoryRangeSnapshot(HistoryRangeSnapshot::decode(payload)?)
         }
         MessageType::Paste => Message::Paste(InputRef::decode(payload)?),
+        MessageType::HostSelection => Message::HostSelection(HostSelection::decode(payload)?),
     })
 }
 
@@ -784,6 +841,7 @@ mod tests {
         assert_eq!(MessageType::from_u16(28), Some(MessageType::DisplayDeltaV2));
         assert_eq!(MessageType::from_u16(26), None);
         assert_eq!(MessageType::from_u16(30), Some(MessageType::Paste));
+        assert_eq!(MessageType::from_u16(31), Some(MessageType::HostSelection));
     }
 
     #[test]
@@ -798,6 +856,26 @@ mod tests {
             Message::Paste(paste) => assert_eq!(paste.bytes, b"paste"),
             other => panic!("expected Paste, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn host_selection_round_trip() {
+        let command = HostSelection {
+            attachment_id: attach_id(),
+            action: HostSelectionAction::EnterCopyMode,
+        };
+        assert_eq!(HostSelection::decode(&command.encode()).unwrap(), command);
+        assert_eq!(MessageType::from_u16(31), Some(MessageType::HostSelection));
+        let mut reserved = command.encode();
+        reserved[17] = 1;
+        assert_eq!(
+            HostSelection::decode(&reserved),
+            Err(FramingError::MalformedPayload)
+        );
+        assert_eq!(
+            HostSelectionAction::from_u8(5),
+            Err(FramingError::MalformedPayload)
+        );
     }
 
     #[test]

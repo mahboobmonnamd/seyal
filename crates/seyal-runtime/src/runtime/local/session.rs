@@ -54,6 +54,7 @@ impl Runtime {
             MessageType::Detach => self.handle_detach(token, payload),
             MessageType::Input => self.handle_input(token, payload),
             MessageType::Paste => self.handle_paste(token, payload),
+            MessageType::HostSelection => self.handle_host_selection(token, payload),
             MessageType::TerminalKey => self.handle_terminal_key(token, payload),
             MessageType::ComposerCommand => self.handle_composer_command(token, payload),
             MessageType::HistoryRangeRequest => self.handle_history_range_request(token, payload),

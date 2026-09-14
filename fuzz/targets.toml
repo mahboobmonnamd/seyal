@@ -22,6 +22,14 @@ adapter = "fuzz/targets/parser-state-mutation"
 libfuzzer = "parser_state_mutation"
 
 [[target]]
+name = "history-resize-eviction"
+owner_pass = 2
+status = "active"
+corpus = "fuzz/corpus/history-resize-eviction"
+adapter = "fuzz/targets/history-resize-eviction"
+libfuzzer = "history_resize_eviction"
+
+[[target]]
 name = "local-binary-protocol-decode"
 owner_pass = 5
 status = "active"

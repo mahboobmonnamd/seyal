@@ -1,6 +1,6 @@
 # M001 UI Design System and Configuration Boundary
 
-**Status:** Implementation map for the Adaptive Depth token/theme/config foundation  
+**Status:** Pre-migration implementation map; target ownership is governed by ADR-015 and migration by #740  
 **Authority:** Subordinate to `SEYAL-ADAPTIVE-DEPTH-DESIGN-LANGUAGE.md`, `SEYAL-UNIVERSAL-COMPONENT-CONTRACT.md`, `SEYAL-ARCH-FOUNDATION-RD-001.md` §13, and R-017–R-020  
 **Owning Issue:** #740
 
@@ -11,6 +11,8 @@ Every first-party Seyal UI surface must obtain typography, colour, spacing, sizi
 This document describes the native implementation boundary. It does not replace the design language or authorize screen-by-screen rebuilds.
 
 ## Ownership
+
+> **Pre-migration note (ADR-015):** The Swift type names and native resolver described here document the existing implementation, not the target authority. Under ADR-015 and #740, Rust owns portable TOML parsing, defaults, validation, precedence and resolved visual semantics; AppKit only realizes the typed colors, fonts and materials using native APIs.
 
 ```text
 product tokens (canonical)

@@ -118,10 +118,12 @@ M001 uses the mechanism defined by `docs/architecture/ADR-001-LOCAL-DISPLAY-PROJ
 ```text
 compact binary Unix-domain control/input
 +
-Runtime-written versioned shared-memory display projection
+Candidate-D versioned binary snapshot/delta display projection
 +
 one-way generation wake/signal
 ```
+
+The production text/grid path is ADR-001 Candidate D (compact binary UDS), not a per-attachment shared-memory grid. Historical Pass 5 compared both mechanisms; see §13.3. Do not rewrite that historical acceptance.
 
 The projection is renderer-facing, rebuildable, bounded, and read-only from the client's perspective.
 

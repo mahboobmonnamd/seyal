@@ -64,8 +64,6 @@ For a one-off override without editing a file, launch with `open --env` (shell `
 open --env SEYAL_UI_APPEARANCE=light target/macos-derived-data/Build/Products/Debug/Seyal.app
 ```
 
-Or run the binary directly so the shell environment is inherited.
-
 ## Next
 
 See **What is available now?** before relying on a feature described in product plans or architecture documents.

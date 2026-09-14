@@ -202,7 +202,7 @@ pub(crate) fn update(
 
 fn copy_rows(terminal: &TerminalState, first_row: u16, row_count: u16) -> Vec<ProjectionCell> {
     let columns = terminal.cols();
-    let mut cells = Vec::with_capacity(row_count as usize * columns as usize);
+    let mut cells: Vec<ProjectionCell> = Vec::with_capacity(row_count as usize * columns as usize);
     for row in first_row..first_row.saturating_add(row_count) {
         for col in 0..columns {
             let cell = terminal.cell(col, row).unwrap_or_default();
@@ -217,27 +217,75 @@ fn copy_rows(terminal: &TerminalState, first_row: u16, row_count: u16) -> Vec<Pr
                     .unwrap_or(cell.canonical_scalar()),
                 CellRole::Empty | CellRole::Continuation => ' ',
             };
-            cells.push(ProjectionCell {
-                role: cell.role,
-                width: cell.width,
-                text,
-                scalar,
-                foreground: cell.style.fg.into(),
-                background: cell.style.bg.into(),
-                attributes: ProjectionAttributes {
+            // Continuations are only valid immediately after their lead in the
+            // same row. Do not carry the previous row's last cell across a row
+            // boundary when projecting reconnect snapshots.
+            let previous = (col > 0)
+                .then(|| cells.last())
+                .flatten()
+                .map(|cell| (cell.role, cell.width));
+            let role = normalized_role(previous, cell.role);
+            // Continuation cells are structural slots with a default terminal
+            // style. The display wire contract repeats the lead's style on its
+            // continuation, so inherit it at this projection boundary.
+            let continuation_style = (role == CellRole::Continuation)
+                .then(|| cells.last())
+                .flatten()
+                .map(|lead| (lead.foreground, lead.background, lead.attributes));
+            let (foreground, background, attributes) = continuation_style.unwrap_or((
+                cell.style.fg.into(),
+                cell.style.bg.into(),
+                ProjectionAttributes {
                     bold: cell.style.bold,
                     underline: cell.style.underline,
                     inverse: cell.style.inverse,
                 },
+            ));
+            let structural = role == CellRole::Empty || role == CellRole::Continuation;
+            cells.push(ProjectionCell {
+                role,
+                width: if structural { 0 } else { cell.width },
+                text: if structural { Arc::from([]) } else { text },
+                scalar: if structural { ' ' } else { scalar },
+                foreground,
+                background,
+                attributes,
             });
         }
     }
     cells
 }
 
+fn normalized_role(previous: Option<(CellRole, u8)>, role: CellRole) -> CellRole {
+    if role == CellRole::Continuation
+        && !previous
+            .is_some_and(|(previous_role, width)| previous_role == CellRole::Lead && width >= 2)
+    {
+        CellRole::Empty
+    } else {
+        role
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn orphan_continuation_is_projected_as_empty() {
+        assert_eq!(
+            normalized_role(None, CellRole::Continuation),
+            CellRole::Empty
+        );
+        assert_eq!(
+            normalized_role(Some((CellRole::Lead, 1)), CellRole::Continuation),
+            CellRole::Empty
+        );
+        assert_eq!(
+            normalized_role(Some((CellRole::Lead, 2)), CellRole::Continuation),
+            CellRole::Continuation
+        );
+    }
 
     #[test]
     fn snapshot_copies_complete_visible_state() {
@@ -290,5 +338,26 @@ mod tests {
             assert_eq!(snapshot.cells[1].role, CellRole::Continuation);
             assert!(snapshot.cells[1].text.is_empty());
         }
+    }
+
+    #[test]
+    fn wide_continuation_inherits_lead_style_for_wire_contract() {
+        let mut terminal = TerminalState::new(8, 2).unwrap();
+        // Width-2 CJK with a non-default indexed foreground. VT stores the
+        // continuation as a structural slot with default style; projection
+        // must repeat the lead so v2 decode does not see InvalidCell.
+        terminal.feed("\x1b[1;38;5;208m中".as_bytes()).unwrap();
+        let snapshot = snapshot(&terminal, 1);
+        let lead = &snapshot.cells[0];
+        assert_eq!(lead.role, CellRole::Lead);
+        assert_eq!(lead.width, 2);
+        assert_eq!(lead.foreground, ProjectionColor::Indexed(208));
+        assert!(lead.attributes.bold);
+        assert_eq!(snapshot.cells[1].role, CellRole::Continuation);
+        assert_eq!(snapshot.cells[1].width, 0);
+        assert!(snapshot.cells[1].text.is_empty());
+        assert_eq!(snapshot.cells[1].foreground, lead.foreground);
+        assert_eq!(snapshot.cells[1].background, lead.background);
+        assert_eq!(snapshot.cells[1].attributes, lead.attributes);
     }
 }

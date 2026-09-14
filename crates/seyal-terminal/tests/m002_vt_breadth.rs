@@ -35,17 +35,21 @@ fn decstbm_il_dl_and_su_sd_preserve_outside_region() {
 fn partial_region_scroll_does_not_enter_primary_history() {
     let mut terminal = TerminalState::new(4, 3).unwrap();
     feed(&mut terminal, b"AAAA\r\nBBBB\r\nCCCC");
-    let before = terminal.primary_history_range(
-        seyal_terminal::LineId(1),
-        seyal_terminal::LineId(u64::MAX),
-        8,
-    );
+    let before = terminal
+        .primary_history_range(
+            seyal_terminal::LineId(1),
+            seyal_terminal::LineId(u64::MAX),
+            8,
+        )
+        .unwrap();
     feed(&mut terminal, b"\x1b[2;3r\x1b[2S");
-    let after = terminal.primary_history_range(
-        seyal_terminal::LineId(1),
-        seyal_terminal::LineId(u64::MAX),
-        8,
-    );
+    let after = terminal
+        .primary_history_range(
+            seyal_terminal::LineId(1),
+            seyal_terminal::LineId(u64::MAX),
+            8,
+        )
+        .unwrap();
     assert_eq!(before.len(), after.len());
     assert_eq!(row(&terminal, 0), "AAAA");
 }

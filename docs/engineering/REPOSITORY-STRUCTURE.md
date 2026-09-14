@@ -28,7 +28,7 @@ M001 Passes 1–9 have seven justified production Rust ownership boundaries:
 
 `seyal-core` owns only stable identity/value types required across authority and protocol layers. It owns no PTY, VT, Runtime registry, protocol transport or renderer state.
 
-`seyal-terminal` owns the permanent incremental VT/parser/state model introduced by Issue #38. `seyal-exec` owns PTY descriptor ownership, child lifecycle and `TerminalExecution`. `seyal-protocol` owns versioned Candidate-D framing and disposable display-value contracts. `seyal-runtime` owns the headless per-user Runtime, logical attachments, projection production and M001 Workspace/`BlockTimeline` metadata (no separate `seyal-workspace` crate exists yet). `seyal-render` owns portable prepared-surface normalization. `seyal-client` owns disposable local attachment state and atomic `DisplayCache` commit before native render.
+`seyal-terminal` owns the permanent incremental VT/parser/state model introduced by Issue #38. `seyal-exec` owns PTY descriptor ownership, child lifecycle and `TerminalExecution`. `seyal-protocol` owns versioned Candidate-D framing and disposable display-value contracts. `seyal-runtime` owns the headless per-user Runtime, logical attachments, projection production and M001 Workspace/`BlockTimeline` metadata (no separate `seyal-workspace` crate exists yet). `seyal-render` owns portable prepared-surface normalization. `seyal-client` owns disposable local attachment state, atomic `DisplayCache` commit before native render, the portable headed Workspace/Tab/Pane product reducer, Flow/Raw/TUI presentation fencing, reconnect/recovery policy, composer/Block projection, chrome/inspector/attention projection, and portable theme/config resolution. It may depend on `seyal-core` identity types. It does not depend on `seyal-runtime` in production. Native hosts map resolved tokens to AppKit; this crate does not.
 
 Do not create empty diagram-driven packages. A future physical `seyal-workspace` crate is justified only when Workspace/Block ownership needs a process/ABI boundary that Runtime composition cannot keep cleanly.
 
@@ -36,7 +36,9 @@ ADR-006 keeps the macOS PTY readiness-composition mechanism inside `seyal-exec`;
 
 ## Current physical native macOS layout
 
-`macos/Seyal` is the permanent native application boundary (**Swift + AppKit + Metal**). Pass 1 established the skeleton; Passes 6–9 added the permanent Metal terminal surface, Candidate-D client bridge, native input/resize/focus/IME, minimal Block presentation and detach/reconnect recovery:
+`macos/Seyal` is the permanent native application boundary (**Swift + AppKit + Metal**). Pass 1 established the skeleton; Passes 6–9 added the permanent Metal terminal surface, Candidate-D client bridge, native input/resize/focus/IME, minimal Block presentation and detach/reconnect recovery.
+
+M001.1 freezes the current AppKit **product** shell as deprecated (not product authority), implements portable product behavior in Rust, removes the rejected shell from the supported path (#890; may temporarily omit a headed app), then replaces the host with a new thin adapter (#883). The freeze/authority map is `docs/engineering/M001.1-SWIFT-OWNERSHIP-PARITY-MANIFEST.md`; it does not replace this layout document.
 
 ```text
 macos/Seyal/
@@ -112,7 +114,7 @@ The exact binaries/packages are decided by active milestones. The architectural 
 - `seyal-protocol`: versioned messages/projection types and validation; no authoritative terminal state.
 - `seyal-render`: derived render preparation; no canonical VT/grid ownership.
 - `seyal-runtime`: per-user authoritative execution registry, logical attachment ownership, bounded multi-execution orchestration and M001 BlockTimeline composition.
-- `seyal-client`: disposable local attachment/client state and DisplayCache commit; no Runtime production dependency.
+- `seyal-client`: disposable local attachment/client state, DisplayCache commit, portable headed product composition, Flow/Raw/TUI presentation fencing, reconnect/recovery policy, composer/Block projection, chrome/inspector/attention projection, and portable theme/config resolution; no Runtime production dependency.
 - `macos/Seyal`: AppKit/native lifecycle/input/Metal surface; consumes derived projection only.
 
 ## Allowed dependency direction
@@ -178,7 +180,7 @@ These locations were introduced incrementally by their owning Issues. Issue #11 
 
 Portable terminal/runtime behavior is Rust. macOS-only AppKit/Metal/input/accessibility code stays under the macOS host. Darwin `kqueue` details stay in the existing macOS platform/exec boundary rather than leaking into portable Runtime domain logic. Do not create a generic cross-platform GUI or reactor framework before another platform is under active development.
 
-The native-language default is Swift. Introduce Objective-C/Objective-C++ only when a reviewed Issue demonstrates a specific API or interoperability need that Swift cannot satisfy cleanly. Cross the Rust/native boundary with coarse C-compatible arrays/runs/batches rather than per-cell callbacks.
+The native-language default for the macOS host adapter is Swift. Swift may own only the thin platform list in ADR-015. Introduce Objective-C/Objective-C++ only when a reviewed Issue demonstrates a specific API or interoperability need that Swift cannot satisfy cleanly. Cross the Rust/native boundary with coarse C-compatible arrays/runs/batches rather than per-cell callbacks. Portable product/UI state must not be added to Swift.
 
 ## Agent instructions
 

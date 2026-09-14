@@ -4,7 +4,7 @@
 - **Date:** 2026-08-28
 - **Refinement issue:** #708
 - **Implementation issue:** #715
-- **Architecture authority:** Foundation Architecture + Runtime/Workspace Continuity + ADR-001 + ADR-004 + ADR-005 + ADR-006 + ADR-007
+- **Architecture authority:** Foundation Architecture + Runtime/Workspace Continuity + ADR-001 + ADR-004 + ADR-005 + ADR-006 + ADR-007 + ADR-015 (Rust/native ownership only; this specification remains authoritative for Block behavior)
 - **Depends on:** SPEC-001, SPEC-003, SPEC-004, SPEC-005 and accepted SPEC-006; Pass 7/7.1 production behavior incorporated on master before PR #721
 
 ## 1. Purpose

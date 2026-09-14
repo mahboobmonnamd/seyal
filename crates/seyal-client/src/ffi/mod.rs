@@ -17,6 +17,7 @@
 //! run loop; `NativePreparedFrame` owns a cell copy at construction so Rust
 //! `PreparedCell` pointers never escape into long-lived Swift state.
 
+mod app;
 mod display;
 mod errors;
 mod input;
@@ -36,19 +37,26 @@ use crate::LocalDisplayClient;
 
 pub(crate) use types::{
     SeyalBlockRecord, SeyalComposerResult, SeyalExecutionBlockMetadata, SeyalHistoryCell,
-    SeyalHistoryRange, SeyalHistoryRow, SeyalPass9DiagSnapshot, SeyalPreparedFrame,
-    SeyalRecoveryResult,
+    SeyalHistoryRange, SeyalHistoryRow, SeyalHistorySidecar, SeyalPass9DiagSnapshot,
+    SeyalPreparedFrame, SeyalRecoveryResult,
 };
 
+#[allow(unused_imports)]
+pub use app::{
+    seyal_app_accessibility, seyal_app_apply, seyal_app_block_row, seyal_app_block_span,
+    seyal_app_chrome, seyal_app_chrome_row, seyal_app_composer, seyal_app_copy, seyal_app_create,
+    seyal_app_destroy, seyal_app_last_error, seyal_app_recovery_param, seyal_app_shell,
+    seyal_app_shell_row, seyal_app_snapshot, seyal_app_theme,
+};
 #[allow(unused_imports)]
 pub use display::{
     seyal_bridge_block_count, seyal_bridge_block_record, seyal_bridge_block_timeline_revision,
     seyal_bridge_composer_result, seyal_bridge_ensure_prepared,
     seyal_bridge_execution_block_metadata, seyal_bridge_flush_writable, seyal_bridge_frame,
     seyal_bridge_history_range_consume, seyal_bridge_history_range_peek_for,
-    seyal_bridge_history_range_row_for, seyal_bridge_next_composer_request_id,
-    seyal_bridge_next_history_request_id, seyal_bridge_poll, seyal_bridge_request_history_range,
-    seyal_bridge_wants_write,
+    seyal_bridge_history_range_row_for, seyal_bridge_history_range_sidecar_for,
+    seyal_bridge_next_composer_request_id, seyal_bridge_next_history_request_id, seyal_bridge_poll,
+    seyal_bridge_request_history_range, seyal_bridge_wants_write,
 };
 pub(crate) use errors::error_code;
 #[allow(unused_imports)]

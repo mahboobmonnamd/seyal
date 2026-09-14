@@ -19,7 +19,6 @@ validate_host_prerequisites() {
     fi
     has xcrun || fail "xcrun is required from Xcode"
     xcrun --find clang >/dev/null 2>&1 || fail "clang is unavailable from the active Xcode installation"
-    bash "${ROOT}/scripts/check-macos-toolchain.sh"
   fi
 }
 
@@ -52,6 +51,9 @@ main() {
   install_pinned_rust_toolchain
   initialize_submodules
   bash "${ROOT}/scripts/check-toolchain.sh"
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    bash "${ROOT}/scripts/check-macos-toolchain.sh"
+  fi
   info "complete"
   info "optional agent/MCP provisioning is separate: make bootstrap-agents"
 }

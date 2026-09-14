@@ -65,6 +65,11 @@ jobs:
         run: |
           cargo +nightly-2026-08-20 fuzz run parser_state_mutation corpus/parser-state-mutation -- \
             -max_total_time=${FUZZ_MAX_TOTAL_TIME} -timeout=10 -rss_limit_mb=1024 -print_final_stats=1
+      - name: Fuzz HistoryStore resize/eviction
+        working-directory: fuzz
+        run: |
+          cargo +nightly-2026-08-20 fuzz run history_resize_eviction corpus/history-resize-eviction -- \
+            -max_total_time=${FUZZ_MAX_TOTAL_TIME} -timeout=10 -rss_limit_mb=1024 -print_final_stats=1
       - name: Fuzz Candidate-D display decoder
         working-directory: fuzz
         run: |

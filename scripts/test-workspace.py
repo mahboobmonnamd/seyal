@@ -79,7 +79,9 @@ expected_portable_dependencies = {
     "seyal-protocol": {"seyal-core"},
     "seyal-runtime": {"seyal-core", "seyal-exec", "seyal-protocol"},
     "seyal-render": set(),
-    "seyal-client": {"seyal-protocol", "seyal-render"},
+    # Identity value types only. Product reducers stay in seyal-client; this is
+    # not a seyal-runtime edge.
+    "seyal-client": {"seyal-core", "seyal-protocol", "seyal-render"},
 }
 for name, expected in expected_portable_dependencies.items():
     dependencies = manifests[name].get("dependencies", {})

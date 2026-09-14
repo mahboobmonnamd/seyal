@@ -19,6 +19,7 @@ use seyal_runtime::{
         TerminalKeyKind, TerminalKeyModifiers, TerminalKeyV2, TerminalKeyV2Event,
         TerminalKeyV2Kind, TerminalKeyV2Modifiers, CAP_CORRELATED_RESIZE,
         CAP_EXTENDED_TERMINAL_KEY, CAP_SEMANTIC_TERMINAL_KEY, HEADER_LEN,
+        HISTORY_CELL_SIDECAR_FLAG,
     },
     AttachmentId, LocalIpcMode, Runtime, RuntimeConfig,
 };
@@ -42,10 +43,16 @@ struct Harness {
 
 impl Harness {
     fn new(command: CommandSpec) -> (Self, seyal_runtime::ExecutionId) {
-        let mut runtime = Runtime::new(config()).expect("Runtime");
-        let execution_id = runtime
-            .create_execution(command, WindowSize::cells(80, 24).expect("size"))
-            .expect("execution");
+        Self::new_with(command, config(), WindowSize::cells(80, 24).expect("size"))
+    }
+
+    fn new_with(
+        command: CommandSpec,
+        config: RuntimeConfig,
+        size: WindowSize,
+    ) -> (Self, seyal_runtime::ExecutionId) {
+        let mut runtime = Runtime::new(config).expect("Runtime");
+        let execution_id = runtime.create_execution(command, size).expect("execution");
         let socket = runtime
             .local_ipc_socket_path()
             .expect("socket")
@@ -241,6 +248,153 @@ impl Harness {
                 Instant::now() < deadline,
                 "fatal V2 connection remained open"
             );
+        }
+    }
+}
+
+#[test]
+fn history_range_combining_grapheme_round_trips_over_runtime_wire() {
+    let (mut harness, execution_id) = Harness::new_with(
+        CommandSpec::new("/bin/cat"),
+        config(),
+        WindowSize::cells(80, 1).expect("size"),
+    );
+    harness.hello();
+    let (attached, _cache) = harness.attach(execution_id, Role::Controller);
+    harness.send(
+        MessageType::Input,
+        &InputRef {
+            attachment_id: attached.attachment_id,
+            bytes: "e\u{301}\r\n".as_bytes(),
+        }
+        .encode(),
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !harness
+        .runtime
+        .execution(execution_id)
+        .expect("execution")
+        .terminal()
+        .primary_history_units_range(LineId(1), LineId(u64::MAX), 32)
+        .iter()
+        .any(|unit| unit.text == "e\u{301}")
+    {
+        assert!(Instant::now() < deadline, "canonical grapheme not retained");
+        harness.pump();
+    }
+    harness.quiesce();
+    harness.send(
+        MessageType::HistoryRangeRequest,
+        &HistoryRangeRequest {
+            attachment_id: attached.attachment_id,
+            request_id: 41,
+            block_id: 7,
+            start_line: 1,
+            end_line: u64::MAX,
+            max_lines: 32,
+            max_cells: 2_560,
+            start_unit: 0,
+        }
+        .encode(),
+    );
+
+    loop {
+        let (kind, payload) = harness.frame();
+        match MessageType::from_u16(kind) {
+            Some(MessageType::HistoryRangeSnapshot) => {
+                let snapshot = HistoryRangeSnapshot::decode(&payload).expect("snapshot");
+                assert_eq!(snapshot.request_id, 41);
+                assert_eq!(snapshot.block_id, 7);
+                let cell = snapshot
+                    .rows
+                    .iter()
+                    .flat_map(|row| &row.cells)
+                    .find(|cell| {
+                        cell.sidecar_utf8(&snapshot.sidecar)
+                            .ok()
+                            .flatten()
+                            .is_some_and(|text| text == "e\u{301}".as_bytes())
+                    })
+                    .expect("combining grapheme on history wire");
+                assert_eq!(
+                    cell.flags & HISTORY_CELL_SIDECAR_FLAG,
+                    HISTORY_CELL_SIDECAR_FLAG
+                );
+                break;
+            }
+            Some(MessageType::DisplaySnapshot | MessageType::DisplayDelta | MessageType::Error) => {
+                if MessageType::from_u16(kind) == Some(MessageType::Error) {
+                    panic!("history combining grapheme became DisplayUnavailable");
+                }
+                continue;
+            }
+            other => panic!("unexpected history response: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn evicted_history_range_reports_stale_over_runtime_wire() {
+    let mut runtime_config = config();
+    runtime_config.history_aggregate_bytes = 24 * 1024;
+    let (mut harness, execution_id) = Harness::new_with(
+        CommandSpec::new("/bin/cat"),
+        runtime_config,
+        WindowSize::cells(512, 1).expect("size"),
+    );
+    harness.hello();
+    let (attached, _cache) = harness.attach(execution_id, Role::Controller);
+    let body = format!("{}\r\n", "a".repeat(512)).repeat(64);
+    harness.send(
+        MessageType::Input,
+        &InputRef {
+            attachment_id: attached.attachment_id,
+            bytes: body.as_bytes(),
+        }
+        .encode(),
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while harness
+        .runtime
+        .execution(execution_id)
+        .expect("execution")
+        .terminal()
+        .primary_history_eviction_generation()
+        == 0
+    {
+        assert!(Instant::now() < deadline, "history was not evicted");
+        harness.pump();
+    }
+    harness.quiesce();
+    harness.send(
+        MessageType::HistoryRangeRequest,
+        &HistoryRangeRequest {
+            attachment_id: attached.attachment_id,
+            request_id: 42,
+            block_id: 7,
+            start_line: 1,
+            end_line: 1,
+            max_lines: 1,
+            max_cells: 512,
+            start_unit: 0,
+        }
+        .encode(),
+    );
+
+    loop {
+        let (kind, payload) = harness.frame();
+        match MessageType::from_u16(kind) {
+            Some(MessageType::HistoryRangeSnapshot) => {
+                let snapshot = HistoryRangeSnapshot::decode(&payload).expect("snapshot");
+                assert_eq!(snapshot.request_id, 42);
+                assert_eq!(snapshot.status, HistoryRangeStatus::Stale);
+                assert!(snapshot.rows.is_empty());
+                break;
+            }
+            Some(MessageType::DisplaySnapshot | MessageType::DisplayDelta) => continue,
+            other => panic!("unexpected history response: {other:?}"),
         }
     }
 }
@@ -557,7 +711,8 @@ fn history_range_over_wire_budget_returns_truncated_not_capacity_error() {
             .execution(execution_id)
             .expect("execution")
             .terminal()
-            .primary_history_range(LineId(1), LineId(u64::MAX), 512);
+            .primary_history_range(LineId(1), LineId(u64::MAX), 512)
+            .expect("scalar history remains representable");
         if rows.len() >= 200 {
             break;
         }
@@ -596,6 +751,7 @@ fn history_range_over_wire_budget_returns_truncated_not_capacity_error() {
             end_line: u64::MAX,
             max_lines: 512,
             max_cells: 131_072,
+            start_unit: 0,
         }
         .encode(),
     );

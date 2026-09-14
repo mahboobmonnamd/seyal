@@ -9,11 +9,13 @@ use crate::{AttachmentId, ExecutionId};
 pub use crate::pass7::{
     BlockTimeline, CommandBlock, CommandBlockState, ComposerCommandRef, ComposerEligibility,
     ComposerResult, ComposerResultCode, ComposerStatus, HistoryCell, HistoryRangeRequest,
-    HistoryRangeSnapshot, HistoryRangeStatus, HistoryRow, ResizeRequest, ResizeResult,
-    ResizeResultCode, TerminalKey, TerminalKeyKind, TerminalKeyModifiers, TerminalKeyV2,
-    TerminalKeyV2Event, TerminalKeyV2Kind, TerminalKeyV2Modifiers, CAP_CORRELATED_RESIZE,
-    CAP_EXTENDED_TERMINAL_KEY, CAP_SEMANTIC_TERMINAL_KEY, MAX_HISTORY_RANGE_BYTES,
-    MAX_HISTORY_RANGE_CELLS, MAX_HISTORY_RANGE_LINES,
+    HistoryRangeSnapshot, HistoryRangeStatus, HistoryRow, HistorySourceCell, ResizeRequest,
+    ResizeResult, ResizeResultCode, TerminalKey, TerminalKeyKind, TerminalKeyModifiers,
+    TerminalKeyV2, TerminalKeyV2Event, TerminalKeyV2Kind, TerminalKeyV2Modifiers,
+    CAP_CORRELATED_RESIZE, CAP_EXTENDED_TERMINAL_KEY, CAP_SEMANTIC_TERMINAL_KEY,
+    HISTORY_CELL_CONTINUATION_FLAG, HISTORY_CELL_SIDECAR_FLAG, HISTORY_CELL_WIDTH_MASK,
+    HISTORY_CELL_WIDTH_SHIFT, MAX_HISTORY_GRAPHEME_BYTES, MAX_HISTORY_RANGE_BYTES,
+    MAX_HISTORY_RANGE_CELLS, MAX_HISTORY_RANGE_LINES, MAX_HISTORY_SIDECAR_BYTES,
 };
 
 pub const MAGIC: [u8; 8] = *b"SEYALIPC";

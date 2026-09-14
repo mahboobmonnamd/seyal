@@ -782,7 +782,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_wide_continuation_must_match_lead_presentation() {
+    fn v2_wide_continuation_inherits_lead_presentation() {
         let heart = "❤️".as_bytes();
         let mut sidecar = Vec::new();
         sidecar.extend_from_slice(heart);
@@ -804,6 +804,11 @@ mod tests {
         payload.extend_from_slice(&DISPLAY_SCHEMA_V2.to_le_bytes());
         payload.extend_from_slice(&0u16.to_le_bytes());
 
+        let lead_attributes = DisplayAttributes {
+            bold: true,
+            underline: false,
+            inverse: false,
+        };
         let mut lead = [0u8; DISPLAY_CELL_LEN];
         lead[0..4].copy_from_slice(&0u32.to_le_bytes());
         lead[4..8].copy_from_slice(&encode_color(DisplayColor::Indexed(7)).to_le_bytes());
@@ -813,11 +818,7 @@ mod tests {
                 2,
                 true,
                 heart.len() as u16,
-                DisplayAttributes {
-                    bold: true,
-                    underline: false,
-                    inverse: false,
-                },
+                lead_attributes,
             )
             .to_le_bytes(),
         );
@@ -826,45 +827,40 @@ mod tests {
         let mut continuation = [0u8; DISPLAY_CELL_LEN];
         continuation[4..8].copy_from_slice(&encode_color(DisplayColor::Indexed(7)).to_le_bytes());
         continuation[12..16].copy_from_slice(
-            &encode_v2_cell_meta(
-                DisplayCellRole::Continuation,
-                0,
-                false,
-                0,
-                DisplayAttributes {
-                    bold: true,
-                    underline: false,
-                    inverse: false,
-                },
-            )
-            .to_le_bytes(),
+            &encode_v2_cell_meta(DisplayCellRole::Continuation, 0, false, 0, lead_attributes)
+                .to_le_bytes(),
         );
         payload.extend_from_slice(&continuation);
         payload.extend_from_slice(&sidecar);
 
         let continuation_offset = DISPLAY_CHUNK_HEADER_V2_LEN + DISPLAY_CELL_LEN;
-        let mut bad_color = payload.clone();
-        bad_color[continuation_offset + 4..continuation_offset + 8]
+        let mut mismatched_color = payload.clone();
+        mismatched_color[continuation_offset + 4..continuation_offset + 8]
             .copy_from_slice(&encode_color(DisplayColor::Indexed(8)).to_le_bytes());
-        let bad_color_frame = framing::encode_frame(MessageType::DisplaySnapshotV2, &bad_color);
-        assert!(matches!(
-            decode_chunk(&bad_color_frame),
-            Err(DisplayError::InvalidCell)
-        ));
+        let mismatched_color_frame =
+            framing::encode_frame(MessageType::DisplaySnapshotV2, &mismatched_color);
+        let color_chunk = decode_chunk(&mismatched_color_frame).unwrap();
+        assert_eq!(color_chunk.cells[1].role, DisplayCellRole::Continuation);
+        assert_eq!(color_chunk.cells[1].foreground, DisplayColor::Indexed(7));
+        assert_eq!(
+            color_chunk.cells[1].background,
+            color_chunk.cells[0].background
+        );
+        assert_eq!(color_chunk.cells[1].attributes, lead_attributes);
 
-        let mut bad_attributes = payload;
+        let mut mismatched_attributes = payload;
         let continuation_meta = u32::from_le_bytes(
-            bad_attributes[continuation_offset + 12..continuation_offset + 16]
+            mismatched_attributes[continuation_offset + 12..continuation_offset + 16]
                 .try_into()
                 .unwrap(),
         );
-        bad_attributes[continuation_offset + 12..continuation_offset + 16]
+        mismatched_attributes[continuation_offset + 12..continuation_offset + 16]
             .copy_from_slice(&(continuation_meta & !1).to_le_bytes());
-        let bad_attributes_frame =
-            framing::encode_frame(MessageType::DisplaySnapshotV2, &bad_attributes);
-        assert!(matches!(
-            decode_chunk(&bad_attributes_frame),
-            Err(DisplayError::InvalidCell)
-        ));
+        let mismatched_attributes_frame =
+            framing::encode_frame(MessageType::DisplaySnapshotV2, &mismatched_attributes);
+        let attr_chunk = decode_chunk(&mismatched_attributes_frame).unwrap();
+        assert_eq!(attr_chunk.cells[1].role, DisplayCellRole::Continuation);
+        assert_eq!(attr_chunk.cells[1].attributes, lead_attributes);
+        assert_eq!(attr_chunk.cells[1].foreground, DisplayColor::Indexed(7));
     }
 }

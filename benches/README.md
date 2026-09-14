@@ -26,6 +26,44 @@ A retained performance result must be paired with the environment metadata contr
 
 Future benchmark workloads belong here or in a justified harness package. Generated measurements belong under ignored build/artifact locations, not committed production modules.
 
+## M002 retained-history matrix (#819)
+
+`crates/seyal-terminal/benches/history_reflow.rs` exercises the production
+`TerminalState` history path and reports append, active-window reflow, canonical
+search, source-anchor resolution, resident-history bytes, derived-cache bytes and
+best-effort process RSS for each selected case. The default invocation remains a
+small comparative smoke case. The complete SPEC-010 shape is selected explicitly:
+
+```sh
+SEYAL_HISTORY_BENCH_FULL=1 \
+SEYAL_HISTORY_BENCH_SAMPLES=32 \
+cargo bench -p seyal-terminal --bench history_reflow --features history-reflow-bench --locked -- --quiet \
+  | tee /tmp/seyal-history-819.log
+python3 scripts/check-history-benchmark.py --require-full-matrix \
+  /tmp/seyal-history-819.log
+```
+
+`SEYAL_HISTORY_BENCH_FULL=1` enumerates 4 workloads × 3 retained-content scales
+× 4 execution populations × 7 column widths. Individual dimensions can be
+selected with `SEYAL_HISTORY_BENCH_LINES`, `SEYAL_HISTORY_BENCH_EXECUTIONS`,
+`SEYAL_HISTORY_BENCH_COLUMNS` and `SEYAL_HISTORY_BENCH_WORKLOADS` for staged
+controlled-host runs. Percentiles use nearest-rank samples and every output is
+marked `performance_claim=false`.
+
+Append timings use evenly sized feed chunks within each execution. The harness
+records up to `SEYAL_HISTORY_BENCH_SAMPLES` append observations per execution
+(bounded by the retained line count), then reports their p50/p95/p99. This keeps
+population-one append percentiles meaningful without feeding the retained scale
+multiple times; the reported append samples cover exactly the requested line
+count.
+
+The harness is intentionally scoped to `TerminalState-comparative` evidence. It
+does not claim Runtime aggregate-budget behavior, physical ARM64 release gates,
+renderer latency or manual UI evidence. Allocation-call/byte counters remain
+`not-instrumented` because benchmark targets inherit the repository's
+`unsafe-code` prohibition; those gates require a separately accepted safe
+instrumentation boundary or a controlled external allocator measurement.
+
 ## Pre-Pass-4 execution scalability evidence
 
 The `seyal-exec` scalability harness measures two distinct resources. The state/resource matrix creates canonical `TerminalState` objects at `0/1/10/50/100/250/500/750` without allocating one PTY per object. The real-execution matrix creates `TerminalExecution` plus its production PTY and child at `1/10/50/100/250`, then attempts larger populations to find the largest safe host-supported population. It does not create a Runtime, scheduler, replacement PTY, or alternate terminal representation.

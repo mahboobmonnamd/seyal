@@ -16,6 +16,7 @@ benchmark-instrumentation = []
 crate-type = ["rlib", "staticlib"]
 
 [dependencies]
+seyal-core = { path = "../seyal-core" }
 seyal-protocol = { path = "../seyal-protocol" }
 seyal-render = { path = "../seyal-render" }
 
@@ -40,3 +41,7 @@ required-features = ["benchmark-instrumentation"]
 name = "pass8_block_metadata"
 harness = false
 required-features = ["benchmark-instrumentation"]
+
+[[bench]]
+name = "app_root"
+harness = false

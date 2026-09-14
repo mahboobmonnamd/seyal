@@ -52,7 +52,7 @@ Seyal must **not** copy Warp's terminal-state architecture or visual identity. I
 | TUI/alt screen | full-screen app presentation | same concept, but explicitly the same `ExecutionId`/PTY/VT/alternate grid with Block/composer chrome yielding |
 | Error styling | can color the Block strongly by exit state | use restrained local status text/icon/border treatment from real metadata; no full-Block error fill |
 | Rich agent content | rich content can live in the same Block list | deferred from M001; future agent/artifact/attention views reference runtime identities without redefining terminal history |
-| UI stack | Rust custom WarpUI/GPU framework | native Swift/AppKit host + Seyal Metal renderer; portable terminal/runtime authority remains Rust |
+| UI stack | Rust custom WarpUI/GPU framework | Rust-owned product/UI state plus a thin in-repo Swift/AppKit host and Seyal Metal renderer (ADR-015); portable terminal/runtime authority remains Rust |
 
 ### 2.2 What Seyal intentionally changes
 
@@ -382,7 +382,7 @@ Rules:
 
 This Issue preserves the seam only. M001 still defers the production configuration system and production Lua runtime.
 
-The native host now implements the typed UI snapshot described by `M001-UI-DESIGN-SYSTEM.md`: TOML is parsed at cold load into `SeyalUserUISettings`, an optional Lua overlay may only produce `SeyalConfigPatch`, and UI/renderer consume `SeyalResolvedVisualConfiguration`. The production Lua VM remains deferred.
+**Pre-migration implementation note (ADR-015):** This passage describes the existing native implementation before M001.1, not target ownership. Under ADR-015, Rust owns TOML parsing, defaults, validation, precedence and the portable resolved snapshot; AppKit receives typed visual intent and realizes native colors/fonts/materials. #740 owns this migration. In the current pre-migration implementation, the native host parses TOML at cold load into `SeyalUserUISettings`, an optional Lua overlay may only produce `SeyalConfigPatch`, and UI/renderer consume `SeyalResolvedVisualConfiguration`. The production Lua VM remains deferred.
 
 ## 10. Native macOS behavior
 

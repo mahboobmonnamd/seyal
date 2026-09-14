@@ -28,9 +28,16 @@ HOT_FUNCTIONS = {
         "encode_cells_v2",
     ],
     "crates/seyal-runtime/src/runtime/local/display_publish.rs": ["publish_display_updates"],
-    # Metal prepare/present: first `update` is the NativePreparedFrame prepare path.
+}
+
+# Metal prepare/present: first `update` is the NativePreparedFrame prepare path.
+# Required only while a native host tree exists. #883 must restore these files;
+# do not stub them here.
+NATIVE_HOT_FUNCTIONS = {
     "macos/Seyal/Sources/MetalTerminalRenderer.swift": ["update", "present"],
 }
+
+NATIVE_HOST_ROOT = Path("macos/Seyal")
 
 FORBIDDEN = {
     "blocking lock": ("Mutex<", "RwLock<", ".lock()", ".read()", ".write()"),
@@ -66,7 +73,13 @@ def extract_function(source: str, name: str) -> str | None:
     return None
 
 
+def native_host_present() -> bool:
+    return (ROOT / NATIVE_HOST_ROOT).is_dir()
+
+
 def validate_native_recovery_ownership(errors: list[str]) -> None:
+    if not native_host_present():
+        return
     surface_relpath = "macos/Seyal/Sources/MetalSurfaceView.swift"
     surface_path = ROOT / surface_relpath
     if not surface_path.exists():
@@ -121,7 +134,10 @@ def validate_native_recovery_ownership(errors: list[str]) -> None:
 
 def main() -> None:
     errors: list[str] = []
-    for relpath, functions in HOT_FUNCTIONS.items():
+    registry = dict(HOT_FUNCTIONS)
+    if native_host_present():
+        registry.update(NATIVE_HOT_FUNCTIONS)
+    for relpath, functions in registry.items():
         path = ROOT / relpath
         if not path.exists():
             errors.append(f"missing guarded hot-path file: {relpath}")

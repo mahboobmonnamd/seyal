@@ -21,7 +21,7 @@
       "sources": [
         {
           "path": "docs/architecture/README.md",
-          "fingerprint": "50f790b755a5c130b94096ef72a4ed50d3230106"
+          "fingerprint": "a1bb58382ca900168b1f30001bee54b49e3ec0a2"
         }
       ],
       "relationships": [
@@ -32,6 +32,10 @@
         {
           "type": "related_to",
           "target": "COMP-BLOCK-TIMELINE"
+        },
+        {
+          "type": "related_to",
+          "target": "COMP-PANE-PRESENTATION"
         }
       ]
     },
@@ -82,13 +86,81 @@
       "sources": [
         {
           "path": "docs/architecture/README.md",
-          "fingerprint": "50f790b755a5c130b94096ef72a4ed50d3230106"
+          "fingerprint": "a1bb58382ca900168b1f30001bee54b49e3ec0a2"
         }
       ],
       "relationships": [
         {
           "type": "related_to",
           "target": "COMP-TERMINAL-EXECUTION"
+        },
+        {
+          "type": "related_to",
+          "target": "COMP-PANE-PRESENTATION"
+        }
+      ]
+    },
+    {
+      "id": "COMP-PANE-PRESENTATION",
+      "kind": "component",
+      "title": "Pane Flow Raw TUI presentation",
+      "summary": "Per TerminalExecution, exactly one user-visible presentation is active: Flow native Blocks/composer, Raw full-Pane primary grid, or TUI full-Pane takeover. Flow terminal cells are clipped to Block output regions and input ownership/reconnect transitions are fenced.",
+      "tags": [
+        "pane",
+        "presentation",
+        "flow",
+        "raw",
+        "tui",
+        "blocks",
+        "composer",
+        "input",
+        "focus",
+        "ime",
+        "reconnect",
+        "adr-009",
+        "adr-015",
+        "spec-006",
+        "spec-008",
+        "spec-009"
+      ],
+      "sources": [
+        {
+          "path": "docs/architecture/ADR-009-COMMAND-BLOCKS-COMPOSER-AND-TUI.md",
+          "fingerprint": "25c820818c250848e9e42f2bf8253c7548946b64"
+        },
+        {
+          "path": "docs/specs/SPEC-006-M001-NATIVE-INPUT-RESIZE.md",
+          "fingerprint": "c2d5e6fe94362614269e31e217cb37f376290c4b"
+        },
+        {
+          "path": "docs/specs/SPEC-008-M003-COMMAND-BLOCKS.md",
+          "fingerprint": "5b775bf58e7f8e8445221bb548f5fe53c4c329fd"
+        },
+        {
+          "path": "docs/specs/SPEC-009-M001-DETACH-RECONNECT.md",
+          "fingerprint": "6836906bf11d4f48c8e7918615105a166d5dfe28"
+        },
+        {
+          "path": "docs/architecture/ADR-015-RUST-PRODUCT-UI-THIN-SWIFT-HOST.md",
+          "fingerprint": "892e74d6341e5ac70fca71f15238f95425b9b89c"
+        }
+      ],
+      "relationships": [
+        {
+          "type": "governed_by",
+          "target": "DEC-ADR-009"
+        },
+        {
+          "type": "related_to",
+          "target": "DEC-ADR-015"
+        },
+        {
+          "type": "related_to",
+          "target": "COMP-TERMINAL-EXECUTION"
+        },
+        {
+          "type": "related_to",
+          "target": "COMP-BLOCK-TIMELINE"
         }
       ]
     },
@@ -114,6 +186,64 @@
         {
           "type": "governs",
           "target": "COMP-TERMINAL-STATE"
+        }
+      ]
+    },
+    {
+      "id": "DEC-ADR-009",
+      "kind": "decision",
+      "title": "ADR-009 Command Blocks composer and presentation takeover",
+      "summary": "Accepted command-Block baseline plus accepted #858 / PR #859 (8d08f2f) correction: Block-first Flow, mutually exclusive Raw/TUI takeover, renderer reuse without viewport authority, and fenced Rust/native input-ownership transitions.",
+      "tags": [
+        "adr",
+        "adr-009",
+        "spec-008",
+        "flow",
+        "raw",
+        "tui",
+        "blocks",
+        "composer",
+        "presentation",
+        "input"
+      ],
+      "sources": [
+        {
+          "path": "docs/architecture/ADR-009-COMMAND-BLOCKS-COMPOSER-AND-TUI.md",
+          "fingerprint": "25c820818c250848e9e42f2bf8253c7548946b64"
+        }
+      ],
+      "relationships": [
+        {
+          "type": "governs",
+          "target": "COMP-PANE-PRESENTATION"
+        }
+      ]
+    },
+    {
+      "id": "DEC-ADR-015",
+      "kind": "decision",
+      "title": "ADR-015 Rust product UI authority and thin native host",
+      "summary": "Accepted (PR #887 / 993e69f): portable Seyal product/UI state, policy and behavior are Rust-owned; Swift remains a thin macOS adapter for inherently platform-specific AppKit, IME, accessibility, clipboard, Metal/CoreText and OS integration. Rejected product Swift may be deleted; native adapter concerns must be recreated.",
+      "tags": [
+        "adr",
+        "adr-015",
+        "rust",
+        "swift",
+        "ui",
+        "platform",
+        "ownership",
+        "cross-platform"
+      ],
+      "sources": [
+        {
+          "path": "docs/architecture/ADR-015-RUST-PRODUCT-UI-THIN-SWIFT-HOST.md",
+          "fingerprint": "892e74d6341e5ac70fca71f15238f95425b9b89c"
+        }
+      ],
+      "relationships": [
+        {
+          "type": "related_to",
+          "target": "COMP-PANE-PRESENTATION"
         }
       ]
     },
@@ -151,13 +281,39 @@
       "sources": [
         {
           "path": "docs/engineering/REPOSITORY-STRUCTURE.md",
-          "fingerprint": "d24e1bc4804e31a75cd88dbd68210373f14267df"
+          "fingerprint": "0d3369703727d1fc82403ded8ed95cb1c1dcd770"
         }
       ],
       "relationships": [
         {
           "type": "implements",
           "target": "COMP-TERMINAL-STATE"
+        }
+      ]
+    },
+    {
+      "id": "DOC-M001.1-SWIFT-OWNERSHIP",
+      "kind": "document",
+      "title": "M001.1 Swift ownership freeze ledger",
+      "summary": "Exhaustive M001.1 freeze map: existing Swift product shell is rejected. Classify REIMPLEMENT_IN_RUST / KEEP_NATIVE_GLUE / DELETE / REFERENCE_ONLY. PR #903 is the unmergeable umbrella recovery branch; KEEP_NATIVE_GLUE means recreate the native concern. #904 freezes the host contract and does not restore Seyal.app or the Usable Terminal Gate.",
+      "tags": [
+        "m001.1",
+        "swift",
+        "macos",
+        "ownership",
+        "adr-015",
+        "migration"
+      ],
+      "sources": [
+        {
+          "path": "docs/engineering/M001.1-SWIFT-OWNERSHIP-PARITY-MANIFEST.md",
+          "fingerprint": "408103a823c374e996534880ec1c42a86b0953f7"
+        }
+      ],
+      "relationships": [
+        {
+          "type": "related_to",
+          "target": "COMP-PANE-PRESENTATION"
         }
       ]
     }

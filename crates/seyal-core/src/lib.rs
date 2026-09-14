@@ -1,6 +1,7 @@
 //! Stable Seyal identity/value types shared across authority and protocol layers.
 //!
-//! This crate owns no PTY, VT, Runtime registry, renderer, transport, or UI.
+//! This crate owns no PTY, VT, Runtime registry, renderer, transport, or UI
+//! reducer. Headed composition IDs (`TabId`, `PaneId`) are value types only.
 
 use std::{
     fmt,
@@ -39,6 +40,16 @@ pub struct ProjectionId(u128);
 /// does not intentionally reuse a prior Workspace Block identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BlockId(u128);
+
+/// Headed composition identity for one Tab. This is not a Runtime, PTY, or VT
+/// authority. Runtime `WorkspaceId` remains the execution-workspace identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct TabId(u128);
+
+/// Headed composition identity for one Pane. Binding an `ExecutionId` does not
+/// move PTY/VT ownership into the product shell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PaneId(u128);
 
 // Fresh authority identities intentionally have no `Default`: default
 // construction would hide a stateful identity-generation side effect.
@@ -87,6 +98,20 @@ impl BlockId {
     }
 }
 
+#[allow(clippy::new_without_default)]
+impl TabId {
+    pub fn new() -> Self {
+        Self(unique_id(0x5441_4200_0000_0001))
+    }
+}
+
+#[allow(clippy::new_without_default)]
+impl PaneId {
+    pub fn new() -> Self {
+        Self(unique_id(0x5041_4e45_0000_0001))
+    }
+}
+
 macro_rules! impl_id_wire_bytes {
     ($type:ty) => {
         impl $type {
@@ -107,6 +132,8 @@ impl_id_wire_bytes!(ExecutionId);
 impl_id_wire_bytes!(AttachmentId);
 impl_id_wire_bytes!(ProjectionId);
 impl_id_wire_bytes!(BlockId);
+impl_id_wire_bytes!(TabId);
+impl_id_wire_bytes!(PaneId);
 
 fn unique_id(domain: u64) -> u128 {
     let sequence = NEXT_ID
@@ -160,6 +187,8 @@ impl_id_display!(ExecutionId);
 impl_id_display!(AttachmentId);
 impl_id_display!(ProjectionId);
 impl_id_display!(BlockId);
+impl_id_display!(TabId);
+impl_id_display!(PaneId);
 
 #[cfg(test)]
 mod tests {
@@ -240,5 +269,11 @@ mod tests {
         assert_eq!(AttachmentId::from_bytes(attachment.to_bytes()), attachment);
         assert_eq!(ProjectionId::from_bytes(projection.to_bytes()), projection);
         assert_eq!(BlockId::from_bytes(block.to_bytes()), block);
+        let tab = TabId::new();
+        let pane = PaneId::new();
+        assert_eq!(TabId::from_bytes(tab.to_bytes()), tab);
+        assert_eq!(PaneId::from_bytes(pane.to_bytes()), pane);
+        assert_ne!(tab.to_string(), pane.to_string());
+        assert_ne!(tab.to_string(), block.to_string());
     }
 }

@@ -340,6 +340,24 @@ pub struct SeyalHistoryRange {
     pub reserved: u32,
 }
 
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct SeyalHistorySidecar {
+    pub bytes: *const u8,
+    pub len: u32,
+    pub reserved: u32,
+}
+
+impl SeyalHistorySidecar {
+    pub(crate) const fn empty() -> Self {
+        Self {
+            bytes: ptr::null(),
+            len: 0,
+            reserved: 0,
+        }
+    }
+}
+
 impl SeyalHistoryRange {
     pub(crate) const fn empty() -> Self {
         Self {

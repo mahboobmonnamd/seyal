@@ -132,21 +132,21 @@ make docs-check    # run Starlight/Astro documentation validation
 
 Current behavior after Passes 1–10 (M001 Pass 10 closeout in progress; #727/#5 open until final freeze + Phase 2 PASS):
 
-- `make bootstrap` provisions/verifies the pinned Rust toolchain and, on macOS, validates full Xcode + Swift + macOS SDK + Metal tooling;
-- `make build` builds the Rust workspace (`seyal-core`, `seyal-terminal`, `seyal-exec`, `seyal-protocol`, `seyal-runtime`, `seyal-render`, `seyal-client`) and, on macOS, builds the native `Seyal.app` Xcode target;
-- `make test` validates repository/tooling/workspace and harness invariants, validates the M001 fuzz registry/corpora, runs Rust workspace unit/integration tests, and on macOS runs the native app smoke plus XCTest/XCUI where configured;
-- `make check` runs the deterministic repository checks, harness/fuzz validation, controlled negative fixtures proving custom validators actually reject bad inputs, Rust formatting/Clippy/tests, architecture layering and the macOS native application on Darwin;
+- `make bootstrap` provisions/verifies the pinned Rust toolchain and, on macOS, validates full Xcode + Swift + macOS SDK + Metal tooling when that host tree exists;
+- `make build` builds the Rust workspace and, on macOS, the thin `Seyal.app` host over Rust snapshots (`#883` one-pane slice);
+- `make test` validates repository/tooling/workspace and harness invariants, validates the M001 fuzz registry/corpora, runs Rust workspace unit/integration tests, and on macOS runs native XCTest/XCUI (`make ui-test`);
+- `make check` runs the deterministic repository checks, harness/fuzz validation, controlled negative fixtures proving custom validators actually reject bad inputs, Rust formatting/Clippy/tests, architecture layering, and on macOS requires the thin `Seyal.app` Metal/hot-path files;
 - `make bench` records and round-trips benchmark environment metadata under `target/benchmarks/` and runs the real Cargo benchmark targets that exist for M001 passes;
 - `make docs` starts the local Starlight documentation site after installing its isolated Node dependencies;
 - `make docs-build` and `make docs-check` validate documentation without becoming dependencies of terminal production execution.
 
-The public `Foundation Quality` workflow separates the fast PR gates into `repository-policy`, `rust-and-harness-quality`, and `native-macos-smoke` (Rust + `Seyal.app` build, `make check`, `make test` including XCTest/XCUIAutomation, and display-link-off `make bench`). See `docs/engineering/GITHUB-WORKFLOW.md` for the exact responsibility, required-check contract, path-filtered Docs/fuzz workflows, and controlled-host-only gates. Linux remains a supported portable-core CI host; native AppKit/Metal build/test steps explicitly skip there instead of introducing a cross-platform GUI abstraction.
+The public `Foundation Quality` workflow separates the fast PR gates into `repository-policy`, `rust-and-harness-quality`, and `native-macos-smoke` (Rust workspace build, `make check`, `make test`, and `make bench`; native `Seyal.app` / XCTest / XCUIAutomation run only when `macos/Seyal` exists). See `docs/engineering/GITHUB-WORKFLOW.md` for the exact responsibility, required-check contract, path-filtered Docs/fuzz workflows, and controlled-host-only gates. Linux remains a supported portable-core CI host; native AppKit/Metal build/test steps explicitly skip there instead of introducing a cross-platform GUI abstraction.
 
 Canonical Cargo operations use the pinned toolchain and `--locked` where dependency resolution applies.
 
 The physical Rust workspace is the Passes 1–10 / M001 production surface documented in `docs/engineering/REPOSITORY-STRUCTURE.md`. Crates exist only for justified ownership boundaries; do not pre-create empty diagram-driven packages.
 
-The native host under `macos/Seyal` is **Swift + AppKit + Metal** and now includes the permanent Metal terminal renderer, Candidate-D client attachment, native input/resize/focus/IME seams, minimal Block presentation, and Pass 9 detach/reconnect recovery. Metal shaders use Metal Shading Language. Rust/native interop crosses a coarse C-compatible prepared-frame boundary rather than per-cell language calls.
+The native host under `macos/Seyal` is a thin AppKit/Metal adapter over Rust `seyal_app_*` snapshots and Candidate-D `seyal_bridge_*` frames. It does not own Workspace/Tab/Pane/composer/chrome product state.
 
 Harness locations under `tests/`, `fuzz/` and `benches/` hold real M001 fixtures, fuzz adapters and pass benchmarks. Pass 10 evidence/protocol docs live under `docs/engineering/M001-PASS10-EVIDENCE.md` and `docs/evidence/`; #727 remains open until final freeze + Phase 2 PASS.
 
@@ -179,11 +179,38 @@ To preview the documentation locally (Node.js 22.12+):
 make docs
 ```
 
-On macOS, after `make build`, the native application can be launched manually with:
+On macOS, after `make build`, the one-pane host can be launched with:
 
 ```sh
 open target/macos-derived-data/Build/Products/Debug/Seyal.app
 ```
+
+### Diagnosing an apparently inert Return key
+
+If the composer accepts text but Return, Command-C, or Command-V appears to do
+nothing, do not assume that AppKit failed to deliver the key. Inspect the
+terminal surface accessibility value first. A usable production path reports
+non-`none` `runtime`, `execution`, and `attachment` identities together with
+`connection=usable`. If it instead reports
+`connection=disconnected runtime=none execution=none attachment=none`, input is
+intentionally fenced because no Runtime-owned execution is attached. A focused
+composer or a passing text-view unit test does not prove that end-to-end path.
+
+One reproducible development-only trigger is terminating `seyal-runtime` while
+its canonical control socket remains present. Connection then fails with
+`ECONNREFUSED`: current reconnect authority treats that differently from an
+absent endpoint, and only the Runtime may validate and remove its stale socket.
+Do not make the GUI unlink the socket or broaden Runtime launch policy inside an
+unrelated UI issue; that changes the accepted reconnect/process-lifecycle
+contract and requires architecture/specification review first.
+
+For user-visible keyboard regressions, retain a packaged-app
+XCTest/XCUIAutomation case that starts the exact Runtime helper, asserts
+`connection=usable`, sends a physical Return with no modifiers, observes the
+command through the Runtime-owned PTY, and repeats the submission to exercise
+Block reconciliation. In Flow mode also assert full-width, aligned Blocks and
+`flow-paint=ok`; the right-edge black strip is a separate Block/Metal clipping
+failure, not evidence that Return itself was dropped.
 
 There are no required private repositories, `seyal-commercial` dependencies, shell-profile assumptions, Homebrew assumptions or hidden environment variables for this canonical product flow. AI-SDLC is an optional public developer-framework dependency materialized only by `make bootstrap-agents`.
 

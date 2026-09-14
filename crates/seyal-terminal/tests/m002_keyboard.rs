@@ -96,6 +96,8 @@ fn kitty_flag_stack_evicts_oldest_and_pop_saturates_to_zero() {
     assert_eq!(terminal.modes().keyboard_flags, 16 & 0b11);
 
     // Set on an empty stack creates a restoreable base entry.
-    terminal.feed(b"\x1b[<65535u\x1b[=2;1u\x1b[>1u\x1b[<1u").unwrap();
+    terminal
+        .feed(b"\x1b[<65535u\x1b[=2;1u\x1b[>1u\x1b[<1u")
+        .unwrap();
     assert_eq!(terminal.modes().keyboard_flags, 2);
 }

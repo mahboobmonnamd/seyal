@@ -305,7 +305,10 @@ fn terminal_key_v2_wire_layout_fields_are_little_endian_and_ordered() {
     let encoded = key.encode();
     assert_eq!(&encoded[0..16], &attachment_id().to_bytes());
     assert_eq!(u16::from_le_bytes(encoded[16..18].try_into().unwrap()), 15);
-    assert_eq!(u16::from_le_bytes(encoded[18..20].try_into().unwrap()), 0b110);
+    assert_eq!(
+        u16::from_le_bytes(encoded[18..20].try_into().unwrap()),
+        0b110
+    );
     assert_eq!(u32::from_le_bytes(encoded[20..24].try_into().unwrap()), 3);
     assert_eq!(encoded[24], 3);
     assert_eq!(encoded[25], 0);

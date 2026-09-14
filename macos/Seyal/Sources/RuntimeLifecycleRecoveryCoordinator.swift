@@ -78,7 +78,14 @@ func openRuntimeRecoveryHandle(
   }
   guard handle != 0 else {
     let result = seyal_bridge_last_recovery_result()
-    if result.failure_class == 1, result.retryable != 0 { return .endpointMissing }
+    // Class 1 is a missing leaf. Class 2 is refused/disappeared: a dead
+    // `control.sock` looks like an unready listener, and only a Runtime
+    // singleton contender may replace it (SPEC-009). Map both to the
+    // one-launch-per-episode path; `launchClaimed` still prevents a second
+    // spawn while a just-started helper binds the canonical endpoint.
+    if result.retryable != 0, result.failure_class == 1 || result.failure_class == 2 {
+      return .endpointMissing
+    }
     if result.failure_class == 3, result.retryable != 0 { return .controllerBusy }
     return result.retryable != 0 ? .retryable : .blocked
   }

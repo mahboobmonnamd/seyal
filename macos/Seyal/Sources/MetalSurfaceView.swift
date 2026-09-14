@@ -255,6 +255,7 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
   private var preparationRetryScheduled = false
   private var preparationState = PreparationRecoveryState()
   private var lastAlternateScreen: Bool?
+  private var isDetachingRuntimeConnection = false
   private(set) var lastBridgeError: Int32?
   private(set) var lastRenderError: Error?
   private var historyRanges: [PaneBlockKey: NativeHistoryRange] = [:]
@@ -301,6 +302,7 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
       metalLayer.framebufferOnly = true
       metalLayer.maximumDrawableCount = 2
       metalLayer.presentsWithTransaction = false
+      metalLayer.isOpaque = true
       updateDrawableSize()
 
       // No dedicated GPU surface resources are retained before the view is
@@ -329,11 +331,20 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
         onStatusChanged: { [weak self] in
           self?.terminalBridgeStatusDidChange()
         },
-        onTimeline: { [weak self] records in
-          self?.onTimelineChanged?(records)
+        onTimeline: { [weak self] in
+          self?.onTimelineChanged?()
         },
         onHistory: { [weak self] range in
-          self?.onHistoryRangeChanged?(range)
+          guard let self else { return }
+          // Retain rows before chrome publishes clips. `setTranscriptFrame`
+          // only re-encodes ranges already stored here; dropping this store
+          // leaves Block bodies empty even after Runtime history arrives.
+          self.retainHistoryRange(range)
+          if let onHistoryRangeChanged {
+            onHistoryRangeChanged(range)
+          } else {
+            self.renderHistoryRange(range)
+          }
         },
         onComposerResult: { [weak self] result in
           self?.onComposerResultChanged?(result)
@@ -380,7 +391,15 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
 
   func terminalBridgeStatusDidChange() {
     refreshRecoveryAccessibilityValue()
-    guard bridge?.isConnected != true else { return }
+    guard !isDetachingRuntimeConnection else { return }
+    if bridge?.isConnected == true {
+      // Propose from `layout()` only. `proposeGeometry` always finishes with
+      // `onStatusChanged`, so calling it here re-enters this method until the
+      // stack overflows (EXC_BAD_ACCESS on the guard page).
+      needsLayout = true
+      return
+    }
+    lastProposedGeometry = .null
     // History/composer/display correlations are disposable connection state;
     // logical pane and Block identity remain owned by Runtime and are not
     // cleared here.
@@ -401,7 +420,7 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
   /// AppKit uses this to switch the surrounding Pane chrome.
   var onAlternateScreenChanged: ((Bool) -> Void)?
   var onFrameChanged: ((NativePreparedFrame) -> Void)?
-  var onTimelineChanged: (([NativeBlockRecord]) -> Void)?
+  var onTimelineChanged: (() -> Void)?
   var onHistoryRangeChanged: ((NativeHistoryRange) -> Void)?
   var onComposerResultChanged: ((NativeComposerResult) -> Void)?
 
@@ -416,7 +435,10 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
   @discardableResult
   func ensureTerminalBridgeConnected() -> Bool {
     guard bridge?.isConnected != true else { return true }
-    guard shouldRender, bridge?.clientHandle == 0 else { return false }
+    guard !isDetachingRuntimeConnection,
+      shouldAttachRuntime,
+      bridge?.clientHandle == 0
+    else { return false }
     if !bridgeRecoveryCoordinator.isActive,
       runtimeRecoveryState.stage != .blocked
     {
@@ -440,6 +462,10 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
 
   func requestHistoryRange(startLine: UInt64, endLine: UInt64, blockID: UInt64) -> Int32 {
     bridge?.requestHistoryRange(startLine: startLine, endLine: endLine, blockID: blockID) ?? -10
+  }
+
+  func retainHistoryRange(_ range: NativeHistoryRange) {
+    historyRanges[PaneBlockKey(paneID: paneID, blockID: range.blockID)] = range
   }
 
   func discardHistoryRequests(except blockIDs: Set<UInt64>) {
@@ -516,8 +542,7 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
   /// bridge boundary but preparation itself remains main-thread confined with
   /// the rest of AppKit/Metal ownership.
   func renderHistoryRange(_ range: NativeHistoryRange, region: NativeTranscriptRegion? = nil) {
-    let key = PaneBlockKey(paneID: paneID, blockID: range.blockID)
-    historyRanges[key] = range
+    retainHistoryRange(range)
     let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
     do {
       let rendererRegion: NativeTranscriptRegion
@@ -557,9 +582,51 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
         beginPresentationAttemptSeries()
         armMetalDisplayLink()
       }
+      refreshRecoveryAccessibilityValue()
     } catch {
       lastRenderError = error
     }
+  }
+
+  func applyRendererPresentation(_ plan: RendererPresentationPlan) {
+    renderer.setPresentationPlan(plan)
+    layer?.isOpaque = plan.drawsFullGridBackground
+    if let metalLayer = layer as? CAMetalLayer {
+      metalLayer.isOpaque = plan.drawsFullGridBackground
+      // Flow composites glyphs over AppKit Block chrome. The compositor must
+      // be able to sample alpha; framebuffer-only drawables skip that path.
+      metalLayer.framebufferOnly = plan.drawsFullGridBackground
+    }
+  }
+
+  override var isOpaque: Bool {
+    inspectRendererPresentation().drawsFullGridBackground
+  }
+
+  override func hitTest(_ point: NSPoint) -> NSView? {
+    // Flow paints terminal pixels over Block bodies. Chrome owns scrolling
+    // and composer hit-testing, so the compositor must not swallow events.
+    if inspectRendererPresentation().drawsLiveGrid {
+      return super.hitTest(point)
+    }
+    return nil
+  }
+
+  func inspectRendererPresentation() -> RendererPresentationInspection {
+    renderer.inspectPresentation()
+  }
+
+  func inspectFlowPaint(sampleGPU: Bool = false) -> FlowPaintInspection {
+    guard sampleGPU else {
+      return renderer.inspectFlowPaint()
+    }
+    let size = convertToBacking(bounds).size
+    let width = max(1, Int(size.width.rounded()))
+    let height = max(1, Int(size.height.rounded()))
+    guard let texture = renderer.renderOffscreenAndWait(width: width, height: height) else {
+      return renderer.inspectFlowPaint()
+    }
+    return renderer.inspectFlowPaint(from: texture)
   }
 
   func setTranscriptFrame(_ frame: NativeTranscriptFrame) {
@@ -615,10 +682,12 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
     let execution = terminalExecutionIdentity ?? "none"
     let attachment = terminalAttachmentIdentity ?? "none"
     let alternate = lastAlternateScreen == true ? "true" : "false"
+    let flowPaint = renderer.inspectFlowPaint().accessibilityToken
     setAccessibilityValue(
       "process=\(ProcessInfo.processInfo.processIdentifier) connection=\(connection) "
         + "runtime=\(runtime) execution=\(execution) "
-        + "attachment=\(attachment) alternate-screen=\(alternate)"
+        + "attachment=\(attachment) alternate-screen=\(alternate) "
+        + "flow-paint=\(flowPaint)"
     )
   }
 
@@ -657,6 +726,7 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
       return
     }
     updateDrawableSize()
+    proposeCurrentGeometry()
     guard shouldRender,
       hasPreparedState,
       renderer.persistentDisplayFailure == nil,
@@ -708,18 +778,30 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
       // Suppress status-driven reconnect before stop() publishes its
       // disconnected transition. Teardown is detach-only and must not create
       // a replacement foreground recovery episode.
-      renderable = false
-      renderer.setVisible(false)
-      invalidatePreparedPresentation()
-      invalidateMetalDisplayLink()
-      cancelBridgeReconnect()
-      bridge?.stop()
+      detachRuntimeConnectionForApplicationTermination()
     }
     super.viewWillMove(toWindow: newWindow)
   }
 
+  /// Detaches the disposable GUI-side Runtime client before the application
+  /// exits. The Runtime/helper intentionally survives GUI lifetime, but its
+  /// controller lease must be released before a later Seyal launch attempts
+  /// to reacquire the same execution.
+  func detachRuntimeConnectionForApplicationTermination() {
+    isDetachingRuntimeConnection = true
+    renderable = false
+    renderer.setVisible(false)
+    invalidatePreparedPresentation()
+    invalidateMetalDisplayLink()
+    cancelBridgeReconnect()
+    bridge?.stop()
+  }
+
   override func viewDidMoveToWindow() {
     super.viewDidMoveToWindow()
+    if window != nil {
+      isDetachingRuntimeConnection = false
+    }
     if let window {
       NotificationCenter.default.addObserver(
         self,
@@ -760,10 +842,22 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
   }
 
   private var shouldRender: Bool {
+    guard shouldAttachRuntime else { return false }
+    guard let window else { return false }
+    return window.occlusionState.contains(.visible)
+  }
+
+  /// Runtime attachment is a lifecycle concern, not a Metal presentation
+  /// concern. AppKit may report a stale/non-visible occlusion state while a
+  /// newly reopened window is already visible and focusable. Gating attach on
+  /// that state strands the pane with no Runtime, no Metal frame, and no
+  /// working Enter key until an unrelated window/occlusion notification.
+  /// A surface already installed in a non-miniaturized window is an eligible
+  /// foreground pane even while AppKit is still settling visibility or an
+  /// ancestor's occlusion bookkeeping.
+  private var shouldAttachRuntime: Bool {
     guard let window else { return false }
     return !window.isMiniaturized
-      && window.occlusionState.contains(.visible)
-      && !isHiddenOrHasHiddenAncestor
   }
 
   private func cancelBridgeReconnect() {
@@ -772,7 +866,8 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
 
   private func startAutomaticBridgeRecoveryIfNeeded() {
     guard !suppressesAutomaticBridgeRecovery,
-      renderable,
+      !isDetachingRuntimeConnection,
+      shouldAttachRuntime,
       bridge?.isConnected == false,
       // stop() keeps the old clientHandle until both dispatch-source cancel
       // handlers complete. Waiting for zero prevents consuming a retry on our
@@ -789,13 +884,23 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
   /// Automatic exhaustion never invokes this method recursively.
   @discardableResult
   func retryRuntimeConnection() -> Bool {
-    guard shouldRender,
+    guard shouldAttachRuntime,
       bridge?.isConnected != true,
       bridge?.clientHandle == 0,
       runtimeRecoveryState.stage != .blocked
     else { return bridge?.isConnected == true }
     bridgeRecoveryCoordinator.retry()
     return bridge?.isConnected == true
+  }
+
+  /// AppKit can finish attaching a scroll-view sibling to its window after
+  /// `viewDidMoveToWindow` has already run. Re-evaluate the lifecycle boundary
+  /// after the shell's window has been ordered front so Runtime discovery is
+  /// never left stranded in `.disconnected`.
+  func activateRuntimeAfterWindowPresentation() {
+    updateVisibility()
+    startAutomaticBridgeRecoveryIfNeeded()
+    refreshRecoveryAccessibilityValue()
   }
 
   private func updateVisibility() {
@@ -839,6 +944,11 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
         beginPresentationAttemptSeries()
         armMetalDisplayLink()
       }
+    } else if shouldAttachRuntime {
+      // The window can be attachable before AppKit publishes a reliable
+      // occlusion state. Keep Runtime recovery independent from presentation;
+      // the renderer remains hidden until a real visible-frame opportunity.
+      startAutomaticBridgeRecoveryIfNeeded()
     }
   }
 
@@ -868,7 +978,9 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
       if result == .updated {
         forceNextFrame = false
         hasPreparedState = true
-        bridgeRecoveryCoordinator.transition(to: .restoringInteraction)
+        if runtimeRecoveryState.stage != .usable {
+          bridgeRecoveryCoordinator.transition(to: .restoringInteraction)
+        }
         // Candidate-D can continue advancing while an exhausted GPU
         // display failure is latched. A successful CPU preparation must
         // not erase that asynchronous display diagnostic.
@@ -881,17 +993,18 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
         if shouldRender,
           bridge?.isConnected == true,
           hasPreparedState,
-          !presentationState.exhausted
+          !presentationState.exhausted,
+          runtimeRecoveryState.stage != .usable
         {
           // SPEC-009 §10: first-responder / accessibility / IME must be restored
           // before Usable when this surface owns the native interaction seam.
+          // After Usable, leave the first responder alone so the Flow composer
+          // can keep Enter and paste.
           guard restoreNativeInteractionAfterRendererReady() else {
             return
           }
-          if runtimeRecoveryState.stage != .usable {
-            bridgeRecoveryCoordinator.transition(to: .usable)
-            refreshRecoveryAccessibilityValue()
-          }
+          bridgeRecoveryCoordinator.transition(to: .usable)
+          refreshRecoveryAccessibilityValue()
         }
         if shouldRender,
           renderer.persistentDisplayFailure == nil,
@@ -1099,6 +1212,32 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
     let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
     metalLayer.contentsScale = scale
     metalLayer.drawableSize = convertToBacking(bounds).size
+  }
+
+  private var lastProposedGeometry = CGRect.null
+  private var proposingGeometry = false
+
+  private func proposeCurrentGeometry() {
+    guard !proposingGeometry else { return }
+    guard terminalBridgeIsConnected, bounds.width > 8, bounds.height > 8 else { return }
+    let rounded = bounds.integral
+    guard rounded != lastProposedGeometry else { return }
+    let cell = terminalPresentationCellSize()
+    guard cell.width > 0, cell.height > 0 else { return }
+    proposingGeometry = true
+    defer { proposingGeometry = false }
+    let result = terminalProposeGeometry(
+      viewportWidth: Double(rounded.width),
+      viewportHeight: Double(rounded.height),
+      horizontalInsets: 0,
+      verticalInsets: 0,
+      cellWidth: Double(cell.width),
+      cellHeight: Double(cell.height),
+      meaningfulLayoutEpoch: true
+    )
+    if result == 0 {
+      lastProposedGeometry = rounded
+    }
   }
 
   static func smokeTest() -> Bool {

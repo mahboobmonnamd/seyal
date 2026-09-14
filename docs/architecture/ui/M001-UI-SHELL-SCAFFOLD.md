@@ -1,12 +1,19 @@
 # M001 UI Shell Scaffold Boundary
 
-> Architecture amendment: [`M001-FLOW-BLOCKS-DEFAULT-AND-TUI-TAKEOVER.md`](M001-FLOW-BLOCKS-DEFAULT-AND-TUI-TAKEOVER.md)
-> establishes Flow/Blocks as the production default. This scaffold document's
-> preview-only boundary remains valid for fixture data, but must not be used to
-> justify a raw-terminal default in the production application.
+> Historical M001 authority: [`M001-FLOW-BLOCKS-DEFAULT-AND-TUI-TAKEOVER.md`](M001-FLOW-BLOCKS-DEFAULT-AND-TUI-TAKEOVER.md)
+> established Flow/Blocks as the production default.
+>
+> **Proposed #858 supersession:** any wording in this scaffold that can be read
+> as a permanent visible/focusable terminal surface underneath Flow is
+> superseded by ADR-009/SPEC-008 on merge. In corrected Flow, the Pane transcript
+> and composer are the user-visible interaction surface and terminal-derived
+> pixels are composed only into Block output regions. Raw/TUI are mutually
+> exclusive full-Pane presentations. A direct-terminal input path requires the
+> Pane to transition to Raw/TUI first, with the source first-responder/IME/mouse/
+> input route revoked before the destination route is enabled.
 
-**Status:** Implementation boundary for the pre-Pass-6 native shell scaffold
-**Authority:** subordinate to `M001-CORE-TERMINAL-REFERENCE-SCREEN.md`, its companion UI specs, M001 pass ordering, and accepted Runtime/TerminalExecution ownership
+**Status:** Implementation boundary for the pre-Pass-6 native shell scaffold; presentation target is historical/subordinate to ADR-009/SPEC-008
+**Authority:** subordinate to `M001-CORE-TERMINAL-REFERENCE-SCREEN.md`, `SEYAL-UI-ARCHITECTURE-001.md`, accepted ADRs/specs, M001 pass ordering, and accepted Runtime/TerminalExecution ownership
 
 ## Purpose
 
@@ -23,7 +30,7 @@ The scaffold may establish:
 - attention-popover presentation seam;
 - native AppKit menu/key-equivalent routing for presentation-only Workspace/Tab/window navigation;
 - transient Command-hold shortcut-discovery overlays that do not alter layout;
-- a `TerminalSurfaceHostView` that contains the already-established permanent `MetalSurfaceView` boundary;
+- the permanent Metal renderer/presenter integration seam without requiring it to be a visible/focusable Raw terminal viewport during Flow;
 - deterministic preview fixtures behind an explicit preview-only launch path.
 
 ## Hard boundary
@@ -41,10 +48,12 @@ This scaffold must not implement or invent:
 - terminal-input keybinding behavior that forwards or transforms PTY/TUI input;
 - multiple-pane Runtime semantics.
 
-The production application path is the Flow/Blocks shell. The permanent Metal
-surface is the same Pane's live terminal body and is shown full-area only during
-canonical full-screen TUI takeover. A fixture-only preview is not a production
-fallback and must not remain the default launch path.
+The production application path is the Flow/Blocks shell when trusted structured
+presentation is safe. Metal remains the permanent renderer technology, but the
+renderer is not required to be a conventional terminal viewport in Flow. Under
+the proposed #858 correction, full-Pane direct terminal interaction belongs only
+to Raw/TUI presentation. A fixture-only preview is not a production fallback and
+must not remain the default launch path.
 
 ## Frozen visual contract
 
@@ -63,7 +72,7 @@ At the canonical `1280x800` preview size:
 - the Inspector rail is functional rather than decorative: current preview modes filter existing context into **Context**, **Workspace**, **Tab**, and **Pane** views only;
 - both the left context panel and right Inspector can be hidden and reopened; when either is hidden the center Pane reclaims that width rather than preserving an empty gutter;
 - left-pane hide/reopen must be immediate on press (no input delay/lockout) and must cancel/redirect any in-flight emphasis preview without changing Workspace/Tab/Pane selection state;
-- reduced-motion must be respected for any emphasis/visibility state changes associated with side-panel collapse/expand.
+- reduced-motion must be respected for any emphasis/visibility state changes associated with side-panel collapse/expand;
 - persistent top-chrome toggles reopen a hidden side panel, while each visible side panel also exposes its own collapse control;
 - each Pane has compact, functional Pane-local split and close controls in its header;
 - the Pane contains its own minimal composer at the bottom;
@@ -85,7 +94,7 @@ The UI shell may be launched explicitly for design/decomposition review using a 
 - must not fabricate PTY/process/terminal/resource telemetry;
 - must not be reused as terminal output/state storage.
 
-The normal preview therefore leaves the permanent Metal terminal host unattached rather than filling it with fake command output.
+The normal preview therefore leaves renderer/Runtime terminal authority unattached rather than filling it with fake command output.
 
 ## Workspace and Tab navigation
 
@@ -185,11 +194,19 @@ The Pane-local multiline composer may use its own bounded editor scroll surface 
 
 `BlockView` accepts a presentation model and a body view. It does not own terminal cells, VT state, PTY state, execution lifecycle, or a copied output transcript.
 
-The future renderer can provide a terminal-surface body without changing Block ownership.
+The renderer can provide terminal-derived Block output without changing Block ownership or exposing a full-Pane Raw viewport in Flow.
 
-## TUI seam
+## TUI / Raw seam
 
-The shell architecture must allow canonical TUI takeover to replace normal Block/transcript presentation with the same execution's terminal surface and hide/disable the Pane composer. The scaffold does not implement the canonical mode transition itself.
+The shell architecture must allow a mutually exclusive presentation change for the
+same execution: normal Flow transcript, full-Pane Raw direct-terminal fallback,
+or canonical full-Pane TUI takeover. The scaffold does not implement the final
+state machine itself.
+
+A transition must release the previous mode's first responder, IME/preedit and
+mouse/input route before the destination route can admit input. Same-execution
+continuity does not require one visible/focusable AppKit terminal view to remain
+installed under every presentation.
 
 ## Functional-only rule
 
@@ -199,13 +216,14 @@ Production UI must not show unsupported controls or fabricated metrics merely be
 
 The scaffold is acceptable only if:
 
-- default M001 app behavior is unchanged;
+- default M001 app behavior is unchanged unless superseded by accepted later architecture/specification;
 - the shell is native Swift/AppKit;
-- Metal remains the permanent terminal-surface direction;
+- Metal remains the permanent terminal rendering technology;
 - no SwiftUI terminal implementation exists;
 - `NSTextView` is used only for the Pane-local multiline composer and never as a terminal renderer;
 - `BlockView` contains no nested output scroll view;
 - one Pane transcript scroll surface owns normal output navigation per Pane;
+- Flow does not expose a coexisting focusable/click-through Raw terminal viewport;
 - deterministic shell construction participates in the native smoke test;
 - the canonical `1280x800` preview satisfies the frozen three-column layout contract with Inspector flush to the trailing edge;
 - the Workspaces/Tabs switcher follows the frozen compact navigation model;

@@ -175,6 +175,75 @@ impl SelectionSession {
         let end = self.end?;
         Some(order_visual(start, end))
     }
+
+    /// Visual coverage matching `copy_visual_cells`. `cols` is the current
+    /// screen width so linear mid-line spans can fill to the row end.
+    pub fn contains_cell(self, col: u16, row: u16, cols: u16) -> bool {
+        let Some((start, end)) = self.ordered_corners() else {
+            return false;
+        };
+        let min_row = start.row.min(end.row);
+        let max_row = start.row.max(end.row);
+        if row < min_row || row > max_row {
+            return false;
+        }
+        let last_col = cols.saturating_sub(1);
+        let (row_start, row_end) = if self.kind == SelectionKind::Rectangular
+            || (row == min_row && row == max_row)
+        {
+            (start.col.min(end.col), start.col.max(end.col))
+        } else if row == min_row {
+            if (start.row, start.col) <= (end.row, end.col) {
+                (start.col, last_col)
+            } else {
+                (end.col, last_col)
+            }
+        } else if row == max_row {
+            if (start.row, start.col) <= (end.row, end.col) {
+                (0, end.col)
+            } else {
+                (0, start.col)
+            }
+        } else {
+            (0, last_col)
+        };
+        col >= row_start && col <= row_end
+    }
+}
+
+#[cfg(test)]
+mod selection_contains_tests {
+    use super::*;
+
+    #[test]
+    fn linear_contains_fills_intermediate_rows() {
+        let session = SelectionSession {
+            kind: SelectionKind::Linear,
+            start: Some(VisualPos { col: 2, row: 0 }),
+            end: Some(VisualPos { col: 1, row: 2 }),
+        };
+        assert!(session.contains_cell(2, 0, 4));
+        assert!(session.contains_cell(3, 0, 4));
+        assert!(session.contains_cell(0, 1, 4));
+        assert!(session.contains_cell(3, 1, 4));
+        assert!(session.contains_cell(0, 2, 4));
+        assert!(session.contains_cell(1, 2, 4));
+        assert!(!session.contains_cell(2, 2, 4));
+        assert!(!session.contains_cell(1, 0, 4));
+    }
+
+    #[test]
+    fn rectangular_contains_is_a_column_box() {
+        let session = SelectionSession {
+            kind: SelectionKind::Rectangular,
+            start: Some(VisualPos { col: 1, row: 0 }),
+            end: Some(VisualPos { col: 2, row: 1 }),
+        };
+        assert!(session.contains_cell(1, 0, 4));
+        assert!(session.contains_cell(2, 1, 4));
+        assert!(!session.contains_cell(0, 0, 4));
+        assert!(!session.contains_cell(3, 1, 4));
+    }
 }
 
 impl SearchSession {

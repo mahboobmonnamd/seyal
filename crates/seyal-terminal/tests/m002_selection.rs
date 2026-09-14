@@ -137,3 +137,15 @@ fn alternate_screen_clears_host_selection_and_copy_mode() {
     assert!(terminal.selection_session().start.is_none());
     assert!(!terminal.copy_mode().active);
 }
+
+#[test]
+fn selection_mutations_commit_display_damage() {
+    let mut terminal = TerminalState::new(4, 1).unwrap();
+    feed(&mut terminal, b"abcd");
+    let _ = terminal.take_damage();
+    terminal.set_linear_selection(VisualPos { col: 0, row: 0 }, VisualPos { col: 1, row: 0 });
+    let damage = terminal.take_damage().expect("selection damage");
+    assert!(damage.full);
+    terminal.enter_copy_mode();
+    assert!(terminal.take_damage().is_some());
+}

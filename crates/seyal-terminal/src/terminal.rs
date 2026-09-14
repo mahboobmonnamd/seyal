@@ -582,17 +582,20 @@ impl TerminalState {
     pub fn clear_selection(&mut self) {
         self.core.selection.clear();
         self.core.copy_buffer = None;
+        self.bump_selection_damage();
     }
 
     pub fn set_linear_selection(&mut self, start: VisualPos, end: VisualPos) {
         if let Some((start, end)) = Self::clamp_visual_pair(self.cols(), self.rows(), start, end) {
             self.core.selection.set_linear(start, end);
+            self.bump_selection_damage();
         }
     }
 
     pub fn set_rectangular_selection(&mut self, start: VisualPos, end: VisualPos) {
         if let Some((start, end)) = Self::clamp_visual_pair(self.cols(), self.rows(), start, end) {
             self.core.selection.set_rectangular(start, end);
+            self.bump_selection_damage();
         }
     }
 
@@ -622,6 +625,7 @@ impl TerminalState {
             self.visual_pos_for_anchor(found.end),
         ) {
             self.core.selection.set_linear(start, end);
+            self.bump_selection_damage();
         }
         Some(found)
     }
@@ -632,10 +636,12 @@ impl TerminalState {
             col: cursor.col,
             row: cursor.row,
         });
+        self.bump_selection_damage();
     }
 
     pub fn exit_copy_mode(&mut self) {
         self.core.copy_mode.exit();
+        self.bump_selection_damage();
     }
 
     pub fn copy_mode_motion(&mut self, motion: CopyModeMotion) {
@@ -660,6 +666,7 @@ impl TerminalState {
         if let Some(selection) = self.core.copy_mode.selection() {
             self.core.selection = selection;
         }
+        self.bump_selection_damage();
     }
 
     pub fn copy_mode_toggle_anchor(&mut self) {
@@ -667,6 +674,7 @@ impl TerminalState {
         if let Some(selection) = self.core.copy_mode.selection() {
             self.core.selection = selection;
         }
+        self.bump_selection_damage();
     }
 
     pub fn copy_mode_toggle_kind(&mut self) {
@@ -674,13 +682,21 @@ impl TerminalState {
         if let Some(selection) = self.core.copy_mode.selection() {
             self.core.selection = selection;
         }
+        self.bump_selection_damage();
     }
 
     pub fn yank_selection(&mut self) -> Result<String, HistoryRangeError> {
         let text = self.copy_selection_text()?;
         self.core.copy_buffer = Some(text.clone());
         self.core.copy_mode.exit();
+        self.bump_selection_damage();
         Ok(text)
+    }
+
+    fn bump_selection_damage(&mut self) {
+        let rows = self.rows();
+        self.core.damage.mark(Mutation::full(rows));
+        self.core.damage.commit();
     }
 
     pub fn take_copy_buffer(&mut self) -> Option<String> {

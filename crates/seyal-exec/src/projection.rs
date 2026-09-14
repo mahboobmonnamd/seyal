@@ -200,6 +200,17 @@ pub(crate) fn update(
     }
 }
 
+fn host_highlight(terminal: &TerminalState, col: u16, row: u16) -> bool {
+    if terminal
+        .selection_session()
+        .contains_cell(col, row, terminal.cols())
+    {
+        return true;
+    }
+    let copy_mode = terminal.copy_mode();
+    copy_mode.active && copy_mode.cursor.col == col && copy_mode.cursor.row == row
+}
+
 fn copy_rows(terminal: &TerminalState, first_row: u16, row_count: u16) -> Vec<ProjectionCell> {
     let columns = terminal.cols();
     let mut cells: Vec<ProjectionCell> = Vec::with_capacity(row_count as usize * columns as usize);
@@ -242,6 +253,10 @@ fn copy_rows(terminal: &TerminalState, first_row: u16, row_count: u16) -> Vec<Pr
                 },
             ));
             let structural = role == CellRole::Empty || role == CellRole::Continuation;
+            let mut attributes = attributes;
+            if role != CellRole::Continuation && host_highlight(terminal, col, row) {
+                attributes.inverse = !attributes.inverse;
+            }
             cells.push(ProjectionCell {
                 role,
                 width: if structural { 0 } else { cell.width },
@@ -338,6 +353,28 @@ mod tests {
             assert_eq!(snapshot.cells[1].role, CellRole::Continuation);
             assert!(snapshot.cells[1].text.is_empty());
         }
+    }
+
+    #[test]
+    fn selection_and_copy_mode_cursor_invert_projected_cells() {
+        let mut terminal = TerminalState::new(4, 2).unwrap();
+        terminal.feed(b"abcd").unwrap();
+        terminal.set_linear_selection(
+            seyal_terminal::VisualPos { col: 1, row: 0 },
+            seyal_terminal::VisualPos { col: 2, row: 0 },
+        );
+        let selected = snapshot(&terminal, 1);
+        assert!(!selected.cells[0].attributes.inverse);
+        assert!(selected.cells[1].attributes.inverse);
+        assert!(selected.cells[2].attributes.inverse);
+        assert!(!selected.cells[3].attributes.inverse);
+
+        terminal.clear_selection();
+        terminal.enter_copy_mode();
+        let cursor = terminal.copy_mode().cursor;
+        let copy_mode_snapshot = snapshot(&terminal, 2);
+        let index = (cursor.row as usize) * 4 + cursor.col as usize;
+        assert!(copy_mode_snapshot.cells[index].attributes.inverse);
     }
 
     #[test]

@@ -43,7 +43,19 @@ enum SeyalAppActionKind {
     SEYAL_APP_ACTION_SELECT_WORKSPACE = 19,
     SEYAL_APP_ACTION_SELECT_TAB = 20,
     SEYAL_APP_ACTION_FOCUS_PANE = 21,
-    SEYAL_APP_ACTION_SET_SHELL_CHROME = 22
+    SEYAL_APP_ACTION_SET_SHELL_CHROME = 22,
+    /*
+     * Composer history recall (#933). Kinds 23-39 are reserved for the
+     * Workspace chrome slices (#922-#935).
+     * SET_COMPOSER_HISTORY_FILTER: payload = UTF-8 query.
+     * MOVE_COMPOSER_HISTORY_SELECTION: reserved = signed row delta (int32).
+     * SELECT_COMPOSER_HISTORY: target_pty_generation = composer epoch.
+     */
+    SEYAL_APP_ACTION_OPEN_COMPOSER_HISTORY = 40,
+    SEYAL_APP_ACTION_SET_COMPOSER_HISTORY_FILTER = 41,
+    SEYAL_APP_ACTION_MOVE_COMPOSER_HISTORY_SELECTION = 42,
+    SEYAL_APP_ACTION_SELECT_COMPOSER_HISTORY = 43,
+    SEYAL_APP_ACTION_CLOSE_COMPOSER_HISTORY = 44
 };
 
 enum SeyalAppEligibility {
@@ -197,6 +209,8 @@ enum SeyalAppComposerMode {
 #define SEYAL_APP_COPY_COMPOSER_PLACEHOLDER 0u
 #define SEYAL_APP_COPY_COMPOSER_EXECUTE 1u
 #define SEYAL_APP_COPY_BLOCK_PROMPT 2u
+#define SEYAL_APP_COPY_COMPOSER_HISTORY 3u
+#define SEYAL_APP_COPY_COMPOSER_HISTORY_PLACEHOLDER 4u
 
 #define SEYAL_APP_BLOCK_STATE_RUNNING 1u
 #define SEYAL_APP_BLOCK_STATE_COMPLETED 2u
@@ -213,6 +227,28 @@ typedef struct SeyalAppComposer {
     uint32_t draft_utf8_len;
     uint32_t block_count;
 } SeyalAppComposer;
+
+/*
+ * Pane-local composer history overlay (#933). `query_utf8` is borrowed until
+ * the next mutating bridge call. Rows come from seyal_app_history_row; the
+ * selected row carries SEYAL_APP_ROW_SELECTED. Hosts show the overlay only
+ * while SEYAL_APP_HISTORY_OPEN is set and enable the recall affordance only
+ * while SEYAL_APP_HISTORY_HAS_ENTRIES is set.
+ */
+typedef struct SeyalAppComposerHistory {
+    uint16_t version;
+    uint16_t size;
+    uint16_t flags;
+    uint16_t selected;
+    uint32_t entry_count;
+    uint32_t row_count;
+    const uint8_t *query_utf8;
+    uint32_t query_utf8_len;
+    uint32_t reserved;
+} SeyalAppComposerHistory;
+
+#define SEYAL_APP_HISTORY_OPEN 1u
+#define SEYAL_APP_HISTORY_HAS_ENTRIES 2u
 
 typedef struct SeyalAppChrome {
     uint16_t version;
@@ -295,6 +331,8 @@ SeyalAppRow seyal_app_shell_row(uint64_t handle, uint16_t kind, uint32_t index);
 SeyalAppRow seyal_app_chrome_row(uint64_t handle, uint16_t kind, uint32_t index);
 SeyalAppRow seyal_app_block_row(uint64_t handle, uint32_t index);
 SeyalAppRow seyal_app_copy(uint64_t handle, uint16_t kind);
+SeyalAppComposerHistory seyal_app_composer_history(uint64_t handle);
+SeyalAppRow seyal_app_history_row(uint64_t handle, uint32_t index);
 
 typedef struct SeyalAppBlockSpan {
     uint64_t start_line;

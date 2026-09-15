@@ -153,6 +153,67 @@ final class SeyalHostUITests: XCTestCase {
 
     /// Metal does not expose PTY bytes as AX text. The live connection token on
     /// `terminal-input` is the host-observable proof that Runtime attached.
+
+    func testComposerHistoryRecallOpensFiltersInsertsAndDismisses() throws {
+        let app = hostedApp()
+        waitForUsablePty(in: app)
+        let composer = app.descendants(matching: .any)["seyal-composer"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 12))
+        let composerReady = NSPredicate(format: "value == 'available'")
+        let becameReady = expectation(for: composerReady, evaluatedWith: composer, handler: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [becameReady], timeout: 12), .completed)
+        let editor = app.descendants(matching: .any)["seyal-composer-editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        editor.firstMatch.click()
+        let overlay = app.descendants(matching: .any)["seyal-composer-history"]
+        let toggle = app.descendants(matching: .any)["seyal-composer-history-toggle"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+        XCTAssertFalse(toggle.firstMatch.isEnabled, "no accepted submit yet: recall is disabled")
+        editor.firstMatch.typeKey("r", modifierFlags: [.control])
+        XCTAssertFalse(overlay.firstMatch.isHittable, "Rust rejects open with empty history")
+
+        editor.firstMatch.typeText("echo seyal-history-recall")
+        editor.firstMatch.typeKey("\r", modifierFlags: [])
+        let cleared = expectation(
+            for: NSPredicate(format: "value == nil OR value == ''"),
+            evaluatedWith: editor.firstMatch,
+            handler: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [cleared], timeout: 8), .completed)
+        let readyAgain = expectation(for: composerReady, evaluatedWith: composer, handler: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [readyAgain], timeout: 12), .completed)
+
+        editor.firstMatch.click()
+        editor.firstMatch.typeKey("r", modifierFlags: [.control])
+        XCTAssertTrue(overlay.waitForExistence(timeout: 5))
+        XCTAssertTrue(overlay.firstMatch.isHittable, "⌃R opens the Rust history overlay")
+        let query = app.descendants(matching: .any)["seyal-composer-history-query"]
+        XCTAssertTrue(query.waitForExistence(timeout: 5))
+        let row = app.descendants(matching: .any)["seyal-composer-history-row-0"]
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        XCTAssertEqual(row.firstMatch.label, "echo seyal-history-recall")
+
+        query.firstMatch.typeText("zzz-no-match")
+        let noRows = expectation(for: NSPredicate(format: "value == '0'"), evaluatedWith: overlay.firstMatch, handler: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [noRows], timeout: 5), .completed, "type-to-filter runs in Rust")
+        app.typeKey(.escape, modifierFlags: [])
+        let dismissed = expectation(for: NSPredicate(format: "isHittable == false"), evaluatedWith: overlay.firstMatch, handler: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed, "Escape closes the overlay")
+
+        toggle.firstMatch.click()
+        XCTAssertTrue(overlay.firstMatch.waitForExistence(timeout: 5))
+        query.firstMatch.typeText("recall")
+        app.typeKey("\r", modifierFlags: [])
+        let inserted = expectation(
+            for: NSPredicate(format: "value == 'echo seyal-history-recall'"),
+            evaluatedWith: editor.firstMatch,
+            handler: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [inserted], timeout: 5), .completed, "Enter inserts into the draft")
+        XCTAssertFalse(overlay.firstMatch.isHittable)
+        XCTAssertEqual(app.state, .runningForeground)
+    }
+
     private func waitForUsablePty(in app: XCUIApplication, timeout: TimeInterval = 20) {
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
         let terminal = app.descendants(matching: .any)["terminal-input"]

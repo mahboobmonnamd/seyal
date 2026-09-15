@@ -10,7 +10,10 @@ use crate::app::{
     PresentationEligibility, APP_ABI_VERSION,
 };
 use crate::chrome::{AgentId, AttentionId, InspectorMode, LeftPanelMode};
-use crate::composer::{ComposerMode, RuntimeBlockRecord, BLOCK_PROMPT, COMPOSER_EXECUTE_LABEL};
+use crate::composer::{
+    ComposerMode, RuntimeBlockRecord, BLOCK_PROMPT, COMPOSER_EXECUTE_LABEL, COMPOSER_HISTORY_LABEL,
+    COMPOSER_HISTORY_PLACEHOLDER,
+};
 use crate::recovery::{AttemptOutcome, LaunchResult, RecoveryEffect, RecoveryStage};
 
 use super::{allocate_handle, with_active_client};
@@ -25,6 +28,9 @@ const SNAP_CONTROLLER: u16 = 2;
 const SNAP_FROZEN: u16 = 4;
 const SNAP_HAS_EXECUTION: u16 = 8;
 const SNAP_HAS_ATTACHMENT: u16 = 16;
+const HISTORY_OPEN: u16 = 1;
+const HISTORY_HAS_ENTRIES: u16 = 2;
+const ROW_SELECTED: u16 = 1;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -121,6 +127,38 @@ pub struct SeyalAppComposer {
     pub block_count: u32,
 }
 
+/// Pane composer history overlay (#933). `query_utf8` is borrowed until the
+/// next mutating bridge call. Rows come from `seyal_app_history_row`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SeyalAppComposerHistory {
+    pub version: u16,
+    pub size: u16,
+    pub flags: u16,
+    pub selected: u16,
+    pub entry_count: u32,
+    pub row_count: u32,
+    pub query_utf8: *const u8,
+    pub query_utf8_len: u32,
+    pub reserved: u32,
+}
+
+impl SeyalAppComposerHistory {
+    const fn empty() -> Self {
+        Self {
+            version: APP_ABI_VERSION,
+            size: 0,
+            flags: 0,
+            selected: 0,
+            entry_count: 0,
+            row_count: 0,
+            query_utf8: ptr::null(),
+            query_utf8_len: 0,
+            reserved: 0,
+        }
+    }
+}
+
 /// Global command palette overlay (#932). `query_utf8` is borrowed until the
 /// next mutating bridge call. Rows come from `seyal_app_palette_row`.
 #[repr(C)]
@@ -196,11 +234,14 @@ struct AppHandle {
     shell_text: Vec<u8>,
     chrome_text: Vec<u8>,
     block_text: Vec<u8>,
+    history_query: Vec<u8>,
+    history_text: Vec<u8>,
     palette_query: Vec<u8>,
     palette_text: Vec<u8>,
     shell_rows: Vec<SeyalAppRow>,
     chrome_rows: Vec<SeyalAppRow>,
     block_rows: Vec<SeyalAppRow>,
+    history_rows: Vec<SeyalAppRow>,
     palette_rows: Vec<SeyalAppRow>,
 }
 
@@ -263,11 +304,14 @@ pub extern "C" fn seyal_app_create() -> u64 {
                 shell_text: Vec::new(),
                 chrome_text: Vec::new(),
                 block_text: Vec::new(),
+                history_query: Vec::new(),
+                history_text: Vec::new(),
                 palette_query: Vec::new(),
                 palette_text: Vec::new(),
                 shell_rows: Vec::new(),
                 chrome_rows: Vec::new(),
                 block_rows: Vec::new(),
+                history_rows: Vec::new(),
                 palette_rows: Vec::new(),
             },
         );
@@ -577,6 +621,68 @@ pub extern "C" fn seyal_app_block_row(handle: u64, index: u32) -> SeyalAppRow {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn seyal_app_composer_history(handle: u64) -> SeyalAppComposerHistory {
+    APPS.with(|apps| {
+        let mut apps = apps.borrow_mut();
+        let Some(state) = apps.get_mut(&handle) else {
+            return SeyalAppComposerHistory::empty();
+        };
+        let Some(composer) = state.root.snapshot().composer else {
+            return SeyalAppComposerHistory {
+                size: size_of::<SeyalAppComposerHistory>() as u16,
+                ..SeyalAppComposerHistory::empty()
+            };
+        };
+        let mut flags = 0;
+        if composer.history_count > 0 {
+            flags |= HISTORY_HAS_ENTRIES;
+        }
+        let Some(overlay) = composer.history else {
+            state.history_query.clear();
+            return SeyalAppComposerHistory {
+                size: size_of::<SeyalAppComposerHistory>() as u16,
+                flags,
+                entry_count: composer.history_count as u32,
+                ..SeyalAppComposerHistory::empty()
+            };
+        };
+        flags |= HISTORY_OPEN;
+        state.history_query = overlay.query.into_bytes();
+        SeyalAppComposerHistory {
+            version: APP_ABI_VERSION,
+            size: size_of::<SeyalAppComposerHistory>() as u16,
+            flags,
+            selected: overlay.selected as u16,
+            entry_count: composer.history_count as u32,
+            row_count: overlay.rows.len() as u32,
+            query_utf8: if state.history_query.is_empty() {
+                ptr::null()
+            } else {
+                state.history_query.as_ptr()
+            },
+            query_utf8_len: state.history_query.len() as u32,
+            reserved: 0,
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_app_history_row(handle: u64, index: u32) -> SeyalAppRow {
+    APPS.with(|apps| {
+        let mut apps = apps.borrow_mut();
+        let Some(state) = apps.get_mut(&handle) else {
+            return SeyalAppRow::empty();
+        };
+        encode_history_rows(state);
+        state
+            .history_rows
+            .get(index as usize)
+            .copied()
+            .unwrap_or_else(SeyalAppRow::empty)
+    })
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn seyal_app_palette(handle: u64) -> SeyalAppPalette {
     APPS.with(|apps| {
         let mut apps = apps.borrow_mut();
@@ -637,6 +743,8 @@ pub extern "C" fn seyal_app_copy(handle: u64, kind: u16) -> SeyalAppRow {
         },
         1 => COMPOSER_EXECUTE_LABEL,
         2 => BLOCK_PROMPT,
+        3 => COMPOSER_HISTORY_LABEL,
+        4 => COMPOSER_HISTORY_PLACEHOLDER,
         _ => "",
     };
     SeyalAppRow {
@@ -901,8 +1009,21 @@ fn decode_action(action: &SeyalAppAction) -> Result<AppAction, i32> {
             inspector: action.reserved & 2 != 0,
             tab_strip: action.reserved & 4 != 0,
         }),
-        // Kinds 23-46 are reserved for the M001.1 Workspace-chrome and
-        // composer-history/Block-inspector slices (#922-#935).
+        40 => Ok(AppAction::OpenComposerHistory { fence }),
+        41 => Ok(AppAction::SetComposerHistoryFilter {
+            fence,
+            query: read_payload(action.payload, action.payload_len)?,
+        }),
+        42 => Ok(AppAction::MoveComposerHistorySelection {
+            fence,
+            delta: action.reserved as i32,
+        }),
+        43 => Ok(AppAction::SelectComposerHistory {
+            fence,
+            composer_epoch: action.target_pty_generation,
+        }),
+        44 => Ok(AppAction::CloseComposerHistory { fence }),
+        // Kinds 45-46 reserved for Block inspector (#935).
         47 => Ok(AppAction::OpenPalette { fence }),
         48 => Ok(AppAction::SetPaletteQuery {
             fence,
@@ -1231,6 +1352,39 @@ fn encode_block_rows(state: &mut AppHandle) {
     relocate_row_pointers(&mut state.block_rows, state.block_text.as_ptr());
 }
 
+fn encode_history_rows(state: &mut AppHandle) {
+    state.history_text.clear();
+    state.history_rows.clear();
+    let Some(overlay) = state
+        .root
+        .snapshot()
+        .composer
+        .and_then(|composer| composer.history)
+    else {
+        return;
+    };
+    for (index, command) in overlay.rows.iter().enumerate() {
+        let flags = if index == overlay.selected {
+            ROW_SELECTED
+        } else {
+            0
+        };
+        push_row(
+            &mut state.history_rows,
+            &mut state.history_text,
+            RowDraft {
+                kind: 0,
+                index: index as u32,
+                id: [0; 16],
+                flags,
+                title: command,
+                detail: "",
+            },
+        );
+    }
+    relocate_row_pointers(&mut state.history_rows, state.history_text.as_ptr());
+}
+
 fn encode_palette_rows(state: &mut AppHandle) {
     state.palette_text.clear();
     state.palette_rows.clear();
@@ -1355,10 +1509,13 @@ fn error_number(error: AppError) -> i32 {
         AppError::UnknownAttention => 20,
         AppError::UnknownChromeWorkspace => 21,
         AppError::UnknownChromeTab => 22,
-        AppError::PaletteNotOpen => 23,
-        AppError::PaletteNoSelection => 24,
-        AppError::TabCreationUnavailable => 25,
-        AppError::PaneSplitUnavailable => 26,
+        AppError::ComposerHistoryUnavailable => 23,
+        AppError::ComposerHistoryClosed => 24,
+        AppError::ComposerHistoryNoSelection => 25,
+        AppError::PaletteNotOpen => 26,
+        AppError::PaletteNoSelection => 27,
+        AppError::TabCreationUnavailable => 28,
+        AppError::PaneSplitUnavailable => 29,
     }
 }
 
@@ -1408,6 +1565,161 @@ mod tests {
         assert_eq!(size_of::<SeyalAppRow>(), 56);
         assert_eq!(size_of::<SeyalAppBlockSpan>(), 16);
         assert_eq!(size_of::<SeyalAppTheme>(), 16);
+        assert_eq!(size_of::<SeyalAppComposerHistory>(), 32);
+        assert_eq!(offset_of!(SeyalAppComposerHistory, query_utf8), 16);
+    }
+
+    fn bound_handle() -> (u64, SeyalAppSnapshot) {
+        let handle = seyal_app_create();
+        let snap = seyal_app_snapshot(handle);
+        let bind = SeyalAppAction {
+            version: APP_ABI_VERSION,
+            size: size_of::<SeyalAppAction>() as u16,
+            kind: 1,
+            flags: FLAG_TARGET_CONTROLLER,
+            fence_pane_lo: snap.pane_lo,
+            fence_pane_hi: snap.pane_hi,
+            fence_execution_lo: 0,
+            fence_execution_hi: 0,
+            fence_attachment_lo: 0,
+            fence_attachment_hi: 0,
+            fence_epoch: snap.epoch,
+            target_execution_lo: 1,
+            target_execution_hi: 0,
+            target_attachment_lo: 2,
+            target_attachment_hi: 0,
+            target_pty_generation: 1,
+            payload: ptr::null(),
+            payload_len: 0,
+            reserved: 0,
+        };
+        assert_eq!(unsafe { seyal_app_apply(handle, &bind) }, 0);
+        let bound = seyal_app_snapshot(handle);
+        (handle, bound)
+    }
+
+    fn accepted_submit(handle: u64, command: &str) {
+        let snap = seyal_app_snapshot(handle);
+        let composer = seyal_app_composer(handle);
+        let mut draft = identity_fence(10, &snap);
+        draft.target_pty_generation = composer.epoch;
+        draft.payload = command.as_ptr();
+        draft.payload_len = command.len() as u32;
+        assert_eq!(unsafe { seyal_app_apply(handle, &draft) }, 0);
+        let mut submit = identity_fence(11, &snap);
+        submit.target_pty_generation = composer.epoch;
+        assert_eq!(unsafe { seyal_app_apply(handle, &submit) }, 0);
+        let pending = seyal_app_composer(handle);
+        let mut result = identity_fence(12, &snap);
+        result.target_execution_lo = pending.request_id;
+        result.reserved = 1;
+        assert_eq!(unsafe { seyal_app_apply(handle, &result) }, 0);
+    }
+
+    fn utf8(pointer: *const u8, len: u32) -> String {
+        if pointer.is_null() || len == 0 {
+            return String::new();
+        }
+        let bytes = unsafe { slice::from_raw_parts(pointer, len as usize) };
+        String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    #[test]
+    fn composer_history_ffi_round_trips_open_filter_select() {
+        let (handle, bound) = bound_handle();
+        let closed = seyal_app_composer_history(handle);
+        assert_eq!(closed.size as usize, size_of::<SeyalAppComposerHistory>());
+        assert_eq!(closed.flags, 0);
+        assert_eq!(closed.entry_count, 0);
+
+        accepted_submit(handle, "cargo build");
+        accepted_submit(handle, "git status");
+        let recorded = seyal_app_composer_history(handle);
+        assert_eq!(recorded.flags, HISTORY_HAS_ENTRIES);
+        assert_eq!(recorded.entry_count, 2);
+        assert_eq!(recorded.row_count, 0);
+        assert!(recorded.query_utf8.is_null());
+        assert_eq!(seyal_app_history_row(handle, 0).title_len, 0);
+
+        let open = identity_fence(40, &bound);
+        assert_eq!(unsafe { seyal_app_apply(handle, &open) }, 0);
+        let opened = seyal_app_composer_history(handle);
+        assert_eq!(opened.flags, HISTORY_OPEN | HISTORY_HAS_ENTRIES);
+        assert_eq!(opened.row_count, 2);
+        assert_eq!(opened.selected, 0);
+        let first = seyal_app_history_row(handle, 0);
+        assert_eq!(utf8(first.title, first.title_len), "git status");
+        assert_eq!(first.flags & ROW_SELECTED, ROW_SELECTED);
+        let second = seyal_app_history_row(handle, 1);
+        assert_eq!(utf8(second.title, second.title_len), "cargo build");
+        assert_eq!(second.flags & ROW_SELECTED, 0);
+
+        let mut filter = identity_fence(41, &bound);
+        let query = b"car";
+        filter.payload = query.as_ptr();
+        filter.payload_len = query.len() as u32;
+        assert_eq!(unsafe { seyal_app_apply(handle, &filter) }, 0);
+        let filtered = seyal_app_composer_history(handle);
+        assert_eq!(filtered.row_count, 1);
+        assert_eq!(utf8(filtered.query_utf8, filtered.query_utf8_len), "car");
+
+        let mut down = identity_fence(42, &bound);
+        down.reserved = 1u32;
+        assert_eq!(unsafe { seyal_app_apply(handle, &down) }, 0);
+        assert_eq!(seyal_app_composer_history(handle).selected, 0, "clamped");
+        let mut up = identity_fence(42, &bound);
+        up.reserved = (-1i32) as u32;
+        assert_eq!(unsafe { seyal_app_apply(handle, &up) }, 0);
+
+        let mut stale = identity_fence(43, &bound);
+        stale.target_pty_generation = seyal_app_composer(handle).epoch + 7;
+        assert_eq!(unsafe { seyal_app_apply(handle, &stale) }, -4);
+        assert_eq!(seyal_app_last_error(handle), 18);
+
+        let mut select = identity_fence(43, &bound);
+        select.target_pty_generation = seyal_app_composer(handle).epoch;
+        assert_eq!(unsafe { seyal_app_apply(handle, &select) }, 0);
+        let composer = seyal_app_composer(handle);
+        assert_eq!(
+            utf8(composer.draft_utf8, composer.draft_utf8_len),
+            "cargo build"
+        );
+        assert_eq!(composer.request_id, 0, "select never submits");
+        assert_eq!(
+            seyal_app_composer_history(handle).flags,
+            HISTORY_HAS_ENTRIES
+        );
+
+        let open_again = identity_fence(40, &bound);
+        assert_eq!(unsafe { seyal_app_apply(handle, &open_again) }, 0);
+        let close = identity_fence(44, &bound);
+        assert_eq!(unsafe { seyal_app_apply(handle, &close) }, 0);
+        assert_eq!(seyal_app_composer_history(handle).flags & HISTORY_OPEN, 0);
+
+        let mut unopened_filter = identity_fence(41, &bound);
+        unopened_filter.payload = query.as_ptr();
+        unopened_filter.payload_len = query.len() as u32;
+        assert_eq!(unsafe { seyal_app_apply(handle, &unopened_filter) }, -4);
+        assert_eq!(seyal_app_last_error(handle), 24);
+        assert_eq!(seyal_app_destroy(handle), 0);
+    }
+
+    #[test]
+    fn composer_history_copy_and_unbound_open_fail_closed() {
+        let handle = seyal_app_create();
+        let label = seyal_app_copy(handle, 3);
+        assert_eq!(utf8(label.title, label.title_len), COMPOSER_HISTORY_LABEL);
+        let placeholder = seyal_app_copy(handle, 4);
+        assert_eq!(
+            utf8(placeholder.title, placeholder.title_len),
+            COMPOSER_HISTORY_PLACEHOLDER
+        );
+        // Unbound Pane: fence is valid but the composer is not Available.
+        let open = identity_fence(40, &seyal_app_snapshot(handle));
+        assert_eq!(unsafe { seyal_app_apply(handle, &open) }, -4);
+        assert_eq!(seyal_app_last_error(handle), 23);
+        assert_eq!(seyal_app_composer_history(handle).flags, 0);
+        assert_eq!(seyal_app_destroy(handle), 0);
     }
 
     #[test]
@@ -1608,7 +1920,7 @@ mod tests {
         assert_eq!(unsafe { seyal_app_apply(handle, &none_filter) }, 0);
         let run_empty = identity_fence(50, &snap);
         assert_eq!(unsafe { seyal_app_apply(handle, &run_empty) }, -4);
-        assert_eq!(seyal_app_last_error(handle), 24);
+        assert_eq!(seyal_app_last_error(handle), 27);
         assert_eq!(seyal_app_palette(handle).flags & PALETTE_OPEN, PALETTE_OPEN);
 
         // Re-filter to the known single row and run it.

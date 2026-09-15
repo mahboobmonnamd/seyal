@@ -13,6 +13,8 @@ final class ProductChromeHostView: NSView {
     private let transcript = NSScrollView()
     private let blocks = NSStackView()
     private let composer: ComposerBridgeView
+    /// Rust-owned history overlay (#933); internal for component tests.
+    let historyOverlay: ComposerHistoryOverlayView
     /// Global command palette overlay (#932); internal for component tests.
     let commandPalette: CommandPaletteOverlayView
     private let workspacesButton = NSButton(title: "Workspaces", target: nil, action: nil)
@@ -41,6 +43,7 @@ final class ProductChromeHostView: NSView {
     override init(frame frameRect: NSRect) {
         pane = ThinPaneHostView(frame: frameRect)
         composer = ComposerBridgeView(appHandle: pane.appHandle)
+        historyOverlay = ComposerHistoryOverlayView(appHandle: pane.appHandle)
         commandPalette = CommandPaletteOverlayView(appHandle: pane.appHandle)
         super.init(frame: frameRect)
         translatesAutoresizingMaskIntoConstraints = false
@@ -128,6 +131,7 @@ final class ProductChromeHostView: NSView {
         centerColumn.addSubview(transcript)
         centerColumn.addSubview(pane)
         centerColumn.addSubview(composer)
+        centerColumn.addSubview(historyOverlay)
 
         addSubview(tabStrip)
         addSubview(left)
@@ -209,6 +213,9 @@ final class ProductChromeHostView: NSView {
             composer.trailingAnchor.constraint(equalTo: centerColumn.trailingAnchor, constant: -24),
             composer.topAnchor.constraint(equalTo: transcript.bottomAnchor, constant: 12),
             composer.bottomAnchor.constraint(equalTo: centerColumn.bottomAnchor, constant: -16),
+            historyOverlay.leadingAnchor.constraint(equalTo: composer.leadingAnchor),
+            historyOverlay.trailingAnchor.constraint(equalTo: composer.trailingAnchor),
+            historyOverlay.bottomAnchor.constraint(equalTo: composer.topAnchor, constant: -8),
             blocks.topAnchor.constraint(equalTo: transcript.contentView.topAnchor),
             blocks.leadingAnchor.constraint(equalTo: transcript.contentView.leadingAnchor),
             blocks.widthAnchor.constraint(equalTo: transcript.contentView.widthAnchor),
@@ -243,6 +250,15 @@ final class ProductChromeHostView: NSView {
             self?.pane.inputSurface.terminalSubmitCommittedText(command) ?? -10
         }
         pane.inputSurface.onRequestComposerFocus = { [weak self] in
+            self?.composer.focusEditor()
+        }
+        composer.onHistoryOpened = { [weak self] in
+            self?.reconcileChrome()
+        }
+        historyOverlay.onChanged = { [weak self] in
+            self?.reconcileChrome()
+        }
+        historyOverlay.onDismissed = { [weak self] in
             self?.composer.focusEditor()
         }
         pane.inputSurface.onTimelineChanged = { [weak self] in
@@ -312,6 +328,7 @@ final class ProductChromeHostView: NSView {
         let eligibilityChanged = snapshot.eligibility != lastEligibility
         if snapshot.generation == lastSnapshotGeneration && !eligibilityChanged {
             composer.reconcile()
+            historyOverlay.reconcile()
             commandPalette.reconcile()
             driveRecovery()
             return
@@ -339,6 +356,7 @@ final class ProductChromeHostView: NSView {
         applyTranscriptPresentation(snapshot)
         recoveryLabel.stringValue = recoveryText(snapshot)
         composer.reconcile()
+        historyOverlay.reconcile()
         commandPalette.reconcile()
         driveRecovery()
         if eligibilityChanged {
@@ -650,6 +668,7 @@ final class ProductChromeHostView: NSView {
         transcript.backgroundColor = .clear
         left.layer?.borderWidth = 0
         composer.apply(theme: theme)
+        historyOverlay.apply(theme: theme)
         commandPalette.apply(theme: theme)
         for view in blocks.arrangedSubviews {
             (view as? CommandBlockView)?.apply(theme: theme)

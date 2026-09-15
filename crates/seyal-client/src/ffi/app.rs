@@ -121,6 +121,38 @@ pub struct SeyalAppComposer {
     pub block_count: u32,
 }
 
+/// Global command palette overlay (#932). `query_utf8` is borrowed until the
+/// next mutating bridge call. Rows come from `seyal_app_palette_row`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SeyalAppPalette {
+    pub version: u16,
+    pub size: u16,
+    pub flags: u16,
+    pub selected: u16,
+    pub row_count: u32,
+    pub query_utf8: *const u8,
+    pub query_utf8_len: u32,
+    pub reserved: u32,
+}
+
+impl SeyalAppPalette {
+    const fn empty() -> Self {
+        Self {
+            version: APP_ABI_VERSION,
+            size: 0,
+            flags: 0,
+            selected: 0,
+            row_count: 0,
+            query_utf8: ptr::null(),
+            query_utf8_len: 0,
+            reserved: 0,
+        }
+    }
+}
+
+const PALETTE_OPEN: u16 = 1;
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct SeyalAppRow {
@@ -164,9 +196,12 @@ struct AppHandle {
     shell_text: Vec<u8>,
     chrome_text: Vec<u8>,
     block_text: Vec<u8>,
+    palette_query: Vec<u8>,
+    palette_text: Vec<u8>,
     shell_rows: Vec<SeyalAppRow>,
     chrome_rows: Vec<SeyalAppRow>,
     block_rows: Vec<SeyalAppRow>,
+    palette_rows: Vec<SeyalAppRow>,
 }
 
 thread_local! {
@@ -228,9 +263,12 @@ pub extern "C" fn seyal_app_create() -> u64 {
                 shell_text: Vec::new(),
                 chrome_text: Vec::new(),
                 block_text: Vec::new(),
+                palette_query: Vec::new(),
+                palette_text: Vec::new(),
                 shell_rows: Vec::new(),
                 chrome_rows: Vec::new(),
                 block_rows: Vec::new(),
+                palette_rows: Vec::new(),
             },
         );
     });
@@ -539,6 +577,52 @@ pub extern "C" fn seyal_app_block_row(handle: u64, index: u32) -> SeyalAppRow {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn seyal_app_palette(handle: u64) -> SeyalAppPalette {
+    APPS.with(|apps| {
+        let mut apps = apps.borrow_mut();
+        let Some(state) = apps.get_mut(&handle) else {
+            return SeyalAppPalette::empty();
+        };
+        let snap = state.root.snapshot();
+        state.palette_query = snap.palette.query.into_bytes();
+        let mut flags = 0;
+        if snap.palette.open {
+            flags |= PALETTE_OPEN;
+        }
+        SeyalAppPalette {
+            version: APP_ABI_VERSION,
+            size: size_of::<SeyalAppPalette>() as u16,
+            flags,
+            selected: snap.palette.selected as u16,
+            row_count: snap.palette.rows.len() as u32,
+            query_utf8: if state.palette_query.is_empty() {
+                ptr::null()
+            } else {
+                state.palette_query.as_ptr()
+            },
+            query_utf8_len: state.palette_query.len() as u32,
+            reserved: 0,
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_app_palette_row(handle: u64, index: u32) -> SeyalAppRow {
+    APPS.with(|apps| {
+        let mut apps = apps.borrow_mut();
+        let Some(state) = apps.get_mut(&handle) else {
+            return SeyalAppRow::empty();
+        };
+        encode_palette_rows(state);
+        state
+            .palette_rows
+            .get(index as usize)
+            .copied()
+            .unwrap_or_else(SeyalAppRow::empty)
+    })
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn seyal_app_copy(handle: u64, kind: u16) -> SeyalAppRow {
     let mode = APPS.with(|apps| {
         apps.borrow()
@@ -817,6 +901,19 @@ fn decode_action(action: &SeyalAppAction) -> Result<AppAction, i32> {
             inspector: action.reserved & 2 != 0,
             tab_strip: action.reserved & 4 != 0,
         }),
+        // Kinds 23-46 are reserved for the M001.1 Workspace-chrome and
+        // composer-history/Block-inspector slices (#922-#935).
+        47 => Ok(AppAction::OpenPalette { fence }),
+        48 => Ok(AppAction::SetPaletteQuery {
+            fence,
+            query: read_payload(action.payload, action.payload_len)?,
+        }),
+        49 => Ok(AppAction::MovePaletteSelection {
+            fence,
+            delta: action.reserved as i32,
+        }),
+        50 => Ok(AppAction::RunPalette { fence }),
+        51 => Ok(AppAction::ClosePalette { fence }),
         _ => Err(-6),
     }
 }
@@ -1134,6 +1231,27 @@ fn encode_block_rows(state: &mut AppHandle) {
     relocate_row_pointers(&mut state.block_rows, state.block_text.as_ptr());
 }
 
+fn encode_palette_rows(state: &mut AppHandle) {
+    state.palette_text.clear();
+    state.palette_rows.clear();
+    let rows = state.root.snapshot().palette.rows;
+    for (index, row) in rows.iter().enumerate() {
+        push_row(
+            &mut state.palette_rows,
+            &mut state.palette_text,
+            RowDraft {
+                kind: 0,
+                index: index as u32,
+                id: [0; 16],
+                flags: 0,
+                title: &row.label,
+                detail: row.category,
+            },
+        );
+    }
+    relocate_row_pointers(&mut state.palette_rows, state.palette_text.as_ptr());
+}
+
 fn relocate_row_pointers(rows: &mut [SeyalAppRow], base: *const u8) {
     for row in rows {
         let title_off = row.title as usize;
@@ -1237,6 +1355,10 @@ fn error_number(error: AppError) -> i32 {
         AppError::UnknownAttention => 20,
         AppError::UnknownChromeWorkspace => 21,
         AppError::UnknownChromeTab => 22,
+        AppError::PaletteNotOpen => 23,
+        AppError::PaletteNoSelection => 24,
+        AppError::TabCreationUnavailable => 25,
+        AppError::PaneSplitUnavailable => 26,
     }
 }
 
@@ -1429,6 +1551,82 @@ mod tests {
         let span = seyal_app_block_span(handle, 0);
         assert_eq!(span.start_line, 0);
         assert_eq!(span.end_line, 0);
+        assert_eq!(seyal_app_destroy(handle), 0);
+    }
+
+    fn decode_utf8(pointer: *const u8, len: u32) -> String {
+        if pointer.is_null() || len == 0 {
+            return String::new();
+        }
+        let bytes = unsafe { slice::from_raw_parts(pointer, len as usize) };
+        String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    #[test]
+    fn palette_ffi_round_trips_open_filter_move_run_and_fails_closed() {
+        let handle = seyal_app_create();
+        let snap = seyal_app_snapshot(handle);
+
+        let closed = seyal_app_palette(handle);
+        assert_eq!(closed.size as usize, size_of::<SeyalAppPalette>());
+        assert_eq!(closed.flags, 0);
+        assert_eq!(closed.row_count, 0);
+        assert!(closed.query_utf8.is_null());
+
+        let open = identity_fence(47, &snap);
+        assert_eq!(unsafe { seyal_app_apply(handle, &open) }, 0);
+        let opened = seyal_app_palette(handle);
+        assert_eq!(opened.flags & PALETTE_OPEN, PALETTE_OPEN);
+        assert!(opened.row_count > 0);
+
+        let mut filter = identity_fence(48, &snap);
+        let query = b"Show Inspector";
+        filter.payload = query.as_ptr();
+        filter.payload_len = query.len() as u32;
+        assert_eq!(unsafe { seyal_app_apply(handle, &filter) }, 0);
+        let filtered = seyal_app_palette(handle);
+        assert_eq!(filtered.row_count, 1);
+        assert_eq!(
+            decode_utf8(filtered.query_utf8, filtered.query_utf8_len),
+            "Show Inspector"
+        );
+        let row = seyal_app_palette_row(handle, 0);
+        assert_eq!(decode_utf8(row.title, row.title_len), "Show Inspector");
+        assert_eq!(decode_utf8(row.detail, row.detail_len), "View");
+        assert_eq!(
+            seyal_app_palette_row(handle, 1).title_len,
+            0,
+            "out of range is empty"
+        );
+
+        // No match: Run fails closed with the published error code and the
+        // palette stays open.
+        let mut none_filter = identity_fence(48, &snap);
+        let no_match = b"zzz-no-such-command";
+        none_filter.payload = no_match.as_ptr();
+        none_filter.payload_len = no_match.len() as u32;
+        assert_eq!(unsafe { seyal_app_apply(handle, &none_filter) }, 0);
+        let run_empty = identity_fence(50, &snap);
+        assert_eq!(unsafe { seyal_app_apply(handle, &run_empty) }, -4);
+        assert_eq!(seyal_app_last_error(handle), 24);
+        assert_eq!(seyal_app_palette(handle).flags & PALETTE_OPEN, PALETTE_OPEN);
+
+        // Re-filter to the known single row and run it.
+        assert_eq!(unsafe { seyal_app_apply(handle, &filter) }, 0);
+        let run = identity_fence(50, &snap);
+        assert_eq!(unsafe { seyal_app_apply(handle, &run) }, 0);
+        assert_eq!(
+            seyal_app_palette(handle).flags & PALETTE_OPEN,
+            0,
+            "Run closes the palette"
+        );
+        let chrome = seyal_app_chrome(handle);
+        assert_ne!(
+            chrome.reserved & 2,
+            0,
+            "SEYAL_APP_CHROME_INSPECTOR_VISIBLE bit"
+        );
+
         assert_eq!(seyal_app_destroy(handle), 0);
     }
 

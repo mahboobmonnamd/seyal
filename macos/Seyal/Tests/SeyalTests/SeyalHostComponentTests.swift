@@ -153,6 +153,50 @@ final class SeyalHostComponentTests: XCTestCase {
         XCTAssertTrue(valid.isValid)
         XCTAssertEqual(valid.regionIDs, [7])
     }
+
+    // MARK: - Command palette (#932)
+
+    func testCommandPaletteABIMatchesPublishedHeaderAndFailsClosedForBogusRow() {
+        XCTAssertEqual(MemoryLayout<SeyalAppPalette>.size, 32)
+        XCTAssertEqual(MemoryLayout<SeyalAppPalette>.stride, 32)
+        XCTAssertEqual(MemoryLayout<SeyalAppPalette>.offset(of: \.query_utf8), 16)
+        let handle = seyal_app_create()
+        defer { XCTAssertEqual(seyal_app_destroy(handle), 0) }
+        let closed = seyal_app_palette(handle)
+        XCTAssertEqual(closed.version, UInt16(SEYAL_APP_ABI_VERSION))
+        XCTAssertEqual(Int(closed.size), MemoryLayout<SeyalAppPalette>.size)
+        XCTAssertEqual(closed.flags, 0)
+        XCTAssertEqual(closed.row_count, 0)
+        XCTAssertTrue(closed.query_utf8 == nil)
+        XCTAssertEqual(seyal_app_palette_row(handle, 0).title_len, 0, "no row at any index while closed")
+    }
+
+    func testCommandPaletteOpenListsCommandsWithoutBindingAndOmitsDisallowedOnes() {
+        let handle = seyal_app_create()
+        defer { XCTAssertEqual(seyal_app_destroy(handle), 0) }
+        let snap = seyal_app_snapshot(handle)
+        var open = SeyalAppAction()
+        open.version = UInt16(SEYAL_APP_ABI_VERSION)
+        open.size = UInt16(MemoryLayout<SeyalAppAction>.size)
+        open.kind = UInt16(SEYAL_APP_ACTION_OPEN_PALETTE.rawValue)
+        open.applySnapshotFence(snap)
+        // Unbound handle: require_fence only needs the Pane to exist, so the
+        // palette opens before any Runtime attach.
+        XCTAssertEqual(seyal_app_apply(handle, &open), 0)
+        let palette = seyal_app_palette(handle)
+        XCTAssertNotEqual(palette.flags & UInt16(SEYAL_APP_PALETTE_OPEN), 0)
+        XCTAssertGreaterThan(palette.row_count, 0)
+        var sawNewTab = false
+        for index in 0..<Int(palette.row_count) {
+            let row = seyal_app_palette_row(handle, UInt32(index))
+            if utf8(row) == "New Tab" { sawNewTab = true }
+        }
+        XCTAssertFalse(
+            sawNewTab,
+            "M001 default shell policy disallows tab creation; the command is omitted, not disabled"
+        )
+    }
+
 }
 
 private func utf8(_ row: SeyalAppRow) -> String {

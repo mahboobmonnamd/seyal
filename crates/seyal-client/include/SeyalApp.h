@@ -43,7 +43,26 @@ enum SeyalAppActionKind {
     SEYAL_APP_ACTION_SELECT_WORKSPACE = 19,
     SEYAL_APP_ACTION_SELECT_TAB = 20,
     SEYAL_APP_ACTION_FOCUS_PANE = 21,
-    SEYAL_APP_ACTION_SET_SHELL_CHROME = 22
+    SEYAL_APP_ACTION_SET_SHELL_CHROME = 22,
+    /*
+     * Kinds 23-46 are reserved for the M001.1 Workspace-chrome, composer
+     * history, and Block-inspector slices (#922-#935).
+     *
+     * Global keyboard-first command palette (#932). The command list is
+     * never sent by the host: it is derived in Rust from the current
+     * Shell/Chrome state on every open/filter/move/run, so it can never
+     * show or run an invented or currently-unsupported action.
+     * SET_PALETTE_QUERY: payload = UTF-8 query.
+     * MOVE_PALETTE_SELECTION: reserved = signed row delta (int32).
+     * RUN_PALETTE: runs the command bound to the current selection, then
+     * closes the palette. Fails closed (no state change) when the filtered
+     * list is empty.
+     */
+    SEYAL_APP_ACTION_OPEN_PALETTE = 47,
+    SEYAL_APP_ACTION_SET_PALETTE_QUERY = 48,
+    SEYAL_APP_ACTION_MOVE_PALETTE_SELECTION = 49,
+    SEYAL_APP_ACTION_RUN_PALETTE = 50,
+    SEYAL_APP_ACTION_CLOSE_PALETTE = 51
 };
 
 enum SeyalAppEligibility {
@@ -284,6 +303,24 @@ typedef struct SeyalAppRow {
     uint32_t reserved2;
 } SeyalAppRow;
 
+/*
+ * Global command palette overlay (#932). `query_utf8` is borrowed until the
+ * next mutating bridge call. Rows come from seyal_app_palette_row; `title`
+ * is the command label, `detail` its category (e.g. "Navigation", "View").
+ */
+typedef struct SeyalAppPalette {
+    uint16_t version;
+    uint16_t size;
+    uint16_t flags;
+    uint16_t selected;
+    uint32_t row_count;
+    const uint8_t *query_utf8;
+    uint32_t query_utf8_len;
+    uint32_t reserved;
+} SeyalAppPalette;
+
+#define SEYAL_APP_PALETTE_OPEN 1u
+
 uint64_t seyal_app_create(void);
 int32_t seyal_app_destroy(uint64_t handle);
 int32_t seyal_app_apply(uint64_t handle, const SeyalAppAction *action);
@@ -295,6 +332,8 @@ SeyalAppRow seyal_app_shell_row(uint64_t handle, uint16_t kind, uint32_t index);
 SeyalAppRow seyal_app_chrome_row(uint64_t handle, uint16_t kind, uint32_t index);
 SeyalAppRow seyal_app_block_row(uint64_t handle, uint32_t index);
 SeyalAppRow seyal_app_copy(uint64_t handle, uint16_t kind);
+SeyalAppPalette seyal_app_palette(uint64_t handle);
+SeyalAppRow seyal_app_palette_row(uint64_t handle, uint32_t index);
 
 typedef struct SeyalAppBlockSpan {
     uint64_t start_line;

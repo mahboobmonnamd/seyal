@@ -31,6 +31,10 @@ const SNAP_HAS_ATTACHMENT: u16 = 16;
 const HISTORY_OPEN: u16 = 1;
 const HISTORY_HAS_ENTRIES: u16 = 2;
 const ROW_SELECTED: u16 = 1;
+/// Block-row `flags`: low bits are the presentation state (1..3); bit 3 marks
+/// the inspector-selected Block. Hosts mask with `BLOCK_STATE_MASK`.
+const BLOCK_STATE_MASK: u16 = 7;
+const BLOCK_SELECTED: u16 = 8;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -494,6 +498,7 @@ pub extern "C" fn seyal_app_chrome(handle: u64) -> SeyalAppChrome {
                 InspectorMode::Workspace => 1,
                 InspectorMode::Tab => 2,
                 InspectorMode::Pane => 3,
+                InspectorMode::Block => 4,
             },
             agent_count: chrome.agents.len() as u32,
             attention_count: chrome.attention_items.len() as u32,
@@ -970,6 +975,7 @@ fn decode_action(action: &SeyalAppAction) -> Result<AppAction, i32> {
                 1 => InspectorMode::Workspace,
                 2 => InspectorMode::Tab,
                 3 => InspectorMode::Pane,
+                4 => InspectorMode::Block,
                 _ => InspectorMode::Context,
             },
         }),
@@ -1023,7 +1029,14 @@ fn decode_action(action: &SeyalAppAction) -> Result<AppAction, i32> {
             composer_epoch: action.target_pty_generation,
         }),
         44 => Ok(AppAction::CloseComposerHistory { fence }),
-        // Kinds 45-46 reserved for Block inspector (#935).
+        45 => Ok(AppAction::SelectBlock {
+            fence,
+            id: BlockId::from_bytes(id16(
+                action.target_execution_lo,
+                action.target_execution_hi,
+            )?),
+        }),
+        46 => Ok(AppAction::ClearBlockSelection { fence }),
         47 => Ok(AppAction::OpenPalette { fence }),
         48 => Ok(AppAction::SetPaletteQuery {
             fence,
@@ -1327,15 +1340,21 @@ fn encode_chrome_rows(state: &mut AppHandle) {
 fn encode_block_rows(state: &mut AppHandle) {
     state.block_text.clear();
     state.block_rows.clear();
-    let Some(composer) = state.root.snapshot().composer else {
+    let snapshot = state.root.snapshot();
+    let Some(composer) = snapshot.composer else {
         return;
     };
+    let selected = snapshot.chrome.selected_block;
     for (index, block) in composer.blocks.iter().enumerate() {
-        let flags = match block.state {
+        let mut flags: u16 = match block.state {
             crate::composer::BlockPresentationState::Running => 1,
             crate::composer::BlockPresentationState::Completed => 2,
             crate::composer::BlockPresentationState::Failed => 3,
         };
+        debug_assert_eq!(flags & BLOCK_STATE_MASK, flags);
+        if selected == Some(block.id) {
+            flags |= BLOCK_SELECTED;
+        }
         push_row(
             &mut state.block_rows,
             &mut state.block_text,
@@ -1516,6 +1535,7 @@ fn error_number(error: AppError) -> i32 {
         AppError::PaletteNoSelection => 27,
         AppError::TabCreationUnavailable => 28,
         AppError::PaneSplitUnavailable => 29,
+        AppError::UnknownBlock => 30,
     }
 }
 
@@ -1866,12 +1886,102 @@ mod tests {
         assert_eq!(seyal_app_destroy(handle), 0);
     }
 
-    fn decode_utf8(pointer: *const u8, len: u32) -> String {
-        if pointer.is_null() || len == 0 {
-            return String::new();
-        }
-        let bytes = unsafe { slice::from_raw_parts(pointer, len as usize) };
-        String::from_utf8(bytes.to_vec()).unwrap()
+    #[test]
+    fn block_selection_ffi_marks_row_and_switches_inspector() {
+        let handle = seyal_app_create();
+        let snap = seyal_app_snapshot(handle);
+        let bind = SeyalAppAction {
+            version: APP_ABI_VERSION,
+            size: size_of::<SeyalAppAction>() as u16,
+            kind: 1,
+            flags: FLAG_TARGET_CONTROLLER,
+            fence_pane_lo: snap.pane_lo,
+            fence_pane_hi: snap.pane_hi,
+            fence_execution_lo: 0,
+            fence_execution_hi: 0,
+            fence_attachment_lo: 0,
+            fence_attachment_hi: 0,
+            fence_epoch: snap.epoch,
+            target_execution_lo: 1,
+            target_execution_hi: 0,
+            target_attachment_lo: 2,
+            target_attachment_hi: 0,
+            target_pty_generation: 1,
+            payload: ptr::null(),
+            payload_len: 0,
+            reserved: 0,
+        };
+        assert_eq!(unsafe { seyal_app_apply(handle, &bind) }, 0);
+        let bound = seyal_app_snapshot(handle);
+
+        // No Blocks yet: select fails closed with the published error code.
+        let mut select = identity_fence(45, &bound);
+        select.target_execution_lo = 0x5151_5151_5151_5151;
+        select.target_execution_hi = 0x5151_5151_5151_5151;
+        assert_eq!(unsafe { seyal_app_apply(handle, &select) }, -4);
+        assert_eq!(seyal_app_last_error(handle), 30);
+        assert_eq!(seyal_app_chrome(handle).inspector_mode, 0);
+
+        // Runtime-projected Blocks are the only row source; seed them through
+        // the application root (the C entry point reads the live client).
+        let fence = APPS.with(|apps| apps.borrow().get(&handle).unwrap().root.fence());
+        APPS.with(|apps| {
+            let mut apps = apps.borrow_mut();
+            let state = apps.get_mut(&handle).unwrap();
+            state
+                .root
+                .apply(AppAction::ApplyRuntimeBlocks {
+                    fence,
+                    records: vec![
+                        RuntimeBlockRecord {
+                            id: BlockId::from_bytes([0x51; 16]),
+                            command: "git status".into(),
+                            start_line: 1,
+                            end_line: Some(3),
+                            running: false,
+                            exit_status: Some(0),
+                        },
+                        RuntimeBlockRecord {
+                            id: BlockId::from_bytes([0x61; 16]),
+                            command: "sleep 9".into(),
+                            start_line: 4,
+                            end_line: None,
+                            running: true,
+                            exit_status: None,
+                        },
+                    ],
+                })
+                .unwrap();
+        });
+        let first = seyal_app_block_row(handle, 0);
+        assert_eq!(first.flags, 2, "completed, unselected");
+        select.target_execution_lo = first.id_lo;
+        select.target_execution_hi = first.id_hi;
+        assert_eq!(unsafe { seyal_app_apply(handle, &select) }, 0);
+        let chrome = seyal_app_chrome(handle);
+        assert_eq!(chrome.inspector_mode, 4);
+        assert_ne!(chrome.reserved & 2, 0, "inspector revealed");
+        assert_eq!(chrome.inspector_row_count, 6);
+        let command = seyal_app_chrome_row(handle, 0, 0);
+        assert_eq!(utf8(command.title, command.title_len), "Block · Command");
+        assert_eq!(utf8(command.detail, command.detail_len), "git status");
+        let exit = seyal_app_chrome_row(handle, 0, 2);
+        assert_eq!(utf8(exit.title, exit.title_len), "Block · Exit code");
+        assert_eq!(utf8(exit.detail, exit.detail_len), "0");
+        let selected = seyal_app_block_row(handle, 0);
+        assert_eq!(selected.flags & BLOCK_STATE_MASK, 2);
+        assert_eq!(selected.flags & BLOCK_SELECTED, BLOCK_SELECTED);
+        assert_eq!(
+            seyal_app_block_row(handle, 1).flags,
+            1,
+            "running, unselected"
+        );
+
+        let clear = identity_fence(46, &seyal_app_snapshot(handle));
+        assert_eq!(unsafe { seyal_app_apply(handle, &clear) }, 0);
+        assert_eq!(seyal_app_chrome(handle).inspector_mode, 0);
+        assert_eq!(seyal_app_block_row(handle, 0).flags, 2);
+        assert_eq!(seyal_app_destroy(handle), 0);
     }
 
     #[test]
@@ -1899,12 +2009,12 @@ mod tests {
         let filtered = seyal_app_palette(handle);
         assert_eq!(filtered.row_count, 1);
         assert_eq!(
-            decode_utf8(filtered.query_utf8, filtered.query_utf8_len),
+            utf8(filtered.query_utf8, filtered.query_utf8_len),
             "Show Inspector"
         );
         let row = seyal_app_palette_row(handle, 0);
-        assert_eq!(decode_utf8(row.title, row.title_len), "Show Inspector");
-        assert_eq!(decode_utf8(row.detail, row.detail_len), "View");
+        assert_eq!(utf8(row.title, row.title_len), "Show Inspector");
+        assert_eq!(utf8(row.detail, row.detail_len), "View");
         assert_eq!(
             seyal_app_palette_row(handle, 1).title_len,
             0,

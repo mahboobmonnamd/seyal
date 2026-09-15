@@ -8,7 +8,7 @@
 
 use std::time::Duration;
 
-use seyal_core::{AttachmentId, ExecutionId, PaneId, TabId, WorkspaceId};
+use seyal_core::{AttachmentId, BlockId, ExecutionId, PaneId, TabId, WorkspaceId};
 
 use crate::chrome::{
     AgentId, AttentionId, ChromeAction, ChromeError, ChromeSnapshot, ChromeState, InspectorMode,
@@ -63,6 +63,7 @@ pub enum AppError {
     PaletteNoSelection,
     TabCreationUnavailable,
     PaneSplitUnavailable,
+    UnknownBlock,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -219,6 +220,14 @@ pub enum AppAction {
     ClosePalette {
         fence: AppFence,
     },
+    /// Bind the inspector to one Block of the focused Pane (#935).
+    SelectBlock {
+        fence: AppFence,
+        id: BlockId,
+    },
+    ClearBlockSelection {
+        fence: AppFence,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -355,7 +364,13 @@ impl ApplicationRoot {
     pub fn snapshot(&self) -> AppSnapshot {
         let shell = self.shell.snapshot();
         let composer = self.composer.snapshot(shell.focused_pane).ok();
-        let chrome = self.chrome.snapshot(&shell);
+        let chrome = self.chrome.snapshot(
+            &shell,
+            composer
+                .as_ref()
+                .map(|composer| composer.blocks.as_slice())
+                .unwrap_or(&[]),
+        );
         let palette = self.palette.snapshot(
             &shell,
             &chrome,
@@ -480,6 +495,15 @@ impl ApplicationRoot {
                 agents,
                 attention,
             } => self.replace_chrome(fence, agents, attention),
+            AppAction::SelectBlock { fence, id } => self.select_block(fence, id),
+            AppAction::ClearBlockSelection { fence } => {
+                self.require_fence(fence)?;
+                let shell = self.shell.snapshot();
+                self.chrome
+                    .apply(ChromeAction::ClearBlockSelection, &shell)
+                    .map(|_| ())
+                    .map_err(chrome_error)
+            }
             AppAction::SelectWorkspace { id } => self.select_workspace(id),
             AppAction::SelectTab { id } => self.select_tab(id),
             AppAction::FocusPane { id } => self.focus_pane(id),
@@ -765,6 +789,24 @@ impl ApplicationRoot {
             .map_err(composer_error)
     }
 
+    fn focused_blocks(&self) -> Vec<crate::composer::BlockProjection> {
+        let pane = self.shell.snapshot().focused_pane;
+        self.composer
+            .snapshot(pane)
+            .map(|composer| composer.blocks)
+            .unwrap_or_default()
+    }
+
+    fn select_block(&mut self, fence: AppFence, id: BlockId) -> Result<(), AppError> {
+        self.require_fence(fence)?;
+        let shell = self.shell.snapshot();
+        let blocks = self.focused_blocks();
+        self.chrome
+            .apply(ChromeAction::SelectBlock { id, blocks }, &shell)
+            .map(|_| ())
+            .map_err(chrome_error)
+    }
+
     /// History recall is fenced like every other pane-sensitive composer
     /// action: stale Pane/execution/attachment identity fails closed.
     fn composer_history(
@@ -832,7 +874,7 @@ impl ApplicationRoot {
     /// clamp `MoveSelection`; the same pass happens again in `snapshot()`.
     fn palette_snapshot(&self) -> PaletteSnapshot {
         let shell = self.shell.snapshot();
-        let chrome = self.chrome.snapshot(&shell);
+        let chrome = self.chrome.snapshot(&shell, &self.focused_blocks());
         self.palette.snapshot(
             &shell,
             &chrome,
@@ -844,7 +886,7 @@ impl ApplicationRoot {
     fn run_palette(&mut self, fence: AppFence) -> Result<(), AppError> {
         self.require_fence(fence)?;
         let shell = self.shell.snapshot();
-        let chrome = self.chrome.snapshot(&shell);
+        let chrome = self.chrome.snapshot(&shell, &self.focused_blocks());
         let command = self.palette.resolve(
             &shell,
             &chrome,
@@ -1010,7 +1052,13 @@ impl ApplicationRoot {
                 records,
             })
             .map(|_| ())
-            .map_err(composer_error)
+            .map_err(composer_error)?;
+        // A selected Block that Runtime no longer lists is not inspectable.
+        if self.chrome.selected_block_is_stale(&self.focused_blocks()) {
+            let shell = self.shell.snapshot();
+            let _ = self.chrome.apply(ChromeAction::ClearBlockSelection, &shell);
+        }
+        Ok(())
     }
 
     fn derive_presentation(&mut self, alternate_screen: bool) -> Result<(), AppError> {
@@ -1065,6 +1113,7 @@ fn chrome_error(error: ChromeError) -> AppError {
         ChromeError::UnknownAttention => AppError::UnknownAttention,
         ChromeError::UnknownWorkspace => AppError::UnknownChromeWorkspace,
         ChromeError::UnknownTab => AppError::UnknownChromeTab,
+        ChromeError::UnknownBlock => AppError::UnknownBlock,
     }
 }
 
@@ -1780,6 +1829,88 @@ mod tests {
             Ok(()),
             "closing an already-closed palette is idempotent"
         );
+    }
+
+    #[test]
+    fn block_selection_is_fenced_and_sourced_from_runtime_blocks() {
+        use crate::chrome::InspectorMode;
+        use seyal_core::BlockId;
+
+        let mut root = ApplicationRoot::new();
+        let known = BlockId::from_bytes([0x51; 16]);
+        let unknown = BlockId::from_bytes([0x52; 16]);
+        // Unbound: fence valid, but there is no Block list yet.
+        assert_eq!(
+            root.apply(AppAction::SelectBlock {
+                fence: root.fence(),
+                id: known,
+            }),
+            Err(AppError::UnknownBlock)
+        );
+        root.apply(AppAction::Bind {
+            fence: root.fence(),
+            evidence: evidence(8, true, false),
+        })
+        .unwrap();
+        root.apply(AppAction::ApplyRuntimeBlocks {
+            fence: root.fence(),
+            records: vec![RuntimeBlockRecord {
+                id: known,
+                command: "git status".into(),
+                start_line: 1,
+                end_line: Some(3),
+                running: false,
+                exit_status: Some(0),
+            }],
+        })
+        .unwrap();
+        assert_eq!(
+            root.apply(AppAction::SelectBlock {
+                fence: root.fence(),
+                id: unknown,
+            }),
+            Err(AppError::UnknownBlock)
+        );
+        let mut stale = root.fence();
+        stale.execution = Some(ExecutionId::from_bytes([0x99; 16]));
+        assert_eq!(
+            root.apply(AppAction::SelectBlock {
+                fence: stale,
+                id: known,
+            }),
+            Err(AppError::StaleExecution)
+        );
+        assert!(root.snapshot().chrome.selected_block.is_none());
+
+        root.apply(AppAction::SelectBlock {
+            fence: root.fence(),
+            id: known,
+        })
+        .unwrap();
+        let snap = root.snapshot();
+        assert_eq!(snap.chrome.selected_block, Some(known));
+        assert_eq!(snap.chrome.inspector_mode, InspectorMode::Block);
+        assert!(snap.chrome.inspector_visible);
+        let rows = &snap.chrome.visible_inspector_rows;
+        assert_eq!(rows[0].value, "git status");
+        assert_eq!(rows[1].value, "Completed");
+        assert_eq!(rows[2].value, "0");
+        assert_eq!(rows[3].value, "3");
+
+        // Runtime republishes without that Block: selection clears itself.
+        root.apply(AppAction::ApplyRuntimeBlocks {
+            fence: root.fence(),
+            records: vec![],
+        })
+        .unwrap();
+        let after = root.snapshot();
+        assert!(after.chrome.selected_block.is_none());
+        assert_eq!(after.chrome.inspector_mode, InspectorMode::Context);
+        assert!(after
+            .chrome
+            .inspector_rows
+            .iter()
+            .all(|row| row.section != "Block"));
     }
 
     #[test]

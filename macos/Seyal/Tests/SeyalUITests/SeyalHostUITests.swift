@@ -214,6 +214,55 @@ final class SeyalHostUITests: XCTestCase {
         XCTAssertEqual(app.state, .runningForeground)
     }
 
+    func testSelectingABlockRevealsRustBlockDetailsInInspector() throws {
+        let app = hostedApp()
+        waitForUsablePty(in: app)
+        let composer = app.descendants(matching: .any)["seyal-composer"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 12))
+        let composerReady = NSPredicate(format: "value == 'available'")
+        let becameReady = expectation(for: composerReady, evaluatedWith: composer, handler: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [becameReady], timeout: 12), .completed)
+        let inspector = app.descendants(matching: .any)["seyal-inspector"]
+        XCTAssertFalse(inspector.firstMatch.isHittable, "inspector is receded before any selection")
+        let editor = app.descendants(matching: .any)["seyal-composer-editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        editor.firstMatch.click()
+        editor.firstMatch.typeText("echo seyal-block-details")
+        editor.firstMatch.typeKey("\r", modifierFlags: [])
+        let cleared = expectation(
+            for: NSPredicate(format: "value == nil OR value == ''"),
+            evaluatedWith: editor.firstMatch,
+            handler: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [cleared], timeout: 8), .completed)
+
+        // Blocks are Runtime timeline metadata (OSC 133); the card appears when
+        // Runtime publishes the revision. Without shell integration there is no
+        // Block and therefore nothing to select: the test proves the host never
+        // fabricates one.
+        let card = app.descendants(matching: .any)["seyal-block-0"]
+        guard card.waitForExistence(timeout: 10) else {
+            XCTAssertFalse(inspector.firstMatch.isHittable, "no Block, no Block details")
+            return
+        }
+        card.firstMatch.click()
+        XCTAssertTrue(inspector.waitForExistence(timeout: 5))
+        let revealed = expectation(for: NSPredicate(format: "isHittable == true"), evaluatedWith: inspector.firstMatch, handler: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [revealed], timeout: 5), .completed, "selecting a Block reveals the inspector")
+        let selected = expectation(for: NSPredicate(format: "value == 'selected'"), evaluatedWith: card.firstMatch, handler: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 5), .completed, "card reflects the Rust selected flag")
+        let commandRow = inspector.descendants(matching: .staticText)["Block · Command"]
+        XCTAssertTrue(commandRow.waitForExistence(timeout: 5), "inspector shows Rust Block rows")
+        XCTAssertTrue(inspector.descendants(matching: .staticText)["echo seyal-block-details"].waitForExistence(timeout: 5))
+        XCTAssertFalse(inspector.descendants(matching: .staticText)["Block · Duration"].exists, "no fabricated telemetry")
+
+        card.firstMatch.click()
+        let deselected = expectation(for: NSPredicate(format: "value == nil OR value == ''"), evaluatedWith: card.firstMatch, handler: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [deselected], timeout: 5), .completed, "clicking again clears the selection")
+        XCTAssertFalse(commandRow.exists, "Block rows leave with the selection")
+        XCTAssertEqual(app.state, .runningForeground)
+    }
+
     private func waitForUsablePty(in app: XCUIApplication, timeout: TimeInterval = 20) {
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
         let terminal = app.descendants(matching: .any)["terminal-input"]

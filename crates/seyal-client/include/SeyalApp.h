@@ -45,8 +45,7 @@ enum SeyalAppActionKind {
     SEYAL_APP_ACTION_FOCUS_PANE = 21,
     SEYAL_APP_ACTION_SET_SHELL_CHROME = 22,
     /*
-     * Composer history recall (#933). Kinds 23-39 remain reserved for
-     * remaining Workspace chrome slices (#922/#935).
+     * Composer history recall (#933).
      * SET_COMPOSER_HISTORY_FILTER: payload = UTF-8 query.
      * MOVE_COMPOSER_HISTORY_SELECTION: reserved = signed row delta (int32).
      * SELECT_COMPOSER_HISTORY: target_pty_generation = composer epoch.
@@ -57,21 +56,32 @@ enum SeyalAppActionKind {
     SEYAL_APP_ACTION_SELECT_COMPOSER_HISTORY = 43,
     SEYAL_APP_ACTION_CLOSE_COMPOSER_HISTORY = 44,
     /*
-     * Global keyboard-first command palette (#932). Kinds 45-46 remain
-     * reserved for Block inspector (#935). The command list is never sent
-     * by the host: it is derived in Rust from the current Shell/Chrome
-     * state on every open/filter/move/run. Error codes 26-29.
-     * SET_PALETTE_QUERY: payload = UTF-8 query.
-     * MOVE_PALETTE_SELECTION: reserved = signed row delta (int32).
-     * RUN_PALETTE: runs the command bound to the current selection, then
-     * closes the palette. Fails closed (no state change) when the filtered
-     * list is empty.
+     * Block details inspector (#935).
+     * SELECT_BLOCK: target_execution_lo/hi = BlockId (from seyal_app_block_row).
+     * Selecting binds the inspector to that Block, switches inspector mode to
+     * SEYAL_APP_INSPECTOR_BLOCK and reveals the inspector. Fails closed for a
+     * Block not in the focused Pane's list. Error code 30 = UnknownBlock.
+     */
+    SEYAL_APP_ACTION_SELECT_BLOCK = 45,
+    SEYAL_APP_ACTION_CLEAR_BLOCK_SELECTION = 46,
+    /*
+     * Global keyboard-first command palette (#932). The command list is never
+     * sent by the host. Error codes 26-29.
      */
     SEYAL_APP_ACTION_OPEN_PALETTE = 47,
     SEYAL_APP_ACTION_SET_PALETTE_QUERY = 48,
     SEYAL_APP_ACTION_MOVE_PALETTE_SELECTION = 49,
     SEYAL_APP_ACTION_RUN_PALETTE = 50,
     SEYAL_APP_ACTION_CLOSE_PALETTE = 51
+};
+
+/* SEYAL_APP_ACTION_SET_INSPECTOR reserved values and SeyalAppChrome.inspector_mode. */
+enum SeyalAppInspectorMode {
+    SEYAL_APP_INSPECTOR_CONTEXT = 0,
+    SEYAL_APP_INSPECTOR_WORKSPACE = 1,
+    SEYAL_APP_INSPECTOR_TAB = 2,
+    SEYAL_APP_INSPECTOR_PANE = 3,
+    SEYAL_APP_INSPECTOR_BLOCK = 4
 };
 
 enum SeyalAppEligibility {
@@ -228,9 +238,16 @@ enum SeyalAppComposerMode {
 #define SEYAL_APP_COPY_COMPOSER_HISTORY 3u
 #define SEYAL_APP_COPY_COMPOSER_HISTORY_PLACEHOLDER 4u
 
+/*
+ * seyal_app_block_row flags: state in the low three bits, plus
+ * SEYAL_APP_BLOCK_SELECTED when that Block is bound to the inspector (#935).
+ * Hosts must mask with SEYAL_APP_BLOCK_STATE_MASK before comparing states.
+ */
 #define SEYAL_APP_BLOCK_STATE_RUNNING 1u
 #define SEYAL_APP_BLOCK_STATE_COMPLETED 2u
 #define SEYAL_APP_BLOCK_STATE_FAILED 3u
+#define SEYAL_APP_BLOCK_STATE_MASK 7u
+#define SEYAL_APP_BLOCK_SELECTED 8u
 
 typedef struct SeyalAppComposer {
     uint16_t version;

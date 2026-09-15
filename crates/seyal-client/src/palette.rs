@@ -256,6 +256,7 @@ fn inspector_mode_label(mode: InspectorMode) -> &'static str {
         InspectorMode::Workspace => "Workspace",
         InspectorMode::Tab => "Tab",
         InspectorMode::Pane => "Pane",
+        InspectorMode::Block => "Block",
     }
 }
 
@@ -379,6 +380,8 @@ fn build_commands(
         InspectorMode::Workspace,
         InspectorMode::Tab,
         InspectorMode::Pane,
+        // Block mode is entered only by selecting a Block, never as a
+        // palette SetInspectorMode (that would project an empty inspector).
     ] {
         if mode == chrome.inspector_mode {
             continue;
@@ -494,7 +497,7 @@ mod tests {
     #[test]
     fn closed_palette_snapshots_empty_and_every_action_but_open_fails_closed() {
         let shell = seed_shell().snapshot();
-        let chrome = ChromeState::new().snapshot(&shell);
+        let chrome = ChromeState::new().snapshot(&shell, &[]);
         let mut palette = PaletteState::new();
         let snap = palette.snapshot(&shell, &chrome, true, true);
         assert!(!snap.open);
@@ -515,7 +518,7 @@ mod tests {
     #[test]
     fn open_lists_commands_and_reopen_does_not_reset_an_existing_query() {
         let shell = seed_shell().snapshot();
-        let chrome = ChromeState::new().snapshot(&shell);
+        let chrome = ChromeState::new().snapshot(&shell, &[]);
         let mut palette = PaletteState::new();
         palette.apply(PaletteAction::Open, 0).unwrap();
         let snap = palette.snapshot(&shell, &chrome, true, true);
@@ -569,7 +572,7 @@ mod tests {
         let mut shell = seed_shell();
         shell.apply(ShellAction::CreateTab).unwrap();
         let snap = shell.snapshot();
-        let chrome = ChromeState::new().snapshot(&snap);
+        let chrome = ChromeState::new().snapshot(&snap, &[]);
         let mut palette = PaletteState::new();
         palette.apply(PaletteAction::Open, 0).unwrap();
         let rows = palette.snapshot(&snap, &chrome, true, true).rows;
@@ -593,7 +596,7 @@ mod tests {
     #[test]
     fn move_selection_clamps_and_resets_on_query_change() {
         let shell = seed_shell().snapshot();
-        let chrome = ChromeState::new().snapshot(&shell);
+        let chrome = ChromeState::new().snapshot(&shell, &[]);
         let mut palette = PaletteState::new();
         palette.apply(PaletteAction::Open, 0).unwrap();
         let row_count = palette.snapshot(&shell, &chrome, true, true).rows.len();
@@ -625,7 +628,7 @@ mod tests {
     #[test]
     fn resolve_tracks_selection_and_closing_stops_resolving() {
         let shell = seed_shell().snapshot();
-        let chrome = ChromeState::new().snapshot(&shell);
+        let chrome = ChromeState::new().snapshot(&shell, &[]);
         let mut palette = PaletteState::new();
         palette.apply(PaletteAction::Open, 0).unwrap();
         palette
@@ -644,7 +647,7 @@ mod tests {
     #[test]
     fn no_match_resolves_to_none() {
         let shell = seed_shell().snapshot();
-        let chrome = ChromeState::new().snapshot(&shell);
+        let chrome = ChromeState::new().snapshot(&shell, &[]);
         let mut palette = PaletteState::new();
         palette.apply(PaletteAction::Open, 0).unwrap();
         palette
@@ -689,7 +692,7 @@ mod tests {
                 &shell,
             )
             .unwrap();
-        let snap = chrome.snapshot(&shell);
+        let snap = chrome.snapshot(&shell, &[]);
         let mut palette = PaletteState::new();
         palette.apply(PaletteAction::Open, 0).unwrap();
         let rows = palette.snapshot(&shell, &snap, true, true).rows;
@@ -704,7 +707,7 @@ mod tests {
                 &shell,
             )
             .unwrap();
-        let after = chrome.snapshot(&shell);
+        let after = chrome.snapshot(&shell, &[]);
         let rows = palette.snapshot(&shell, &after, true, true).rows;
         assert!(!labels(&rows).contains(&"Focus Agent: Claude"));
     }
@@ -712,7 +715,7 @@ mod tests {
     #[test]
     fn build_commands_omits_create_tab_and_split_when_shell_policy_disallows_them() {
         let shell = ShellState::m001_local("local").snapshot();
-        let chrome = ChromeState::new().snapshot(&shell);
+        let chrome = ChromeState::new().snapshot(&shell, &[]);
         let mut palette = PaletteState::new();
         palette.apply(PaletteAction::Open, 0).unwrap();
         let rows = palette.snapshot(&shell, &chrome, false, false).rows;

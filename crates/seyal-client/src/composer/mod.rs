@@ -137,6 +137,8 @@ pub struct BlockProjection {
     pub state: BlockPresentationState,
     pub start_line: u64,
     pub end_line: Option<u64>,
+    /// Runtime-published exit status; `None` while running or unknown.
+    pub exit_status: Option<i32>,
 }
 
 /// Typed host → Rust command. One action is one coarse transition.
@@ -323,6 +325,7 @@ impl PaneComposer {
                 state: record.presentation_state(),
                 start_line: record.start_line,
                 end_line: record.end_line,
+                exit_status: record.exit_status,
             })
             .collect()
     }

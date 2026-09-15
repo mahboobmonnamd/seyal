@@ -11,8 +11,8 @@ use std::time::Duration;
 use seyal_core::{AttachmentId, BlockId, ExecutionId, PaneId, TabId, WorkspaceId};
 
 use crate::chrome::{
-    AgentId, AttentionId, ChromeAction, ChromeError, ChromeSnapshot, ChromeState, InspectorMode,
-    LeftPanelMode,
+    AgentId, AttentionId, CenterSurface, ChromeAction, ChromeError, ChromeSnapshot, ChromeState,
+    InspectorMode, LeftPanelMode,
 };
 use crate::chrome_palette::PaletteCommandId;
 use crate::composer::{
@@ -154,6 +154,9 @@ pub enum AppAction {
     },
     SetInspectorMode {
         mode: InspectorMode,
+    },
+    SetCenterSurface {
+        mode: CenterSurface,
     },
     SelectAgent {
         fence: AppFence,
@@ -477,6 +480,7 @@ impl ApplicationRoot {
             }
             AppAction::SetLeftPanel { mode } => self.set_left_panel(mode),
             AppAction::SetInspectorMode { mode } => self.set_inspector_mode(mode),
+            AppAction::SetCenterSurface { mode } => self.set_center_surface(mode),
             AppAction::SelectAgent { fence, id } => self.select_agent(fence, id),
             AppAction::OpenAttention { fence, id } => self.open_attention(fence, id),
             AppAction::ReplaceChrome {
@@ -871,6 +875,14 @@ impl ApplicationRoot {
             .map_err(chrome_error)
     }
 
+    fn set_center_surface(&mut self, mode: CenterSurface) -> Result<(), AppError> {
+        let shell = self.shell.snapshot();
+        self.chrome
+            .apply(ChromeAction::SetCenterSurface(mode), &shell)
+            .map(|_| ())
+            .map_err(chrome_error)
+    }
+
     fn set_shell_visibility(
         &mut self,
         left: bool,
@@ -965,6 +977,8 @@ impl ApplicationRoot {
             }
             PaletteCommandId::ShowWorkspaces => self.set_left_panel(LeftPanelMode::Workspaces),
             PaletteCommandId::ShowTabs => self.set_left_panel(LeftPanelMode::Tabs),
+            PaletteCommandId::ShowCoreCenter => self.set_center_surface(CenterSurface::Core),
+            PaletteCommandId::ShowAgentsCenter => self.set_center_surface(CenterSurface::Agents),
             PaletteCommandId::InspectorContext => self.set_inspector_mode(InspectorMode::Context),
             PaletteCommandId::InspectorWorkspace => {
                 self.set_inspector_mode(InspectorMode::Workspace)
@@ -1818,6 +1832,52 @@ mod tests {
                 .as_ref()
                 .map(|id| id.as_str()),
             Some("agent-codex")
+        );
+    }
+
+    #[test]
+    fn agents_center_surface_switches_and_selects_fail_closed() {
+        let mut root = ApplicationRoot::new();
+        assert_eq!(
+            root.snapshot().chrome.center_surface,
+            CenterSurface::Core
+        );
+        root.apply(AppAction::SetCenterSurface {
+            mode: CenterSurface::Agents,
+        })
+        .unwrap();
+        assert_eq!(
+            root.snapshot().chrome.center_surface,
+            CenterSurface::Agents
+        );
+        assert_eq!(root.snapshot().chrome.agents.len(), 1);
+        root.apply(AppAction::SelectAgent {
+            fence: root.fence(),
+            id: AgentId::new("agent-codex"),
+        })
+        .unwrap();
+        assert_eq!(
+            root.snapshot()
+                .chrome
+                .selected_agent
+                .as_ref()
+                .map(|id| id.as_str()),
+            Some("agent-codex")
+        );
+        assert!(matches!(
+            root.apply(AppAction::SelectAgent {
+                fence: root.fence(),
+                id: AgentId::new("missing"),
+            }),
+            Err(AppError::UnknownAgent)
+        ));
+        root.apply(AppAction::SetCenterSurface {
+            mode: CenterSurface::Core,
+        })
+        .unwrap();
+        assert_eq!(
+            root.snapshot().chrome.center_surface,
+            CenterSurface::Core
         );
     }
 

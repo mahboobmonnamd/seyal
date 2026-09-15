@@ -68,6 +68,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             keyEquivalent: "0"
         )
         inspectorItem.keyEquivalentModifierMask = [.command, .option]
+        viewMenu.addItem(withTitle: "Show Core Terminal", action: #selector(ProductChromeHostView.showCoreCenter), keyEquivalent: "1")
+        viewMenu.addItem(withTitle: "Show Agents", action: #selector(ProductChromeHostView.showAgentsCenter), keyEquivalent: "2")
         viewMenu.addItem(withTitle: "New Tab", action: #selector(ProductChromeHostView.createTab), keyEquivalent: "t")
         viewMenu.addItem(withTitle: "Split Right", action: #selector(ProductChromeHostView.splitRight), keyEquivalent: "d")
         let splitDown = viewMenu.addItem(

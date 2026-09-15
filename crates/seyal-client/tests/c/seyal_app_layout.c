@@ -23,7 +23,7 @@ int main(void) {
     REQUIRE(sizeof(SeyalAppAxNode) == 72);
     REQUIRE(sizeof(SeyalAppAccessibility) == 24);
     REQUIRE(sizeof(SeyalAppComposer) == 64);
-    REQUIRE(sizeof(SeyalAppChrome) == 24);
+    REQUIRE(sizeof(SeyalAppChrome) == 28);
     REQUIRE(sizeof(SeyalAppTheme) == 16);
     REQUIRE(sizeof(SeyalAppShell) == 64);
     REQUIRE(sizeof(SeyalAppRow) == 56);

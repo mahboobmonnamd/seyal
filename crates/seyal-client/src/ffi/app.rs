@@ -9,7 +9,7 @@ use crate::app::{
     AppAction, AppError, AppFence, AppSnapshot, ApplicationRoot, BindingEvidence, NativeEffect,
     PresentationEligibility, APP_ABI_VERSION,
 };
-use crate::chrome::{AgentId, AttentionId, InspectorMode, LeftPanelMode};
+use crate::chrome::{AgentId, AttentionId, CenterSurface, InspectorMode, LeftPanelMode};
 use crate::composer::{ComposerMode, RuntimeBlockRecord, BLOCK_PROMPT, COMPOSER_EXECUTE_LABEL};
 use crate::recovery::{AttemptOutcome, LaunchResult, RecoveryEffect, RecoveryStage};
 use crate::shell::{LayoutNodeKind, SplitAxis};
@@ -424,6 +424,8 @@ pub struct SeyalAppChrome {
     pub size: u16,
     pub left_panel: u16,
     pub inspector_mode: u16,
+    pub center_surface: u16,
+    pub reserved_align: u16,
     pub agent_count: u32,
     pub attention_count: u32,
     pub inspector_row_count: u32,
@@ -440,6 +442,8 @@ pub extern "C" fn seyal_app_chrome(handle: u64) -> SeyalAppChrome {
                 size: 0,
                 left_panel: 0,
                 inspector_mode: 0,
+                center_surface: 0,
+                reserved_align: 0,
                 agent_count: 0,
                 attention_count: 0,
                 inspector_row_count: 0,
@@ -461,6 +465,11 @@ pub extern "C" fn seyal_app_chrome(handle: u64) -> SeyalAppChrome {
                 InspectorMode::Pane => 3,
                 InspectorMode::Blocks => 4,
             },
+            center_surface: match chrome.center_surface {
+                CenterSurface::Core => 0,
+                CenterSurface::Agents => 1,
+            },
+            reserved_align: 0,
             agent_count: chrome.agents.len() as u32,
             attention_count: chrome.attention_items.len() as u32,
             inspector_row_count: chrome.visible_inspector_rows.len() as u32,
@@ -1180,6 +1189,13 @@ fn decode_action(action: &SeyalAppAction) -> Result<AppAction, i32> {
             )?),
         }),
         38 => Ok(AppAction::ClearInspectorBlock { fence }),
+        39 => Ok(AppAction::SetCenterSurface {
+            mode: if action.reserved == 1 {
+                CenterSurface::Agents
+            } else {
+                CenterSurface::Core
+            },
+        }),
         _ => Err(-6),
     }
 }
@@ -1702,6 +1718,42 @@ mod tests {
         assert_eq!(size_of::<SeyalAppBlockSpan>(), 16);
         assert_eq!(size_of::<SeyalAppTheme>(), 52);
         assert_eq!(size_of::<SeyalAppChromeSurface>(), 16);
+        assert_eq!(size_of::<SeyalAppChrome>(), 28);
+        assert_eq!(offset_of!(SeyalAppChrome, center_surface), 8);
+    }
+
+    #[test]
+    fn center_surface_projects_through_ffi_action_39() {
+        let handle = seyal_app_create();
+        let chrome = seyal_app_chrome(handle);
+        assert_eq!(chrome.center_surface, 0);
+        let mut set_agents = SeyalAppAction {
+            version: APP_ABI_VERSION,
+            size: size_of::<SeyalAppAction>() as u16,
+            kind: 39,
+            flags: 0,
+            fence_pane_lo: 0,
+            fence_pane_hi: 0,
+            fence_execution_lo: 0,
+            fence_execution_hi: 0,
+            fence_attachment_lo: 0,
+            fence_attachment_hi: 0,
+            fence_epoch: 0,
+            target_execution_lo: 0,
+            target_execution_hi: 0,
+            target_attachment_lo: 0,
+            target_attachment_hi: 0,
+            target_pty_generation: 0,
+            payload: ptr::null(),
+            payload_len: 0,
+            reserved: 1,
+        };
+        assert_eq!(seyal_app_apply(handle, &set_agents), 0);
+        assert_eq!(seyal_app_chrome(handle).center_surface, 1);
+        set_agents.reserved = 0;
+        assert_eq!(seyal_app_apply(handle, &set_agents), 0);
+        assert_eq!(seyal_app_chrome(handle).center_surface, 0);
+        seyal_app_destroy(handle);
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! Portable shell chrome: agents, inspector, attention, left-panel mode,
-//! command palette, and which shell regions are visible. M001 first UI recedes
-//! sidebar/inspector/tab strip (`docs/architecture/ui/M001-FIRST-UI-DESIGN.md`).
+//! center surface mode, command palette, and which shell regions are visible.
+//! M001 first UI recedes sidebar/inspector/tab strip
+//! (`docs/architecture/ui/M001-FIRST-UI-DESIGN.md`).
 //!
 //! This module derives inspector/attention projections from authoritative
 //! [`crate::shell::ShellSnapshot`] plus activity rows supplied by the host.
@@ -25,6 +26,19 @@ use crate::shell::{LayoutDescription, ShellSnapshot};
 pub enum LeftPanelMode {
     Workspaces,
     Tabs,
+}
+
+/// Product chrome for the center surface (Core Terminal default vs Agents).
+///
+/// Agents mode projects the same agent authority as the left inventory; it is
+/// not a provider and does not invent sessions. Opening Agents does not affect
+/// PTY/VT/execution progress (`docs/architecture/ui/M001-AGENTS-VIEW.md`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CenterSurface {
+    /// Default Core Terminal center (Blocks / multipane / live surface).
+    Core,
+    /// Agents management list for the active Workspace agent rows.
+    Agents,
 }
 
 /// Product inspector filter. Filtering never invents rows.
@@ -146,6 +160,8 @@ impl fmt::Display for ChromeError {
 pub enum ChromeAction {
     SetLeftPanel(LeftPanelMode),
     SetInspectorMode(InspectorMode),
+    /// Switch the center surface between Core Terminal and Agents.
+    SetCenterSurface(CenterSurface),
     SelectAgent {
         id: AgentId,
     },
@@ -206,6 +222,7 @@ pub struct ChromeEffect {
 pub struct ChromeSnapshot {
     pub left_panel: LeftPanelMode,
     pub inspector_mode: InspectorMode,
+    pub center_surface: CenterSurface,
     pub left_visible: bool,
     pub inspector_visible: bool,
     pub tab_strip_visible: bool,
@@ -228,6 +245,7 @@ pub struct ChromeSnapshot {
 pub struct ChromeState {
     left_panel: LeftPanelMode,
     inspector_mode: InspectorMode,
+    center_surface: CenterSurface,
     left_visible: bool,
     inspector_visible: bool,
     tab_strip_visible: bool,
@@ -247,6 +265,7 @@ impl Default for ChromeState {
         Self {
             left_panel: LeftPanelMode::Workspaces,
             inspector_mode: InspectorMode::Context,
+            center_surface: CenterSurface::Core,
             // Core Terminal mockup vertical slice: workspace chrome is visible
             // by default. Hosts may still recede regions via SetShellVisibility.
             left_visible: true,
@@ -298,6 +317,10 @@ impl ChromeState {
                 if mode != InspectorMode::Blocks {
                     self.selected_block = None;
                 }
+                Ok(ChromeEffect::default())
+            }
+            ChromeAction::SetCenterSurface(mode) => {
+                self.center_surface = mode;
                 Ok(ChromeEffect::default())
             }
             ChromeAction::SelectAgent { id } => {
@@ -410,6 +433,7 @@ impl ChromeState {
         ChromeSnapshot {
             left_panel: self.left_panel,
             inspector_mode: self.inspector_mode,
+            center_surface: self.center_surface,
             left_visible: self.left_visible,
             inspector_visible: self.inspector_visible,
             tab_strip_visible: self.tab_strip_visible,
@@ -1266,5 +1290,62 @@ mod tests {
             chrome.snapshot_with_blocks(&snap, &blocks).inspector_mode,
             InspectorMode::Context
         );
+    }
+
+    #[test]
+    fn center_surface_defaults_to_core_and_switches_to_agents() {
+        let shell = seed_shell();
+        let snap = shell.snapshot();
+        let mut chrome = ChromeState::new();
+        assert_eq!(chrome.snapshot(&snap).center_surface, CenterSurface::Core);
+        chrome
+            .apply(ChromeAction::SetCenterSurface(CenterSurface::Agents), &snap)
+            .unwrap();
+        assert_eq!(
+            chrome.snapshot(&snap).center_surface,
+            CenterSurface::Agents
+        );
+        // Mode switch does not invent agents or clear an existing selection
+        // path — Agents center reuses the same authority as left inventory.
+        seed_agents(&mut chrome, &snap);
+        chrome
+            .apply(
+                ChromeAction::SelectAgent {
+                    id: AgentId::new("agent-claude"),
+                },
+                &snap,
+            )
+            .unwrap();
+        chrome
+            .apply(ChromeAction::SetCenterSurface(CenterSurface::Core), &snap)
+            .unwrap();
+        let after = chrome.snapshot(&snap);
+        assert_eq!(after.center_surface, CenterSurface::Core);
+        assert_eq!(after.selected_agent, Some(AgentId::new("agent-claude")));
+        assert_eq!(after.agents.len(), 2);
+    }
+
+    #[test]
+    fn agents_center_selection_fails_closed_for_unknown_agent() {
+        let shell = seed_shell();
+        let snap = shell.snapshot();
+        let mut chrome = ChromeState::new();
+        seed_agents(&mut chrome, &snap);
+        chrome
+            .apply(ChromeAction::SetCenterSurface(CenterSurface::Agents), &snap)
+            .unwrap();
+        assert_eq!(
+            chrome.apply(
+                ChromeAction::SelectAgent {
+                    id: AgentId::new("missing-agent"),
+                },
+                &snap,
+            ),
+            Err(ChromeError::UnknownAgent)
+        );
+        let after = chrome.snapshot(&snap);
+        assert_eq!(after.center_surface, CenterSurface::Agents);
+        assert!(after.selected_agent.is_none());
+        assert_eq!(after.last_error, Some(ChromeError::UnknownAgent));
     }
 }

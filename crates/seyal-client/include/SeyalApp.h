@@ -65,7 +65,9 @@ enum SeyalAppActionKind {
     SEYAL_APP_ACTION_DISMISS_COMPOSER_HISTORY = 36,
     /* target_execution_lo/hi = BlockId */
     SEYAL_APP_ACTION_SELECT_INSPECTOR_BLOCK = 37,
-    SEYAL_APP_ACTION_CLEAR_INSPECTOR_BLOCK = 38
+    SEYAL_APP_ACTION_CLEAR_INSPECTOR_BLOCK = 38,
+    /* reserved = center surface: 0 Core, 1 Agents */
+    SEYAL_APP_ACTION_SET_CENTER_SURFACE = 39
 };
 
 enum SeyalAppEligibility {
@@ -246,6 +248,9 @@ typedef struct SeyalAppChrome {
     uint16_t size;
     uint16_t left_panel;
     uint16_t inspector_mode;
+    /* 0 = Core Terminal, 1 = Agents center */
+    uint16_t center_surface;
+    uint16_t reserved_align;
     uint32_t agent_count;
     uint32_t attention_count;
     uint32_t inspector_row_count;

@@ -31,6 +31,7 @@ final class ProductChromeHostView: NSView {
     private let leftItems = NSStackView()
     private let inspectorColumn = NSView()
     private let centerColumn = NSView()
+    private let agentsCenter = NSStackView()
     private let multipaneBoard = MultipaneBoardView()
     private let liveSurfaceHost = NSView()
     private var recoveryTimer: Timer?
@@ -51,6 +52,8 @@ final class ProductChromeHostView: NSView {
     private var centerTrailingInspector: NSLayoutConstraint!
     private var centerTopTab: NSLayoutConstraint!
     private var lastChromeDepths: [UInt16: UInt16] = [:]
+    private let coreCenterButton = NSButton(title: "Core", target: nil, action: nil)
+    private let agentsCenterButton = NSButton(title: "Agents", target: nil, action: nil)
 
     override init(frame frameRect: NSRect) {
         pane = ThinPaneHostView(frame: frameRect)
@@ -198,6 +201,15 @@ final class ProductChromeHostView: NSView {
         centerColumn.addSubview(multipaneBoard)
         multipaneBoard.installLiveSubviews([transcript, pane, composer])
 
+        agentsCenter.orientation = .vertical
+        agentsCenter.alignment = .leading
+        agentsCenter.spacing = 4
+        agentsCenter.translatesAutoresizingMaskIntoConstraints = false
+        agentsCenter.edgeInsets = NSEdgeInsets(top: 12, left: 16, bottom: 12, right: 16)
+        agentsCenter.isHidden = true
+        expose(agentsCenter, identifier: "seyal-agents-center")
+        centerColumn.addSubview(agentsCenter)
+
         addSubview(tabStrip)
         addSubview(left)
         addSubview(centerColumn)
@@ -277,6 +289,10 @@ final class ProductChromeHostView: NSView {
             multipaneBoard.trailingAnchor.constraint(equalTo: centerColumn.trailingAnchor),
             multipaneBoard.topAnchor.constraint(equalTo: centerColumn.topAnchor),
             multipaneBoard.bottomAnchor.constraint(equalTo: centerColumn.bottomAnchor),
+            agentsCenter.leadingAnchor.constraint(equalTo: centerColumn.leadingAnchor),
+            agentsCenter.trailingAnchor.constraint(equalTo: centerColumn.trailingAnchor),
+            agentsCenter.topAnchor.constraint(equalTo: centerColumn.topAnchor),
+            agentsCenter.bottomAnchor.constraint(lessThanOrEqualTo: centerColumn.bottomAnchor),
             blocks.topAnchor.constraint(equalTo: transcript.contentView.topAnchor),
             blocks.leadingAnchor.constraint(equalTo: transcript.contentView.leadingAnchor),
             blocks.widthAnchor.constraint(equalTo: transcript.contentView.widthAnchor),
@@ -396,8 +412,12 @@ final class ProductChromeHostView: NSView {
         let shell = seyal_app_shell(pane.appHandle)
         workspacesButton.state = chrome.left_panel == 0 ? .on : .off
         tabsButton.state = chrome.left_panel == 1 ? .on : .off
+        coreCenterButton.state = chrome.center_surface == 0 ? .on : .off
+        agentsCenterButton.state = chrome.center_surface == 1 ? .on : .off
         rebuildLeft(shell: shell, chrome: chrome)
         rebuildInspector(chrome)
+        rebuildAgentsCenter(chrome)
+        applyCenterSurface(chrome)
         rebuildTabStrip(shell: shell)
         rebuildCommandPalette(chrome)
         multipaneBoard.rebuild(appHandle: pane.appHandle)
@@ -519,6 +539,40 @@ final class ProductChromeHostView: NSView {
                 )
             )
         }
+    }
+
+    private func rebuildAgentsCenter(_ chrome: SeyalAppChrome) {
+        agentsCenter.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        let header = NSTextField(labelWithString: "Agents")
+        header.font = .systemFont(ofSize: 13, weight: .semibold)
+        header.setAccessibilityIdentifier("seyal-agents-center-header")
+        agentsCenter.addArrangedSubview(header)
+        if chrome.agent_count == 0 {
+            let empty = NSTextField(labelWithString: "No agents in this Workspace")
+            empty.font = .systemFont(ofSize: 12, weight: .regular)
+            empty.textColor = .secondaryLabelColor
+            empty.setAccessibilityIdentifier("seyal-agents-center-empty")
+            agentsCenter.addArrangedSubview(empty)
+            return
+        }
+        for index in 0..<Int(chrome.agent_count) {
+            let row = seyal_app_chrome_row(pane.appHandle, UInt16(SEYAL_APP_ROW_AGENT), UInt32(index))
+            let identity = copyUTF8(row.title, row.title_len) ?? ""
+            let name = copyUTF8(row.detail, row.detail_len) ?? identity
+            let button = borderlessButton(title: name, action: #selector(selectAgent(_:)))
+            button.setAccessibilityIdentifier("seyal-agents-center-\(index)")
+            button.identifier = NSUserInterfaceItemIdentifier(identity)
+            button.state = row.flags & UInt16(SEYAL_APP_ROW_SELECTED) != 0 ? .on : .off
+            agentsCenter.addArrangedSubview(button)
+        }
+    }
+
+    private func applyCenterSurface(_ chrome: SeyalAppChrome) {
+        let agents = chrome.center_surface == 1
+        agentsCenter.isHidden = !agents
+        agentsCenter.setAccessibilityElement(agents)
+        multipaneBoard.isHidden = agents
+        multipaneBoard.setAccessibilityElement(!agents)
     }
 
     private func rebuildInspector(_ chrome: SeyalAppChrome) {
@@ -1001,6 +1055,14 @@ final class ProductChromeHostView: NSView {
         applyChromeKind(UInt16(SEYAL_APP_ACTION_SET_LEFT_PANEL.rawValue), reserved: 1)
     }
 
+    @objc func showCoreCenter() {
+        applyChromeKind(UInt16(SEYAL_APP_ACTION_SET_CENTER_SURFACE.rawValue), reserved: 0)
+    }
+
+    @objc func showAgentsCenter() {
+        applyChromeKind(UInt16(SEYAL_APP_ACTION_SET_CENTER_SURFACE.rawValue), reserved: 1)
+    }
+
     func focusPaneIdentity(lo: UInt64, hi: UInt64) {
         applyChromeKind(
             UInt16(SEYAL_APP_ACTION_FOCUS_PANE.rawValue),
@@ -1208,12 +1270,16 @@ final class ProductChromeHostView: NSView {
     private func configureChromeButtons() {
         styleSwitcher(workspacesButton, identifier: "seyal-left-workspaces", action: #selector(showWorkspaces))
         styleSwitcher(tabsButton, identifier: "seyal-left-tabs", action: #selector(showTabs))
+        styleSwitcher(coreCenterButton, identifier: "seyal-center-core", action: #selector(showCoreCenter))
+        styleSwitcher(agentsCenterButton, identifier: "seyal-center-agents", action: #selector(showAgentsCenter))
         styleAction(newTabButton, identifier: "seyal-new-tab", action: #selector(createTab))
         styleAction(splitRightButton, identifier: "seyal-split-right", action: #selector(splitRight))
         styleAction(splitDownButton, identifier: "seyal-split-down", action: #selector(splitDown))
         styleAction(closePaneButton, identifier: "seyal-close-pane", action: #selector(closeFocusedPane))
         styleSwitcher(attentionBell, identifier: "seyal-attention-bell", action: #selector(toggleAttentionPopover))
         chromeActions.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        chromeActions.addArrangedSubview(coreCenterButton)
+        chromeActions.addArrangedSubview(agentsCenterButton)
         chromeActions.addArrangedSubview(splitRightButton)
         chromeActions.addArrangedSubview(splitDownButton)
         chromeActions.addArrangedSubview(closePaneButton)

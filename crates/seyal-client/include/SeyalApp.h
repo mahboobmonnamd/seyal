@@ -43,7 +43,11 @@ enum SeyalAppActionKind {
     SEYAL_APP_ACTION_SELECT_WORKSPACE = 19,
     SEYAL_APP_ACTION_SELECT_TAB = 20,
     SEYAL_APP_ACTION_FOCUS_PANE = 21,
-    SEYAL_APP_ACTION_SET_SHELL_CHROME = 22
+    SEYAL_APP_ACTION_SET_SHELL_CHROME = 22,
+    SEYAL_APP_ACTION_CREATE_TAB = 23,
+    SEYAL_APP_ACTION_CLOSE_TAB = 24,
+    SEYAL_APP_ACTION_SPLIT_FOCUSED = 25,
+    SEYAL_APP_ACTION_CLOSE_PANE = 26
 };
 
 enum SeyalAppEligibility {
@@ -222,13 +226,17 @@ typedef struct SeyalAppChrome {
     uint32_t agent_count;
     uint32_t attention_count;
     uint32_t inspector_row_count;
-    /* SEYAL_APP_CHROME_* visibility bits. Zero is M001 first-UI receded chrome. */
+    /* SEYAL_APP_CHROME_* visibility bits. Core Terminal chrome is visible by default. */
     uint32_t reserved;
 } SeyalAppChrome;
 
 #define SEYAL_APP_CHROME_LEFT_VISIBLE 1u
 #define SEYAL_APP_CHROME_INSPECTOR_VISIBLE 2u
 #define SEYAL_APP_CHROME_TAB_STRIP_VISIBLE 4u
+
+/* SEYAL_APP_ACTION_SPLIT_FOCUSED reserved axis values */
+#define SEYAL_APP_SPLIT_RIGHT 0u
+#define SEYAL_APP_SPLIT_DOWN 1u
 
 typedef struct SeyalAppAccessibility {
     uint16_t version;

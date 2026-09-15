@@ -6,8 +6,10 @@ final class ProductChromeHostView: NSView {
     let pane: ThinPaneHostView
     private let material = NSVisualEffectView()
     private let tabStrip = NSView()
-    private let tabTitle = NSTextField(labelWithString: "Terminal")
+    private let tabItems = NSStackView()
+    private let chromeActions = NSStackView()
     private let left = NSView()
+    private let inspectorModes = NSStackView()
     private let inspector = NSStackView()
     private let attention = NSStackView()
     private let transcript = NSScrollView()
@@ -15,6 +17,10 @@ final class ProductChromeHostView: NSView {
     private let composer: ComposerBridgeView
     private let workspacesButton = NSButton(title: "Workspaces", target: nil, action: nil)
     private let tabsButton = NSButton(title: "Tabs", target: nil, action: nil)
+    private let newTabButton = NSButton(title: "+", target: nil, action: nil)
+    private let splitRightButton = NSButton(title: "Split Right", target: nil, action: nil)
+    private let splitDownButton = NSButton(title: "Split Down", target: nil, action: nil)
+    private let closePaneButton = NSButton(title: "Close Pane", target: nil, action: nil)
     private let recoveryLabel = NSTextField(labelWithString: "")
     private let leftItems = NSStackView()
     private let inspectorColumn = NSView()
@@ -57,9 +63,23 @@ final class ProductChromeHostView: NSView {
         tabStrip.setAccessibilityElement(true)
         tabStrip.setAccessibilityRole(.group)
         tabStrip.setAccessibilityIdentifier("seyal-tab-strip")
-        tabTitle.font = .systemFont(ofSize: 13, weight: .semibold)
-        tabTitle.translatesAutoresizingMaskIntoConstraints = false
-        tabStrip.addSubview(tabTitle)
+        tabItems.orientation = .horizontal
+        tabItems.alignment = .centerY
+        tabItems.spacing = 6
+        tabItems.translatesAutoresizingMaskIntoConstraints = false
+        tabItems.setAccessibilityIdentifier("seyal-tab-items")
+        chromeActions.orientation = .horizontal
+        chromeActions.alignment = .centerY
+        chromeActions.spacing = 8
+        chromeActions.translatesAutoresizingMaskIntoConstraints = false
+        chromeActions.setAccessibilityIdentifier("seyal-chrome-actions")
+        tabStrip.addSubview(tabItems)
+        tabStrip.addSubview(chromeActions)
+        inspectorModes.orientation = .horizontal
+        inspectorModes.alignment = .centerY
+        inspectorModes.spacing = 4
+        inspectorModes.translatesAutoresizingMaskIntoConstraints = false
+        inspectorModes.setAccessibilityIdentifier("seyal-inspector-modes")
 
         left.translatesAutoresizingMaskIntoConstraints = false
         left.wantsLayer = true
@@ -90,6 +110,7 @@ final class ProductChromeHostView: NSView {
 
         inspectorColumn.translatesAutoresizingMaskIntoConstraints = false
         inspectorColumn.wantsLayer = true
+        inspectorColumn.addSubview(inspectorModes)
         inspectorColumn.addSubview(inspector)
         inspectorColumn.addSubview(attention)
 
@@ -150,8 +171,11 @@ final class ProductChromeHostView: NSView {
             tabStrip.trailingAnchor.constraint(equalTo: trailingAnchor),
             tabStrip.topAnchor.constraint(equalTo: topAnchor),
             tabStrip.heightAnchor.constraint(equalToConstant: 48),
-            tabTitle.leadingAnchor.constraint(equalTo: tabStrip.leadingAnchor, constant: 236),
-            tabTitle.centerYAnchor.constraint(equalTo: tabStrip.centerYAnchor),
+            tabItems.leadingAnchor.constraint(equalTo: tabStrip.leadingAnchor, constant: 236),
+            tabItems.centerYAnchor.constraint(equalTo: tabStrip.centerYAnchor),
+            tabItems.trailingAnchor.constraint(lessThanOrEqualTo: chromeActions.leadingAnchor, constant: -12),
+            chromeActions.trailingAnchor.constraint(equalTo: tabStrip.trailingAnchor, constant: -12),
+            chromeActions.centerYAnchor.constraint(equalTo: tabStrip.centerYAnchor),
 
             left.leadingAnchor.constraint(equalTo: leadingAnchor),
             left.topAnchor.constraint(equalTo: tabStrip.bottomAnchor),
@@ -170,9 +194,12 @@ final class ProductChromeHostView: NSView {
             inspectorColumn.topAnchor.constraint(equalTo: tabStrip.bottomAnchor),
             inspectorColumn.bottomAnchor.constraint(equalTo: bottomAnchor),
             inspectorColumn.widthAnchor.constraint(equalToConstant: 248),
+            inspectorModes.leadingAnchor.constraint(equalTo: inspectorColumn.leadingAnchor, constant: 10),
+            inspectorModes.trailingAnchor.constraint(equalTo: inspectorColumn.trailingAnchor, constant: -10),
+            inspectorModes.topAnchor.constraint(equalTo: inspectorColumn.topAnchor, constant: 10),
             inspector.leadingAnchor.constraint(equalTo: inspectorColumn.leadingAnchor, constant: 10),
             inspector.trailingAnchor.constraint(equalTo: inspectorColumn.trailingAnchor, constant: -10),
-            inspector.topAnchor.constraint(equalTo: inspectorColumn.topAnchor, constant: 10),
+            inspector.topAnchor.constraint(equalTo: inspectorModes.bottomAnchor, constant: 8),
             attention.leadingAnchor.constraint(equalTo: inspector.leadingAnchor),
             attention.trailingAnchor.constraint(equalTo: inspector.trailingAnchor),
             attention.topAnchor.constraint(equalTo: inspector.bottomAnchor, constant: 12),
@@ -341,10 +368,24 @@ final class ProductChromeHostView: NSView {
     }
 
     private func rebuildTabStrip(shell: SeyalAppShell) {
-        if shell.tab_count > 0 {
-            let row = seyal_app_shell_row(pane.appHandle, UInt16(SEYAL_APP_ROW_TAB), 0)
-            tabTitle.stringValue = copyUTF8(row.title, row.title_len) ?? "Terminal"
+        tabItems.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        for index in 0..<Int(shell.tab_count) {
+            let row = seyal_app_shell_row(pane.appHandle, UInt16(SEYAL_APP_ROW_TAB), UInt32(index))
+            let selected = row.flags & UInt16(SEYAL_APP_ROW_SELECTED) != 0
+            let button = rowButton(
+                title: copyUTF8(row.title, row.title_len) ?? "Tab",
+                detail: nil,
+                identifier: "seyal-tab-strip-\(index)",
+                selected: selected,
+                action: #selector(selectTab(_:)),
+                kind: UInt16(SEYAL_APP_ACTION_SELECT_TAB.rawValue),
+                idLo: row.id_lo,
+                idHi: row.id_hi
+            )
+            button.font = .systemFont(ofSize: 12, weight: selected ? .semibold : .regular)
+            tabItems.addArrangedSubview(button)
         }
+        tabItems.addArrangedSubview(newTabButton)
     }
 
     private func rebuildLeft(shell: SeyalAppShell, leftPanel: UInt16) {
@@ -400,6 +441,20 @@ final class ProductChromeHostView: NSView {
     }
 
     private func rebuildInspector(_ chrome: SeyalAppChrome) {
+        inspectorModes.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        for (title, mode, identifier) in [
+            ("Context", UInt32(0), "seyal-inspector-mode-context"),
+            ("Workspace", UInt32(1), "seyal-inspector-mode-workspace"),
+            ("Tab", UInt32(2), "seyal-inspector-mode-tab"),
+            ("Pane", UInt32(3), "seyal-inspector-mode-pane"),
+        ] {
+            let button = borderlessButton(title: title, action: #selector(setInspectorMode(_:)))
+            button.setButtonType(.toggle)
+            button.tag = Int(mode)
+            button.setAccessibilityIdentifier(identifier)
+            button.state = chrome.inspector_mode == UInt16(mode) ? .on : .off
+            inspectorModes.addArrangedSubview(button)
+        }
         inspector.arrangedSubviews.forEach { $0.removeFromSuperview() }
         attention.arrangedSubviews.forEach { $0.removeFromSuperview() }
         for index in 0..<Int(chrome.inspector_row_count) {
@@ -732,6 +787,56 @@ final class ProductChromeHostView: NSView {
         applyChromeKind(UInt16(SEYAL_APP_ACTION_SET_LEFT_PANEL.rawValue), reserved: 1)
     }
 
+    @objc func createTab() {
+        applyChromeKind(UInt16(SEYAL_APP_ACTION_CREATE_TAB.rawValue), reserved: 0)
+    }
+
+    @objc func splitRight() {
+        applyChromeKind(UInt16(SEYAL_APP_ACTION_SPLIT_FOCUSED.rawValue), reserved: UInt32(SEYAL_APP_SPLIT_RIGHT))
+    }
+
+    @objc func splitDown() {
+        applyChromeKind(UInt16(SEYAL_APP_ACTION_SPLIT_FOCUSED.rawValue), reserved: UInt32(SEYAL_APP_SPLIT_DOWN))
+    }
+
+    @objc func closeFocusedPane() {
+        let shell = seyal_app_shell(pane.appHandle)
+        applyChromeKind(
+            UInt16(SEYAL_APP_ACTION_CLOSE_PANE.rawValue),
+            reserved: 0,
+            idLo: shell.focused_pane_lo,
+            idHi: shell.focused_pane_hi
+        )
+    }
+
+    @objc func toggleLeftPanel() {
+        let chrome = seyal_app_chrome(pane.appHandle)
+        let leftOn = chrome.reserved & UInt32(SEYAL_APP_CHROME_LEFT_VISIBLE) == 0
+        let inspectorOn = chrome.reserved & UInt32(SEYAL_APP_CHROME_INSPECTOR_VISIBLE) != 0
+        let tabOn = chrome.reserved & UInt32(SEYAL_APP_CHROME_TAB_STRIP_VISIBLE) != 0
+        var reserved: UInt32 = 0
+        if leftOn { reserved |= UInt32(SEYAL_APP_CHROME_LEFT_VISIBLE) }
+        if inspectorOn { reserved |= UInt32(SEYAL_APP_CHROME_INSPECTOR_VISIBLE) }
+        if tabOn { reserved |= UInt32(SEYAL_APP_CHROME_TAB_STRIP_VISIBLE) }
+        applyChromeKind(UInt16(SEYAL_APP_ACTION_SET_SHELL_CHROME.rawValue), reserved: reserved)
+    }
+
+    @objc func toggleInspector() {
+        let chrome = seyal_app_chrome(pane.appHandle)
+        let leftOn = chrome.reserved & UInt32(SEYAL_APP_CHROME_LEFT_VISIBLE) != 0
+        let inspectorOn = chrome.reserved & UInt32(SEYAL_APP_CHROME_INSPECTOR_VISIBLE) == 0
+        let tabOn = chrome.reserved & UInt32(SEYAL_APP_CHROME_TAB_STRIP_VISIBLE) != 0
+        var reserved: UInt32 = 0
+        if leftOn { reserved |= UInt32(SEYAL_APP_CHROME_LEFT_VISIBLE) }
+        if inspectorOn { reserved |= UInt32(SEYAL_APP_CHROME_INSPECTOR_VISIBLE) }
+        if tabOn { reserved |= UInt32(SEYAL_APP_CHROME_TAB_STRIP_VISIBLE) }
+        applyChromeKind(UInt16(SEYAL_APP_ACTION_SET_SHELL_CHROME.rawValue), reserved: reserved)
+    }
+
+    @objc private func setInspectorMode(_ sender: NSButton) {
+        applyChromeKind(UInt16(SEYAL_APP_ACTION_SET_INSPECTOR.rawValue), reserved: UInt32(sender.tag))
+    }
+
     @objc private func selectWorkspace(_ sender: NSButton) {
         applyIdentity(UInt16(SEYAL_APP_ACTION_SELECT_WORKSPACE.rawValue), button: sender)
     }
@@ -752,12 +857,19 @@ final class ProductChromeHostView: NSView {
         applyPayload(UInt16(SEYAL_APP_ACTION_SELECT_AGENT.rawValue), text: sender.identifier?.rawValue ?? "")
     }
 
-    private func applyChromeKind(_ kind: UInt16, reserved: UInt32) {
+    private func applyChromeKind(
+        _ kind: UInt16,
+        reserved: UInt32,
+        idLo: UInt64 = 0,
+        idHi: UInt64 = 0
+    ) {
         var action = SeyalAppAction()
         action.version = UInt16(SEYAL_APP_ABI_VERSION)
         action.size = UInt16(MemoryLayout<SeyalAppAction>.size)
         action.kind = kind
         action.reserved = reserved
+        action.target_execution_lo = idLo
+        action.target_execution_hi = idHi
         _ = seyal_app_apply(pane.appHandle, &action)
         reconcileChrome()
     }
@@ -793,6 +905,23 @@ final class ProductChromeHostView: NSView {
     private func configureChromeButtons() {
         styleSwitcher(workspacesButton, identifier: "seyal-left-workspaces", action: #selector(showWorkspaces))
         styleSwitcher(tabsButton, identifier: "seyal-left-tabs", action: #selector(showTabs))
+        styleAction(newTabButton, identifier: "seyal-new-tab", action: #selector(createTab))
+        styleAction(splitRightButton, identifier: "seyal-split-right", action: #selector(splitRight))
+        styleAction(splitDownButton, identifier: "seyal-split-down", action: #selector(splitDown))
+        styleAction(closePaneButton, identifier: "seyal-close-pane", action: #selector(closeFocusedPane))
+        chromeActions.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        chromeActions.addArrangedSubview(splitRightButton)
+        chromeActions.addArrangedSubview(splitDownButton)
+        chromeActions.addArrangedSubview(closePaneButton)
+    }
+
+    private func styleAction(_ button: NSButton, identifier: String, action: Selector) {
+        button.bezelStyle = .inline
+        button.isBordered = false
+        button.font = .systemFont(ofSize: 11, weight: .medium)
+        button.setAccessibilityIdentifier(identifier)
+        button.target = self
+        button.action = action
     }
 
     private func styleSwitcher(_ button: NSButton, identifier: String, action: Selector) {

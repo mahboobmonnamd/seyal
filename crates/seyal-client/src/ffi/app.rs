@@ -12,6 +12,7 @@ use crate::app::{
 use crate::chrome::{AgentId, AttentionId, InspectorMode, LeftPanelMode};
 use crate::composer::{ComposerMode, RuntimeBlockRecord, BLOCK_PROMPT, COMPOSER_EXECUTE_LABEL};
 use crate::recovery::{AttemptOutcome, LaunchResult, RecoveryEffect, RecoveryStage};
+use crate::shell::SplitAxis;
 
 use super::{allocate_handle, with_active_client};
 
@@ -817,6 +818,26 @@ fn decode_action(action: &SeyalAppAction) -> Result<AppAction, i32> {
             inspector: action.reserved & 2 != 0,
             tab_strip: action.reserved & 4 != 0,
         }),
+        23 => Ok(AppAction::CreateTab),
+        24 => Ok(AppAction::CloseTab {
+            id: TabId::from_bytes(id16(
+                action.target_execution_lo,
+                action.target_execution_hi,
+            )?),
+        }),
+        25 => Ok(AppAction::SplitFocused {
+            axis: if action.reserved == 1 {
+                SplitAxis::Down
+            } else {
+                SplitAxis::Right
+            },
+        }),
+        26 => Ok(AppAction::ClosePane {
+            id: PaneId::from_bytes(id16(
+                action.target_execution_lo,
+                action.target_execution_hi,
+            )?),
+        }),
         _ => Err(-6),
     }
 }
@@ -1289,11 +1310,13 @@ mod tests {
     }
 
     #[test]
-    fn first_ui_chrome_ffi_is_receded() {
+    fn core_terminal_chrome_ffi_is_visible_by_default() {
         let handle = seyal_app_create();
         let chrome = seyal_app_chrome(handle);
-        assert_eq!(chrome.reserved, 0);
-        let mut show = SeyalAppAction {
+        assert_eq!(chrome.reserved & 1, 1);
+        assert_eq!(chrome.reserved & 2, 2);
+        assert_eq!(chrome.reserved & 4, 4);
+        let mut hide = SeyalAppAction {
             version: APP_ABI_VERSION,
             size: size_of::<SeyalAppAction>() as u16,
             kind: 22,
@@ -1312,16 +1335,26 @@ mod tests {
             target_pty_generation: 0,
             payload: ptr::null(),
             payload_len: 0,
-            reserved: 1 | 2 | 4,
+            reserved: 0,
         };
-        assert_eq!(unsafe { seyal_app_apply(handle, &show) }, 0);
+        assert_eq!(unsafe { seyal_app_apply(handle, &hide) }, 0);
+        assert_eq!(seyal_app_chrome(handle).reserved, 0);
+        hide.reserved = 1 | 2 | 4;
+        assert_eq!(unsafe { seyal_app_apply(handle, &hide) }, 0);
         let shown = seyal_app_chrome(handle);
         assert_eq!(shown.reserved & 1, 1);
         assert_eq!(shown.reserved & 2, 2);
         assert_eq!(shown.reserved & 4, 4);
-        show.reserved = 0;
-        assert_eq!(unsafe { seyal_app_apply(handle, &show) }, 0);
-        assert_eq!(seyal_app_chrome(handle).reserved, 0);
+        let mut create = hide;
+        create.kind = 23;
+        create.reserved = 0;
+        assert_eq!(unsafe { seyal_app_apply(handle, &create) }, 0);
+        assert_eq!(seyal_app_shell(handle).tab_count, 2);
+        let mut split = create;
+        split.kind = 25;
+        split.reserved = 0;
+        assert_eq!(unsafe { seyal_app_apply(handle, &split) }, 0);
+        assert_eq!(seyal_app_shell(handle).pane_count, 2);
         assert_eq!(seyal_app_destroy(handle), 0);
     }
 

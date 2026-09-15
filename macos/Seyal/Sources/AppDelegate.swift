@@ -57,6 +57,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         editItem.submenu = editMenu
+
+        let viewItem = NSMenuItem()
+        mainMenu.addItem(viewItem)
+        let viewMenu = NSMenu(title: "View")
+        viewMenu.addItem(withTitle: "Toggle Left Panel", action: #selector(ProductChromeHostView.toggleLeftPanel), keyEquivalent: "0")
+        let inspectorItem = viewMenu.addItem(
+            withTitle: "Toggle Inspector",
+            action: #selector(ProductChromeHostView.toggleInspector),
+            keyEquivalent: "0"
+        )
+        inspectorItem.keyEquivalentModifierMask = [.command, .option]
+        viewMenu.addItem(withTitle: "New Tab", action: #selector(ProductChromeHostView.createTab), keyEquivalent: "t")
+        viewMenu.addItem(withTitle: "Split Right", action: #selector(ProductChromeHostView.splitRight), keyEquivalent: "d")
+        let splitDown = viewMenu.addItem(
+            withTitle: "Split Down",
+            action: #selector(ProductChromeHostView.splitDown),
+            keyEquivalent: "d"
+        )
+        splitDown.keyEquivalentModifierMask = [.command, .shift]
+        viewItem.submenu = viewMenu
         NSApp.mainMenu = mainMenu
     }
 }

@@ -285,8 +285,10 @@ impl ShellState {
         Self {
             active_workspace: workspace.id,
             workspaces: vec![workspace],
-            allows_pane_splitting: false,
-            allows_tab_creation: false,
+            // Composition tabs/splits are product chrome (one live execution on
+            // the focused Pane). They do not mint a second PTY/VT authority.
+            allows_pane_splitting: true,
+            allows_tab_creation: true,
             last_error: None,
             next_tab_ordinal: 2,
         }
@@ -726,7 +728,7 @@ mod tests {
     }
 
     #[test]
-    fn production_shell_is_single_pane_and_fail_closed() {
+    fn production_shell_starts_single_pane_and_allows_chrome_composition() {
         let mut shell = ShellState::m001_local("/tmp/seyal");
         let snap = shell.snapshot();
         assert_eq!(snap.workspaces.len(), 1);
@@ -736,23 +738,32 @@ mod tests {
         assert_eq!(snap.panes.len(), 1);
         assert_eq!(snap.panes[0].title, "Pane 1");
         assert!(snap.panes[0].allows_implicit_bootstrap);
-        assert!(!shell.allows_tab_creation());
-        assert!(!shell.allows_pane_splitting());
-        assert_eq!(
-            shell.apply(ShellAction::CreateTab),
-            Err(ShellError::TabCreationUnavailable)
-        );
-        assert_eq!(shell.last_error(), Some(ShellError::TabCreationUnavailable));
-        let focused = snap.focused_pane;
-        assert_eq!(
-            shell.apply(ShellAction::SplitPane {
+        assert!(shell.allows_tab_creation());
+        assert!(shell.allows_pane_splitting());
+        shell.apply(ShellAction::CreateTab).expect("create tab");
+        assert_eq!(shell.snapshot().tabs.len(), 2);
+        let focused = shell.snapshot().focused_pane;
+        shell
+            .apply(ShellAction::SplitPane {
                 id: focused,
-                axis: SplitAxis::Right
+                axis: SplitAxis::Right,
+            })
+            .expect("split pane");
+        assert_eq!(shell.snapshot().layout, LayoutDescription::SplitRight);
+        assert_eq!(shell.snapshot().panes.len(), 2);
+        assert_eq!(
+            shell.apply(ShellAction::ClosePane {
+                id: shell.snapshot().focused_pane
             }),
-            Err(ShellError::PaneSplitUnavailable)
+            Ok(())
         );
-        assert_eq!(shell.snapshot().tabs.len(), 1);
-        assert_eq!(shell.snapshot().layout, LayoutDescription::Single);
+        assert_eq!(shell.snapshot().panes.len(), 1);
+        assert_eq!(
+            shell.apply(ShellAction::ClosePane {
+                id: shell.snapshot().focused_pane
+            }),
+            Err(ShellError::CannotCloseLastPane)
+        );
     }
 
     #[test]

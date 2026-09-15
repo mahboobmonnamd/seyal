@@ -37,15 +37,12 @@ final class SeyalHostUITests: XCTestCase {
             120,
             "Flow transcript must fill the Pane, not sit above a Metal viewport"
         )
-        XCTAssertGreaterThan(
-            transcript.firstMatch.frame.width,
-            chrome.firstMatch.frame.width * 0.7,
-            "Flow transcript must use the Pane width; sidebar/inspector stay receded"
+        XCTAssertTrue(
+            app.descendants(matching: .any)["seyal-left-workspaces"].firstMatch.waitForExistence(timeout: 5),
+            "Core Terminal left Workspaces chrome must be visible"
         )
-        XCTAssertFalse(
-            app.descendants(matching: .any)["seyal-left-workspaces"].firstMatch.isHittable,
-            "Flow shows composer and Blocks only"
-        )
+        XCTAssertTrue(app.descendants(matching: .any)["seyal-tab-strip"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["seyal-inspector"].firstMatch.waitForExistence(timeout: 5))
         waitForUsablePty(in: app)
     }
 
@@ -54,9 +51,9 @@ final class SeyalHostUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["seyal-composer"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.descendants(matching: .any)["seyal-blocks-scroll"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["seyal-blocks"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.descendants(matching: .any)["seyal-inspector"].firstMatch.isHittable)
-        XCTAssertFalse(app.descendants(matching: .any)["seyal-tab-strip"].firstMatch.isHittable)
-        XCTAssertFalse(app.descendants(matching: .any)["seyal-left-tabs"].firstMatch.isHittable)
+        XCTAssertTrue(app.descendants(matching: .any)["seyal-inspector"].firstMatch.isHittable)
+        XCTAssertTrue(app.descendants(matching: .any)["seyal-tab-strip"].firstMatch.isHittable)
+        XCTAssertTrue(app.descendants(matching: .any)["seyal-left-workspaces"].firstMatch.isHittable)
         XCTAssertTrue(app.descendants(matching: .any)["seyal-composer-execute"].waitForExistence(timeout: 5))
     }
 

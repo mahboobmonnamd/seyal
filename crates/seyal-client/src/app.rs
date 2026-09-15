@@ -23,7 +23,7 @@ use crate::presentation::{
 use crate::recovery::{
     AttemptOutcome, LaunchResult, RecoveryCoordinator, RecoveryEffect, RecoveryStage,
 };
-use crate::shell::{ShellAction, ShellSnapshot, ShellState};
+use crate::shell::{ShellAction, ShellError, ShellSnapshot, ShellState, SplitAxis};
 
 #[cfg(target_os = "macos")]
 use crate::LocalDisplayClient;
@@ -55,6 +55,10 @@ pub enum AppError {
     UnknownAttention,
     UnknownChromeWorkspace,
     UnknownChromeTab,
+    TabCreationUnavailable,
+    PaneSplitUnavailable,
+    CannotCloseLastTab,
+    CannotCloseLastPane,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -166,6 +170,16 @@ pub enum AppAction {
         id: TabId,
     },
     FocusPane {
+        id: PaneId,
+    },
+    CreateTab,
+    CloseTab {
+        id: TabId,
+    },
+    SplitFocused {
+        axis: SplitAxis,
+    },
+    ClosePane {
         id: PaneId,
     },
     SetShellVisibility {
@@ -397,6 +411,10 @@ impl ApplicationRoot {
             AppAction::SelectWorkspace { id } => self.select_workspace(id),
             AppAction::SelectTab { id } => self.select_tab(id),
             AppAction::FocusPane { id } => self.focus_pane(id),
+            AppAction::CreateTab => self.create_tab(),
+            AppAction::CloseTab { id } => self.close_tab(id),
+            AppAction::SplitFocused { axis } => self.split_focused(axis),
+            AppAction::ClosePane { id } => self.close_pane(id),
             AppAction::SetShellVisibility {
                 left,
                 inspector,
@@ -760,7 +778,47 @@ impl ApplicationRoot {
     fn focus_pane(&mut self, id: PaneId) -> Result<(), AppError> {
         self.shell
             .apply(ShellAction::FocusPane { id })
-            .map_err(|_| AppError::UnknownPane)?;
+            .map_err(shell_error)?;
+        let _ = self
+            .chrome
+            .apply(ChromeAction::ContextNavigated, &self.shell.snapshot());
+        Ok(())
+    }
+
+    fn create_tab(&mut self) -> Result<(), AppError> {
+        self.shell
+            .apply(ShellAction::CreateTab)
+            .map_err(shell_error)?;
+        let _ = self
+            .chrome
+            .apply(ChromeAction::ContextNavigated, &self.shell.snapshot());
+        Ok(())
+    }
+
+    fn close_tab(&mut self, id: TabId) -> Result<(), AppError> {
+        self.shell
+            .apply(ShellAction::CloseTab { id })
+            .map_err(shell_error)?;
+        let _ = self
+            .chrome
+            .apply(ChromeAction::ContextNavigated, &self.shell.snapshot());
+        Ok(())
+    }
+
+    fn split_focused(&mut self, axis: SplitAxis) -> Result<(), AppError> {
+        self.shell
+            .apply(ShellAction::SplitFocused { axis })
+            .map_err(shell_error)?;
+        let _ = self
+            .chrome
+            .apply(ChromeAction::ContextNavigated, &self.shell.snapshot());
+        Ok(())
+    }
+
+    fn close_pane(&mut self, id: PaneId) -> Result<(), AppError> {
+        self.shell
+            .apply(ShellAction::ClosePane { id })
+            .map_err(shell_error)?;
         let _ = self
             .chrome
             .apply(ChromeAction::ContextNavigated, &self.shell.snapshot());
@@ -857,6 +915,19 @@ fn chrome_error(error: ChromeError) -> AppError {
         ChromeError::UnknownAttention => AppError::UnknownAttention,
         ChromeError::UnknownWorkspace => AppError::UnknownChromeWorkspace,
         ChromeError::UnknownTab => AppError::UnknownChromeTab,
+    }
+}
+
+fn shell_error(error: ShellError) -> AppError {
+    match error {
+        ShellError::UnknownWorkspace => AppError::UnknownChromeWorkspace,
+        ShellError::UnknownTab => AppError::UnknownChromeTab,
+        ShellError::UnknownPane => AppError::UnknownPane,
+        ShellError::TabCreationUnavailable => AppError::TabCreationUnavailable,
+        ShellError::PaneSplitUnavailable => AppError::PaneSplitUnavailable,
+        ShellError::CannotCloseLastTab => AppError::CannotCloseLastTab,
+        ShellError::CannotCloseLastPane => AppError::CannotCloseLastPane,
+        ShellError::ExecutionAlreadyBound | ShellError::EmptyShell => AppError::InvalidPayload,
     }
 }
 
@@ -986,9 +1057,40 @@ mod tests {
         assert!(!snap.composer_eligible);
         assert_eq!(snap.generation, 1);
         assert_eq!(root.snapshot(), root.snapshot());
-        assert!(!snap.chrome.left_visible);
-        assert!(!snap.chrome.inspector_visible);
-        assert!(!snap.chrome.tab_strip_visible);
+        assert!(snap.chrome.left_visible);
+        assert!(snap.chrome.inspector_visible);
+        assert!(snap.chrome.tab_strip_visible);
+    }
+
+    #[test]
+    fn chrome_vertical_slice_create_tab_and_split_through_root() {
+        let mut root = ApplicationRoot::new();
+        root.apply(AppAction::CreateTab).unwrap();
+        let after_tab = root.snapshot();
+        assert_eq!(after_tab.shell.tabs.len(), 2);
+        root.apply(AppAction::SplitFocused {
+            axis: SplitAxis::Right,
+        })
+        .unwrap();
+        let after_split = root.snapshot();
+        assert_eq!(after_split.shell.panes.len(), 2);
+        assert_eq!(
+            after_split.shell.layout,
+            crate::shell::LayoutDescription::SplitRight
+        );
+        let focused = after_split.shell.focused_pane;
+        root.apply(AppAction::ClosePane { id: focused }).unwrap();
+        assert_eq!(root.snapshot().shell.panes.len(), 1);
+        root.apply(AppAction::SetShellVisibility {
+            left: false,
+            inspector: false,
+            tab_strip: false,
+        })
+        .unwrap();
+        let receded = root.snapshot().chrome;
+        assert!(!receded.left_visible);
+        assert!(!receded.inspector_visible);
+        assert!(!receded.tab_strip_visible);
     }
 
     #[test]

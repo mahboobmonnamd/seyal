@@ -57,6 +57,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         editItem.submenu = editMenu
+
+        let viewItem = NSMenuItem()
+        mainMenu.addItem(viewItem)
+        let viewMenu = NSMenu(title: "View")
+        let paletteItem = NSMenuItem(
+            title: "Command Palette",
+            action: #selector(ProductChromeHostView.openCommandPalette),
+            keyEquivalent: "k"
+        )
+        // Global command palette (#932). Target-less: AppKit walks the
+        // responder chain, but `host` is the content view and not always
+        // first responder (e.g. the terminal surface is), so target it
+        // explicitly at the chrome host that owns the Rust-backed overlay.
+        paletteItem.target = host
+        viewMenu.addItem(paletteItem)
+        viewItem.submenu = viewMenu
+
         NSApp.mainMenu = mainMenu
     }
 }

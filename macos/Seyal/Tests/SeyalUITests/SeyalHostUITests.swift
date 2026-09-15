@@ -242,4 +242,78 @@ final class SeyalHostUITests: XCTestCase {
         app.typeKey("q", modifierFlags: .command)
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 8))
     }
+
+    func testCommandPaletteOpensFiltersRunsAndDismisses() throws {
+        let app = hostedApp()
+        waitForUsablePty(in: app)
+        let inspector = app.descendants(matching: .any)["seyal-inspector"]
+        XCTAssertFalse(inspector.firstMatch.isHittable, "inspector is receded before any command runs")
+
+        let palette = app.descendants(matching: .any)["seyal-command-palette"]
+        app.typeKey("k", modifierFlags: .command)
+        XCTAssertTrue(palette.waitForExistence(timeout: 5), "⌘K opens the Rust-backed palette")
+        XCTAssertTrue(palette.firstMatch.isHittable)
+
+        let query = app.descendants(matching: .any)["seyal-command-palette-query"]
+        XCTAssertTrue(query.waitForExistence(timeout: 5))
+        query.firstMatch.click()
+        query.firstMatch.typeText("Show Inspector")
+        let row = app.descendants(matching: .any)["seyal-command-palette-row-0"]
+        let filtered = expectation(
+            for: NSPredicate(format: "exists == true"),
+            evaluatedWith: row,
+            handler: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [filtered], timeout: 5), .completed, "type-to-filter runs in Rust")
+        XCTAssertEqual(row.label, "Show Inspector")
+
+        app.typeKey("\r", modifierFlags: [])
+        let dismissed = expectation(
+            for: NSPredicate(format: "isHittable == false"),
+            evaluatedWith: palette.firstMatch,
+            handler: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed, "Enter runs the row and closes")
+        let revealed = expectation(
+            for: NSPredicate(format: "isHittable == true"),
+            evaluatedWith: inspector.firstMatch,
+            handler: nil
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [revealed], timeout: 5),
+            .completed,
+            "the resolved command actually ran, not just an overlay animation"
+        )
+        XCTAssertEqual(app.state, .runningForeground)
+    }
+
+    func testCommandPaletteEscapeAndClickOutsideBothDismissWithoutRunning() throws {
+        let app = hostedApp()
+        waitForUsablePty(in: app)
+        let palette = app.descendants(matching: .any)["seyal-command-palette"]
+        let scrim = app.descendants(matching: .any)["seyal-command-palette-scrim"]
+
+        app.typeKey("k", modifierFlags: .command)
+        XCTAssertTrue(palette.waitForExistence(timeout: 5))
+        app.typeKey(.escape, modifierFlags: [])
+        let closedByEscape = expectation(
+            for: NSPredicate(format: "isHittable == false"),
+            evaluatedWith: palette.firstMatch,
+            handler: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [closedByEscape], timeout: 5), .completed)
+
+        app.typeKey("k", modifierFlags: .command)
+        XCTAssertTrue(palette.waitForExistence(timeout: 5))
+        // Click near the top-left corner of the scrim, well outside the
+        // centered card, to exercise click-outside-to-close.
+        scrim.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.02)).click()
+        let closedByClick = expectation(
+            for: NSPredicate(format: "isHittable == false"),
+            evaluatedWith: palette.firstMatch,
+            handler: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [closedByClick], timeout: 5), .completed)
+        XCTAssertEqual(app.state, .runningForeground)
+    }
 }

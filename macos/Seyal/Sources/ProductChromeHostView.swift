@@ -23,6 +23,9 @@ final class ProductChromeHostView: NSView {
     private let closePaneButton = NSButton(title: "Close Pane", target: nil, action: nil)
     private let attentionBell = NSButton(title: "Attention", target: nil, action: nil)
     private let attentionPopover = NSStackView()
+    private let paletteOverlay = NSView()
+    private let paletteField = NSTextField(string: "")
+    private let paletteList = NSStackView()
     private let recoveryLabel = NSTextField(labelWithString: "")
     private let leftItems = NSStackView()
     private let inspectorColumn = NSView()
@@ -35,6 +38,7 @@ final class ProductChromeHostView: NSView {
     private var lastProjectedExecution = (lo: UInt64(0), hi: UInt64(0))
     private var lastBlockCount: Int = 0
     private var isReconcilingChrome = false
+    private var isApplyingPaletteQuery = false
     private var blockCards: [UInt64: CommandBlockView] = [:]
     private var transcriptFrameRevision: UInt64 = 0
     private var paneFollowsTranscript: [NSLayoutConstraint] = []
@@ -118,6 +122,33 @@ final class ProductChromeHostView: NSView {
         attentionPopover.isHidden = true
         expose(attentionPopover, identifier: "seyal-attention-popover")
         addSubview(attentionPopover)
+
+        paletteOverlay.translatesAutoresizingMaskIntoConstraints = false
+        paletteOverlay.wantsLayer = true
+        paletteOverlay.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.97).cgColor
+        paletteOverlay.layer?.cornerRadius = 10
+        paletteOverlay.layer?.borderWidth = 1
+        paletteOverlay.layer?.borderColor = NSColor.separatorColor.cgColor
+        paletteOverlay.isHidden = true
+        expose(paletteOverlay, identifier: "seyal-command-palette")
+        paletteField.placeholderString = "Type a command"
+        paletteField.font = .systemFont(ofSize: 14, weight: .regular)
+        paletteField.isBordered = true
+        paletteField.isBezeled = true
+        paletteField.bezelStyle = .roundedBezel
+        paletteField.focusRingType = .exterior
+        paletteField.translatesAutoresizingMaskIntoConstraints = false
+        paletteField.setAccessibilityIdentifier("seyal-command-palette-query")
+        paletteField.delegate = self
+        paletteList.orientation = .vertical
+        paletteList.alignment = .leading
+        paletteList.spacing = 2
+        paletteList.translatesAutoresizingMaskIntoConstraints = false
+        paletteList.setAccessibilityIdentifier("seyal-command-palette-list")
+        paletteOverlay.addSubview(paletteField)
+        paletteOverlay.addSubview(paletteList)
+        addSubview(paletteOverlay)
+
         recoveryLabel.font = .systemFont(ofSize: 11, weight: .regular)
         recoveryLabel.tag = 2
         recoveryLabel.setAccessibilityElement(true)
@@ -224,6 +255,16 @@ final class ProductChromeHostView: NSView {
             attentionPopover.topAnchor.constraint(equalTo: tabStrip.bottomAnchor, constant: 4),
             attentionPopover.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
             attentionPopover.widthAnchor.constraint(equalToConstant: 280),
+            paletteOverlay.centerXAnchor.constraint(equalTo: centerXAnchor),
+            paletteOverlay.topAnchor.constraint(equalTo: tabStrip.bottomAnchor, constant: 24),
+            paletteOverlay.widthAnchor.constraint(equalToConstant: 420),
+            paletteField.leadingAnchor.constraint(equalTo: paletteOverlay.leadingAnchor, constant: 12),
+            paletteField.trailingAnchor.constraint(equalTo: paletteOverlay.trailingAnchor, constant: -12),
+            paletteField.topAnchor.constraint(equalTo: paletteOverlay.topAnchor, constant: 12),
+            paletteList.leadingAnchor.constraint(equalTo: paletteField.leadingAnchor),
+            paletteList.trailingAnchor.constraint(equalTo: paletteField.trailingAnchor),
+            paletteList.topAnchor.constraint(equalTo: paletteField.bottomAnchor, constant: 8),
+            paletteList.bottomAnchor.constraint(equalTo: paletteOverlay.bottomAnchor, constant: -12),
             recoveryLabel.leadingAnchor.constraint(equalTo: leadingAnchor),
             recoveryLabel.topAnchor.constraint(equalTo: topAnchor),
             recoveryLabel.widthAnchor.constraint(equalToConstant: 1),
@@ -355,6 +396,7 @@ final class ProductChromeHostView: NSView {
         rebuildLeft(shell: shell, chrome: chrome)
         rebuildInspector(chrome)
         rebuildTabStrip(shell: shell)
+        rebuildCommandPalette(chrome)
         multipaneBoard.rebuild(appHandle: pane.appHandle)
         let direct = snapshot.eligibility == UInt16(SEYAL_APP_ELIGIBILITY_RAW.rawValue)
             || snapshot.eligibility == UInt16(SEYAL_APP_ELIGIBILITY_TUI.rawValue)
@@ -507,6 +549,47 @@ final class ProductChromeHostView: NSView {
             inspector.addArrangedSubview(body)
         }
         rebuildAttentionPopover(chrome)
+    }
+
+    private func rebuildCommandPalette(_ chrome: SeyalAppChrome) {
+        let open = chrome.reserved & UInt32(SEYAL_APP_CHROME_PALETTE_OPEN) != 0
+        paletteOverlay.isHidden = !open
+        paletteOverlay.setAccessibilityElement(open)
+        paletteList.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        guard open else { return }
+        let queryRow = seyal_app_copy(pane.appHandle, UInt16(SEYAL_APP_COPY_PALETTE_QUERY))
+        let query = copyUTF8(queryRow.title, queryRow.title_len) ?? ""
+        if !isApplyingPaletteQuery, paletteField.stringValue != query {
+            isApplyingPaletteQuery = true
+            paletteField.stringValue = query
+            isApplyingPaletteQuery = false
+        }
+        var index = 0
+        while true {
+            let row = seyal_app_chrome_row(
+                pane.appHandle,
+                UInt16(SEYAL_APP_ROW_PALETTE),
+                UInt32(index)
+            )
+            if row.title_len == 0 { break }
+            let title = copyUTF8(row.detail, row.detail_len)
+                ?? copyUTF8(row.title, row.title_len)
+                ?? ""
+            let selected = row.flags & UInt16(SEYAL_APP_ROW_SELECTED) != 0
+            let button = borderlessButton(title: title, action: #selector(runSelectedPaletteCommand))
+            button.font = .systemFont(ofSize: 13, weight: selected ? .semibold : .regular)
+            button.setAccessibilityIdentifier("seyal-command-palette-\(index)")
+            button.state = selected ? .on : .off
+            if selected {
+                button.wantsLayer = true
+                button.layer?.backgroundColor = NSColor.selectedControlColor.withAlphaComponent(0.25).cgColor
+            }
+            paletteList.addArrangedSubview(button)
+            index += 1
+        }
+        if open, window?.firstResponder !== paletteField {
+            window?.makeFirstResponder(paletteField)
+        }
     }
 
 
@@ -912,6 +995,56 @@ final class ProductChromeHostView: NSView {
             reserved: open ? 1 : 0
         )
     }
+
+    @objc func toggleCommandPalette() {
+        let chrome = seyal_app_chrome(pane.appHandle)
+        let open = chrome.reserved & UInt32(SEYAL_APP_CHROME_PALETTE_OPEN) == 0
+        applyChromeKind(
+            UInt16(SEYAL_APP_ACTION_SET_PALETTE_OPEN.rawValue),
+            reserved: open ? 1 : 0
+        )
+    }
+
+    @objc private func runSelectedPaletteCommand() {
+        applyChromeKind(UInt16(SEYAL_APP_ACTION_PALETTE_RUN.rawValue), reserved: 0)
+    }
+
+    private func setPaletteQuery(_ query: String) {
+        applyPayload(UInt16(SEYAL_APP_ACTION_SET_PALETTE_QUERY.rawValue), text: query)
+    }
+
+    private func movePalette(delta: Int32) {
+        applyChromeKind(
+            UInt16(SEYAL_APP_ACTION_PALETTE_MOVE.rawValue),
+            reserved: UInt32(bitPattern: delta)
+        )
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let chrome = seyal_app_chrome(pane.appHandle)
+        let open = chrome.reserved & UInt32(SEYAL_APP_CHROME_PALETTE_OPEN) != 0
+        guard open else {
+            return super.performKeyEquivalent(with: event)
+        }
+        if event.keyCode == 53 { // Escape
+            applyChromeKind(UInt16(SEYAL_APP_ACTION_SET_PALETTE_OPEN.rawValue), reserved: 0)
+            return true
+        }
+        if event.keyCode == 36 { // Return
+            applyChromeKind(UInt16(SEYAL_APP_ACTION_PALETTE_RUN.rawValue), reserved: 0)
+            return true
+        }
+        if event.keyCode == 125 { // Down
+            movePalette(delta: 1)
+            return true
+        }
+        if event.keyCode == 126 { // Up
+            movePalette(delta: -1)
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
     @objc private func openAttention(_ sender: NSButton) {
         applyPayload(UInt16(SEYAL_APP_ACTION_OPEN_ATTENTION.rawValue), text: sender.identifier?.rawValue ?? "")
     }
@@ -1045,6 +1178,34 @@ final class ProductChromeHostView: NSView {
         view.setAccessibilityElement(true)
         view.setAccessibilityRole(.group)
         view.setAccessibilityIdentifier(identifier)
+    }
+}
+
+extension ProductChromeHostView: NSTextFieldDelegate {
+    func controlTextDidChange(_ obj: Notification) {
+        guard obj.object as AnyObject? === paletteField, !isApplyingPaletteQuery else { return }
+        setPaletteQuery(paletteField.stringValue)
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard control === paletteField else { return false }
+        if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            applyChromeKind(UInt16(SEYAL_APP_ACTION_PALETTE_RUN.rawValue), reserved: 0)
+            return true
+        }
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+            applyChromeKind(UInt16(SEYAL_APP_ACTION_SET_PALETTE_OPEN.rawValue), reserved: 0)
+            return true
+        }
+        if commandSelector == #selector(NSResponder.moveDown(_:)) {
+            movePalette(delta: 1)
+            return true
+        }
+        if commandSelector == #selector(NSResponder.moveUp(_:)) {
+            movePalette(delta: -1)
+            return true
+        }
+        return false
     }
 }
 

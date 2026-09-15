@@ -76,6 +76,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             keyEquivalent: "d"
         )
         splitDown.keyEquivalentModifierMask = [.command, .shift]
+        viewMenu.addItem(
+            withTitle: "Command Palette",
+            action: #selector(ProductChromeHostView.toggleCommandPalette),
+            keyEquivalent: "k"
+        )
         viewItem.submenu = viewMenu
         NSApp.mainMenu = mainMenu
     }

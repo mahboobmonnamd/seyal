@@ -10,6 +10,7 @@
 
 pub mod app;
 pub mod chrome;
+pub mod chrome_palette;
 pub mod composer;
 pub mod presentation;
 pub mod recovery;

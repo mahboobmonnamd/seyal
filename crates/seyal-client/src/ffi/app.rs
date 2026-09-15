@@ -160,6 +160,7 @@ struct AppHandle {
     root: ApplicationRoot,
     output: Vec<u8>,
     composer_draft: Vec<u8>,
+    palette_query: Vec<u8>,
     ax_nodes: Vec<SeyalAppAxNode>,
     ax_text: Vec<u8>,
     shell_text: Vec<u8>,
@@ -225,6 +226,7 @@ pub extern "C" fn seyal_app_create() -> u64 {
                 root: ApplicationRoot::new(),
                 output: Vec::new(),
                 composer_draft: Vec::new(),
+                palette_query: Vec::new(),
                 ax_nodes: Vec::new(),
                 ax_text: Vec::new(),
                 shell_text: Vec::new(),
@@ -625,6 +627,40 @@ pub extern "C" fn seyal_app_block_row(handle: u64, index: u32) -> SeyalAppRow {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn seyal_app_copy(handle: u64, kind: u16) -> SeyalAppRow {
+    if kind == 3 {
+        return APPS.with(|apps| {
+            let mut apps = apps.borrow_mut();
+            let Some(state) = apps.get_mut(&handle) else {
+                return SeyalAppRow::empty();
+            };
+            state.palette_query = state
+                .root
+                .snapshot()
+                .chrome
+                .palette_query
+                .as_bytes()
+                .to_vec();
+            let len = state.palette_query.len() as u32;
+            let ptr = if state.palette_query.is_empty() {
+                ptr::null()
+            } else {
+                state.palette_query.as_ptr()
+            };
+            SeyalAppRow {
+                kind,
+                flags: 0,
+                reserved: 0,
+                id_lo: 0,
+                id_hi: 0,
+                title: ptr,
+                title_len: len,
+                reserved1: 0,
+                detail: ptr::null(),
+                detail_len: 0,
+                reserved2: 0,
+            }
+        });
+    }
     let mode = APPS.with(|apps| {
         apps.borrow()
             .get(&handle)
@@ -929,6 +965,16 @@ fn decode_action(action: &SeyalAppAction) -> Result<AppAction, i32> {
             layout_index: action.reserved,
             ratio_bps: (action.target_execution_lo & 0xffff) as u16,
         }),
+        29 => Ok(AppAction::SetPaletteOpen {
+            open: action.reserved != 0,
+        }),
+        30 => Ok(AppAction::SetPaletteQuery {
+            query: read_payload(action.payload, action.payload_len)?,
+        }),
+        31 => Ok(AppAction::PaletteMove {
+            delta: action.reserved as i32,
+        }),
+        32 => Ok(AppAction::PaletteRun),
         _ => Err(-6),
     }
 }
@@ -1164,6 +1210,9 @@ fn chrome_visibility_flags(chrome: &crate::chrome::ChromeSnapshot) -> u32 {
     if chrome.attention_popover_open {
         flags |= 8;
     }
+    if chrome.palette_open {
+        flags |= 16;
+    }
     flags
 }
 
@@ -1218,6 +1267,21 @@ fn encode_chrome_rows(state: &mut AppHandle) {
             },
         );
     }
+    for (index, command) in chrome.palette_commands.iter().enumerate() {
+        let selected = index == chrome.palette_selected;
+        push_row(
+            &mut state.chrome_rows,
+            &mut state.chrome_text,
+            RowDraft {
+                kind: 3,
+                index: index as u32,
+                id: [0; 16],
+                flags: u16::from(selected),
+                title: &command.id,
+                detail: &command.title,
+            },
+        );
+    }
     relocate_row_pointers(&mut state.chrome_rows, state.chrome_text.as_ptr());
 }
 
@@ -1247,6 +1311,29 @@ fn encode_block_rows(state: &mut AppHandle) {
         );
     }
     relocate_row_pointers(&mut state.block_rows, state.block_text.as_ptr());
+}
+
+fn encode_history_rows(state: &mut AppHandle) {
+    state.history_text.clear();
+    state.history_rows.clear();
+    let Some(composer) = state.root.snapshot().composer else {
+        return;
+    };
+    for (index, command) in composer.history_matches.iter().enumerate() {
+        push_row(
+            &mut state.history_rows,
+            &mut state.history_text,
+            RowDraft {
+                kind: 0,
+                index: index as u32,
+                id: [0; 16],
+                flags: 0,
+                title: command,
+                detail: "",
+            },
+        );
+    }
+    relocate_row_pointers(&mut state.history_rows, state.history_text.as_ptr());
 }
 
 fn relocate_row_pointers(rows: &mut [SeyalAppRow], base: *const u8) {
@@ -1352,6 +1439,11 @@ fn error_number(error: AppError) -> i32 {
         AppError::UnknownAttention => 20,
         AppError::UnknownChromeWorkspace => 21,
         AppError::UnknownChromeTab => 22,
+        AppError::TabCreationUnavailable => 23,
+        AppError::PaneSplitUnavailable => 24,
+        AppError::CannotCloseLastTab => 25,
+        AppError::CannotCloseLastPane => 26,
+        AppError::EmptyPaletteSelection => 27,
     }
 }
 

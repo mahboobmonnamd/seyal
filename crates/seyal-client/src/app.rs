@@ -14,6 +14,7 @@ use crate::chrome::{
     AgentId, AttentionId, ChromeAction, ChromeError, ChromeSnapshot, ChromeState, InspectorMode,
     LeftPanelMode,
 };
+use crate::chrome_palette::PaletteCommandId;
 use crate::composer::{
     ComposerAction, ComposerError, ComposerSnapshot, ComposerState, RuntimeBlockRecord,
 };
@@ -59,6 +60,7 @@ pub enum AppError {
     PaneSplitUnavailable,
     CannotCloseLastTab,
     CannotCloseLastPane,
+    EmptyPaletteSelection,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -194,6 +196,16 @@ pub enum AppAction {
     SetAttentionPopover {
         open: bool,
     },
+    SetPaletteOpen {
+        open: bool,
+    },
+    SetPaletteQuery {
+        query: String,
+    },
+    PaletteMove {
+        delta: i32,
+    },
+    PaletteRun,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -460,6 +472,10 @@ impl ApplicationRoot {
                 tab_strip,
             } => self.set_shell_visibility(left, inspector, tab_strip),
             AppAction::SetAttentionPopover { open } => self.set_attention_popover(open),
+            AppAction::SetPaletteOpen { open } => self.set_palette_open(open),
+            AppAction::SetPaletteQuery { query } => self.set_palette_query(query),
+            AppAction::PaletteMove { delta } => self.palette_move(delta),
+            AppAction::PaletteRun => self.palette_run(),
         };
         match result {
             Ok(()) => {
@@ -770,6 +786,82 @@ impl ApplicationRoot {
             .map(|_| ())
             .map_err(chrome_error)
     }
+
+    fn set_palette_open(&mut self, open: bool) -> Result<(), AppError> {
+        let shell = self.shell.snapshot();
+        self.chrome
+            .apply(ChromeAction::SetPaletteOpen { open }, &shell)
+            .map(|_| ())
+            .map_err(chrome_error)
+    }
+
+    fn set_palette_query(&mut self, query: String) -> Result<(), AppError> {
+        let shell = self.shell.snapshot();
+        self.chrome
+            .apply(ChromeAction::SetPaletteQuery { query }, &shell)
+            .map(|_| ())
+            .map_err(chrome_error)
+    }
+
+    fn palette_move(&mut self, delta: i32) -> Result<(), AppError> {
+        let shell = self.shell.snapshot();
+        self.chrome
+            .apply(ChromeAction::PaletteMove { delta }, &shell)
+            .map(|_| ())
+            .map_err(chrome_error)
+    }
+
+    fn palette_run(&mut self) -> Result<(), AppError> {
+        let shell = self.shell.snapshot();
+        let effect = self
+            .chrome
+            .apply(ChromeAction::PaletteRun, &shell)
+            .map_err(chrome_error)?;
+        let Some(command) = effect.palette_command else {
+            return Ok(());
+        };
+        self.dispatch_palette_command(command)
+    }
+
+    fn dispatch_palette_command(&mut self, command: PaletteCommandId) -> Result<(), AppError> {
+        match command {
+            PaletteCommandId::CreateTab => self.create_tab(),
+            PaletteCommandId::SplitRight => self.split_focused(SplitAxis::Right),
+            PaletteCommandId::SplitDown => self.split_focused(SplitAxis::Down),
+            PaletteCommandId::ToggleLeft => {
+                let chrome = self.chrome.snapshot(&self.shell.snapshot());
+                self.set_shell_visibility(
+                    !chrome.left_visible,
+                    chrome.inspector_visible,
+                    chrome.tab_strip_visible,
+                )
+            }
+            PaletteCommandId::ToggleInspector => {
+                let chrome = self.chrome.snapshot(&self.shell.snapshot());
+                self.set_shell_visibility(
+                    chrome.left_visible,
+                    !chrome.inspector_visible,
+                    chrome.tab_strip_visible,
+                )
+            }
+            PaletteCommandId::ToggleAttentionPopover => {
+                let open = !self
+                    .chrome
+                    .snapshot(&self.shell.snapshot())
+                    .attention_popover_open;
+                self.set_attention_popover(open)
+            }
+            PaletteCommandId::ShowWorkspaces => self.set_left_panel(LeftPanelMode::Workspaces),
+            PaletteCommandId::ShowTabs => self.set_left_panel(LeftPanelMode::Tabs),
+            PaletteCommandId::InspectorContext => self.set_inspector_mode(InspectorMode::Context),
+            PaletteCommandId::InspectorWorkspace => {
+                self.set_inspector_mode(InspectorMode::Workspace)
+            }
+            PaletteCommandId::InspectorTab => self.set_inspector_mode(InspectorMode::Tab),
+            PaletteCommandId::InspectorPane => self.set_inspector_mode(InspectorMode::Pane),
+        }
+    }
+
     fn select_agent(&mut self, fence: AppFence, id: AgentId) -> Result<(), AppError> {
         self.require_fence(fence)?;
         let shell = self.shell.snapshot();
@@ -975,6 +1067,7 @@ fn chrome_error(error: ChromeError) -> AppError {
         ChromeError::UnknownAttention => AppError::UnknownAttention,
         ChromeError::UnknownWorkspace => AppError::UnknownChromeWorkspace,
         ChromeError::UnknownTab => AppError::UnknownChromeTab,
+        ChromeError::EmptyPaletteSelection => AppError::EmptyPaletteSelection,
     }
 }
 
@@ -1681,5 +1774,40 @@ mod tests {
             }),
             Err(AppError::UnknownAttention)
         );
+    }
+
+    #[test]
+    fn command_palette_filters_runs_and_fails_closed_through_app_root() {
+        let mut root = ApplicationRoot::new();
+        assert!(!root.snapshot().chrome.palette_open);
+        root.apply(AppAction::SetPaletteOpen { open: true })
+            .unwrap();
+        assert!(root.snapshot().chrome.palette_open);
+        let before_tabs = root.snapshot().shell.tabs.len();
+        root.apply(AppAction::SetPaletteQuery {
+            query: "create tab".into(),
+        })
+        .unwrap();
+        let filtered = root.snapshot().chrome;
+        assert_eq!(filtered.palette_commands.len(), 1);
+        assert_eq!(filtered.palette_commands[0].id, "create-tab");
+        root.apply(AppAction::PaletteRun).unwrap();
+        assert_eq!(root.snapshot().shell.tabs.len(), before_tabs + 1);
+        assert!(!root.snapshot().chrome.palette_open);
+
+        root.apply(AppAction::SetPaletteOpen { open: true })
+            .unwrap();
+        root.apply(AppAction::SetPaletteQuery {
+            query: "zzzz-absent".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            root.apply(AppAction::PaletteRun),
+            Err(AppError::EmptyPaletteSelection)
+        );
+        assert!(root.snapshot().chrome.palette_open);
+        root.apply(AppAction::SetPaletteOpen { open: false })
+            .unwrap();
+        assert!(!root.snapshot().chrome.palette_open);
     }
 }

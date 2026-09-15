@@ -1,18 +1,22 @@
-//! Portable shell chrome: agents, inspector, attention, left-panel mode, and
-//! which shell regions are visible. M001 first UI recedes sidebar/inspector/tab
-//! strip (`docs/architecture/ui/M001-FIRST-UI-DESIGN.md`).
+//! Portable shell chrome: agents, inspector, attention, left-panel mode,
+//! command palette, and which shell regions are visible. M001 first UI recedes
+//! sidebar/inspector/tab strip (`docs/architecture/ui/M001-FIRST-UI-DESIGN.md`).
 //!
 //! This module derives inspector/attention projections from authoritative
 //! [`crate::shell::ShellSnapshot`] plus activity rows supplied by the host.
 //! It does not own Workspace/Tab/Pane identities, fabricate Runtime telemetry,
 //! or implement an agent provider. Hosts dispatch [`ChromeAction`] and render
-//! [`ChromeSnapshot`].
+//! [`ChromeSnapshot`]. The global command palette catalog lives in
+//! [`crate::chrome_palette`]; this module owns open/query/selection state.
 
 use std::collections::HashMap;
 use std::fmt;
 
 use seyal_core::{TabId, WorkspaceId};
 
+use crate::chrome_palette::{
+    clamp_selected, filter_commands, move_selected, PaletteCommandId, PaletteCommandRow,
+};
 use crate::shell::{LayoutDescription, ShellSnapshot};
 
 /// Product chrome for the left context list.
@@ -110,6 +114,8 @@ pub enum ChromeError {
     UnknownAttention,
     UnknownWorkspace,
     UnknownTab,
+    /// Palette run with no selectable filtered command (fail-closed).
+    EmptyPaletteSelection,
 }
 
 impl ChromeError {
@@ -119,6 +125,7 @@ impl ChromeError {
             Self::UnknownAttention => "Unknown attention item.",
             Self::UnknownWorkspace => "Attention target Workspace does not exist.",
             Self::UnknownTab => "Attention target Tab does not exist.",
+            Self::EmptyPaletteSelection => "No palette command is selected.",
         }
     }
 }
@@ -161,13 +168,26 @@ pub enum ChromeAction {
     SetAttentionPopover {
         open: bool,
     },
+    /// Global command palette open/closed. Opening resets query/selection.
+    SetPaletteOpen {
+        open: bool,
+    },
+    SetPaletteQuery {
+        query: String,
+    },
+    PaletteMove {
+        delta: i32,
+    },
+    /// Run the selected filtered command. Fails closed when none is selectable.
+    PaletteRun,
 }
 
-/// Navigation the host must apply to [`crate::shell::ShellState`].
+/// Navigation / palette dispatch the host (App root) must apply.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct ChromeEffect {
     pub select_workspace: Option<WorkspaceId>,
     pub select_tab: Option<TabId>,
+    pub palette_command: Option<PaletteCommandId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -178,6 +198,10 @@ pub struct ChromeSnapshot {
     pub inspector_visible: bool,
     pub tab_strip_visible: bool,
     pub attention_popover_open: bool,
+    pub palette_open: bool,
+    pub palette_query: String,
+    pub palette_selected: usize,
+    pub palette_commands: Vec<PaletteCommandRow>,
     pub selected_agent: Option<AgentId>,
     pub agents: Vec<AgentRecord>,
     pub inspector_rows: Vec<InspectorRow>,
@@ -195,6 +219,9 @@ pub struct ChromeState {
     inspector_visible: bool,
     tab_strip_visible: bool,
     attention_popover_open: bool,
+    palette_open: bool,
+    palette_query: String,
+    palette_selected: usize,
     selected_agent: Option<AgentId>,
     agents: HashMap<WorkspaceId, Vec<AgentRecord>>,
     attention: Vec<AttentionItem>,
@@ -212,6 +239,9 @@ impl Default for ChromeState {
             inspector_visible: true,
             tab_strip_visible: true,
             attention_popover_open: false,
+            palette_open: false,
+            palette_query: String::new(),
+            palette_selected: 0,
             selected_agent: None,
             agents: HashMap::new(),
             attention: Vec::new(),
@@ -287,12 +317,40 @@ impl ChromeState {
                 self.attention_popover_open = open;
                 Ok(ChromeEffect::default())
             }
+            ChromeAction::SetPaletteOpen { open } => {
+                self.palette_open = open;
+                if open {
+                    self.palette_query.clear();
+                    self.palette_selected = 0;
+                } else {
+                    self.dismiss_palette();
+                }
+                Ok(ChromeEffect::default())
+            }
+            ChromeAction::SetPaletteQuery { query } => {
+                self.palette_query = query;
+                let len = filter_commands(&self.palette_query).len();
+                self.palette_selected = clamp_selected(self.palette_selected, len);
+                Ok(ChromeEffect::default())
+            }
+            ChromeAction::PaletteMove { delta } => {
+                let len = filter_commands(&self.palette_query).len();
+                self.palette_selected = move_selected(self.palette_selected, delta, len);
+                Ok(ChromeEffect::default())
+            }
+            ChromeAction::PaletteRun => self.run_palette(),
         }
     }
 
     pub fn snapshot(&self, shell: &ShellSnapshot) -> ChromeSnapshot {
         let inspector_rows = self.inspector_rows(shell);
         let visible_inspector_rows = filter_rows(&inspector_rows, self.inspector_mode);
+        let palette_commands = if self.palette_open {
+            filter_commands(&self.palette_query)
+        } else {
+            Vec::new()
+        };
+        let palette_selected = clamp_selected(self.palette_selected, palette_commands.len());
         ChromeSnapshot {
             left_panel: self.left_panel,
             inspector_mode: self.inspector_mode,
@@ -300,6 +358,10 @@ impl ChromeState {
             inspector_visible: self.inspector_visible,
             tab_strip_visible: self.tab_strip_visible,
             attention_popover_open: self.attention_popover_open,
+            palette_open: self.palette_open,
+            palette_query: self.palette_query.clone(),
+            palette_selected,
+            palette_commands,
             selected_agent: self.selected_agent.clone(),
             agents: self.agents_for(shell.active_workspace).to_vec(),
             inspector_rows,
@@ -307,6 +369,30 @@ impl ChromeState {
             attention_items: self.attention.clone(),
             last_error: self.last_error,
         }
+    }
+
+    fn run_palette(&mut self) -> Result<ChromeEffect, ChromeError> {
+        if !self.palette_open {
+            return self.fail(ChromeError::EmptyPaletteSelection);
+        }
+        let commands = filter_commands(&self.palette_query);
+        let Some(row) = commands.get(self.palette_selected) else {
+            return self.fail(ChromeError::EmptyPaletteSelection);
+        };
+        let Some(command) = PaletteCommandId::from_str_id(&row.id) else {
+            return self.fail(ChromeError::EmptyPaletteSelection);
+        };
+        self.dismiss_palette();
+        Ok(ChromeEffect {
+            palette_command: Some(command),
+            ..ChromeEffect::default()
+        })
+    }
+
+    fn dismiss_palette(&mut self) {
+        self.palette_open = false;
+        self.palette_query.clear();
+        self.palette_selected = 0;
     }
 
     fn open_attention(
@@ -355,6 +441,7 @@ impl ChromeState {
         Ok(ChromeEffect {
             select_workspace: item.workspace,
             select_tab: item.tab,
+            palette_command: None,
         })
     }
 
@@ -488,6 +575,7 @@ fn layout_label(layout: LayoutDescription) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chrome_palette::PaletteCommandId;
     use crate::shell::{ShellAction, ShellPaneSeed, ShellState, ShellTabSeed, ShellWorkspaceSeed};
     use seyal_core::{PaneId, TabId, WorkspaceId};
 
@@ -841,5 +929,79 @@ mod tests {
             Err(ChromeError::UnknownWorkspace)
         );
         assert_eq!(chrome.snapshot(&snap).attention_items.len(), 1);
+    }
+
+    #[test]
+    fn palette_opens_filters_runs_and_dismisses() {
+        let shell = seed_shell();
+        let snap = shell.snapshot();
+        let mut chrome = ChromeState::new();
+        assert!(!chrome.snapshot(&snap).palette_open);
+        chrome
+            .apply(ChromeAction::SetPaletteOpen { open: true }, &snap)
+            .unwrap();
+        let open = chrome.snapshot(&snap);
+        assert!(open.palette_open);
+        assert!(open.palette_query.is_empty());
+        assert_eq!(open.palette_selected, 0);
+        assert!(!open.palette_commands.is_empty());
+        chrome
+            .apply(
+                ChromeAction::SetPaletteQuery {
+                    query: "split".into(),
+                },
+                &snap,
+            )
+            .unwrap();
+        let filtered = chrome.snapshot(&snap);
+        assert_eq!(filtered.palette_commands.len(), 2);
+        assert_eq!(filtered.palette_commands[0].id, "split-right");
+        chrome
+            .apply(ChromeAction::PaletteMove { delta: 1 }, &snap)
+            .unwrap();
+        assert_eq!(chrome.snapshot(&snap).palette_selected, 1);
+        let effect = chrome
+            .apply(ChromeAction::PaletteRun, &snap)
+            .unwrap();
+        assert_eq!(
+            effect.palette_command,
+            Some(PaletteCommandId::SplitDown)
+        );
+        let closed = chrome.snapshot(&snap);
+        assert!(!closed.palette_open);
+        assert!(closed.palette_query.is_empty());
+        assert!(closed.palette_commands.is_empty());
+    }
+
+    #[test]
+    fn palette_run_fails_closed_when_empty() {
+        let shell = seed_shell();
+        let snap = shell.snapshot();
+        let mut chrome = ChromeState::new();
+        assert_eq!(
+            chrome.apply(ChromeAction::PaletteRun, &snap),
+            Err(ChromeError::EmptyPaletteSelection)
+        );
+        chrome
+            .apply(ChromeAction::SetPaletteOpen { open: true }, &snap)
+            .unwrap();
+        chrome
+            .apply(
+                ChromeAction::SetPaletteQuery {
+                    query: "no-such-command".into(),
+                },
+                &snap,
+            )
+            .unwrap();
+        assert!(chrome.snapshot(&snap).palette_commands.is_empty());
+        assert_eq!(
+            chrome.apply(ChromeAction::PaletteRun, &snap),
+            Err(ChromeError::EmptyPaletteSelection)
+        );
+        assert!(chrome.snapshot(&snap).palette_open);
+        chrome
+            .apply(ChromeAction::SetPaletteOpen { open: false }, &snap)
+            .unwrap();
+        assert!(!chrome.snapshot(&snap).palette_open);
     }
 }

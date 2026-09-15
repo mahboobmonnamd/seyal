@@ -50,7 +50,14 @@ enum SeyalAppActionKind {
     SEYAL_APP_ACTION_CLOSE_PANE = 26,
     SEYAL_APP_ACTION_SET_ATTENTION_POPOVER = 27,
     /* reserved = layout node index; target_execution_lo low 16 bits = ratio_bps */
-    SEYAL_APP_ACTION_SET_SPLIT_RATIO = 28
+    SEYAL_APP_ACTION_SET_SPLIT_RATIO = 28,
+    /* reserved = open (nonzero) */
+    SEYAL_APP_ACTION_SET_PALETTE_OPEN = 29,
+    /* payload = query utf8 */
+    SEYAL_APP_ACTION_SET_PALETTE_QUERY = 30,
+    /* reserved = signed move delta as i32 bit pattern */
+    SEYAL_APP_ACTION_PALETTE_MOVE = 31,
+    SEYAL_APP_ACTION_PALETTE_RUN = 32
 };
 
 enum SeyalAppEligibility {
@@ -204,6 +211,7 @@ enum SeyalAppComposerMode {
 #define SEYAL_APP_COPY_COMPOSER_PLACEHOLDER 0u
 #define SEYAL_APP_COPY_COMPOSER_EXECUTE 1u
 #define SEYAL_APP_COPY_BLOCK_PROMPT 2u
+#define SEYAL_APP_COPY_PALETTE_QUERY 3u
 
 #define SEYAL_APP_BLOCK_STATE_RUNNING 1u
 #define SEYAL_APP_BLOCK_STATE_COMPLETED 2u
@@ -237,6 +245,7 @@ typedef struct SeyalAppChrome {
 #define SEYAL_APP_CHROME_INSPECTOR_VISIBLE 2u
 #define SEYAL_APP_CHROME_TAB_STRIP_VISIBLE 4u
 #define SEYAL_APP_CHROME_ATTENTION_POPOVER_OPEN 8u
+#define SEYAL_APP_CHROME_PALETTE_OPEN 16u
 
 /* SEYAL_APP_ACTION_SPLIT_FOCUSED reserved axis values */
 #define SEYAL_APP_SPLIT_RIGHT 0u
@@ -280,6 +289,7 @@ typedef struct SeyalAppShell {
 #define SEYAL_APP_ROW_INSPECTOR 0u
 #define SEYAL_APP_ROW_AGENT 1u
 #define SEYAL_APP_ROW_ATTENTION 2u
+#define SEYAL_APP_ROW_PALETTE 3u
 #define SEYAL_APP_ROW_SELECTED 1u
 
 #define SEYAL_APP_LAYOUT_LEAF 0u

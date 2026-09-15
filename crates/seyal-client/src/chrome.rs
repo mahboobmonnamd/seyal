@@ -3,16 +3,18 @@
 //! strip (`docs/architecture/ui/M001-FIRST-UI-DESIGN.md`).
 //!
 //! This module derives inspector/attention projections from authoritative
-//! [`crate::shell::ShellSnapshot`] plus activity rows supplied by the host.
-//! It does not own Workspace/Tab/Pane identities, fabricate Runtime telemetry,
-//! or implement an agent provider. Hosts dispatch [`ChromeAction`] and render
+//! [`crate::shell::ShellSnapshot`], the composer's Runtime-projected Block
+//! list, plus activity rows supplied by the host. It does not own
+//! Workspace/Tab/Pane/Block identities, fabricate Runtime telemetry, or
+//! implement an agent provider. Hosts dispatch [`ChromeAction`] and render
 //! [`ChromeSnapshot`].
 
 use std::collections::HashMap;
 use std::fmt;
 
-use seyal_core::{TabId, WorkspaceId};
+use seyal_core::{BlockId, TabId, WorkspaceId};
 
+use crate::composer::{BlockPresentationState, BlockProjection};
 use crate::shell::{LayoutDescription, ShellSnapshot};
 
 /// Product chrome for the left context list.
@@ -29,6 +31,9 @@ pub enum InspectorMode {
     Workspace,
     Tab,
     Pane,
+    /// Selected Block details (#935). Rows exist only while a Block from the
+    /// authoritative list is selected.
+    Block,
 }
 
 /// Display state for one agent row. This is not Runtime telemetry.
@@ -110,6 +115,7 @@ pub enum ChromeError {
     UnknownAttention,
     UnknownWorkspace,
     UnknownTab,
+    UnknownBlock,
 }
 
 impl ChromeError {
@@ -119,6 +125,7 @@ impl ChromeError {
             Self::UnknownAttention => "Unknown attention item.",
             Self::UnknownWorkspace => "Attention target Workspace does not exist.",
             Self::UnknownTab => "Attention target Tab does not exist.",
+            Self::UnknownBlock => "Block is not in the focused Pane's Block list.",
         }
     }
 }
@@ -146,9 +153,18 @@ pub enum ChromeAction {
     ReplaceAttention {
         items: Vec<AttentionItem>,
     },
-    /// Host applied a Workspace/Tab/Pane navigation action. Clears agent
-    /// selection without inventing new composition identities.
+    /// Host applied a Workspace/Tab/Pane navigation action. Clears agent and
+    /// Block selection without inventing new composition identities.
     ContextNavigated,
+    /// Bind the inspector to one Block from `blocks`. Fails closed for an
+    /// unknown identity. Switches to [`InspectorMode::Block`] and reveals the
+    /// inspector so the selection is visible.
+    SelectBlock {
+        id: BlockId,
+        blocks: Vec<BlockProjection>,
+    },
+    /// Return the inspector to focused-Pane context and the previous mode.
+    ClearBlockSelection,
     /// Shell-region visibility. Receded is the M001 first-UI default.
     SetShellVisibility {
         left: bool,
@@ -172,6 +188,7 @@ pub struct ChromeSnapshot {
     pub inspector_visible: bool,
     pub tab_strip_visible: bool,
     pub selected_agent: Option<AgentId>,
+    pub selected_block: Option<BlockId>,
     pub agents: Vec<AgentRecord>,
     pub inspector_rows: Vec<InspectorRow>,
     pub visible_inspector_rows: Vec<InspectorRow>,
@@ -188,6 +205,9 @@ pub struct ChromeState {
     inspector_visible: bool,
     tab_strip_visible: bool,
     selected_agent: Option<AgentId>,
+    selected_block: Option<BlockId>,
+    /// Mode to restore when the Block selection clears.
+    mode_before_block: Option<InspectorMode>,
     agents: HashMap<WorkspaceId, Vec<AgentRecord>>,
     attention: Vec<AttentionItem>,
     last_error: Option<ChromeError>,
@@ -202,6 +222,8 @@ impl Default for ChromeState {
             inspector_visible: false,
             tab_strip_visible: false,
             selected_agent: None,
+            selected_block: None,
+            mode_before_block: None,
             agents: HashMap::new(),
             attention: Vec::new(),
             last_error: None,
@@ -260,6 +282,24 @@ impl ChromeState {
             }
             ChromeAction::ContextNavigated => {
                 self.selected_agent = None;
+                self.clear_block_selection();
+                Ok(ChromeEffect::default())
+            }
+            ChromeAction::SelectBlock { id, blocks } => {
+                if !blocks.iter().any(|block| block.id == id) {
+                    return self.fail(ChromeError::UnknownBlock);
+                }
+                if self.selected_block.is_none() {
+                    self.mode_before_block = Some(self.inspector_mode);
+                }
+                self.selected_block = Some(id);
+                self.selected_agent = None;
+                self.inspector_mode = InspectorMode::Block;
+                self.inspector_visible = true;
+                Ok(ChromeEffect::default())
+            }
+            ChromeAction::ClearBlockSelection => {
+                self.clear_block_selection();
                 Ok(ChromeEffect::default())
             }
             ChromeAction::SetShellVisibility {
@@ -275,8 +315,12 @@ impl ChromeState {
         }
     }
 
-    pub fn snapshot(&self, shell: &ShellSnapshot) -> ChromeSnapshot {
-        let inspector_rows = self.inspector_rows(shell);
+    /// `blocks` is the focused Pane's authoritative Block list from the
+    /// composer projection. A selected Block absent from it is treated as
+    /// unselected: rows fall back to Pane context and no Block rows are shown.
+    pub fn snapshot(&self, shell: &ShellSnapshot, blocks: &[BlockProjection]) -> ChromeSnapshot {
+        let selected_block = self.selected_block_in(blocks);
+        let inspector_rows = self.inspector_rows(shell, selected_block);
         let visible_inspector_rows = filter_rows(&inspector_rows, self.inspector_mode);
         ChromeSnapshot {
             left_panel: self.left_panel,
@@ -285,6 +329,7 @@ impl ChromeState {
             inspector_visible: self.inspector_visible,
             tab_strip_visible: self.tab_strip_visible,
             selected_agent: self.selected_agent.clone(),
+            selected_block: selected_block.map(|block| block.id),
             agents: self.agents_for(shell.active_workspace).to_vec(),
             inspector_rows,
             visible_inspector_rows,
@@ -341,13 +386,43 @@ impl ChromeState {
         })
     }
 
-    fn inspector_rows(&self, shell: &ShellSnapshot) -> Vec<InspectorRow> {
+    /// Whether the selected Block is still in the authoritative list.
+    pub fn selected_block_is_stale(&self, blocks: &[BlockProjection]) -> bool {
+        self.selected_block.is_some() && self.selected_block_in(blocks).is_none()
+    }
+
+    fn selected_block_in<'a>(&self, blocks: &'a [BlockProjection]) -> Option<&'a BlockProjection> {
+        let id = self.selected_block?;
+        blocks.iter().find(|block| block.id == id)
+    }
+
+    fn clear_block_selection(&mut self) {
+        if self.selected_block.take().is_some() {
+            self.inspector_mode = self
+                .mode_before_block
+                .take()
+                .unwrap_or(InspectorMode::Context);
+        }
+    }
+
+    fn inspector_rows(
+        &self,
+        shell: &ShellSnapshot,
+        selected_block: Option<&BlockProjection>,
+    ) -> Vec<InspectorRow> {
         let workspace = shell
             .workspaces
             .iter()
             .find(|row| row.id == shell.active_workspace);
         let tab = shell.tabs.iter().find(|row| row.id == shell.active_tab);
         let pane = shell.panes.iter().find(|row| row.id == shell.focused_pane);
+        if let Some(block) = selected_block {
+            return block_rows(
+                block,
+                workspace.map(|item| item.name.as_str()),
+                pane.map(|item| item.title.as_str()),
+            );
+        }
         if let Some(selected) = &self.selected_agent
             && let Some(agent) = self
                 .agents_for(shell.active_workspace)
@@ -439,9 +514,66 @@ fn row(id: &str, section: &str, label: &str, value: String) -> InspectorRow {
     }
 }
 
+/// Block detail rows from Runtime-projected metadata only (spec §3/§11).
+/// Fields Runtime does not publish (duration, timestamps, cwd, shell) are
+/// omitted rather than fabricated.
+fn block_rows(
+    block: &BlockProjection,
+    workspace: Option<&str>,
+    pane: Option<&str>,
+) -> Vec<InspectorRow> {
+    let state = match block.state {
+        BlockPresentationState::Running => "Running",
+        BlockPresentationState::Completed => "Completed",
+        BlockPresentationState::Failed => "Failed",
+    };
+    let mut rows = vec![
+        row("block-command", "Block", "Command", block.command.clone()),
+        row("block-state", "Block", "State", state.to_owned()),
+    ];
+    if let Some(exit_status) = block.exit_status {
+        rows.push(row(
+            "block-exit",
+            "Block",
+            "Exit code",
+            exit_status.to_string(),
+        ));
+    }
+    if let Some(end_line) = block.end_line
+        && end_line >= block.start_line
+    {
+        rows.push(row(
+            "block-lines",
+            "Block",
+            "Output lines",
+            (end_line - block.start_line + 1).to_string(),
+        ));
+    }
+    rows.push(row(
+        "block-pane",
+        "Block",
+        "Pane",
+        pane.map(str::to_owned).unwrap_or_else(|| "—".to_owned()),
+    ));
+    rows.push(row(
+        "block-workspace",
+        "Block",
+        "Workspace",
+        workspace
+            .map(str::to_owned)
+            .unwrap_or_else(|| "—".to_owned()),
+    ));
+    rows
+}
+
 fn filter_rows(rows: &[InspectorRow], mode: InspectorMode) -> Vec<InspectorRow> {
     match mode {
         InspectorMode::Context => rows.to_vec(),
+        InspectorMode::Block => rows
+            .iter()
+            .filter(|row| row.section == "Block")
+            .cloned()
+            .collect(),
         InspectorMode::Workspace => rows
             .iter()
             .filter(|row| row.section == "Workspace")
@@ -472,7 +604,7 @@ fn layout_label(layout: LayoutDescription) -> &'static str {
 mod tests {
     use super::*;
     use crate::shell::{ShellAction, ShellPaneSeed, ShellState, ShellTabSeed, ShellWorkspaceSeed};
-    use seyal_core::{PaneId, TabId, WorkspaceId};
+    use seyal_core::{BlockId, PaneId, TabId, WorkspaceId};
 
     fn workspace(tag: u8) -> WorkspaceId {
         WorkspaceId::from_bytes([tag; 16])
@@ -581,7 +713,7 @@ mod tests {
         let snap = shell.snapshot();
         let mut chrome = ChromeState::new();
         seed_agents(&mut chrome, &snap);
-        let rows = chrome.snapshot(&snap).inspector_rows;
+        let rows = chrome.snapshot(&snap, &[]).inspector_rows;
         let labels: Vec<_> = rows.iter().map(|row| row.label.as_str()).collect();
         assert_eq!(
             labels,
@@ -605,7 +737,7 @@ mod tests {
         chrome
             .apply(ChromeAction::SetInspectorMode(InspectorMode::Tab), &snap)
             .unwrap();
-        let visible = chrome.snapshot(&snap).visible_inspector_rows;
+        let visible = chrome.snapshot(&snap, &[]).visible_inspector_rows;
         assert!(visible.iter().all(|row| row.section == "Tab"));
         assert_eq!(visible.len(), 3);
         assert!(!visible.iter().any(|row| row.section == "Workspace"));
@@ -625,7 +757,7 @@ mod tests {
                 &snap,
             )
             .unwrap();
-        let rows = chrome.snapshot(&snap).inspector_rows;
+        let rows = chrome.snapshot(&snap, &[]).inspector_rows;
         assert_eq!(rows[0].section, "Agent");
         assert_eq!(rows[0].value, "Claude Code");
         assert_eq!(rows[1].value, "Running");
@@ -645,16 +777,19 @@ mod tests {
         assert_eq!(after_shell.active_tab, before.active_tab);
         assert_eq!(after_shell.workspaces, before.workspaces);
         assert_eq!(
-            chrome.snapshot(&after_shell).left_panel,
+            chrome.snapshot(&after_shell, &[]).left_panel,
             LeftPanelMode::Tabs
         );
-        assert!(chrome.snapshot(&after_shell).selected_agent.is_none());
+        assert!(chrome.snapshot(&after_shell, &[]).selected_agent.is_none());
         shell.apply(ShellAction::SelectTab { id: tab(2) }).unwrap();
         chrome
             .apply(ChromeAction::ContextNavigated, &shell.snapshot())
             .unwrap();
         assert_eq!(shell.snapshot().active_tab, tab(2));
-        assert!(chrome.snapshot(&shell.snapshot()).selected_agent.is_none());
+        assert!(chrome
+            .snapshot(&shell.snapshot(), &[])
+            .selected_agent
+            .is_none());
     }
 
     #[test]
@@ -662,7 +797,7 @@ mod tests {
         let shell = seed_shell();
         let snap = shell.snapshot();
         let mut chrome = ChromeState::new();
-        let initial = chrome.snapshot(&snap);
+        let initial = chrome.snapshot(&snap, &[]);
         assert!(!initial.left_visible);
         assert!(!initial.inspector_visible);
         assert!(!initial.tab_strip_visible);
@@ -676,7 +811,7 @@ mod tests {
                 &snap,
             )
             .unwrap();
-        let shown = chrome.snapshot(&snap);
+        let shown = chrome.snapshot(&snap, &[]);
         assert!(shown.left_visible);
         assert!(shown.inspector_visible);
         assert!(shown.tab_strip_visible);
@@ -719,7 +854,7 @@ mod tests {
         if let Some(id) = effect.select_tab {
             shell.apply(ShellAction::SelectTab { id }).unwrap();
         }
-        let after = chrome.snapshot(&shell.snapshot());
+        let after = chrome.snapshot(&shell.snapshot(), &[]);
         assert!(after.attention_items.is_empty());
         assert_eq!(after.selected_agent, Some(AgentId::new("agent-codex")));
         assert_eq!(shell.snapshot().active_tab, tab(2));
@@ -749,8 +884,8 @@ mod tests {
             ),
             Err(ChromeError::UnknownAgent)
         );
-        assert!(chrome.snapshot(&snap).attention_items.is_empty());
-        assert!(chrome.snapshot(&snap).selected_agent.is_none());
+        assert!(chrome.snapshot(&snap, &[]).attention_items.is_empty());
+        assert!(chrome.snapshot(&snap, &[]).selected_agent.is_none());
     }
 
     #[test]
@@ -782,6 +917,195 @@ mod tests {
             ),
             Err(ChromeError::UnknownWorkspace)
         );
-        assert_eq!(chrome.snapshot(&snap).attention_items.len(), 1);
+        assert_eq!(chrome.snapshot(&snap, &[]).attention_items.len(), 1);
+    }
+
+    fn block(tag: u8, command: &str, state: BlockPresentationState) -> BlockProjection {
+        BlockProjection {
+            pane: pane(1),
+            id: BlockId::from_bytes([tag; 16]),
+            command: command.to_owned(),
+            state,
+            start_line: 10,
+            end_line: None,
+            exit_status: None,
+        }
+    }
+
+    fn values(rows: &[InspectorRow]) -> Vec<(&str, &str)> {
+        rows.iter()
+            .map(|row| (row.id.as_str(), row.value.as_str()))
+            .collect()
+    }
+
+    #[test]
+    fn block_rows_come_only_from_the_supplied_block_list() {
+        let shell = seed_shell();
+        let snap = shell.snapshot();
+        let mut chrome = ChromeState::new();
+        let running = block(7, "cargo test", BlockPresentationState::Running);
+        let none = chrome.snapshot(&snap, &[]);
+        assert!(none.selected_block.is_none());
+        assert!(none.inspector_rows.iter().all(|row| row.section != "Block"));
+        assert_eq!(
+            chrome.apply(
+                ChromeAction::SelectBlock {
+                    id: running.id,
+                    blocks: vec![]
+                },
+                &snap
+            ),
+            Err(ChromeError::UnknownBlock),
+            "empty list fails closed"
+        );
+        assert_eq!(
+            chrome.snapshot(&snap, &[]).inspector_mode,
+            InspectorMode::Context
+        );
+        chrome
+            .apply(
+                ChromeAction::SelectBlock {
+                    id: running.id,
+                    blocks: vec![running.clone()],
+                },
+                &snap,
+            )
+            .unwrap();
+        let selected = chrome.snapshot(&snap, std::slice::from_ref(&running));
+        assert_eq!(selected.selected_block, Some(running.id));
+        assert_eq!(selected.inspector_mode, InspectorMode::Block);
+        assert!(
+            selected.inspector_visible,
+            "selection reveals the inspector"
+        );
+        assert_eq!(
+            values(&selected.visible_inspector_rows),
+            vec![
+                ("block-command", "cargo test"),
+                ("block-state", "Running"),
+                ("block-pane", "Pane 1"),
+                ("block-workspace", "Seyal OSS"),
+            ],
+            "exit code and output lines are omitted while unknown"
+        );
+    }
+
+    #[test]
+    fn completed_block_rows_expose_exit_code_and_lines_from_runtime_only() {
+        let shell = seed_shell();
+        let snap = shell.snapshot();
+        let mut chrome = ChromeState::new();
+        let mut failed = block(8, "false", BlockPresentationState::Failed);
+        failed.end_line = Some(14);
+        failed.exit_status = Some(1);
+        chrome
+            .apply(
+                ChromeAction::SelectBlock {
+                    id: failed.id,
+                    blocks: vec![failed.clone()],
+                },
+                &snap,
+            )
+            .unwrap();
+        let rows = chrome
+            .snapshot(&snap, std::slice::from_ref(&failed))
+            .visible_inspector_rows;
+        assert_eq!(
+            values(&rows),
+            vec![
+                ("block-command", "false"),
+                ("block-state", "Failed"),
+                ("block-exit", "1"),
+                ("block-lines", "5"),
+                ("block-pane", "Pane 1"),
+                ("block-workspace", "Seyal OSS"),
+            ]
+        );
+        assert!(
+            rows.iter().all(|row| !matches!(
+                row.label.as_str(),
+                "Duration" | "Started" | "Finished" | "cwd" | "Shell"
+            )),
+            "no fabricated telemetry"
+        );
+    }
+
+    #[test]
+    fn stale_block_selection_falls_back_to_context_and_clear_restores_mode() {
+        let shell = seed_shell();
+        let snap = shell.snapshot();
+        let mut chrome = ChromeState::new();
+        chrome
+            .apply(ChromeAction::SetInspectorMode(InspectorMode::Pane), &snap)
+            .unwrap();
+        let first = block(1, "ls", BlockPresentationState::Completed);
+        let second = block(2, "pwd", BlockPresentationState::Completed);
+        chrome
+            .apply(
+                ChromeAction::SelectBlock {
+                    id: first.id,
+                    blocks: vec![first.clone(), second.clone()],
+                },
+                &snap,
+            )
+            .unwrap();
+        // Runtime republished without the selected Block.
+        let only_second = vec![second.clone()];
+        assert!(chrome.selected_block_is_stale(&only_second));
+        let stale = chrome.snapshot(&snap, &only_second);
+        assert!(stale.selected_block.is_none());
+        assert!(stale
+            .inspector_rows
+            .iter()
+            .all(|row| row.section != "Block"));
+        assert!(
+            stale.visible_inspector_rows.is_empty(),
+            "Block mode with no selected Block projects no rows"
+        );
+        chrome
+            .apply(ChromeAction::ClearBlockSelection, &snap)
+            .unwrap();
+        let cleared = chrome.snapshot(&snap, &only_second);
+        assert_eq!(
+            cleared.inspector_mode,
+            InspectorMode::Pane,
+            "previous mode restored"
+        );
+        assert!(!chrome.selected_block_is_stale(&only_second));
+        assert!(cleared
+            .visible_inspector_rows
+            .iter()
+            .all(|row| row.section == "Active Pane"));
+    }
+
+    #[test]
+    fn block_selection_clears_on_navigation_and_replaces_agent_selection() {
+        let shell = seed_shell();
+        let snap = shell.snapshot();
+        let mut chrome = ChromeState::new();
+        seed_agents(&mut chrome, &snap);
+        chrome
+            .apply(ChromeAction::SelectAgent { id: claude().id }, &snap)
+            .unwrap();
+        let b = block(3, "make", BlockPresentationState::Running);
+        chrome
+            .apply(
+                ChromeAction::SelectBlock {
+                    id: b.id,
+                    blocks: vec![b.clone()],
+                },
+                &snap,
+            )
+            .unwrap();
+        let selected = chrome.snapshot(&snap, std::slice::from_ref(&b));
+        assert!(
+            selected.selected_agent.is_none(),
+            "one inspector subject at a time"
+        );
+        assert_eq!(selected.selected_block, Some(b.id));
+        chrome.apply(ChromeAction::ContextNavigated, &snap).unwrap();
+        let navigated = chrome.snapshot(&snap, std::slice::from_ref(&b));
+        assert!(navigated.selected_block.is_none());
+        assert_eq!(navigated.inspector_mode, InspectorMode::Context);
     }
 }

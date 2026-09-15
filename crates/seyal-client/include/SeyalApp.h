@@ -43,7 +43,26 @@ enum SeyalAppActionKind {
     SEYAL_APP_ACTION_SELECT_WORKSPACE = 19,
     SEYAL_APP_ACTION_SELECT_TAB = 20,
     SEYAL_APP_ACTION_FOCUS_PANE = 21,
-    SEYAL_APP_ACTION_SET_SHELL_CHROME = 22
+    SEYAL_APP_ACTION_SET_SHELL_CHROME = 22,
+    /*
+     * Block details inspector (#935). Kinds 23-44 are reserved for the
+     * Workspace chrome slices (#922-#934).
+     * SELECT_BLOCK: target_execution_lo/hi = BlockId (from seyal_app_block_row).
+     * Selecting binds the inspector to that Block, switches inspector mode to
+     * SEYAL_APP_INSPECTOR_BLOCK and reveals the inspector. Fails closed for a
+     * Block not in the focused Pane's list.
+     */
+    SEYAL_APP_ACTION_SELECT_BLOCK = 45,
+    SEYAL_APP_ACTION_CLEAR_BLOCK_SELECTION = 46
+};
+
+/* SEYAL_APP_ACTION_SET_INSPECTOR reserved values and SeyalAppChrome.inspector_mode. */
+enum SeyalAppInspectorMode {
+    SEYAL_APP_INSPECTOR_CONTEXT = 0,
+    SEYAL_APP_INSPECTOR_WORKSPACE = 1,
+    SEYAL_APP_INSPECTOR_TAB = 2,
+    SEYAL_APP_INSPECTOR_PANE = 3,
+    SEYAL_APP_INSPECTOR_BLOCK = 4
 };
 
 enum SeyalAppEligibility {
@@ -198,9 +217,16 @@ enum SeyalAppComposerMode {
 #define SEYAL_APP_COPY_COMPOSER_EXECUTE 1u
 #define SEYAL_APP_COPY_BLOCK_PROMPT 2u
 
+/*
+ * seyal_app_block_row flags: state in the low three bits, plus
+ * SEYAL_APP_BLOCK_SELECTED when that Block is bound to the inspector (#935).
+ * Hosts must mask with SEYAL_APP_BLOCK_STATE_MASK before comparing states.
+ */
 #define SEYAL_APP_BLOCK_STATE_RUNNING 1u
 #define SEYAL_APP_BLOCK_STATE_COMPLETED 2u
 #define SEYAL_APP_BLOCK_STATE_FAILED 3u
+#define SEYAL_APP_BLOCK_STATE_MASK 7u
+#define SEYAL_APP_BLOCK_SELECTED 8u
 
 typedef struct SeyalAppComposer {
     uint16_t version;

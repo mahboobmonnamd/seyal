@@ -287,6 +287,17 @@ impl ApplicationRoot {
         let shell_snap = shell.snapshot();
         let mut chrome = ChromeState::new();
         let _ = chrome.apply(
+            ChromeAction::ReplaceAgents {
+                workspace: shell_snap.active_workspace,
+                agents: vec![crate::chrome::AgentRecord {
+                    id: AgentId::new("agent-codex"),
+                    name: "Codex".into(),
+                    activity: crate::chrome::AgentActivity::Attention,
+                }],
+            },
+            &shell_snap,
+        );
+        let _ = chrome.apply(
             ChromeAction::ReplaceAttention {
                 items: vec![crate::chrome::AttentionItem {
                     id: AttentionId::new("attention-preview-tab"),
@@ -294,7 +305,7 @@ impl ApplicationRoot {
                     detail: "Agent needs approval".into(),
                     workspace: Some(shell_snap.active_workspace),
                     tab: Some(shell_snap.active_tab),
-                    agent: None,
+                    agent: Some(AgentId::new("agent-codex")),
                 }],
             },
             &shell_snap,
@@ -1544,6 +1555,31 @@ mod tests {
         assert_eq!(projected[0].id, block);
         assert_eq!(projected[0].state, BlockPresentationState::Completed);
         assert_eq!(projected[0].pane, root.snapshot().pane);
+    }
+
+    #[test]
+    fn left_workspaces_mode_exposes_seeded_agents() {
+        let mut root = ApplicationRoot::new();
+        let snap = root.snapshot();
+        assert_eq!(
+            snap.chrome.left_panel,
+            crate::chrome::LeftPanelMode::Workspaces
+        );
+        assert_eq!(snap.chrome.agents.len(), 1);
+        assert_eq!(snap.chrome.agents[0].id.as_str(), "agent-codex");
+        root.apply(AppAction::SelectAgent {
+            fence: root.fence(),
+            id: AgentId::new("agent-codex"),
+        })
+        .unwrap();
+        assert_eq!(
+            root.snapshot()
+                .chrome
+                .selected_agent
+                .as_ref()
+                .map(|id| id.as_str()),
+            Some("agent-codex")
+        );
     }
 
     #[test]

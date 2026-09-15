@@ -105,6 +105,7 @@ final class ProductChromeHostView: NSView {
         attention.orientation = .vertical
         attention.alignment = .leading
         expose(attention, identifier: "seyal-agents")
+        attention.isHidden = true
         attentionPopover.orientation = .vertical
         attentionPopover.alignment = .leading
         attentionPopover.spacing = 4
@@ -351,7 +352,7 @@ final class ProductChromeHostView: NSView {
         let shell = seyal_app_shell(pane.appHandle)
         workspacesButton.state = chrome.left_panel == 0 ? .on : .off
         tabsButton.state = chrome.left_panel == 1 ? .on : .off
-        rebuildLeft(shell: shell, leftPanel: chrome.left_panel)
+        rebuildLeft(shell: shell, chrome: chrome)
         rebuildInspector(chrome)
         rebuildTabStrip(shell: shell)
         multipaneBoard.rebuild(appHandle: pane.appHandle)
@@ -405,8 +406,9 @@ final class ProductChromeHostView: NSView {
         tabItems.addArrangedSubview(newTabButton)
     }
 
-    private func rebuildLeft(shell: SeyalAppShell, leftPanel: UInt16) {
+    private func rebuildLeft(shell: SeyalAppShell, chrome: SeyalAppChrome) {
         leftItems.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        let leftPanel = chrome.left_panel
         if leftPanel == 0 {
             for index in 0..<Int(shell.workspace_count) {
                 let row = seyal_app_shell_row(pane.appHandle, UInt16(SEYAL_APP_ROW_WORKSPACE), UInt32(index))
@@ -423,7 +425,24 @@ final class ProductChromeHostView: NSView {
                     )
                 )
             }
+            if chrome.agent_count > 0 {
+                let header = NSTextField(labelWithString: "Agents")
+                header.font = .systemFont(ofSize: 10, weight: .semibold)
+                header.setAccessibilityIdentifier("seyal-left-agents-header")
+                leftItems.addArrangedSubview(header)
+            }
+            for index in 0..<Int(chrome.agent_count) {
+                let row = seyal_app_chrome_row(pane.appHandle, UInt16(SEYAL_APP_ROW_AGENT), UInt32(index))
+                let identity = copyUTF8(row.title, row.title_len) ?? ""
+                let name = copyUTF8(row.detail, row.detail_len) ?? identity
+                let button = borderlessButton(title: name, action: #selector(selectAgent(_:)))
+                button.setAccessibilityIdentifier("seyal-agent-\(index)")
+                button.identifier = NSUserInterfaceItemIdentifier(identity)
+                button.state = row.flags & UInt16(SEYAL_APP_ROW_SELECTED) != 0 ? .on : .off
+                leftItems.addArrangedSubview(button)
+            }
         } else {
+
             for index in 0..<Int(shell.tab_count) {
                 let row = seyal_app_shell_row(pane.appHandle, UInt16(SEYAL_APP_ROW_TAB), UInt32(index))
                 leftItems.addArrangedSubview(
@@ -488,16 +507,6 @@ final class ProductChromeHostView: NSView {
             inspector.addArrangedSubview(body)
         }
         rebuildAttentionPopover(chrome)
-        for index in 0..<Int(chrome.agent_count) {
-            let row = seyal_app_chrome_row(pane.appHandle, UInt16(SEYAL_APP_ROW_AGENT), UInt32(index))
-            let identity = copyUTF8(row.title, row.title_len) ?? ""
-            let name = copyUTF8(row.detail, row.detail_len) ?? identity
-            let button = borderlessButton(title: name, action: #selector(selectAgent(_:)))
-            button.setAccessibilityIdentifier("seyal-agent-\(index)")
-            button.identifier = NSUserInterfaceItemIdentifier(identity)
-            button.state = row.flags & UInt16(SEYAL_APP_ROW_SELECTED) != 0 ? .on : .off
-            attention.addArrangedSubview(button)
-        }
     }
 
 

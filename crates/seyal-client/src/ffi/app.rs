@@ -12,7 +12,7 @@ use crate::app::{
 use crate::chrome::{AgentId, AttentionId, InspectorMode, LeftPanelMode};
 use crate::composer::{ComposerMode, RuntimeBlockRecord, BLOCK_PROMPT, COMPOSER_EXECUTE_LABEL};
 use crate::recovery::{AttemptOutcome, LaunchResult, RecoveryEffect, RecoveryStage};
-use crate::shell::SplitAxis;
+use crate::shell::{LayoutNodeKind, SplitAxis};
 
 use super::{allocate_handle, with_active_client};
 
@@ -168,6 +168,7 @@ struct AppHandle {
     shell_rows: Vec<SeyalAppRow>,
     chrome_rows: Vec<SeyalAppRow>,
     block_rows: Vec<SeyalAppRow>,
+    layout_nodes: Vec<SeyalAppLayoutNode>,
 }
 
 thread_local! {
@@ -232,6 +233,7 @@ pub extern "C" fn seyal_app_create() -> u64 {
                 shell_rows: Vec::new(),
                 chrome_rows: Vec::new(),
                 block_rows: Vec::new(),
+                layout_nodes: Vec::new(),
             },
         );
     });
@@ -486,6 +488,88 @@ pub extern "C" fn seyal_app_shell(handle: u64) -> SeyalAppShell {
             focused_pane_lo: pane.0,
             focused_pane_hi: pane.1,
         }
+    })
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SeyalAppLayoutNode {
+    pub kind: u16,
+    pub flags: u16,
+    pub first_child: u32,
+    pub second_child: u32,
+    pub reserved: u32,
+    pub pane_lo: u64,
+    pub pane_hi: u64,
+}
+
+impl SeyalAppLayoutNode {
+    const fn empty() -> Self {
+        Self {
+            kind: 0,
+            flags: 0,
+            first_child: 0,
+            second_child: 0,
+            reserved: 0,
+            pane_lo: 0,
+            pane_hi: 0,
+        }
+    }
+}
+
+fn encode_layout_nodes(state: &mut AppHandle) {
+    let shell = state.root.snapshot().shell;
+    state.layout_nodes = shell
+        .tree
+        .flatten_layout()
+        .into_iter()
+        .map(|node| {
+            let pane = node
+                .pane
+                .map(|id| split_id(id.to_bytes()))
+                .unwrap_or((0, 0));
+            SeyalAppLayoutNode {
+                kind: match node.kind {
+                    LayoutNodeKind::Leaf => 0,
+                    LayoutNodeKind::SplitRight => 1,
+                    LayoutNodeKind::SplitDown => 2,
+                },
+                flags: 0,
+                first_child: node.first_child,
+                second_child: node.second_child,
+                reserved: 0,
+                pane_lo: pane.0,
+                pane_hi: pane.1,
+            }
+        })
+        .collect();
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_app_layout_count(handle: u64) -> u32 {
+    APPS.with(|apps| {
+        let mut apps = apps.borrow_mut();
+        let Some(state) = apps.get_mut(&handle) else {
+            return 0;
+        };
+        encode_layout_nodes(state);
+        state.layout_nodes.len() as u32
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_app_layout_node(handle: u64, index: u32) -> SeyalAppLayoutNode {
+    APPS.with(|apps| {
+        let mut apps = apps.borrow_mut();
+        let Some(state) = apps.get_mut(&handle) else {
+            return SeyalAppLayoutNode::empty();
+        };
+        encode_layout_nodes(state);
+        state
+            .layout_nodes
+            .get(index as usize)
+            .copied()
+            .unwrap_or_else(SeyalAppLayoutNode::empty)
     })
 }
 
@@ -1355,6 +1439,42 @@ mod tests {
         split.reserved = 0;
         assert_eq!(unsafe { seyal_app_apply(handle, &split) }, 0);
         assert_eq!(seyal_app_shell(handle).pane_count, 2);
+        assert_eq!(seyal_app_destroy(handle), 0);
+    }
+
+    #[test]
+    fn layout_ffi_projects_split_tree() {
+        let handle = seyal_app_create();
+        assert_eq!(seyal_app_layout_count(handle), 1);
+        let leaf = seyal_app_layout_node(handle, 0);
+        assert_eq!(leaf.kind, 0);
+        let mut split = SeyalAppAction {
+            version: APP_ABI_VERSION,
+            size: size_of::<SeyalAppAction>() as u16,
+            kind: 25,
+            flags: 0,
+            fence_pane_lo: 0,
+            fence_pane_hi: 0,
+            fence_execution_lo: 0,
+            fence_execution_hi: 0,
+            fence_attachment_lo: 0,
+            fence_attachment_hi: 0,
+            fence_epoch: 0,
+            target_execution_lo: 0,
+            target_execution_hi: 0,
+            target_attachment_lo: 0,
+            target_attachment_hi: 0,
+            target_pty_generation: 0,
+            payload: ptr::null(),
+            payload_len: 0,
+            reserved: 0,
+        };
+        assert_eq!(unsafe { seyal_app_apply(handle, &split) }, 0);
+        assert_eq!(seyal_app_layout_count(handle), 3);
+        let root = seyal_app_layout_node(handle, 0);
+        assert_eq!(root.kind, 1);
+        assert_eq!(seyal_app_layout_node(handle, root.first_child).kind, 0);
+        assert_eq!(seyal_app_layout_node(handle, root.second_child).kind, 0);
         assert_eq!(seyal_app_destroy(handle), 0);
     }
 

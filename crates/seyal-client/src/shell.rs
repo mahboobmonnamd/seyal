@@ -112,6 +112,68 @@ pub enum LayoutDescription {
     SplitDown,
 }
 
+/// One node in a flattened PaneTree projection for thin hosts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayoutNodeKind {
+    Leaf,
+    SplitRight,
+    SplitDown,
+}
+
+/// Flattened layout node. Split children are indices into the same node list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LayoutNode {
+    pub kind: LayoutNodeKind,
+    pub pane: Option<PaneId>,
+    pub first_child: u32,
+    pub second_child: u32,
+}
+
+impl PaneTree {
+    /// Pre-order flatten with split nodes referencing child indices.
+    pub fn flatten_layout(&self) -> Vec<LayoutNode> {
+        let mut nodes = Vec::new();
+        Self::flatten_into(self, &mut nodes);
+        nodes
+    }
+
+    fn flatten_into(tree: &PaneTree, nodes: &mut Vec<LayoutNode>) -> u32 {
+        match tree {
+            Self::Leaf(id) => {
+                let index = nodes.len() as u32;
+                nodes.push(LayoutNode {
+                    kind: LayoutNodeKind::Leaf,
+                    pane: Some(*id),
+                    first_child: 0,
+                    second_child: 0,
+                });
+                index
+            }
+            Self::Split {
+                axis,
+                first,
+                second,
+            } => {
+                let index = nodes.len() as u32;
+                nodes.push(LayoutNode {
+                    kind: match axis {
+                        SplitAxis::Right => LayoutNodeKind::SplitRight,
+                        SplitAxis::Down => LayoutNodeKind::SplitDown,
+                    },
+                    pane: None,
+                    first_child: 0,
+                    second_child: 0,
+                });
+                let first_child = Self::flatten_into(first, nodes);
+                let second_child = Self::flatten_into(second, nodes);
+                nodes[index as usize].first_child = first_child;
+                nodes[index as usize].second_child = second_child;
+                index
+            }
+        }
+    }
+}
+
 /// Why a [`ShellAction`] was rejected. The previous state is unchanged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShellError {
@@ -725,6 +787,42 @@ mod tests {
             true,
         )
         .expect("fixture")
+    }
+
+    #[test]
+    fn flatten_layout_projects_nested_splits_in_preorder() {
+        let mut shell = ShellState::m001_local("/tmp/seyal");
+        shell
+            .apply(ShellAction::SplitFocused {
+                axis: SplitAxis::Right,
+            })
+            .unwrap();
+        let right = shell.snapshot().focused_pane;
+        shell
+            .apply(ShellAction::SplitPane {
+                id: right,
+                axis: SplitAxis::Down,
+            })
+            .unwrap();
+        let nodes = shell.snapshot().tree.flatten_layout();
+        assert!(nodes.len() >= 3);
+        assert_eq!(nodes[0].kind, LayoutNodeKind::SplitRight);
+        assert_eq!(
+            nodes[nodes[0].first_child as usize].kind,
+            LayoutNodeKind::Leaf
+        );
+        assert_eq!(
+            nodes[nodes[0].second_child as usize].kind,
+            LayoutNodeKind::SplitDown
+        );
+        assert_eq!(
+            nodes
+                .iter()
+                .filter(|node| node.kind == LayoutNodeKind::Leaf)
+                .count(),
+            3
+        );
+        assert_eq!(shell.snapshot().panes.len(), 3);
     }
 
     #[test]

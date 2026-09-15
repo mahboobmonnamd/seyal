@@ -42,6 +42,7 @@ final class SeyalHostUITests: XCTestCase {
             "Core Terminal left Workspaces chrome must be visible"
         )
         XCTAssertTrue(app.descendants(matching: .any)["seyal-tab-strip"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["seyal-multipane-board"].firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["seyal-inspector"].firstMatch.waitForExistence(timeout: 5))
         waitForUsablePty(in: app)
     }

@@ -25,6 +25,8 @@ final class ProductChromeHostView: NSView {
     private let leftItems = NSStackView()
     private let inspectorColumn = NSView()
     private let centerColumn = NSView()
+    private let multipaneBoard = MultipaneBoardView()
+    private let liveSurfaceHost = NSView()
     private var recoveryTimer: Timer?
     private var lastSnapshotGeneration: UInt64 = .max
     private var lastEligibility: UInt16 = .max
@@ -143,9 +145,10 @@ final class ProductChromeHostView: NSView {
         // Transcript chrome sits under the Pane Metal compositor. Flow clears
         // the drawable to transparent and paints only Block-body clips, so
         // command headers remain AppKit while output glyphs composite on top.
-        centerColumn.addSubview(transcript)
-        centerColumn.addSubview(pane)
-        centerColumn.addSubview(composer)
+        multipaneBoard.chromeHost = self
+        multipaneBoard.translatesAutoresizingMaskIntoConstraints = false
+        centerColumn.addSubview(multipaneBoard)
+        multipaneBoard.installLiveSubviews([transcript, pane, composer])
 
         addSubview(tabStrip)
         addSubview(left)
@@ -209,14 +212,10 @@ final class ProductChromeHostView: NSView {
             recoveryLabel.heightAnchor.constraint(equalToConstant: 1),
 
             centerColumn.bottomAnchor.constraint(equalTo: bottomAnchor),
-            transcript.leadingAnchor.constraint(equalTo: centerColumn.leadingAnchor, constant: 20),
-            transcript.trailingAnchor.constraint(equalTo: centerColumn.trailingAnchor, constant: -20),
-            transcript.topAnchor.constraint(equalTo: centerColumn.topAnchor, constant: 16),
-            transcript.heightAnchor.constraint(greaterThanOrEqualToConstant: 240),
-            composer.leadingAnchor.constraint(equalTo: centerColumn.leadingAnchor, constant: 24),
-            composer.trailingAnchor.constraint(equalTo: centerColumn.trailingAnchor, constant: -24),
-            composer.topAnchor.constraint(equalTo: transcript.bottomAnchor, constant: 12),
-            composer.bottomAnchor.constraint(equalTo: centerColumn.bottomAnchor, constant: -16),
+            multipaneBoard.leadingAnchor.constraint(equalTo: centerColumn.leadingAnchor),
+            multipaneBoard.trailingAnchor.constraint(equalTo: centerColumn.trailingAnchor),
+            multipaneBoard.topAnchor.constraint(equalTo: centerColumn.topAnchor),
+            multipaneBoard.bottomAnchor.constraint(equalTo: centerColumn.bottomAnchor),
             blocks.topAnchor.constraint(equalTo: transcript.contentView.topAnchor),
             blocks.leadingAnchor.constraint(equalTo: transcript.contentView.leadingAnchor),
             blocks.widthAnchor.constraint(equalTo: transcript.contentView.widthAnchor),
@@ -236,10 +235,10 @@ final class ProductChromeHostView: NSView {
             pane.bottomAnchor.constraint(equalTo: transcript.bottomAnchor),
         ]
         paneFillsCenter = [
-            pane.leadingAnchor.constraint(equalTo: centerColumn.leadingAnchor),
-            pane.trailingAnchor.constraint(equalTo: centerColumn.trailingAnchor),
-            pane.topAnchor.constraint(equalTo: centerColumn.topAnchor),
-            pane.bottomAnchor.constraint(equalTo: centerColumn.bottomAnchor),
+            pane.leadingAnchor.constraint(equalTo: multipaneBoard.liveContentView.leadingAnchor),
+            pane.trailingAnchor.constraint(equalTo: multipaneBoard.liveContentView.trailingAnchor),
+            pane.topAnchor.constraint(equalTo: multipaneBoard.liveContentView.topAnchor),
+            pane.bottomAnchor.constraint(equalTo: multipaneBoard.liveContentView.bottomAnchor),
         ]
         NSLayoutConstraint.activate(paneFollowsTranscript)
         applyShellChrome(seyal_app_chrome(pane.appHandle))
@@ -338,6 +337,7 @@ final class ProductChromeHostView: NSView {
         rebuildLeft(shell: shell, leftPanel: chrome.left_panel)
         rebuildInspector(chrome)
         rebuildTabStrip(shell: shell)
+        multipaneBoard.rebuild(appHandle: pane.appHandle)
         let direct = snapshot.eligibility == UInt16(SEYAL_APP_ELIGIBILITY_RAW.rawValue)
             || snapshot.eligibility == UInt16(SEYAL_APP_ELIGIBILITY_TUI.rawValue)
         if !direct {
@@ -785,6 +785,15 @@ final class ProductChromeHostView: NSView {
 
     @objc private func showTabs() {
         applyChromeKind(UInt16(SEYAL_APP_ACTION_SET_LEFT_PANEL.rawValue), reserved: 1)
+    }
+
+    func focusPaneIdentity(lo: UInt64, hi: UInt64) {
+        applyChromeKind(
+            UInt16(SEYAL_APP_ACTION_FOCUS_PANE.rawValue),
+            reserved: 0,
+            idLo: lo,
+            idHi: hi
+        )
     }
 
     @objc func createTab() {

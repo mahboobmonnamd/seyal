@@ -278,6 +278,20 @@ typedef struct SeyalAppShell {
 #define SEYAL_APP_ROW_ATTENTION 2u
 #define SEYAL_APP_ROW_SELECTED 1u
 
+#define SEYAL_APP_LAYOUT_LEAF 0u
+#define SEYAL_APP_LAYOUT_SPLIT_RIGHT 1u
+#define SEYAL_APP_LAYOUT_SPLIT_DOWN 2u
+
+typedef struct SeyalAppLayoutNode {
+    uint16_t kind;
+    uint16_t flags;
+    uint32_t first_child;
+    uint32_t second_child;
+    uint32_t reserved;
+    uint64_t pane_lo;
+    uint64_t pane_hi;
+} SeyalAppLayoutNode;
+
 typedef struct SeyalAppRow {
     uint16_t kind;
     uint16_t flags;
@@ -303,6 +317,8 @@ SeyalAppRow seyal_app_shell_row(uint64_t handle, uint16_t kind, uint32_t index);
 SeyalAppRow seyal_app_chrome_row(uint64_t handle, uint16_t kind, uint32_t index);
 SeyalAppRow seyal_app_block_row(uint64_t handle, uint32_t index);
 SeyalAppRow seyal_app_copy(uint64_t handle, uint16_t kind);
+uint32_t seyal_app_layout_count(uint64_t handle);
+SeyalAppLayoutNode seyal_app_layout_node(uint64_t handle, uint32_t index);
 
 typedef struct SeyalAppBlockSpan {
     uint64_t start_line;

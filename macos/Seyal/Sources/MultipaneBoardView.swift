@@ -9,6 +9,7 @@ final class MultipaneBoardView: NSView {
     private var rootView: NSView?
     private var leafViews: [UInt64: PaneLeafView] = [:]
     private var focusedKey: UInt64?
+    private var splitReporters: [SplitRatioReporter] = []
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -64,6 +65,7 @@ final class MultipaneBoardView: NSView {
         let focused = shell.focused_pane_lo
         rootView?.removeFromSuperview()
         leafViews.removeAll()
+        splitReporters.removeAll()
         guard !nodes.isEmpty else { return }
         let built = buildNode(0, nodes: nodes, focused: focused)
         rootView = built
@@ -90,6 +92,16 @@ final class MultipaneBoardView: NSView {
             let second = buildNode(Int(node.second_child), nodes: nodes, focused: focused)
             split.addSubview(first)
             split.addSubview(second)
+            let reporter = SplitRatioReporter(board: self, layoutIndex: index)
+            splitReporters.append(reporter)
+            split.delegate = reporter
+            let ratio = CGFloat(node.reserved == 0 ? 5000 : node.reserved) / 10000.0
+            DispatchQueue.main.async { [weak split] in
+                guard let split, split.subviews.count >= 2 else { return }
+                let total = split.isVertical ? split.bounds.width : split.bounds.height
+                guard total > 1 else { return }
+                split.setPosition(total * ratio, ofDividerAt: 0)
+            }
             return split
         default:
             let leaf = PaneLeafView(
@@ -181,5 +193,30 @@ final class PaneLeafView: NSView {
         } else {
             super.mouseDown(with: event)
         }
+    }
+}
+
+/// Reports divider drags to Rust as SetSplitRatio (layout index + basis points).
+final class SplitRatioReporter: NSObject, NSSplitViewDelegate {
+    weak var board: MultipaneBoardView?
+    let layoutIndex: Int
+
+    init(board: MultipaneBoardView, layoutIndex: Int) {
+        self.board = board
+        self.layoutIndex = layoutIndex
+    }
+
+    func splitViewDidResizeSubviews(_ notification: Notification) {
+        guard let split = notification.object as? NSSplitView,
+              split.subviews.count >= 2,
+              let board,
+              let host = board.chromeHost
+        else { return }
+        let total = split.isVertical ? split.bounds.width : split.bounds.height
+        let first = split.isVertical ? split.subviews[0].bounds.width : split.subviews[0].bounds.height
+        guard total > 1 else { return }
+        var ratio = UInt16((first / total) * 10000.0)
+        ratio = max(1000, min(9000, ratio))
+        host.applySplitRatio(layoutIndex: UInt32(layoutIndex), ratioBps: ratio)
     }
 }

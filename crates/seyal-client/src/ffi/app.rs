@@ -537,7 +537,7 @@ fn encode_layout_nodes(state: &mut AppHandle) {
                 flags: 0,
                 first_child: node.first_child,
                 second_child: node.second_child,
-                reserved: 0,
+                reserved: u32::from(node.ratio_bps),
                 pane_lo: pane.0,
                 pane_hi: pane.1,
             }
@@ -924,6 +924,10 @@ fn decode_action(action: &SeyalAppAction) -> Result<AppAction, i32> {
         }),
         27 => Ok(AppAction::SetAttentionPopover {
             open: action.reserved != 0,
+        }),
+        28 => Ok(AppAction::SetSplitRatio {
+            layout_index: action.reserved,
+            ratio_bps: (action.target_execution_lo & 0xffff) as u16,
         }),
         _ => Err(-6),
     }

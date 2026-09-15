@@ -48,7 +48,9 @@ enum SeyalAppActionKind {
     SEYAL_APP_ACTION_CLOSE_TAB = 24,
     SEYAL_APP_ACTION_SPLIT_FOCUSED = 25,
     SEYAL_APP_ACTION_CLOSE_PANE = 26,
-    SEYAL_APP_ACTION_SET_ATTENTION_POPOVER = 27
+    SEYAL_APP_ACTION_SET_ATTENTION_POPOVER = 27,
+    /* reserved = layout node index; target_execution_lo low 16 bits = ratio_bps */
+    SEYAL_APP_ACTION_SET_SPLIT_RATIO = 28
 };
 
 enum SeyalAppEligibility {
@@ -289,6 +291,7 @@ typedef struct SeyalAppLayoutNode {
     uint16_t flags;
     uint32_t first_child;
     uint32_t second_child;
+    /* Split first-child ratio in basis points; 0 on leaves. */
     uint32_t reserved;
     uint64_t pane_lo;
     uint64_t pane_hi;

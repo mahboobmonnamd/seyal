@@ -920,6 +920,15 @@ final class ProductChromeHostView: NSView {
         applyPayload(UInt16(SEYAL_APP_ACTION_SELECT_AGENT.rawValue), text: sender.identifier?.rawValue ?? "")
     }
 
+    func applySplitRatio(layoutIndex: UInt32, ratioBps: UInt16) {
+        applyChromeKind(
+            UInt16(SEYAL_APP_ACTION_SET_SPLIT_RATIO.rawValue),
+            reserved: layoutIndex,
+            idLo: UInt64(ratioBps),
+            idHi: 0
+        )
+    }
+
     private func applyChromeKind(
         _ kind: UInt16,
         reserved: UInt32,

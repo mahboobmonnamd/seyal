@@ -179,6 +179,10 @@ pub enum AppAction {
     SplitFocused {
         axis: SplitAxis,
     },
+    SetSplitRatio {
+        layout_index: u32,
+        ratio_bps: u16,
+    },
     ClosePane {
         id: PaneId,
     },
@@ -445,6 +449,10 @@ impl ApplicationRoot {
             AppAction::CreateTab => self.create_tab(),
             AppAction::CloseTab { id } => self.close_tab(id),
             AppAction::SplitFocused { axis } => self.split_focused(axis),
+            AppAction::SetSplitRatio {
+                layout_index,
+                ratio_bps,
+            } => self.set_split_ratio(layout_index, ratio_bps),
             AppAction::ClosePane { id } => self.close_pane(id),
             AppAction::SetShellVisibility {
                 left,
@@ -844,7 +852,20 @@ impl ApplicationRoot {
         Ok(())
     }
 
-    fn split_focused(&mut self, axis: SplitAxis) -> Result<(), AppError> {
+        fn set_split_ratio(&mut self, layout_index: u32, ratio_bps: u16) -> Result<(), AppError> {
+        self.shell
+            .apply(ShellAction::SetSplitRatio {
+                layout_index,
+                ratio_bps,
+            })
+            .map_err(shell_error)?;
+        let _ = self
+            .chrome
+            .apply(ChromeAction::ContextNavigated, &self.shell.snapshot());
+        Ok(())
+    }
+
+fn split_focused(&mut self, axis: SplitAxis) -> Result<(), AppError> {
         self.shell
             .apply(ShellAction::SplitFocused { axis })
             .map_err(shell_error)?;
@@ -967,6 +988,7 @@ fn shell_error(error: ShellError) -> AppError {
         ShellError::CannotCloseLastTab => AppError::CannotCloseLastTab,
         ShellError::CannotCloseLastPane => AppError::CannotCloseLastPane,
         ShellError::ExecutionAlreadyBound | ShellError::EmptyShell => AppError::InvalidPayload,
+        ShellError::UnknownLayoutNode | ShellError::InvalidSplitRatio => AppError::InvalidPayload,
     }
 }
 

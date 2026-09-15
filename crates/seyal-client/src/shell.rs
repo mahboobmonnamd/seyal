@@ -17,12 +17,19 @@ pub enum SplitAxis {
     Down,
 }
 
+/// Split first-child weight in basis points (10000 = 100%). Default 5000.
+pub const DEFAULT_SPLIT_RATIO_BPS: u16 = 5000;
+pub const MIN_SPLIT_RATIO_BPS: u16 = 1000;
+pub const MAX_SPLIT_RATIO_BPS: u16 = 9000;
+
 /// Recursive pane layout for one Tab.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PaneTree {
     Leaf(PaneId),
     Split {
         axis: SplitAxis,
+        /// Share of the split given to `first` in basis points.
+        ratio_bps: u16,
         first: Box<PaneTree>,
         second: Box<PaneTree>,
     },
@@ -35,10 +42,12 @@ impl PaneTree {
             Self::Leaf(_) => self.clone(),
             Self::Split {
                 axis,
+                ratio_bps,
                 first,
                 second,
             } => Self::Split {
                 axis: *axis,
+                ratio_bps: *ratio_bps,
                 first: Box::new(first.replacing(target, replacement.clone())),
                 second: Box::new(second.replacing(target, replacement)),
             },
@@ -56,11 +65,13 @@ impl PaneTree {
             }
             Self::Split {
                 axis,
+                ratio_bps,
                 first,
                 second,
             } => match (first.removing(target), second.removing(target)) {
                 (Some(left), Some(right)) => Some(Self::Split {
                     axis: *axis,
+                    ratio_bps: *ratio_bps,
                     first: Box::new(left),
                     second: Box::new(right),
                 }),
@@ -127,6 +138,8 @@ pub struct LayoutNode {
     pub pane: Option<PaneId>,
     pub first_child: u32,
     pub second_child: u32,
+    /// Split first-child ratio in basis points; 0 on leaves.
+    pub ratio_bps: u16,
 }
 
 impl PaneTree {
@@ -146,11 +159,13 @@ impl PaneTree {
                     pane: Some(*id),
                     first_child: 0,
                     second_child: 0,
+                    ratio_bps: 0,
                 });
                 index
             }
             Self::Split {
                 axis,
+                ratio_bps,
                 first,
                 second,
             } => {
@@ -163,6 +178,7 @@ impl PaneTree {
                     pane: None,
                     first_child: 0,
                     second_child: 0,
+                    ratio_bps: *ratio_bps,
                 });
                 let first_child = Self::flatten_into(first, nodes);
                 let second_child = Self::flatten_into(second, nodes);
@@ -186,6 +202,8 @@ pub enum ShellError {
     CannotCloseLastPane,
     ExecutionAlreadyBound,
     EmptyShell,
+    UnknownLayoutNode,
+    InvalidSplitRatio,
 }
 
 impl ShellError {
@@ -204,6 +222,8 @@ impl ShellError {
             Self::CannotCloseLastPane => "The last Pane cannot be closed.",
             Self::ExecutionAlreadyBound => "This Pane is already bound to an execution.",
             Self::EmptyShell => "Shell requires at least one Workspace.",
+            Self::UnknownLayoutNode => "Unknown layout node.",
+            Self::InvalidSplitRatio => "Split ratio is out of range.",
         }
     }
 }
@@ -233,6 +253,10 @@ pub enum ShellAction {
     SplitPane {
         id: PaneId,
         axis: SplitAxis,
+    },
+    SetSplitRatio {
+        layout_index: u32,
+        ratio_bps: u16,
     },
     ClosePane {
         id: PaneId,
@@ -463,6 +487,10 @@ impl ShellState {
                 self.split_pane(focused, axis).map(|_| ())
             }
             ShellAction::SplitPane { id, axis } => self.split_pane(id, axis).map(|_| ()),
+            ShellAction::SetSplitRatio {
+                layout_index,
+                ratio_bps,
+            } => self.set_split_ratio(layout_index, ratio_bps),
             ShellAction::ClosePane { id } => self.close_pane(id),
             ShellAction::FocusPane { id } => self.focus_pane(id),
             ShellAction::BindExecution { pane, execution } => self.bind_execution(pane, execution),
@@ -532,6 +560,46 @@ impl ShellState {
         Ok(())
     }
 
+
+    fn set_split_ratio(&mut self, layout_index: u32, ratio_bps: u16) -> Result<(), ShellError> {
+        if !(MIN_SPLIT_RATIO_BPS..=MAX_SPLIT_RATIO_BPS).contains(&ratio_bps) {
+            return Err(ShellError::InvalidSplitRatio);
+        }
+        let workspace = self.workspace_mut(self.active_workspace)?;
+        let tab = workspace.active_tab_mut()?;
+        let mut cursor = 0u32;
+        if !Self::set_ratio_in_tree(&mut tab.root, layout_index, ratio_bps, &mut cursor) {
+            return Err(ShellError::UnknownLayoutNode);
+        }
+        Ok(())
+    }
+
+    fn set_ratio_in_tree(
+        tree: &mut PaneTree,
+        target: u32,
+        ratio_bps: u16,
+        cursor: &mut u32,
+    ) -> bool {
+        let index = *cursor;
+        *cursor = cursor.saturating_add(1);
+        match tree {
+            PaneTree::Leaf(_) => false,
+            PaneTree::Split {
+                ratio_bps: slot,
+                first,
+                second,
+                ..
+            } => {
+                if index == target {
+                    *slot = ratio_bps;
+                    return true;
+                }
+                Self::set_ratio_in_tree(first, target, ratio_bps, cursor)
+                    || Self::set_ratio_in_tree(second, target, ratio_bps, cursor)
+            }
+        }
+    }
+
     fn split_pane(&mut self, pane_id: PaneId, axis: SplitAxis) -> Result<PaneId, ShellError> {
         if !self.allows_pane_splitting {
             return Err(ShellError::PaneSplitUnavailable);
@@ -554,6 +622,7 @@ impl ShellState {
             pane_id,
             PaneTree::Split {
                 axis,
+                ratio_bps: DEFAULT_SPLIT_RATIO_BPS,
                 first: Box::new(PaneTree::Leaf(pane_id)),
                 second: Box::new(PaneTree::Leaf(id)),
             },
@@ -1016,6 +1085,7 @@ mod tests {
             a,
             PaneTree::Split {
                 axis: SplitAxis::Right,
+        ratio_bps: DEFAULT_SPLIT_RATIO_BPS,
                 first: Box::new(PaneTree::Leaf(a)),
                 second: Box::new(PaneTree::Leaf(b)),
             },
@@ -1023,4 +1093,38 @@ mod tests {
         assert_eq!(tree.pane_ids(), vec![a, b]);
         assert_eq!(tree.layout_description(), LayoutDescription::SplitRight);
     }
+    #[test]
+    fn set_split_ratio_updates_flatten_projection() {
+        let mut shell = ShellState::m001_local("local");
+        shell
+            .apply(ShellAction::SplitFocused {
+                axis: SplitAxis::Right,
+            })
+            .unwrap();
+        let nodes = shell.snapshot().tree.flatten_layout();
+        assert_eq!(nodes[0].kind, LayoutNodeKind::SplitRight);
+        assert_eq!(nodes[0].ratio_bps, DEFAULT_SPLIT_RATIO_BPS);
+        shell
+            .apply(ShellAction::SetSplitRatio {
+                layout_index: 0,
+                ratio_bps: 7000,
+            })
+            .unwrap();
+        assert_eq!(shell.snapshot().tree.flatten_layout()[0].ratio_bps, 7000);
+        assert_eq!(
+            shell.apply(ShellAction::SetSplitRatio {
+                layout_index: 0,
+                ratio_bps: 50,
+            }),
+            Err(ShellError::InvalidSplitRatio)
+        );
+        assert_eq!(
+            shell.apply(ShellAction::SetSplitRatio {
+                layout_index: 99,
+                ratio_bps: 6000,
+            }),
+            Err(ShellError::UnknownLayoutNode)
+        );
+    }
+
 }

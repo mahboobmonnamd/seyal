@@ -45,15 +45,34 @@ enum SeyalAppActionKind {
     SEYAL_APP_ACTION_FOCUS_PANE = 21,
     SEYAL_APP_ACTION_SET_SHELL_CHROME = 22,
     /*
-     * Block details inspector (#935). Kinds 23-44 are reserved for the
-     * Workspace chrome slices (#922-#934).
+     * Composer history recall (#933).
+     * SET_COMPOSER_HISTORY_FILTER: payload = UTF-8 query.
+     * MOVE_COMPOSER_HISTORY_SELECTION: reserved = signed row delta (int32).
+     * SELECT_COMPOSER_HISTORY: target_pty_generation = composer epoch.
+     */
+    SEYAL_APP_ACTION_OPEN_COMPOSER_HISTORY = 40,
+    SEYAL_APP_ACTION_SET_COMPOSER_HISTORY_FILTER = 41,
+    SEYAL_APP_ACTION_MOVE_COMPOSER_HISTORY_SELECTION = 42,
+    SEYAL_APP_ACTION_SELECT_COMPOSER_HISTORY = 43,
+    SEYAL_APP_ACTION_CLOSE_COMPOSER_HISTORY = 44,
+    /*
+     * Block details inspector (#935).
      * SELECT_BLOCK: target_execution_lo/hi = BlockId (from seyal_app_block_row).
      * Selecting binds the inspector to that Block, switches inspector mode to
      * SEYAL_APP_INSPECTOR_BLOCK and reveals the inspector. Fails closed for a
-     * Block not in the focused Pane's list.
+     * Block not in the focused Pane's list. Error code 30 = UnknownBlock.
      */
     SEYAL_APP_ACTION_SELECT_BLOCK = 45,
-    SEYAL_APP_ACTION_CLEAR_BLOCK_SELECTION = 46
+    SEYAL_APP_ACTION_CLEAR_BLOCK_SELECTION = 46,
+    /*
+     * Global keyboard-first command palette (#932). The command list is never
+     * sent by the host. Error codes 26-29.
+     */
+    SEYAL_APP_ACTION_OPEN_PALETTE = 47,
+    SEYAL_APP_ACTION_SET_PALETTE_QUERY = 48,
+    SEYAL_APP_ACTION_MOVE_PALETTE_SELECTION = 49,
+    SEYAL_APP_ACTION_RUN_PALETTE = 50,
+    SEYAL_APP_ACTION_CLOSE_PALETTE = 51
 };
 
 /* SEYAL_APP_ACTION_SET_INSPECTOR reserved values and SeyalAppChrome.inspector_mode. */
@@ -216,6 +235,8 @@ enum SeyalAppComposerMode {
 #define SEYAL_APP_COPY_COMPOSER_PLACEHOLDER 0u
 #define SEYAL_APP_COPY_COMPOSER_EXECUTE 1u
 #define SEYAL_APP_COPY_BLOCK_PROMPT 2u
+#define SEYAL_APP_COPY_COMPOSER_HISTORY 3u
+#define SEYAL_APP_COPY_COMPOSER_HISTORY_PLACEHOLDER 4u
 
 /*
  * seyal_app_block_row flags: state in the low three bits, plus
@@ -239,6 +260,28 @@ typedef struct SeyalAppComposer {
     uint32_t draft_utf8_len;
     uint32_t block_count;
 } SeyalAppComposer;
+
+/*
+ * Pane-local composer history overlay (#933). `query_utf8` is borrowed until
+ * the next mutating bridge call. Rows come from seyal_app_history_row; the
+ * selected row carries SEYAL_APP_ROW_SELECTED. Hosts show the overlay only
+ * while SEYAL_APP_HISTORY_OPEN is set and enable the recall affordance only
+ * while SEYAL_APP_HISTORY_HAS_ENTRIES is set.
+ */
+typedef struct SeyalAppComposerHistory {
+    uint16_t version;
+    uint16_t size;
+    uint16_t flags;
+    uint16_t selected;
+    uint32_t entry_count;
+    uint32_t row_count;
+    const uint8_t *query_utf8;
+    uint32_t query_utf8_len;
+    uint32_t reserved;
+} SeyalAppComposerHistory;
+
+#define SEYAL_APP_HISTORY_OPEN 1u
+#define SEYAL_APP_HISTORY_HAS_ENTRIES 2u
 
 typedef struct SeyalAppChrome {
     uint16_t version;
@@ -310,6 +353,24 @@ typedef struct SeyalAppRow {
     uint32_t reserved2;
 } SeyalAppRow;
 
+/*
+ * Global command palette overlay (#932). `query_utf8` is borrowed until the
+ * next mutating bridge call. Rows come from seyal_app_palette_row; `title`
+ * is the command label, `detail` its category (e.g. "Navigation", "View").
+ */
+typedef struct SeyalAppPalette {
+    uint16_t version;
+    uint16_t size;
+    uint16_t flags;
+    uint16_t selected;
+    uint32_t row_count;
+    const uint8_t *query_utf8;
+    uint32_t query_utf8_len;
+    uint32_t reserved;
+} SeyalAppPalette;
+
+#define SEYAL_APP_PALETTE_OPEN 1u
+
 uint64_t seyal_app_create(void);
 int32_t seyal_app_destroy(uint64_t handle);
 int32_t seyal_app_apply(uint64_t handle, const SeyalAppAction *action);
@@ -321,6 +382,10 @@ SeyalAppRow seyal_app_shell_row(uint64_t handle, uint16_t kind, uint32_t index);
 SeyalAppRow seyal_app_chrome_row(uint64_t handle, uint16_t kind, uint32_t index);
 SeyalAppRow seyal_app_block_row(uint64_t handle, uint32_t index);
 SeyalAppRow seyal_app_copy(uint64_t handle, uint16_t kind);
+SeyalAppComposerHistory seyal_app_composer_history(uint64_t handle);
+SeyalAppRow seyal_app_history_row(uint64_t handle, uint32_t index);
+SeyalAppPalette seyal_app_palette(uint64_t handle);
+SeyalAppRow seyal_app_palette_row(uint64_t handle, uint32_t index);
 
 typedef struct SeyalAppBlockSpan {
     uint64_t start_line;

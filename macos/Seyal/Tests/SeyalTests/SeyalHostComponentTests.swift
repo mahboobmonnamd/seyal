@@ -154,6 +154,199 @@ final class SeyalHostComponentTests: XCTestCase {
         XCTAssertEqual(valid.regionIDs, [7])
     }
 
+    // MARK: - Composer history (#933)
+
+    /// Bind one Pane and drive an accepted composer submit through the FFI so
+    /// Rust records history. Tests never fabricate rows.
+    private func boundHandleWithHistory(_ commands: [String]) -> UInt64 {
+        let handle = seyal_app_create()
+        let snap = seyal_app_snapshot(handle)
+        var bind = SeyalAppAction()
+        bind.version = UInt16(SEYAL_APP_ABI_VERSION)
+        bind.size = UInt16(MemoryLayout<SeyalAppAction>.size)
+        bind.kind = UInt16(SEYAL_APP_ACTION_BIND.rawValue)
+        bind.flags = UInt16(SEYAL_APP_FLAG_TARGET_CONTROLLER)
+        bind.fence_pane_lo = snap.pane_lo
+        bind.fence_pane_hi = snap.pane_hi
+        bind.fence_epoch = snap.epoch
+        bind.target_execution_lo = 1
+        bind.target_attachment_lo = 2
+        bind.target_pty_generation = 1
+        XCTAssertEqual(seyal_app_apply(handle, &bind), 0)
+        for command in commands {
+            let bound = seyal_app_snapshot(handle)
+            let composer = seyal_app_composer(handle)
+            var draft = SeyalAppAction()
+            draft.version = bind.version
+            draft.size = bind.size
+            draft.kind = UInt16(SEYAL_APP_ACTION_SET_COMPOSER_DRAFT.rawValue)
+            draft.applySnapshotFence(bound)
+            draft.target_pty_generation = composer.epoch
+            let utf8 = Array(command.utf8)
+            utf8.withUnsafeBufferPointer { buffer in
+                draft.payload = buffer.baseAddress
+                draft.payload_len = UInt32(buffer.count)
+                XCTAssertEqual(seyal_app_apply(handle, &draft), 0)
+            }
+            var submit = SeyalAppAction()
+            submit.version = bind.version
+            submit.size = bind.size
+            submit.kind = UInt16(SEYAL_APP_ACTION_SUBMIT_COMPOSER.rawValue)
+            submit.applySnapshotFence(bound)
+            submit.target_pty_generation = composer.epoch
+            XCTAssertEqual(seyal_app_apply(handle, &submit), 0)
+            var result = SeyalAppAction()
+            result.version = bind.version
+            result.size = bind.size
+            result.kind = UInt16(SEYAL_APP_ACTION_APPLY_COMPOSER_RESULT.rawValue)
+            result.applySnapshotFence(bound)
+            result.target_execution_lo = seyal_app_composer(handle).request_id
+            result.reserved = 1
+            XCTAssertEqual(seyal_app_apply(handle, &result), 0)
+        }
+        return handle
+    }
+
+    private func applyHistory(_ handle: UInt64, kind: UInt16, payload: String? = nil, reserved: UInt32 = 0) -> Int32 {
+        let snap = seyal_app_snapshot(handle)
+        var action = SeyalAppAction()
+        action.version = UInt16(SEYAL_APP_ABI_VERSION)
+        action.size = UInt16(MemoryLayout<SeyalAppAction>.size)
+        action.kind = kind
+        action.applySnapshotFence(snap)
+        action.reserved = reserved
+        action.target_pty_generation = seyal_app_composer(handle).epoch
+        let utf8 = Array((payload ?? "").utf8)
+        return utf8.withUnsafeBufferPointer { buffer in
+            action.payload = payload == nil ? nil : buffer.baseAddress
+            action.payload_len = payload == nil ? 0 : UInt32(buffer.count)
+            return seyal_app_apply(handle, &action)
+        }
+    }
+
+    func testComposerHistoryABIMatchesPublishedHeader() {
+        XCTAssertEqual(MemoryLayout<SeyalAppComposerHistory>.size, 32)
+        XCTAssertEqual(MemoryLayout<SeyalAppComposerHistory>.stride, 32)
+        XCTAssertEqual(MemoryLayout<SeyalAppComposerHistory>.offset(of: \.query_utf8), 16)
+        let handle = seyal_app_create()
+        defer { XCTAssertEqual(seyal_app_destroy(handle), 0) }
+        let closed = seyal_app_composer_history(handle)
+        XCTAssertEqual(closed.version, UInt16(SEYAL_APP_ABI_VERSION))
+        XCTAssertEqual(Int(closed.size), MemoryLayout<SeyalAppComposerHistory>.size)
+        XCTAssertEqual(closed.flags, 0)
+        XCTAssertEqual(closed.entry_count, 0)
+        XCTAssertEqual(seyal_app_history_row(handle, 0).title_len, 0)
+        let label = seyal_app_copy(handle, UInt16(SEYAL_APP_COPY_COMPOSER_HISTORY))
+        XCTAssertGreaterThan(label.title_len, 0)
+        let placeholder = seyal_app_copy(handle, UInt16(SEYAL_APP_COPY_COMPOSER_HISTORY_PLACEHOLDER))
+        XCTAssertGreaterThan(placeholder.title_len, 0)
+        // Unbound composer is not Available: open fails closed in Rust.
+        XCTAssertEqual(applyHistory(handle, kind: UInt16(SEYAL_APP_ACTION_OPEN_COMPOSER_HISTORY.rawValue)), -4)
+        XCTAssertEqual(seyal_app_composer_history(handle).flags & UInt16(SEYAL_APP_HISTORY_OPEN), 0)
+    }
+
+    func testComposerHistoryRowsAreRustRecordedAcceptedSubmits() {
+        let handle = boundHandleWithHistory(["cargo build", "git status"])
+        defer { XCTAssertEqual(seyal_app_destroy(handle), 0) }
+        let recorded = seyal_app_composer_history(handle)
+        XCTAssertEqual(recorded.flags, UInt16(SEYAL_APP_HISTORY_HAS_ENTRIES))
+        XCTAssertEqual(recorded.entry_count, 2)
+        XCTAssertEqual(recorded.row_count, 0, "closed overlay projects no rows")
+        XCTAssertEqual(applyHistory(handle, kind: UInt16(SEYAL_APP_ACTION_OPEN_COMPOSER_HISTORY.rawValue)), 0)
+        let open = seyal_app_composer_history(handle)
+        XCTAssertEqual(open.flags, UInt16(SEYAL_APP_HISTORY_OPEN | SEYAL_APP_HISTORY_HAS_ENTRIES))
+        XCTAssertEqual(open.row_count, 2)
+        XCTAssertEqual(utf8(seyal_app_history_row(handle, 0)), "git status")
+        XCTAssertEqual(seyal_app_history_row(handle, 0).flags & UInt16(SEYAL_APP_ROW_SELECTED), UInt16(SEYAL_APP_ROW_SELECTED))
+        XCTAssertEqual(applyHistory(handle, kind: UInt16(SEYAL_APP_ACTION_SET_COMPOSER_HISTORY_FILTER.rawValue), payload: "carg"), 0)
+        XCTAssertEqual(seyal_app_composer_history(handle).row_count, 1)
+        XCTAssertEqual(utf8(seyal_app_history_row(handle, 0)), "cargo build")
+        XCTAssertEqual(applyHistory(handle, kind: UInt16(SEYAL_APP_ACTION_SELECT_COMPOSER_HISTORY.rawValue)), 0)
+        let composer = seyal_app_composer(handle)
+        XCTAssertEqual(composer.request_id, 0, "select inserts into the draft; it never submits")
+        let draft = String(decoding: UnsafeBufferPointer(start: composer.draft_utf8, count: Int(composer.draft_utf8_len)), as: UTF8.self)
+        XCTAssertEqual(draft, "cargo build")
+        XCTAssertEqual(seyal_app_composer_history(handle).flags & UInt16(SEYAL_APP_HISTORY_OPEN), 0)
+    }
+
+    @MainActor
+    func testComposerHistoryOverlayProjectsRustStateOnly() {
+        let handle = boundHandleWithHistory(["echo one", "echo two"])
+        defer { XCTAssertEqual(seyal_app_destroy(handle), 0) }
+        let overlay = ComposerHistoryOverlayView(appHandle: handle)
+        overlay.reconcile()
+        XCTAssertTrue(overlay.isHidden, "overlay is hidden until Rust opens it")
+        XCTAssertEqual(applyHistory(handle, kind: UInt16(SEYAL_APP_ACTION_OPEN_COMPOSER_HISTORY.rawValue)), 0)
+        overlay.reconcile()
+        XCTAssertFalse(overlay.isHidden)
+        XCTAssertEqual(overlay.accessibilityValue() as? String, "2")
+        XCTAssertEqual(applyHistory(handle, kind: UInt16(SEYAL_APP_ACTION_MOVE_COMPOSER_HISTORY_SELECTION.rawValue), reserved: 1), 0)
+        var dismissed = 0
+        overlay.onDismissed = { dismissed += 1 }
+        overlay.reconcile()
+        overlay.reconcile()
+        XCTAssertEqual(dismissed, 0)
+        XCTAssertEqual(applyHistory(handle, kind: UInt16(SEYAL_APP_ACTION_CLOSE_COMPOSER_HISTORY.rawValue)), 0)
+        overlay.reconcile()
+        XCTAssertTrue(overlay.isHidden)
+        XCTAssertEqual(dismissed, 1, "closing notifies the host exactly once")
+        overlay.reconcile()
+        XCTAssertEqual(dismissed, 1)
+    }
+
+    @MainActor
+    func testProductChromeHostsHiddenHistoryOverlayAndReconciles() {
+        let view = ProductChromeHostView(frame: NSRect(x: 0, y: 0, width: 800, height: 560))
+        view.reconcileChrome()
+        XCTAssertTrue(view.historyOverlay.isHidden)
+        XCTAssertNotNil(view.historyOverlay.superview)
+        view.reconcileChrome()
+        XCTAssertTrue(view.historyOverlay.isHidden)
+    }
+
+    // MARK: - Command palette (#932)
+
+    func testCommandPaletteABIMatchesPublishedHeaderAndFailsClosedForBogusRow() {
+        XCTAssertEqual(MemoryLayout<SeyalAppPalette>.size, 32)
+        XCTAssertEqual(MemoryLayout<SeyalAppPalette>.stride, 32)
+        XCTAssertEqual(MemoryLayout<SeyalAppPalette>.offset(of: \.query_utf8), 16)
+        let handle = seyal_app_create()
+        defer { XCTAssertEqual(seyal_app_destroy(handle), 0) }
+        let closed = seyal_app_palette(handle)
+        XCTAssertEqual(closed.version, UInt16(SEYAL_APP_ABI_VERSION))
+        XCTAssertEqual(Int(closed.size), MemoryLayout<SeyalAppPalette>.size)
+        XCTAssertEqual(closed.flags, 0)
+        XCTAssertEqual(closed.row_count, 0)
+        XCTAssertTrue(closed.query_utf8 == nil)
+        XCTAssertEqual(seyal_app_palette_row(handle, 0).title_len, 0, "no row at any index while closed")
+    }
+
+    func testCommandPaletteOpenListsCommandsWithoutBindingAndOmitsDisallowedOnes() {
+        let handle = seyal_app_create()
+        defer { XCTAssertEqual(seyal_app_destroy(handle), 0) }
+        let snap = seyal_app_snapshot(handle)
+        var open = SeyalAppAction()
+        open.version = UInt16(SEYAL_APP_ABI_VERSION)
+        open.size = UInt16(MemoryLayout<SeyalAppAction>.size)
+        open.kind = UInt16(SEYAL_APP_ACTION_OPEN_PALETTE.rawValue)
+        open.applySnapshotFence(snap)
+        // Unbound handle: require_fence only needs the Pane to exist, so the
+        // palette opens before any Runtime attach.
+        XCTAssertEqual(seyal_app_apply(handle, &open), 0)
+        let palette = seyal_app_palette(handle)
+        XCTAssertNotEqual(palette.flags & UInt16(SEYAL_APP_PALETTE_OPEN), 0)
+        XCTAssertGreaterThan(palette.row_count, 0)
+        var sawNewTab = false
+        for index in 0..<Int(palette.row_count) {
+            let row = seyal_app_palette_row(handle, UInt32(index))
+            if utf8(row) == "New Tab" { sawNewTab = true }
+        }
+        XCTAssertFalse(
+            sawNewTab,
+            "M001 default shell policy disallows tab creation; the command is omitted, not disabled"
+        )
+    }
+
     // MARK: - Block details inspector (#935)
 
     func testBlockSelectionFailsClosedWithoutRuntimeBlocks() {
@@ -186,7 +379,7 @@ final class SeyalHostComponentTests: XCTestCase {
         select.target_execution_lo = 0x5151_5151_5151_5151
         select.target_execution_hi = 0x5151_5151_5151_5151
         XCTAssertEqual(seyal_app_apply(handle, &select), -4, "unknown Block fails closed")
-        XCTAssertEqual(seyal_app_last_error(handle), 23)
+        XCTAssertEqual(seyal_app_last_error(handle), 30)
         let chrome = seyal_app_chrome(handle)
         XCTAssertEqual(chrome.inspector_mode, UInt16(SEYAL_APP_INSPECTOR_CONTEXT.rawValue))
         XCTAssertEqual(chrome.reserved & UInt32(SEYAL_APP_CHROME_INSPECTOR_VISIBLE), 0, "rejected select does not reveal")
@@ -210,6 +403,7 @@ final class SeyalHostComponentTests: XCTestCase {
         XCTAssertEqual(chrome.inspector_mode, UInt16(SEYAL_APP_INSPECTOR_CONTEXT.rawValue))
         view.reconcileChrome()
     }
+
 }
 
 private func utf8(_ row: SeyalAppRow) -> String {

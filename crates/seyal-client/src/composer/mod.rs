@@ -1,10 +1,13 @@
 //! Portable composer draft, submission fencing, and Block presentation.
 //!
 //! This module owns per-Pane draft lifecycle, available/busy/hidden eligibility,
-//! request-id correlation, and a read-only projection of Runtime Block metadata.
-//! It is not a BlockTimeline, PTY, VT/grid, or renderer. Hosts dispatch
-//! [`ComposerAction`] and render [`ComposerSnapshot`]. Do not call this from
-//! the PTY→VT→damage path. Do not invent Block completions.
+//! request-id correlation, Pane-local command history recall, and a read-only
+//! projection of Runtime Block metadata. It is not a BlockTimeline, PTY,
+//! VT/grid, or renderer. Hosts dispatch [`ComposerAction`] and render
+//! [`ComposerSnapshot`]. Do not call this from the PTY→VT→damage path. Do not
+//! invent Block completions.
+
+mod history;
 
 use std::collections::HashMap;
 use std::fmt;
@@ -12,6 +15,9 @@ use std::fmt;
 use seyal_core::{BlockId, PaneId};
 
 use crate::presentation::{InputRoute, PresentationMode};
+
+use history::{HistoryOverlay, PaneHistory};
+pub use history::{HistoryOverlaySnapshot, HISTORY_CAPACITY, HISTORY_VISIBLE_ROWS};
 
 /// Host-visible composer eligibility for one Pane.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,6 +36,9 @@ pub enum ComposerError {
     SubmitDisabled,
     StaleRequest,
     StaleEpoch,
+    HistoryUnavailable,
+    HistoryClosed,
+    HistoryNoSelection,
 }
 
 impl ComposerError {
@@ -40,6 +49,9 @@ impl ComposerError {
             Self::SubmitDisabled => "Composer submit is unavailable.",
             Self::StaleRequest => "Composer result does not match the pending request.",
             Self::StaleEpoch => "Composer action epoch is stale.",
+            Self::HistoryUnavailable => "Composer history is unavailable for this Pane.",
+            Self::HistoryClosed => "Composer history is not open.",
+            Self::HistoryNoSelection => "Composer history has no matching entry.",
         }
     }
 }
@@ -85,6 +97,12 @@ pub const BLOCK_PROMPT: &str = "$";
 
 /// C09 execute affordance.
 pub const COMPOSER_EXECUTE_LABEL: &str = "⏎";
+
+/// History recall affordance (#933). Trigger binding is host-documented.
+pub const COMPOSER_HISTORY_LABEL: &str = "⌃R";
+
+/// History overlay query placeholder.
+pub const COMPOSER_HISTORY_PLACEHOLDER: &str = "Search command history...";
 
 /// Canonical Runtime/Workspace Block metadata consumed by the projection.
 /// This type does not create, complete, or own Blocks.
@@ -156,6 +174,28 @@ pub enum ComposerAction {
         pane: PaneId,
         records: Vec<RuntimeBlockRecord>,
     },
+    /// Open the history overlay above this Pane's composer. Requires
+    /// [`ComposerMode::Available`] and at least one recorded entry.
+    OpenHistory {
+        pane: PaneId,
+    },
+    SetHistoryFilter {
+        pane: PaneId,
+        query: String,
+    },
+    MoveHistorySelection {
+        pane: PaneId,
+        delta: i32,
+    },
+    /// Insert the selected entry into the draft and close the overlay.
+    /// Never submits. Epoch-fenced because it replaces the draft.
+    SelectHistory {
+        pane: PaneId,
+        epoch: u64,
+    },
+    CloseHistory {
+        pane: PaneId,
+    },
 }
 
 /// Read-only projection for native hosts.
@@ -170,6 +210,10 @@ pub struct ComposerSnapshot {
     pub allows_direct_terminal: bool,
     pub blocks: Vec<BlockProjection>,
     pub last_error: Option<ComposerError>,
+    /// Number of retained history entries; hosts enable recall only when > 0.
+    pub history_count: usize,
+    /// Open overlay projection, `None` while closed.
+    pub history: Option<HistoryOverlaySnapshot>,
 }
 
 #[derive(Clone, Debug)]
@@ -182,6 +226,8 @@ struct PaneComposer {
     presentation_mode: PresentationMode,
     input_route: InputRoute,
     blocks: Vec<BlockProjection>,
+    history: PaneHistory,
+    overlay: Option<HistoryOverlay>,
 }
 
 impl PaneComposer {
@@ -195,7 +241,33 @@ impl PaneComposer {
             presentation_mode: PresentationMode::Flow,
             input_route: InputRoute::Composer,
             blocks: Vec::new(),
+            history: PaneHistory::default(),
+            overlay: None,
         }
+    }
+
+    /// The overlay only exists while the composer is Available.
+    fn close_overlay_if_unavailable(&mut self) {
+        if !matches!(self.mode(), ComposerMode::Available) {
+            self.overlay = None;
+        }
+    }
+
+    fn overlay_snapshot(&self) -> Option<HistoryOverlaySnapshot> {
+        let overlay = self.overlay.as_ref()?;
+        let rows: Vec<String> = self
+            .history
+            .rank(&overlay.query)
+            .into_iter()
+            .map(|entry| entry.command.clone())
+            .collect();
+        let mut clamped = overlay.clone();
+        clamped.clamp(rows.len());
+        Some(HistoryOverlaySnapshot {
+            query: overlay.query.clone(),
+            rows,
+            selected: clamped.selected,
+        })
     }
 
     fn bump_epoch(&mut self) {
@@ -295,6 +367,7 @@ impl ComposerState {
                 }
                 let request_id = composer.allocate_request_id();
                 composer.pending_request_id = Some(request_id);
+                composer.overlay = None;
                 composer.bump_epoch();
                 Ok(Some(request_id))
             }
@@ -309,6 +382,7 @@ impl ComposerState {
                 }
                 composer.pending_request_id = None;
                 if accepted {
+                    composer.history.record(&composer.draft);
                     composer.draft.clear();
                 }
                 composer.bump_epoch();
@@ -319,6 +393,7 @@ impl ComposerState {
                 if composer.busy_process != process {
                     composer.busy_process = process;
                     composer.bump_epoch();
+                    composer.close_overlay_if_unavailable();
                 }
                 Ok(None)
             }
@@ -332,12 +407,68 @@ impl ComposerState {
                     composer.presentation_mode = mode;
                     composer.input_route = input_route;
                     composer.bump_epoch();
+                    composer.close_overlay_if_unavailable();
                 }
                 Ok(None)
             }
             ComposerAction::ApplyRuntimeBlocks { pane, records } => {
                 let composer = self.pane_mut(pane);
                 composer.blocks = composer.project_blocks(pane, &records);
+                Ok(None)
+            }
+            ComposerAction::OpenHistory { pane } => {
+                let composer = self.existing_mut(pane)?;
+                // An empty history has no rows to show; the host affordance is
+                // disabled for the same reason, so the shortcut agrees with it.
+                if !matches!(composer.mode(), ComposerMode::Available)
+                    || composer.history.len() == 0
+                {
+                    return self.fail(ComposerError::HistoryUnavailable);
+                }
+                if composer.overlay.is_none() {
+                    composer.overlay = Some(HistoryOverlay::default());
+                }
+                Ok(None)
+            }
+            ComposerAction::SetHistoryFilter { pane, query } => {
+                let composer = self.existing_mut(pane)?;
+                let Some(overlay) = composer.overlay.as_mut() else {
+                    return self.fail(ComposerError::HistoryClosed);
+                };
+                if overlay.query != query {
+                    overlay.query = query;
+                    overlay.selected = 0;
+                }
+                Ok(None)
+            }
+            ComposerAction::MoveHistorySelection { pane, delta } => {
+                let composer = self.existing_mut(pane)?;
+                let Some(overlay) = composer.overlay.as_ref() else {
+                    return self.fail(ComposerError::HistoryClosed);
+                };
+                let row_count = composer.history.rank(&overlay.query).len();
+                if let Some(overlay) = composer.overlay.as_mut() {
+                    overlay.step(delta, row_count);
+                }
+                Ok(None)
+            }
+            ComposerAction::SelectHistory { pane, epoch } => {
+                let composer = self.existing_mut(pane)?;
+                composer.require_epoch(epoch)?;
+                let Some(snapshot) = composer.overlay_snapshot() else {
+                    return self.fail(ComposerError::HistoryClosed);
+                };
+                let Some(command) = snapshot.rows.get(snapshot.selected) else {
+                    return self.fail(ComposerError::HistoryNoSelection);
+                };
+                composer.draft = command.clone();
+                composer.overlay = None;
+                composer.bump_epoch();
+                Ok(None)
+            }
+            ComposerAction::CloseHistory { pane } => {
+                let composer = self.existing_mut(pane)?;
+                composer.overlay = None;
                 Ok(None)
             }
         }
@@ -355,6 +486,8 @@ impl ComposerState {
             allows_direct_terminal: composer.input_route == InputRoute::DirectTerminal,
             blocks: composer.blocks.clone(),
             last_error: self.last_error,
+            history_count: composer.history.len(),
+            history: composer.overlay_snapshot(),
         })
     }
 
@@ -787,5 +920,264 @@ mod tests {
         let snap = state.snapshot(pane).unwrap();
         assert_eq!(snap.blocks[0].state, BlockPresentationState::Failed);
         assert_eq!(snap.blocks[1].state, BlockPresentationState::Running);
+    }
+
+    fn submit_accepted(state: &mut ComposerState, pane: PaneId, command: &str) {
+        let epoch = state.snapshot(pane).unwrap().epoch;
+        state
+            .apply(ComposerAction::SetDraft {
+                pane,
+                text: command.into(),
+                epoch,
+            })
+            .unwrap();
+        let request_id = state
+            .apply(ComposerAction::Submit { pane, epoch })
+            .unwrap()
+            .expect("request");
+        state
+            .apply(ComposerAction::ApplyResult {
+                pane,
+                request_id,
+                accepted: true,
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn history_records_only_accepted_submissions() {
+        let pane = pane();
+        let mut state = ComposerState::new();
+        let epoch = ready(&mut state, pane);
+        assert_eq!(state.snapshot(pane).unwrap().history_count, 0);
+        state
+            .apply(ComposerAction::SetDraft {
+                pane,
+                text: "rejected cmd".into(),
+                epoch,
+            })
+            .unwrap();
+        let request_id = state
+            .apply(ComposerAction::Submit { pane, epoch })
+            .unwrap()
+            .unwrap();
+        state
+            .apply(ComposerAction::ApplyResult {
+                pane,
+                request_id,
+                accepted: false,
+            })
+            .unwrap();
+        assert_eq!(state.snapshot(pane).unwrap().history_count, 0);
+        submit_accepted(&mut state, pane, "git status");
+        let snap = state.snapshot(pane).unwrap();
+        assert_eq!(snap.history_count, 1);
+        assert!(snap.history.is_none(), "overlay stays closed after submit");
+    }
+
+    #[test]
+    fn history_is_isolated_per_pane() {
+        let first = pane();
+        let second = other_pane();
+        let mut state = ComposerState::new();
+        ready(&mut state, first);
+        ready(&mut state, second);
+        submit_accepted(&mut state, first, "only in first");
+        assert_eq!(state.snapshot(first).unwrap().history_count, 1);
+        assert_eq!(state.snapshot(second).unwrap().history_count, 0);
+        assert_eq!(
+            state.apply(ComposerAction::OpenHistory { pane: second }),
+            Err(ComposerError::HistoryUnavailable),
+            "second Pane has no entries of its own"
+        );
+        assert!(state.snapshot(second).unwrap().history.is_none());
+        state
+            .apply(ComposerAction::OpenHistory { pane: first })
+            .unwrap();
+        let overlay = state.snapshot(first).unwrap().history.unwrap();
+        assert_eq!(overlay.rows, vec!["only in first"]);
+        assert!(state.snapshot(second).unwrap().history.is_none());
+    }
+
+    #[test]
+    fn open_history_fails_closed_until_an_accepted_submit_exists() {
+        let pane = pane();
+        let mut state = ComposerState::new();
+        ready(&mut state, pane);
+        assert_eq!(
+            state.apply(ComposerAction::OpenHistory { pane }),
+            Err(ComposerError::HistoryUnavailable)
+        );
+        assert!(state.snapshot(pane).unwrap().history.is_none());
+        submit_accepted(&mut state, pane, "ls");
+        state.apply(ComposerAction::OpenHistory { pane }).unwrap();
+        assert_eq!(
+            state.snapshot(pane).unwrap().history.unwrap().rows,
+            vec!["ls"]
+        );
+    }
+
+    #[test]
+    fn open_filter_move_select_inserts_into_draft_and_bumps_epoch() {
+        let pane = pane();
+        let mut state = ComposerState::new();
+        ready(&mut state, pane);
+        submit_accepted(&mut state, pane, "cargo build");
+        submit_accepted(&mut state, pane, "cargo test");
+        submit_accepted(&mut state, pane, "git push");
+        state.apply(ComposerAction::OpenHistory { pane }).unwrap();
+        let open = state.snapshot(pane).unwrap();
+        let overlay = open.history.clone().unwrap();
+        assert_eq!(overlay.rows, vec!["git push", "cargo test", "cargo build"]);
+        assert_eq!(overlay.selected, 0);
+        state
+            .apply(ComposerAction::SetHistoryFilter {
+                pane,
+                query: "cargo".into(),
+            })
+            .unwrap();
+        state
+            .apply(ComposerAction::MoveHistorySelection { pane, delta: 1 })
+            .unwrap();
+        state
+            .apply(ComposerAction::MoveHistorySelection { pane, delta: 9 })
+            .unwrap();
+        let filtered = state.snapshot(pane).unwrap().history.unwrap();
+        assert_eq!(filtered.query, "cargo");
+        assert_eq!(filtered.rows, vec!["cargo test", "cargo build"]);
+        assert_eq!(filtered.selected, 1);
+        let before = state.snapshot(pane).unwrap().epoch;
+        state
+            .apply(ComposerAction::SelectHistory {
+                pane,
+                epoch: before,
+            })
+            .unwrap();
+        let after = state.snapshot(pane).unwrap();
+        assert_eq!(after.draft, "cargo build");
+        assert!(after.history.is_none());
+        assert!(after.epoch > before);
+        assert!(after.can_submit);
+        assert!(after.pending_request_id.is_none(), "select never submits");
+    }
+
+    #[test]
+    fn select_with_stale_epoch_or_no_rows_fails_closed() {
+        let pane = pane();
+        let mut state = ComposerState::new();
+        ready(&mut state, pane);
+        submit_accepted(&mut state, pane, "ls");
+        state.apply(ComposerAction::OpenHistory { pane }).unwrap();
+        let epoch = state.snapshot(pane).unwrap().epoch;
+        assert_eq!(
+            state.apply(ComposerAction::SelectHistory {
+                pane,
+                epoch: epoch + 1
+            }),
+            Err(ComposerError::StaleEpoch)
+        );
+        assert!(state.snapshot(pane).unwrap().history.is_some());
+        state
+            .apply(ComposerAction::SetHistoryFilter {
+                pane,
+                query: "nomatch".into(),
+            })
+            .unwrap();
+        assert_eq!(
+            state.apply(ComposerAction::SelectHistory { pane, epoch }),
+            Err(ComposerError::HistoryNoSelection)
+        );
+        let snap = state.snapshot(pane).unwrap();
+        assert!(snap.draft.is_empty());
+        assert!(snap.history.is_some());
+    }
+
+    #[test]
+    fn filter_and_move_require_open_overlay() {
+        let pane = pane();
+        let mut state = ComposerState::new();
+        ready(&mut state, pane);
+        assert_eq!(
+            state.apply(ComposerAction::SetHistoryFilter {
+                pane,
+                query: "x".into()
+            }),
+            Err(ComposerError::HistoryClosed)
+        );
+        assert_eq!(
+            state.apply(ComposerAction::MoveHistorySelection { pane, delta: 1 }),
+            Err(ComposerError::HistoryClosed)
+        );
+        assert_eq!(
+            state.apply(ComposerAction::CloseHistory { pane }),
+            Ok(None),
+            "closing a closed overlay is idempotent"
+        );
+        assert_eq!(
+            state.apply(ComposerAction::OpenHistory {
+                pane: PaneId::from_bytes([0x33; 16])
+            }),
+            Err(ComposerError::UnknownPane)
+        );
+    }
+
+    #[test]
+    fn overlay_closes_when_composer_becomes_busy_or_hidden() {
+        let pane = pane();
+        let mut state = ComposerState::new();
+        ready(&mut state, pane);
+        submit_accepted(&mut state, pane, "ls");
+        state.apply(ComposerAction::OpenHistory { pane }).unwrap();
+        state
+            .apply(ComposerAction::SetBusy {
+                pane,
+                process: Some("vite".into()),
+            })
+            .unwrap();
+        assert!(state.snapshot(pane).unwrap().history.is_none());
+        assert_eq!(
+            state.apply(ComposerAction::OpenHistory { pane }),
+            Err(ComposerError::HistoryUnavailable)
+        );
+        state
+            .apply(ComposerAction::SetBusy {
+                pane,
+                process: None,
+            })
+            .unwrap();
+        state.apply(ComposerAction::OpenHistory { pane }).unwrap();
+        state
+            .apply(ComposerAction::ApplyPresentation {
+                pane,
+                mode: PresentationMode::Tui,
+                input_route: InputRoute::DirectTerminal,
+            })
+            .unwrap();
+        assert!(state.snapshot(pane).unwrap().history.is_none());
+        assert_eq!(
+            state.apply(ComposerAction::OpenHistory { pane }),
+            Err(ComposerError::HistoryUnavailable)
+        );
+    }
+
+    #[test]
+    fn submit_while_overlay_open_closes_it_and_keeps_history_writer_runtime_only() {
+        let pane = pane();
+        let mut state = ComposerState::new();
+        ready(&mut state, pane);
+        submit_accepted(&mut state, pane, "first");
+        state.apply(ComposerAction::OpenHistory { pane }).unwrap();
+        let epoch = state.snapshot(pane).unwrap().epoch;
+        state
+            .apply(ComposerAction::SetDraft {
+                pane,
+                text: "second".into(),
+                epoch,
+            })
+            .unwrap();
+        state.apply(ComposerAction::Submit { pane, epoch }).unwrap();
+        let snap = state.snapshot(pane).unwrap();
+        assert!(snap.history.is_none());
+        assert_eq!(snap.history_count, 1, "pending submit is not history yet");
     }
 }

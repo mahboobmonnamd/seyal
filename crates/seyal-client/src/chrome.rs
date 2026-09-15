@@ -249,6 +249,12 @@ impl ChromeState {
                 Ok(ChromeEffect::default())
             }
             ChromeAction::SetInspectorMode(mode) => {
+                if mode == InspectorMode::Block && self.selected_block.is_none() {
+                    // Block mode is entered only through SelectBlock. A mode
+                    // switch with no selected Block would project an empty
+                    // inspector with no recovery path.
+                    return self.fail(ChromeError::UnknownBlock);
+                }
                 self.inspector_mode = mode;
                 Ok(ChromeEffect::default())
             }
@@ -320,11 +326,17 @@ impl ChromeState {
     /// unselected: rows fall back to Pane context and no Block rows are shown.
     pub fn snapshot(&self, shell: &ShellSnapshot, blocks: &[BlockProjection]) -> ChromeSnapshot {
         let selected_block = self.selected_block_in(blocks);
+        let inspector_mode =
+            if self.inspector_mode == InspectorMode::Block && selected_block.is_none() {
+                InspectorMode::Context
+            } else {
+                self.inspector_mode
+            };
         let inspector_rows = self.inspector_rows(shell, selected_block);
-        let visible_inspector_rows = filter_rows(&inspector_rows, self.inspector_mode);
+        let visible_inspector_rows = filter_rows(&inspector_rows, inspector_mode);
         ChromeSnapshot {
             left_panel: self.left_panel,
-            inspector_mode: self.inspector_mode,
+            inspector_mode,
             left_visible: self.left_visible,
             inspector_visible: self.inspector_visible,
             tab_strip_visible: self.tab_strip_visible,
@@ -1031,6 +1043,27 @@ mod tests {
     }
 
     #[test]
+    fn block_mode_without_a_selected_block_fails_closed_and_projects_context() {
+        let shell = seed_shell();
+        let snap = shell.snapshot();
+        let mut chrome = ChromeState::new();
+        assert_eq!(
+            chrome.apply(ChromeAction::SetInspectorMode(InspectorMode::Block), &snap),
+            Err(ChromeError::UnknownBlock)
+        );
+        let projected = chrome.snapshot(&snap, &[]);
+        assert_eq!(projected.inspector_mode, InspectorMode::Context);
+        assert!(
+            !projected.visible_inspector_rows.is_empty(),
+            "context rows remain; Block mode does not empty the inspector"
+        );
+        assert!(projected
+            .visible_inspector_rows
+            .iter()
+            .all(|row| row.section != "Block"));
+    }
+
+    #[test]
     fn stale_block_selection_falls_back_to_context_and_clear_restores_mode() {
         let shell = seed_shell();
         let snap = shell.snapshot();
@@ -1058,9 +1091,14 @@ mod tests {
             .inspector_rows
             .iter()
             .all(|row| row.section != "Block"));
+        assert_eq!(
+            stale.inspector_mode,
+            InspectorMode::Context,
+            "stale Block selection projects Context, not an empty Block inspector"
+        );
         assert!(
-            stale.visible_inspector_rows.is_empty(),
-            "Block mode with no selected Block projects no rows"
+            !stale.visible_inspector_rows.is_empty(),
+            "context rows remain while the selected Block is gone"
         );
         chrome
             .apply(ChromeAction::ClearBlockSelection, &snap)

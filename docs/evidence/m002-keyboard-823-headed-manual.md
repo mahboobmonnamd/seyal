@@ -49,3 +49,15 @@ A further computer-use subagent was launched after the V2 error-ID
 correlation commit and also ran on Linux. It stopped after `uname -a` and
 did not launch `Seyal.app`. The six-step checklist remains
 `ENVIRONMENT_UNSUPPORTED`. Raw note: `/tmp/m002-reviews/headed-macos-819-823.md`.
+
+## 2026-09-15 Linux cloud-agent attempt (exact head `379f8c6`)
+
+- **Host:** Linux cloud agent (`uname=Linux`, x86_64)
+- **Exact branch head:** `379f8c655452acc4313f4987d90b875e11337d7d`
+- **Classification:** `ENVIRONMENT_UNSUPPORTED`
+
+No macOS GUI, HID keyboard, IME source, keypad, or Metal pixels on this host.
+No Debug `Seyal.app` was launched. All six headed steps remain
+`ENVIRONMENT_UNSUPPORTED`. See `m002-keyboard-823-macos-handoff.md` for the
+macOS exclusive-Runtime procedure and `m002-keyboard-823-379f8c6-rereview.md`
+for the Linux SOURCE_GO / CLOSE_NO_GO verdict.

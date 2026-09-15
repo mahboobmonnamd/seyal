@@ -8,7 +8,7 @@
 
 use std::time::Duration;
 
-use seyal_core::{AttachmentId, ExecutionId, PaneId, TabId, WorkspaceId};
+use seyal_core::{AttachmentId, BlockId, ExecutionId, PaneId, TabId, WorkspaceId};
 
 use crate::chrome::{
     AgentId, AttentionId, ChromeAction, ChromeError, ChromeSnapshot, ChromeState, InspectorMode,
@@ -63,6 +63,7 @@ pub enum AppError {
     CannotCloseLastTab,
     CannotCloseLastPane,
     EmptyPaletteSelection,
+    UnknownBlock,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -221,6 +222,13 @@ pub enum AppAction {
         composer_epoch: u64,
     },
     DismissComposerHistory {
+        fence: AppFence,
+    },
+    SelectInspectorBlock {
+        fence: AppFence,
+        id: BlockId,
+    },
+    ClearInspectorBlock {
         fence: AppFence,
     },
 }
@@ -384,7 +392,11 @@ impl ApplicationRoot {
     pub fn snapshot(&self) -> AppSnapshot {
         let shell = self.shell.snapshot();
         let composer = self.composer.snapshot(shell.focused_pane).ok();
-        let chrome = self.chrome.snapshot(&shell);
+        let focused_blocks = composer
+            .as_ref()
+            .map(|snap| snap.blocks.as_slice())
+            .unwrap_or(&[]);
+        let chrome = self.chrome.snapshot_with_blocks(&shell, focused_blocks);
         let eligibility = self.eligibility();
         let composer_eligible = eligibility == PresentationEligibility::Flow && !self.frozen;
         AppSnapshot {
@@ -503,6 +515,8 @@ impl ApplicationRoot {
                 composer_epoch,
             } => self.select_composer_history(fence, index, composer_epoch),
             AppAction::DismissComposerHistory { fence } => self.dismiss_composer_history(fence),
+            AppAction::SelectInspectorBlock { fence, id } => self.select_inspector_block(fence, id),
+            AppAction::ClearInspectorBlock { fence } => self.clear_inspector_block(fence),
         };
         match result {
             Ok(()) => {
@@ -818,6 +832,29 @@ impl ApplicationRoot {
             .map_err(composer_error)
     }
 
+    fn select_inspector_block(&mut self, fence: AppFence, id: BlockId) -> Result<(), AppError> {
+        self.require_fence(fence)?;
+        let shell = self.shell.snapshot();
+        let focused_blocks = self
+            .composer
+            .snapshot(shell.focused_pane)
+            .map(|snap| snap.blocks)
+            .unwrap_or_default();
+        self.chrome
+            .apply_with_blocks(ChromeAction::SelectBlock { id }, &shell, &focused_blocks)
+            .map(|_| ())
+            .map_err(chrome_error)
+    }
+
+    fn clear_inspector_block(&mut self, fence: AppFence) -> Result<(), AppError> {
+        self.require_fence(fence)?;
+        let shell = self.shell.snapshot();
+        self.chrome
+            .apply(ChromeAction::ClearBlockSelection, &shell)
+            .map(|_| ())
+            .map_err(chrome_error)
+    }
+
     fn set_left_panel(&mut self, mode: LeftPanelMode) -> Result<(), AppError> {
         let shell = self.shell.snapshot();
         self.chrome
@@ -934,6 +971,7 @@ impl ApplicationRoot {
             }
             PaletteCommandId::InspectorTab => self.set_inspector_mode(InspectorMode::Tab),
             PaletteCommandId::InspectorPane => self.set_inspector_mode(InspectorMode::Pane),
+            PaletteCommandId::InspectorBlocks => self.set_inspector_mode(InspectorMode::Blocks),
         }
     }
 
@@ -1087,7 +1125,15 @@ impl ApplicationRoot {
                 records,
             })
             .map(|_| ())
-            .map_err(composer_error)
+            .map_err(composer_error)?;
+        let shell = self.shell.snapshot();
+        let focused_blocks = self
+            .composer
+            .snapshot(shell.focused_pane)
+            .map(|snap| snap.blocks)
+            .unwrap_or_default();
+        self.chrome.retain_selected_block(&focused_blocks);
+        Ok(())
     }
 
     fn derive_presentation(&mut self, alternate_screen: bool) -> Result<(), AppError> {
@@ -1143,6 +1189,7 @@ fn chrome_error(error: ChromeError) -> AppError {
         ChromeError::UnknownWorkspace => AppError::UnknownChromeWorkspace,
         ChromeError::UnknownTab => AppError::UnknownChromeTab,
         ChromeError::EmptyPaletteSelection => AppError::EmptyPaletteSelection,
+        ChromeError::UnknownBlock => AppError::UnknownBlock,
     }
 }
 
@@ -1886,5 +1933,65 @@ mod tests {
         root.apply(AppAction::SetPaletteOpen { open: false })
             .unwrap();
         assert!(!root.snapshot().chrome.palette_open);
+    }
+
+    #[test]
+    fn inspector_block_details_project_from_composer_and_fail_closed() {
+        use crate::chrome::InspectorMode;
+        use seyal_core::BlockId;
+
+        let mut root = ApplicationRoot::new();
+        root.apply(AppAction::SetInspectorMode {
+            mode: InspectorMode::Blocks,
+        })
+        .unwrap();
+        assert!(root.snapshot().chrome.visible_inspector_rows.is_empty());
+
+        let block = BlockId::from_bytes([0x55; 16]);
+        root.apply(AppAction::ApplyRuntimeBlocks {
+            fence: root.fence(),
+            records: vec![RuntimeBlockRecord {
+                id: block,
+                command: "pwd".into(),
+                start_line: 3,
+                end_line: Some(4),
+                running: false,
+                exit_status: Some(0),
+            }],
+        })
+        .unwrap();
+        let listed = root.snapshot().chrome;
+        assert_eq!(listed.inspector_mode, InspectorMode::Blocks);
+        assert_eq!(listed.visible_inspector_rows.len(), 1);
+        assert_eq!(listed.visible_inspector_rows[0].section, "Block");
+        assert!(listed.visible_inspector_rows[0].value.contains("pwd"));
+
+        root.apply(AppAction::SelectInspectorBlock {
+            fence: root.fence(),
+            id: block,
+        })
+        .unwrap();
+        let detail = root.snapshot().chrome;
+        assert_eq!(detail.selected_block, Some(block));
+        let labels: Vec<_> = detail
+            .visible_inspector_rows
+            .iter()
+            .map(|row| row.label.as_str())
+            .collect();
+        assert!(labels.contains(&"Command"));
+        assert!(labels.contains(&"Exit code"));
+        assert!(!labels.iter().any(|label| label.contains(&"CPU")));
+        assert_eq!(
+            root.apply(AppAction::SelectInspectorBlock {
+                fence: root.fence(),
+                id: BlockId::from_bytes([0xab; 16]),
+            }),
+            Err(AppError::UnknownBlock)
+        );
+        root.apply(AppAction::ClearInspectorBlock {
+            fence: root.fence(),
+        })
+        .unwrap();
+        assert!(root.snapshot().chrome.selected_block.is_none());
     }
 }

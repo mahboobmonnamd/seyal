@@ -62,7 +62,10 @@ enum SeyalAppActionKind {
     SEYAL_APP_ACTION_SET_COMPOSER_HISTORY_QUERY = 34,
     /* reserved = filtered match index; target_pty_generation = composer epoch */
     SEYAL_APP_ACTION_SELECT_COMPOSER_HISTORY = 35,
-    SEYAL_APP_ACTION_DISMISS_COMPOSER_HISTORY = 36
+    SEYAL_APP_ACTION_DISMISS_COMPOSER_HISTORY = 36,
+    /* target_execution_lo/hi = BlockId */
+    SEYAL_APP_ACTION_SELECT_INSPECTOR_BLOCK = 37,
+    SEYAL_APP_ACTION_CLEAR_INSPECTOR_BLOCK = 38
 };
 
 enum SeyalAppEligibility {

@@ -20,6 +20,7 @@ pub enum PaletteCommandId {
     InspectorWorkspace,
     InspectorTab,
     InspectorPane,
+    InspectorBlocks,
 }
 
 impl PaletteCommandId {
@@ -37,6 +38,7 @@ impl PaletteCommandId {
             Self::InspectorWorkspace => "inspector-workspace",
             Self::InspectorTab => "inspector-tab",
             Self::InspectorPane => "inspector-pane",
+            Self::InspectorBlocks => "inspector-blocks",
         }
     }
 
@@ -54,6 +56,7 @@ impl PaletteCommandId {
             Self::InspectorWorkspace => "Inspector: Workspace",
             Self::InspectorTab => "Inspector: Tab",
             Self::InspectorPane => "Inspector: Pane",
+            Self::InspectorBlocks => "Inspector: Blocks",
         }
     }
 
@@ -75,6 +78,7 @@ const BUILTIN: &[PaletteCommandId] = &[
     PaletteCommandId::InspectorWorkspace,
     PaletteCommandId::InspectorTab,
     PaletteCommandId::InspectorPane,
+    PaletteCommandId::InspectorBlocks,
 ];
 
 /// Host-facing filtered palette row. Identities are catalog ids, not Runtime ids.

@@ -459,6 +459,7 @@ pub extern "C" fn seyal_app_chrome(handle: u64) -> SeyalAppChrome {
                 InspectorMode::Workspace => 1,
                 InspectorMode::Tab => 2,
                 InspectorMode::Pane => 3,
+                InspectorMode::Blocks => 4,
             },
             agent_count: chrome.agents.len() as u32,
             attention_count: chrome.attention_items.len() as u32,
@@ -1083,6 +1084,7 @@ fn decode_action(action: &SeyalAppAction) -> Result<AppAction, i32> {
                 1 => InspectorMode::Workspace,
                 2 => InspectorMode::Tab,
                 3 => InspectorMode::Pane,
+                4 => InspectorMode::Blocks,
                 _ => InspectorMode::Context,
             },
         }),
@@ -1170,6 +1172,14 @@ fn decode_action(action: &SeyalAppAction) -> Result<AppAction, i32> {
             composer_epoch: action.target_pty_generation,
         }),
         36 => Ok(AppAction::DismissComposerHistory { fence }),
+        37 => Ok(AppAction::SelectInspectorBlock {
+            fence,
+            id: BlockId::from_bytes(id16(
+                action.target_execution_lo,
+                action.target_execution_hi,
+            )?),
+        }),
+        38 => Ok(AppAction::ClearInspectorBlock { fence }),
         _ => Err(-6),
     }
 }
@@ -1641,6 +1651,7 @@ fn error_number(error: AppError) -> i32 {
         AppError::CannotCloseLastTab => 25,
         AppError::CannotCloseLastPane => 26,
         AppError::EmptyPaletteSelection => 27,
+        AppError::UnknownBlock => 29,
     }
 }
 

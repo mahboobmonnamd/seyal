@@ -528,6 +528,7 @@ final class ProductChromeHostView: NSView {
             ("Workspace", UInt32(1), "seyal-inspector-mode-workspace"),
             ("Tab", UInt32(2), "seyal-inspector-mode-tab"),
             ("Pane", UInt32(3), "seyal-inspector-mode-pane"),
+            ("Blocks", UInt32(4), "seyal-inspector-mode-blocks"),
         ] {
             let button = borderlessButton(title: title, action: #selector(setInspectorMode(_:)))
             button.setButtonType(.toggle)
@@ -695,10 +696,15 @@ final class ProductChromeHostView: NSView {
                 detail: detail,
                 state: row.flags,
                 cellHeight: cellHeight,
-                lines: lines
+                lines: lines,
+                idLo: row.id_lo,
+                idHi: row.id_hi
             )
             card.setAccessibilityIdentifier("seyal-block-\(index)")
             card.body.setAccessibilityIdentifier("seyal-block-\(index)-body")
+            card.onSelect = { [weak self] idLo, idHi in
+                self?.selectInspectorBlock(idLo: idLo, idHi: idHi)
+            }
             blocks.addArrangedSubview(card)
             if blockID != 0 {
                 blockCards[blockID] = card
@@ -1054,6 +1060,19 @@ final class ProductChromeHostView: NSView {
         applyChromeKind(UInt16(SEYAL_APP_ACTION_SET_INSPECTOR.rawValue), reserved: UInt32(sender.tag))
     }
 
+    private func selectInspectorBlock(idLo: UInt64, idHi: UInt64) {
+        let snapshot = seyal_app_snapshot(pane.appHandle)
+        var action = SeyalAppAction()
+        action.version = UInt16(SEYAL_APP_ABI_VERSION)
+        action.size = UInt16(MemoryLayout<SeyalAppAction>.size)
+        action.kind = UInt16(SEYAL_APP_ACTION_SELECT_INSPECTOR_BLOCK.rawValue)
+        action.applySnapshotFence(snapshot)
+        action.target_execution_lo = idLo
+        action.target_execution_hi = idHi
+        _ = seyal_app_apply(pane.appHandle, &action)
+        reconcileChrome()
+    }
+
     @objc private func selectWorkspace(_ sender: NSButton) {
         applyIdentity(UInt16(SEYAL_APP_ACTION_SELECT_WORKSPACE.rawValue), button: sender)
     }
@@ -1306,7 +1325,10 @@ private final class CommandBlockView: NSView {
     private let status = NSTextField(labelWithString: "")
     private let seam = NSView()
     private let state: UInt16
+    private let idLo: UInt64
+    private let idHi: UInt64
     private var bodyHeight: NSLayoutConstraint!
+    var onSelect: ((UInt64, UInt64) -> Void)?
 
     init(
         prompt: String,
@@ -1314,9 +1336,13 @@ private final class CommandBlockView: NSView {
         detail: String,
         state: UInt16,
         cellHeight: CGFloat,
-        lines: Int
+        lines: Int,
+        idLo: UInt64,
+        idHi: UInt64
     ) {
         self.state = state
+        self.idLo = idLo
+        self.idHi = idHi
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = false
@@ -1382,6 +1408,13 @@ private final class CommandBlockView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("CommandBlockView is programmatic")
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if idLo != 0 || idHi != 0 {
+            onSelect?(idLo, idHi)
+        }
+        super.mouseDown(with: event)
     }
 
     func setOutputLines(_ lines: Int, cellHeight: CGFloat) {

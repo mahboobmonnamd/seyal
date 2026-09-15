@@ -191,17 +191,20 @@ The permanent implementation must support a deterministic baseline using provide
 
 Optional semantic retrieval/reranking may improve quality but can be disabled without making eligibility, provenance or invalidation incorrect.
 
-Given identical eligible inputs, policy, builder version and deterministic retrieval configuration, the deterministic baseline must produce reproducible candidate identity/order before optional nondeterministic enhancement. Filesystem/directory enumeration order is not a permitted tie-breaker; inputs must be normalized and deterministically ordered before ranking.
+Given identical eligible inputs, policy, builder version and deterministic retrieval configuration, the deterministic baseline must produce reproducible candidate identity/order before optional nondeterministic enhancement. Filesystem/directory enumeration order and hash-map iteration order are not permitted tie-breakers; inputs must be normalized and deterministically ordered before ranking.
 
 ## 9. Conflict handling and deduplication
 
-Deduplication must preserve provenance and authority differences.
+Deduplication must preserve provenance, authority and policy boundaries.
 
-Two sources with identical or near-identical text are not automatically interchangeable if they have different authority, version, repository, worktree or sensitivity provenance.
+Two sources with identical or near-identical text are not automatically interchangeable if they have different authority, version, repository, worktree, sensitivity, retention, revocation or permission provenance.
 
 Rules:
 
-- byte/content duplicates within the same authority/scope/version may be coalesced into one selected payload while retaining all relevant provenance references;
+- only **eligible** candidates may contribute to a selected coalesced payload;
+- byte/content duplicates may be coalesced only when authority/scope/version **and effective sensitivity, retention, revocation and permission/eligibility policy are compatible for the selected representation**;
+- if otherwise-identical candidates have different policy/sensitivity/retention eligibility, keep them distinct for selection/audit purposes or omit the denied/ineligible candidate according to trace policy; never attach denied candidate provenance, locators or metadata to a less-restricted selected payload in a way that widens retention or disclosure;
+- all retained provenance on a coalesced item inherits the strictest compatible sensitivity/retention/revocation obligations of the contributing eligible candidates;
 - a current normative/source fact and a conflicting lower-authority memory/summary remain distinguishable;
 - conflicting current source facts from different authorized roots are both retained or explicitly surfaced as conflict when the engine cannot establish a single authority winner;
 - a model-generated summary cannot silently replace exact normative/source content when exact content is required for correctness;
@@ -239,7 +242,7 @@ Ignored files are excluded from automatic discovery by default.
 
 `.gitignore` is not a security boundary. Explicit user/source authorization may include an ignored file only after normal policy/sensitivity checks.
 
-### 10.4 Symlinks
+### 10.4 Symlinks and traversal
 
 A symlink inside an authorized root must not silently authorize reading an external target.
 
@@ -248,7 +251,9 @@ Eligibility requires either:
 - target resolves within an already-authorized source root; or
 - the external target/root is explicitly authorized as a source.
 
-Resolution must validate the complete path-component/symlink chain. The bytes read for a selected item must be bound to the resolved target/version that passed authorization; implementations must not perform a check-then-read sequence that permits a target swap between authorization and read.
+Resolution must validate the complete path-component/symlink chain. Recursive discovery must detect symlink/directory cycles using stable resolved-object identity where available plus a bounded traversal-depth/visited-set/entry budget. Re-entering an object already present in the current traversal lineage is a cycle and is not recursively enumerated again. If stable cycle identity cannot be established safely, discovery fails closed for that branch rather than following it indefinitely. Cycle handling yields a typed excluded/error reason suitable for policy-safe trace/audit metadata.
+
+The bytes read for a selected item must be bound to the resolved target/version that passed authorization; implementations must not perform a check-then-read sequence that permits a target swap between authorization and read.
 
 The item records link-path and resolved-target provenance sufficient to invalidate when either changes.
 
@@ -278,7 +283,7 @@ A rename may preserve a higher-level logical identity only if the source adapter
 
 Invalidation marks derived items/bundles stale or removes their reuse eligibility. It never mutates external source truth.
 
-Freshness must be positively established by a bounded authoritative check appropriate to the source before a cached item/bundle is reused. Filesystem watchers, editor notifications and similar event streams are invalidation hints only; missed/coalesced events cannot be the sole proof that a dependency is still current. The accepted implementation must define a bounded freshness policy per source class (for example source generation/version comparison or repository/index generation). Metadata-only checks such as modification time and size are sufficient only when the source adapter can establish that the filesystem's identity and timestamp granularity make them authoritative; otherwise freshness requires an authoritative content/version check. It must fail closed to rebuild/exclusion when required freshness cannot be established.
+Freshness must be positively established by a bounded authoritative check appropriate to the source before a cached item/bundle is reused. Filesystem watchers, editor notifications and similar event streams are invalidation hints only; missed/coalesced events cannot be the sole proof that a dependency is still current. The accepted implementation must define a bounded freshness policy per source class. Metadata-only checks such as modification time and size are sufficient only when the source adapter can establish that the filesystem's identity and timestamp granularity make them authoritative; otherwise freshness requires authoritative content identity or monotonic source generation/version. It must fail closed to rebuild/exclusion when required freshness cannot be established.
 
 ## 12. LSP, symbol and language-index sources
 
@@ -329,13 +334,13 @@ created_at
 SelectionTraceId
 ```
 
-Once created, a bundle is never silently edited in place.
+Once created, a bundle's selection identity/order/dependency metadata is never silently edited in place.
 
-If an item/dependency becomes stale or eligibility changes, the old bundle is marked stale/undispatchable as required by the applicable later use-time contract and a new bundle is built or explicitly revalidated.
+Payload storage is separable retention state. If an item/dependency becomes stale or eligibility changes, the immutable selection record is marked stale/undispatchable and a new bundle is built or explicitly revalidated; policy-required payload redaction/removal does not rewrite historical selection identity into a different bundle.
 
 A new bundle receives a new `ContextBundleId`.
 
-`ContextBundle` payload retention is derived-state retention, not an independent archive. Any locally retained selected payload must remain governed by the selected source's effective sensitivity, retention and revocation policy. When a bundle becomes stale/undispatchable, expires, loses authorization, or its selected source is revoked/deleted under ADR-013, retained payload and reconstructable derivatives must be redacted/removed according to that owning policy; retaining identifiers/provenance for audit is permitted only when those identifiers are themselves policy-safe and non-reconstructive. A bundle that no longer retains payload may remain as policy-safe metadata/evidence, but it cannot be dispatched or used to reconstruct erased/private content.
+`ContextBundle` payload retention is derived-state retention, not an independent archive. Any locally retained selected payload must remain governed by the selected source's effective sensitivity, retention and revocation policy. When a bundle becomes stale/undispatchable, expires, loses authorization, or its selected source is revoked/deleted under ADR-013, retained payload and reconstructable derivatives must be redacted/removed according to that owning policy; retaining identifiers/provenance for audit is permitted only when those identifiers are themselves policy-safe and non-reconstructive. A bundle that no longer retains payload may remain as policy-safe immutable selection metadata/evidence, but it cannot be dispatched or used to reconstruct erased/private content.
 
 ## 14. Dependency completeness
 
@@ -367,16 +372,13 @@ A valid implementation may use configurable partitions, but behavior must satisf
 - optional oversized items may be truncated/chunked only with explicit provenance/range identity and only when the source/consumer contract permits it;
 - no one optional source class may consume unbounded memory/CPU/token budget;
 - omission due to budget is recorded in `SelectionTrace`;
-- budget exhaustion returns a valid bounded result only when all mandatory requirements remain satisfied; otherwise it returns the explicit non-dispatchable state above;
-- budget handling never enters an unbounded retry loop.
-
-Changing the effective budget/partition configuration or mandatory-item classification policy is part of selection configuration identity and prevents reuse when it could change selected content.
+- budget exhaustion returns a valid bounded result only when all mandatory requirements remain satisfied.
 
 ## 16. `SelectionTrace` contract
 
-Every completed build produces a policy-safe `SelectionTrace` sufficient to explain important selection behavior without retaining forbidden payload.
+`SelectionTrace` explains why candidates were included, excluded, coalesced or budget-dropped without becoming another payload store.
 
-The trace may record:
+At minimum it may record:
 
 ```text
 SelectionTraceId
@@ -404,11 +406,14 @@ Required reason classes include at least:
 - excluded duplicate/coalesced;
 - excluded lower-authority conflict;
 - excluded budget;
-- source unavailable/error.
+- source unavailable/error;
+- excluded traversal cycle/unsafe path when applicable.
 
 For excluded secret-bearing or denied content, traces must not persist raw snippets, embeddings, reversible hashes, paths/locators or summaries when those would reveal/reconstruct the excluded source.
 
 Explainability cannot become a second retention path. Every retained trace field is classified under the repository's recognized monotonic sensitivity domain; at minimum the baseline is `Public < Internal < Sensitive < Restricted` as defined by the accepted memory/privacy policy. The effective `SelectionTrace` sensitivity is the maximum/most restrictive classification across every retained candidate metadata field, source identity, exclusion reason and selected item represented in the trace; a derived trace can never lower that classification. Retention is the intersection of all applicable contributing-source policies: the trace may exist only for the shortest permitted lifetime and under every applicable scope/revocation restriction. If policies are incomparable, cannot be mapped to the recognized monotonic domain, or have no safe intersection, the affected field is redacted/omitted; if a safe trace cannot be formed, only a minimal policy-safe audit fact permitted by all applicable policies may remain. Revocation/deletion of any contributing protected source removes/redacts trace material that would reveal or reconstruct it. A mixed-source trace is never retained under a less restrictive bundle/build policy merely because another source is public.
+
+Coalescing never changes these rules: a denied/ineligible candidate is recorded only through its own policy-safe exclusion outcome and cannot be attached as provenance to an eligible coalesced item to bypass its sensitivity/retention restrictions.
 
 ## 17. Optional semantic/model enhancement
 
@@ -457,6 +462,7 @@ Required behavior:
 - required normative/exact source unavailable **or ineligible** because scope/permission/sensitivity/current-policy checks fail → explicit non-dispatchable failed/incomplete build; do not silently substitute lower authority or treat policy denial as an ordinary I/O miss;
 - mandatory context cannot fit budget → explicit non-dispatchable incomplete/unable-to-build state; do not silently drop required authority;
 - freshness cannot be established for a required dependency → fail/rebuild rather than reuse stale state;
+- symlink/directory cycle or traversal budget exhaustion → stop that branch with typed excluded/degraded reason; never recurse indefinitely or repeatedly enumerate the same cycle;
 - stale LSP/index → ignore/rebuild asynchronously; source reads remain authoritative;
 - semantic provider failure → deterministic fallback;
 - cache corruption → invalidate/rebuild derivative;
@@ -473,9 +479,11 @@ The implementation must protect against at least:
 - prompt/context poisoning from untrusted repository content;
 - content that attempts to masquerade as normative instructions;
 - symlink escape from authorized roots;
+- symlink/directory cycles and recursive traversal amplification;
 - sibling worktree/repository leakage;
 - stale submodule/nested-repository reuse;
 - ignored/secret file accidental discovery;
+- dedup/coalescing across incompatible sensitivity/retention/permission policy;
 - cache/index cross-scope poisoning;
 - cache producer/schema/integrity spoofing or corruption;
 - model reranker widening authority;
@@ -526,7 +534,7 @@ Concrete production budgets are calibrated/refined before #681 becomes Ready, bu
 - repeated failure/backoff behavior and convergence at the finite retry/deadline budget;
 - terminal latency/throughput isolation during active/failure load.
 
-Background work must be bounded, cancellable and priority-aware.
+Background work must be bounded, cancellable and priority-aware. Traversal also has explicit depth/entry/visited-state bounds sufficient to stop cycles and adversarial expansion.
 
 The calibrated values and reproducible measurement procedure must be recorded in versioned repository evidence (for example an M005 context calibration document under `docs/evidence/`) before #681 becomes Ready; CI/acceptance must reference that evidence rather than relying on an unwritten local threshold.
 
@@ -534,7 +542,7 @@ The calibrated values and reproducible measurement procedure must be recorded in
 
 At minimum, production implementation must include tests for:
 
-1. identical deterministic inputs produce stable pre-semantic candidate ordering independent of directory-enumeration order;
+1. identical deterministic inputs produce stable pre-semantic candidate ordering independent of directory-enumeration/hash-map order;
 2. source-scope exclusion occurs before ranking;
 3. lower-authority semantic match cannot outrank conflicting current normative/source truth;
 4. selected source edit invalidates dependent item/bundle;
@@ -547,33 +555,35 @@ At minimum, production implementation must include tests for:
 11. explicitly authorized ignored file still receives policy/sensitivity filtering;
 12. symlink outside authorized root is rejected unless external root is explicitly authorized;
 13. symlink chain/target change invalidates derived context and authorized-read binding prevents check-then-read target swap;
-14. submodule revision/dirty-state change invalidates affected item/bundle;
-15. nested repository identity remains distinct;
-16. unsaved LSP overlay and on-disk source remain distinct versions and build scope explicitly chooses the intended source;
-17. late LSP/index generation is rejected as stale;
-18. LSP failure falls back without changing source authority;
-19. exact duplicate coalescing preserves provenance;
-20. conflicting sources remain explainable rather than silently overwritten;
-21. mandatory context overflow returns non-dispatchable incomplete/unable-to-build state rather than a silently truncated valid bundle;
-22. optional budget drops are deterministic and traceable;
-23. oversized optional source chunk/range identity survives selection and invalidates on content/range change;
-24. SelectionTrace for excluded secret does not retain raw/reconstructable payload;
-25. mixed-source SelectionTrace computes the most restrictive sensitivity and policy intersection deterministically, and incomparable/no-safe-intersection metadata is redacted/omitted;
-26. stale/undispatchable bundle and its trace obey source retention/revocation without becoming a payload archive;
-27. cache hit cannot bypass changed scope/policy/source generation or bounded freshness verification;
-28. cache producer/schema/integrity mismatch is treated as miss/corruption and rebuilt from source authority;
-29. semantic/model reranker cannot reintroduce excluded items or increase derived authority/decrease sensitivity;
-30. semantic/model failure falls back deterministically;
-31. source discovery never executes discovered project content;
-32. arbitrary instruction-shaped repository content cannot self-classify as `NormativeInstruction`;
-33. malformed/path-traversal source identity is rejected;
-34. source identity follows the mounted filesystem's case/Unicode equivalence and stable object identity rules; APFS case-sensitive and case-insensitive volumes plus NFC/NFD names do not alias distinct files or scopes;
-35. repeated source/index failure stops automatically at the finite attempt/deadline budget, exposes degraded state, bounds queued resources, and only a defined recovery event starts a fresh budget;
-36. cancellation releases build resources;
-37. required source that exists but is ineligible by scope/permission/sensitivity produces the same non-dispatchable required-context outcome as another unavailable required source;
-38. heavy context/index load does not synchronously stall terminal progress.
+14. symlinked directory cycle is detected and bounded without recursive/repeated enumeration; unknown cycle identity fails closed for that branch;
+15. submodule revision/dirty-state change invalidates affected item/bundle;
+16. nested repository identity remains distinct;
+17. unsaved LSP overlay and on-disk source remain distinct versions and build scope explicitly chooses the intended source;
+18. late LSP/index generation is rejected as stale;
+19. LSP failure falls back without changing source authority;
+20. exact duplicate coalescing preserves provenance only for compatible eligible policy/sensitivity classes;
+21. public/eligible and secret/denied content with identical bytes are not coalesced into a selected item or trace-retention path;
+22. conflicting sources remain explainable rather than silently overwritten;
+23. mandatory context overflow returns non-dispatchable incomplete/unable-to-build state rather than a silently truncated valid bundle;
+24. optional budget drops are deterministic and traceable;
+25. oversized optional source chunk/range identity survives selection and invalidates on content/range change;
+26. SelectionTrace for excluded secret does not retain raw/reconstructable payload;
+27. mixed-source SelectionTrace computes the most restrictive sensitivity and policy intersection deterministically, and incomparable/no-safe-intersection metadata is redacted/omitted;
+28. stale/undispatchable bundle and its trace obey source retention/revocation without becoming a payload archive;
+29. cache hit cannot bypass changed scope/policy/source generation or bounded freshness verification;
+30. cache producer/schema/integrity mismatch is treated as miss/corruption and rebuilt from source authority;
+31. semantic/model reranker cannot reintroduce excluded items or increase derived authority/decrease sensitivity;
+32. semantic/model failure falls back deterministically;
+33. source discovery never executes discovered project content;
+34. arbitrary instruction-shaped repository content cannot self-classify as `NormativeInstruction`;
+35. malformed/path-traversal source identity is rejected;
+36. source identity follows the mounted filesystem's case/Unicode equivalence and stable object identity rules; APFS case-sensitive and case-insensitive volumes plus NFC/NFD names do not alias distinct files or scopes;
+37. repeated source/index failure stops automatically at the finite attempt/deadline budget, exposes degraded state, bounds queued resources, and only a defined recovery event starts a fresh budget;
+38. cancellation releases build resources;
+39. required source that exists but is ineligible by scope/permission/sensitivity produces the same non-dispatchable required-context outcome as another unavailable required source;
+40. heavy context/index load does not synchronously stall terminal progress.
 
-Property/fuzz tests are required for source-identifier normalization, dependency invalidation and scope-key composition where malformed/untrusted input can reach them.
+Property/fuzz tests are required for source-identifier normalization, traversal/cycle handling, dependency invalidation and scope-key composition where malformed/untrusted input can reach them.
 
 ## 24. Specification acceptance and downstream conformance
 
@@ -585,10 +595,11 @@ Before #681 can become implementation-ready/accepted, production evidence must p
 - scope/policy/sensitivity filtering occurs before relevance/model enhancement;
 - cross-workspace/worktree/repository scope leakage is rejected before ranking and cannot be reintroduced by cache/index/model enrichment;
 - authority and relevance remain distinct;
-- filesystem/repository/worktree/symlink/submodule provenance is deterministic;
+- filesystem/repository/worktree/symlink/submodule provenance is deterministic and traversal cycles are bounded;
 - LSP/index sources are generation-fenced and never source truth;
-- ContextBundle is immutable, policy-retained, and dependency-complete enough for selected and enumeration/negative dependency invalidation;
+- ContextBundle is immutable in selection identity, policy-retained, and dependency-complete enough for selected and enumeration/negative dependency invalidation;
 - SelectionTrace is useful but policy-safe and does not outlive source/bundle privacy constraints as a secret-retention path;
+- dedup/coalescing cannot attach denied or more-sensitive material to a less-restricted selected item;
 - mandatory context cannot be silently budget-dropped from a valid dispatchable bundle;
 - deterministic provider-free retrieval remains functional;
 - caches/indexes are rebuildable, integrity-validated and cannot widen authority or bypass freshness;

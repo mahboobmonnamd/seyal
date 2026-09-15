@@ -153,6 +153,63 @@ final class SeyalHostComponentTests: XCTestCase {
         XCTAssertTrue(valid.isValid)
         XCTAssertEqual(valid.regionIDs, [7])
     }
+
+    // MARK: - Block details inspector (#935)
+
+    func testBlockSelectionFailsClosedWithoutRuntimeBlocks() {
+        XCTAssertEqual(UInt16(SEYAL_APP_BLOCK_STATE_MASK), 7)
+        XCTAssertEqual(UInt16(SEYAL_APP_BLOCK_SELECTED), 8)
+        XCTAssertEqual(UInt16(SEYAL_APP_BLOCK_STATE_FAILED) & UInt16(SEYAL_APP_BLOCK_SELECTED), 0)
+        XCTAssertEqual(UInt16(SEYAL_APP_INSPECTOR_BLOCK.rawValue), 4)
+        let handle = seyal_app_create()
+        defer { XCTAssertEqual(seyal_app_destroy(handle), 0) }
+        var snap = seyal_app_snapshot(handle)
+        var bind = SeyalAppAction()
+        bind.version = UInt16(SEYAL_APP_ABI_VERSION)
+        bind.size = UInt16(MemoryLayout<SeyalAppAction>.size)
+        bind.kind = UInt16(SEYAL_APP_ACTION_BIND.rawValue)
+        bind.flags = UInt16(SEYAL_APP_FLAG_TARGET_CONTROLLER)
+        bind.fence_pane_lo = snap.pane_lo
+        bind.fence_pane_hi = snap.pane_hi
+        bind.fence_epoch = snap.epoch
+        bind.target_execution_lo = 1
+        bind.target_attachment_lo = 2
+        bind.target_pty_generation = 1
+        XCTAssertEqual(seyal_app_apply(handle, &bind), 0)
+        snap = seyal_app_snapshot(handle)
+        XCTAssertEqual(seyal_app_composer(handle).block_count, 0, "no Runtime timeline in a unit test")
+        var select = SeyalAppAction()
+        select.version = bind.version
+        select.size = bind.size
+        select.kind = UInt16(SEYAL_APP_ACTION_SELECT_BLOCK.rawValue)
+        select.applySnapshotFence(snap)
+        select.target_execution_lo = 0x5151_5151_5151_5151
+        select.target_execution_hi = 0x5151_5151_5151_5151
+        XCTAssertEqual(seyal_app_apply(handle, &select), -4, "unknown Block fails closed")
+        XCTAssertEqual(seyal_app_last_error(handle), 23)
+        let chrome = seyal_app_chrome(handle)
+        XCTAssertEqual(chrome.inspector_mode, UInt16(SEYAL_APP_INSPECTOR_CONTEXT.rawValue))
+        XCTAssertEqual(chrome.reserved & UInt32(SEYAL_APP_CHROME_INSPECTOR_VISIBLE), 0, "rejected select does not reveal")
+        for index in 0..<Int(chrome.inspector_row_count) {
+            let row = seyal_app_chrome_row(handle, UInt16(SEYAL_APP_ROW_INSPECTOR), UInt32(index))
+            XCTAssertFalse(utf8(row).hasPrefix("Block ·"), "no Block rows without a Block list")
+        }
+        var clear = SeyalAppAction()
+        clear.version = bind.version
+        clear.size = bind.size
+        clear.kind = UInt16(SEYAL_APP_ACTION_CLEAR_BLOCK_SELECTION.rawValue)
+        clear.applySnapshotFence(seyal_app_snapshot(handle))
+        XCTAssertEqual(seyal_app_apply(handle, &clear), 0, "clearing nothing is idempotent")
+    }
+
+    @MainActor
+    func testProductChromeReconcilesWithNoBlockSelection() {
+        let view = ProductChromeHostView(frame: NSRect(x: 0, y: 0, width: 800, height: 560))
+        view.reconcileChrome()
+        let chrome = seyal_app_chrome(view.pane.appHandle)
+        XCTAssertEqual(chrome.inspector_mode, UInt16(SEYAL_APP_INSPECTOR_CONTEXT.rawValue))
+        view.reconcileChrome()
+    }
 }
 
 private func utf8(_ row: SeyalAppRow) -> String {

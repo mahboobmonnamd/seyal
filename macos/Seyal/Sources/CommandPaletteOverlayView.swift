@@ -29,7 +29,11 @@ final class CommandPaletteOverlayView: NSView, NSTextFieldDelegate {
         translatesAutoresizingMaskIntoConstraints = false
         isHidden = true
         setAccessibilityIdentifier("seyal-command-palette-scrim")
-        setAccessibilityElement(false)
+        // Accessible (not merely decorative): XCUIAutomation locates it by
+        // identifier for click-outside-to-close coverage, matching every
+        // other overlay root in this host (#933's history overlay, etc.).
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
 
         card.translatesAutoresizingMaskIntoConstraints = false
         card.wantsLayer = true
@@ -68,8 +72,8 @@ final class CommandPaletteOverlayView: NSView, NSTextFieldDelegate {
             query.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 18),
             query.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -18),
             query.topAnchor.constraint(equalTo: card.topAnchor, constant: 16),
-            rows.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 10),
-            rows.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -10),
+            rows.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14),
+            rows.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -14),
             rows.topAnchor.constraint(equalTo: query.bottomAnchor, constant: 12),
             rows.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -10),
         ])
@@ -241,10 +245,14 @@ final class CommandPaletteOverlayView: NSView, NSTextFieldDelegate {
         for (index, view) in rowViews.enumerated() {
             let row = seyal_app_palette_row(appHandle, UInt32(index))
             view.label.tag = index
-            view.label.stringValue = "  " + (copyUTF8(row.title, row.title_len) ?? "")
+            view.label.stringValue = copyUTF8(row.title, row.title_len) ?? ""
             view.category.stringValue = copyUTF8(row.detail, row.detail_len) ?? ""
             view.label.setAccessibilityIdentifier("seyal-command-palette-row-\(index)")
             view.label.setAccessibilityElement(true)
+            // NSTextField(labelWithString:) does not bridge stringValue to
+            // accessibilityLabel automatically; XCUIElement.label reads
+            // nothing without this (see #933's ComposerHistoryOverlayView).
+            view.label.setAccessibilityLabel(view.label.stringValue)
             view.label.setAccessibilityValue(index == selected ? "selected" : "")
         }
     }

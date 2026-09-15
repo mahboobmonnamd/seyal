@@ -778,29 +778,171 @@ pub extern "C" fn seyal_app_recovery_param(handle: u64) -> u64 {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+#[repr(C)]
 pub struct SeyalAppTheme {
     pub canvas: u32,
     pub text: u32,
     pub accent: u32,
     pub appearance: u16,
+    pub flags: u16,
+    pub utility_receded: u32,
+    pub utility_active: u32,
+    pub attention_fill: u32,
+    pub overlay: u32,
+    pub seam: u32,
+    pub intent_receded: u16,
+    pub intent_active: u16,
+    pub intent_attention: u16,
     pub reserved: u16,
+    pub focus_duration: f32,
+    pub overlay_duration: f32,
 }
 
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct SeyalAppChromeSurface {
+    pub surface: u16,
+    pub depth: u16,
+    pub intent: u16,
+    pub reserved: u16,
+    pub color: u32,
+    pub reserved1: u32,
+}
+
+const THEME_FLAG_REDUCE_TRANSPARENCY: u16 = 1;
+const THEME_FLAG_REDUCE_MOTION: u16 = 2;
+const THEME_FLAG_INCREASE_CONTRAST: u16 = 4;
+
 #[unsafe(no_mangle)]
-pub extern "C" fn seyal_app_theme(appearance: u16) -> SeyalAppTheme {
-    use crate::theme::{canonical, AccessibilitySignals, ColorRole, ResolvedAppearance};
+pub extern "C" fn seyal_app_theme(appearance: u16, accessibility_flags: u16) -> SeyalAppTheme {
+    use crate::theme::{
+        canonical, AccessibilitySignals, ColorRole, DepthLevel, ResolvedAppearance,
+    };
     let resolved_appearance = if appearance == 1 {
         ResolvedAppearance::Light
     } else {
         ResolvedAppearance::Dark
     };
-    let visual = canonical(resolved_appearance, AccessibilitySignals::default());
+    let accessibility = AccessibilitySignals {
+        reduce_transparency: accessibility_flags & THEME_FLAG_REDUCE_TRANSPARENCY != 0,
+        reduce_motion: accessibility_flags & THEME_FLAG_REDUCE_MOTION != 0,
+        increase_contrast: accessibility_flags & THEME_FLAG_INCREASE_CONTRAST != 0,
+    };
+    let visual = canonical(resolved_appearance, accessibility);
+    let receded = visual.material(DepthLevel::RecededUtility);
+    let active = visual.material(DepthLevel::ActiveUtility);
+    let attention = visual.material(DepthLevel::Attention);
+    let mut flags = 0u16;
+    if visual.reduce_transparency {
+        flags |= THEME_FLAG_REDUCE_TRANSPARENCY;
+    }
+    if !visual.motion.allows_motion {
+        flags |= THEME_FLAG_REDUCE_MOTION;
+    }
+    if accessibility.increase_contrast {
+        flags |= THEME_FLAG_INCREASE_CONTRAST;
+    }
     SeyalAppTheme {
         canvas: pack_srgb(visual.colors.get(ColorRole::Canvas)),
         text: pack_srgb(visual.colors.get(ColorRole::TextPrimary)),
         accent: pack_srgb(visual.colors.get(ColorRole::Focus)),
         appearance,
+        flags,
+        utility_receded: pack_srgb(receded.color),
+        utility_active: pack_srgb(active.color),
+        attention_fill: pack_srgb(attention.color),
+        overlay: pack_srgb(visual.colors.get(ColorRole::Overlay)),
+        seam: pack_srgb(visual.colors.get(ColorRole::SeamRest)),
+        intent_receded: pack_intent(receded.intent),
+        intent_active: pack_intent(active.intent),
+        intent_attention: pack_intent(attention.intent),
         reserved: 0,
+        focus_duration: visual.motion.focus_duration as f32,
+        overlay_duration: visual.motion.overlay_duration as f32,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_app_chrome_surface(
+    handle: u64,
+    surface: u16,
+    appearance: u16,
+    accessibility_flags: u16,
+) -> SeyalAppChromeSurface {
+    use crate::chrome_depth::{
+        depth_for_surface, material_for_surface, ChromeDepthSignals, ChromeSurface,
+    };
+    use crate::theme::{canonical, AccessibilitySignals, ResolvedAppearance};
+
+    let empty = SeyalAppChromeSurface {
+        surface,
+        depth: 1,
+        intent: 1,
+        reserved: 0,
+        color: 0,
+        reserved1: 0,
+    };
+    let Some(chrome_surface) = unpack_surface(surface) else {
+        return empty;
+    };
+    let resolved_appearance = if appearance == 1 {
+        ResolvedAppearance::Light
+    } else {
+        ResolvedAppearance::Dark
+    };
+    let accessibility = AccessibilitySignals {
+        reduce_transparency: accessibility_flags & THEME_FLAG_REDUCE_TRANSPARENCY != 0,
+        reduce_motion: accessibility_flags & THEME_FLAG_REDUCE_MOTION != 0,
+        increase_contrast: accessibility_flags & THEME_FLAG_INCREASE_CONTRAST != 0,
+    };
+    let visual = canonical(resolved_appearance, accessibility);
+    APPS.with(|apps| {
+        let apps = apps.borrow();
+        let Some(state) = apps.get(&handle) else {
+            return empty;
+        };
+        let snap = state.root.snapshot();
+        let signals = ChromeDepthSignals::from_snapshots(&snap.chrome, snap.composer.as_ref());
+        let depth = depth_for_surface(chrome_surface, signals);
+        let material = material_for_surface(&visual, chrome_surface, depth);
+        SeyalAppChromeSurface {
+            surface,
+            depth: pack_depth(depth),
+            intent: pack_intent(material.intent),
+            reserved: 0,
+            color: pack_srgb(material.color),
+            reserved1: 0,
+        }
+    })
+}
+
+fn pack_intent(intent: crate::theme::MaterialIntent) -> u16 {
+    match intent {
+        crate::theme::MaterialIntent::Opaque => 0,
+        crate::theme::MaterialIntent::Tonal => 1,
+        crate::theme::MaterialIntent::Frosted => 2,
+    }
+}
+
+fn pack_depth(depth: crate::theme::DepthLevel) -> u16 {
+    match depth {
+        crate::theme::DepthLevel::Truth => 0,
+        crate::theme::DepthLevel::RecededUtility => 1,
+        crate::theme::DepthLevel::ActiveUtility => 2,
+        crate::theme::DepthLevel::Attention => 3,
+    }
+}
+
+fn unpack_surface(surface: u16) -> Option<crate::chrome_depth::ChromeSurface> {
+    use crate::chrome_depth::ChromeSurface;
+    match surface {
+        0 => Some(ChromeSurface::Left),
+        1 => Some(ChromeSurface::Inspector),
+        2 => Some(ChromeSurface::TabStrip),
+        3 => Some(ChromeSurface::AttentionPopover),
+        4 => Some(ChromeSurface::PaletteOverlay),
+        5 => Some(ChromeSurface::Composer),
+        _ => None,
     }
 }
 
@@ -1547,7 +1689,8 @@ mod tests {
         assert_eq!(size_of::<SeyalAppShell>(), 64);
         assert_eq!(size_of::<SeyalAppRow>(), 56);
         assert_eq!(size_of::<SeyalAppBlockSpan>(), 16);
-        assert_eq!(size_of::<SeyalAppTheme>(), 16);
+        assert_eq!(size_of::<SeyalAppTheme>(), 52);
+        assert_eq!(size_of::<SeyalAppChromeSurface>(), 16);
     }
 
     #[test]
@@ -1816,6 +1959,57 @@ mod tests {
         assert_eq!(copy_text(placeholder), "Type a command...");
         assert_eq!(copy_text(execute), "⏎");
         assert_eq!(copy_text(prompt), "$");
+        assert_eq!(seyal_app_destroy(handle), 0);
+    }
+
+    #[test]
+    fn adaptive_depth_chrome_surfaces_project_through_ffi() {
+        let handle = seyal_app_create();
+        let theme = seyal_app_theme(0, 0);
+        assert_ne!(theme.canvas, theme.text);
+        assert_eq!(theme.intent_receded, 2); // frosted by default
+        assert_eq!(theme.focus_duration > 0.0, true);
+        let left = seyal_app_chrome_surface(handle, 0, 0, 0);
+        assert_eq!(left.surface, 0);
+        assert_eq!(left.depth, 1); // receded at rest
+        assert_eq!(left.intent, 2);
+        assert_ne!(left.color, 0);
+
+        let reduced = seyal_app_theme(0, THEME_FLAG_REDUCE_TRANSPARENCY | THEME_FLAG_REDUCE_MOTION);
+        assert_eq!(reduced.flags & THEME_FLAG_REDUCE_TRANSPARENCY, THEME_FLAG_REDUCE_TRANSPARENCY);
+        assert_eq!(reduced.flags & THEME_FLAG_REDUCE_MOTION, THEME_FLAG_REDUCE_MOTION);
+        assert_eq!(reduced.intent_receded, 1); // tonal
+        assert_eq!(reduced.focus_duration, 0.0);
+
+        let mut open = SeyalAppAction {
+            version: APP_ABI_VERSION,
+            size: size_of::<SeyalAppAction>() as u16,
+            kind: 27, // SetAttentionPopover
+            flags: 0,
+            fence_pane_lo: 0,
+            fence_pane_hi: 0,
+            fence_execution_lo: 0,
+            fence_execution_hi: 0,
+            fence_attachment_lo: 0,
+            fence_attachment_hi: 0,
+            fence_epoch: 0,
+            target_execution_lo: 0,
+            target_execution_hi: 0,
+            target_attachment_lo: 0,
+            target_attachment_hi: 0,
+            target_pty_generation: 0,
+            payload: ptr::null(),
+            payload_len: 0,
+            reserved: 1,
+        };
+        assert_eq!(unsafe { seyal_app_apply(handle, &open) }, 0);
+        let attention = seyal_app_chrome_surface(handle, 3, 0, 0);
+        assert_eq!(attention.depth, 3); // D3 attention
+        open.kind = 29; // SetPaletteOpen
+        open.reserved = 1;
+        assert_eq!(unsafe { seyal_app_apply(handle, &open) }, 0);
+        let palette = seyal_app_chrome_surface(handle, 4, 0, 0);
+        assert_eq!(palette.depth, 2); // D2 active
         assert_eq!(seyal_app_destroy(handle), 0);
     }
 

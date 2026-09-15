@@ -273,8 +273,49 @@ typedef struct SeyalAppTheme {
     uint32_t text;
     uint32_t accent;
     uint16_t appearance;
+    /* bit0 reduce_transparency, bit1 reduce_motion, bit2 increase_contrast */
+    uint16_t flags;
+    uint32_t utility_receded;
+    uint32_t utility_active;
+    uint32_t attention_fill;
+    uint32_t overlay;
+    uint32_t seam;
+    uint16_t intent_receded;   /* 0 opaque, 1 tonal, 2 frosted */
+    uint16_t intent_active;
+    uint16_t intent_attention;
     uint16_t reserved;
+    float focus_duration;
+    float overlay_duration;
 } SeyalAppTheme;
+
+#define SEYAL_APP_THEME_REDUCE_TRANSPARENCY 1u
+#define SEYAL_APP_THEME_REDUCE_MOTION 2u
+#define SEYAL_APP_THEME_INCREASE_CONTRAST 4u
+
+#define SEYAL_APP_MATERIAL_OPAQUE 0u
+#define SEYAL_APP_MATERIAL_TONAL 1u
+#define SEYAL_APP_MATERIAL_FROSTED 2u
+
+#define SEYAL_APP_DEPTH_TRUTH 0u
+#define SEYAL_APP_DEPTH_RECEDED 1u
+#define SEYAL_APP_DEPTH_ACTIVE 2u
+#define SEYAL_APP_DEPTH_ATTENTION 3u
+
+#define SEYAL_APP_SURFACE_LEFT 0u
+#define SEYAL_APP_SURFACE_INSPECTOR 1u
+#define SEYAL_APP_SURFACE_TAB_STRIP 2u
+#define SEYAL_APP_SURFACE_ATTENTION_POPOVER 3u
+#define SEYAL_APP_SURFACE_PALETTE_OVERLAY 4u
+#define SEYAL_APP_SURFACE_COMPOSER 5u
+
+typedef struct SeyalAppChromeSurface {
+    uint16_t surface;
+    uint16_t depth;
+    uint16_t intent;
+    uint16_t reserved;
+    uint32_t color;
+    uint32_t reserved1;
+} SeyalAppChromeSurface;
 
 typedef struct SeyalAppShell {
     uint16_t version;
@@ -353,7 +394,13 @@ typedef struct SeyalAppBlockSpan {
 SeyalAppBlockSpan seyal_app_block_span(uint64_t handle, uint32_t index);
 uint64_t seyal_app_recovery_param(uint64_t handle);
 SeyalAppAccessibility seyal_app_accessibility(uint64_t handle);
-SeyalAppTheme seyal_app_theme(uint16_t appearance);
+SeyalAppTheme seyal_app_theme(uint16_t appearance, uint16_t accessibility_flags);
+SeyalAppChromeSurface seyal_app_chrome_surface(
+    uint64_t handle,
+    uint16_t surface,
+    uint16_t appearance,
+    uint16_t accessibility_flags
+);
 int32_t seyal_app_last_error(uint64_t handle);
 
 #ifdef __cplusplus

@@ -5,7 +5,10 @@ struct NativeTheme {
     let canvas: NSColor
     let container: NSColor
     let utility: NSColor
+    let utilityActive: NSColor
     let elevated: NSColor
+    let attentionFill: NSColor
+    let overlay: NSColor
     let text: NSColor
     let secondary: NSColor
     let muted: NSColor
@@ -15,30 +18,86 @@ struct NativeTheme {
     let warning: NSColor
     let danger: NSColor
     let appearance: NSAppearance
+    let reduceTransparency: Bool
+    let reduceMotion: Bool
+    let intentReceded: UInt16
+    let intentActive: UInt16
+    let intentAttention: UInt16
+    let focusDuration: CGFloat
+    let overlayDuration: CGFloat
 }
 
 enum NativeThemeRealization {
+    static func accessibilityFlags(for appearance: NSAppearance) -> UInt16 {
+        var flags: UInt16 = 0
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency {
+            flags |= UInt16(SEYAL_APP_THEME_REDUCE_TRANSPARENCY)
+        }
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            flags |= UInt16(SEYAL_APP_THEME_REDUCE_MOTION)
+        }
+        if NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast {
+            flags |= UInt16(SEYAL_APP_THEME_INCREASE_CONTRAST)
+        }
+        // appearance is reserved for future per-window contrast probing
+        _ = appearance
+        return flags
+    }
+
     static func theme(for appearance: NSAppearance) -> NativeTheme {
         let light = appearance.bestMatch(from: [.aqua, .darkAqua]) == .aqua
-        let packed = seyal_app_theme(light ? 1 : 0)
+        let flags = accessibilityFlags(for: appearance)
+        let packed = seyal_app_theme(light ? 1 : 0, flags)
         let canvas = color(packed.canvas)
         let text = color(packed.text)
         let accent = color(packed.accent)
         return NativeTheme(
             canvas: canvas,
-            container: mix(canvas, text, 0.04),
-            utility: mix(canvas, text, 0.08),
-            elevated: mix(canvas, text, 0.12),
+            container: color(packed.utility_receded).withAlphaComponent(1),
+            utility: color(packed.utility_receded),
+            utilityActive: color(packed.utility_active),
+            elevated: color(packed.utility_active),
+            attentionFill: color(packed.attention_fill),
+            overlay: color(packed.overlay),
             text: text,
             secondary: mix(text, canvas, 0.32),
             muted: mix(text, canvas, 0.52),
             accent: accent,
-            seam: mix(canvas, text, 0.16),
+            seam: color(packed.seam),
             success: NSColor(srgbRed: 0.22, green: 0.83, blue: 0.62, alpha: 1),
             warning: NSColor(srgbRed: 0.96, green: 0.65, blue: 0.14, alpha: 1),
             danger: NSColor(srgbRed: 0.98, green: 0.44, blue: 0.40, alpha: 1),
-            appearance: light ? NSAppearance(named: .aqua)! : NSAppearance(named: .darkAqua)!
+            appearance: light ? NSAppearance(named: .aqua)! : NSAppearance(named: .darkAqua)!,
+            reduceTransparency: packed.flags & UInt16(SEYAL_APP_THEME_REDUCE_TRANSPARENCY) != 0,
+            reduceMotion: packed.flags & UInt16(SEYAL_APP_THEME_REDUCE_MOTION) != 0,
+            intentReceded: packed.intent_receded,
+            intentActive: packed.intent_active,
+            intentAttention: packed.intent_attention,
+            focusDuration: CGFloat(packed.focus_duration),
+            overlayDuration: CGFloat(packed.overlay_duration)
         )
+    }
+
+    static func chromeSurface(
+        _ surface: UInt16,
+        appHandle: UInt64,
+        appearance: NSAppearance
+    ) -> SeyalAppChromeSurface {
+        let light = appearance.bestMatch(from: [.aqua, .darkAqua]) == .aqua
+        return seyal_app_chrome_surface(
+            appHandle,
+            surface,
+            light ? 1 : 0,
+            accessibilityFlags(for: appearance)
+        )
+    }
+
+    static func color(for surface: SeyalAppChromeSurface, theme: NativeTheme) -> NSColor {
+        let packed = color(surface.color)
+        if surface.intent == UInt16(SEYAL_APP_MATERIAL_OPAQUE) || theme.reduceTransparency {
+            return packed.withAlphaComponent(1)
+        }
+        return packed
     }
 
     @MainActor
@@ -49,6 +108,7 @@ enum NativeThemeRealization {
         view.appearance = theme.appearance
         view.wantsLayer = true
         view.layer?.backgroundColor = theme.canvas.cgColor
+        // Root frost stays off; per-region materials are applied by the chrome host.
         material.isHidden = true
         applyColors(in: view, theme: theme)
     }

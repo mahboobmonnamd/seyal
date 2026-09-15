@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 
 /// Thin AppKit projection of Rust shell/chrome/composer/recovery. No writable product model.
 @MainActor
@@ -49,6 +50,7 @@ final class ProductChromeHostView: NSView {
     private var centerLeadingLeft: NSLayoutConstraint!
     private var centerTrailingInspector: NSLayoutConstraint!
     private var centerTopTab: NSLayoutConstraint!
+    private var lastChromeDepths: [UInt16: UInt16] = [:]
 
     override init(frame frameRect: NSRect) {
         pane = ThinPaneHostView(frame: frameRect)
@@ -378,6 +380,7 @@ final class ProductChromeHostView: NSView {
         let eligibilityChanged = snapshot.eligibility != lastEligibility
         if snapshot.generation == lastSnapshotGeneration && !eligibilityChanged {
             composer.reconcile()
+            applyTheme()
             driveRecovery()
             return
         }
@@ -797,16 +800,92 @@ final class ProductChromeHostView: NSView {
             material: material,
             appearance: effectiveAppearance
         )
-        left.layer?.backgroundColor = theme.utility.cgColor
-        inspectorColumn.layer?.backgroundColor = theme.utility.cgColor
-        tabStrip.layer?.backgroundColor = theme.container.cgColor
+        applyChromeSurface(
+            UInt16(SEYAL_APP_SURFACE_LEFT),
+            to: left,
+            theme: theme,
+            cornerRadius: 0
+        )
+        applyChromeSurface(
+            UInt16(SEYAL_APP_SURFACE_INSPECTOR),
+            to: inspectorColumn,
+            theme: theme,
+            cornerRadius: 0
+        )
+        applyChromeSurface(
+            UInt16(SEYAL_APP_SURFACE_TAB_STRIP),
+            to: tabStrip,
+            theme: theme,
+            cornerRadius: 0
+        )
+        applyChromeSurface(
+            UInt16(SEYAL_APP_SURFACE_ATTENTION_POPOVER),
+            to: attentionPopover,
+            theme: theme,
+            cornerRadius: 8
+        )
+        applyChromeSurface(
+            UInt16(SEYAL_APP_SURFACE_PALETTE_OVERLAY),
+            to: paletteOverlay,
+            theme: theme,
+            cornerRadius: 10
+        )
         centerColumn.layer?.backgroundColor = theme.canvas.cgColor
         transcript.backgroundColor = .clear
         left.layer?.borderWidth = 0
         composer.apply(theme: theme)
+        applyComposerDepth(theme: theme)
         for view in blocks.arrangedSubviews {
             (view as? CommandBlockView)?.apply(theme: theme)
         }
+    }
+
+    private func applyChromeSurface(
+        _ surface: UInt16,
+        to view: NSView,
+        theme: NativeTheme,
+        cornerRadius: CGFloat
+    ) {
+        let projected = NativeThemeRealization.chromeSurface(
+            surface,
+            appHandle: pane.appHandle,
+            appearance: effectiveAppearance
+        )
+        let fill = NativeThemeRealization.color(for: projected, theme: theme)
+        view.wantsLayer = true
+        view.layer?.backgroundColor = fill.cgColor
+        if cornerRadius > 0 {
+            view.layer?.cornerRadius = cornerRadius
+            view.layer?.borderWidth = theme.reduceTransparency ? 1 : 0
+            view.layer?.borderColor = theme.seam.cgColor
+        }
+        let previous = lastChromeDepths[surface]
+        lastChromeDepths[surface] = projected.depth
+        if !theme.reduceMotion,
+           projected.depth >= UInt16(SEYAL_APP_DEPTH_ACTIVE),
+           previous != projected.depth
+        {
+            // Short opacity settle only; never animate terminal content.
+            let animation = CABasicAnimation(keyPath: "opacity")
+            animation.fromValue = 0.92
+            animation.toValue = 1
+            animation.duration = theme.focusDuration
+            view.layer?.add(animation, forKey: "seyal-depth-focus")
+        }
+    }
+
+    private func applyComposerDepth(theme: NativeTheme) {
+        let projected = NativeThemeRealization.chromeSurface(
+            UInt16(SEYAL_APP_SURFACE_COMPOSER),
+            appHandle: pane.appHandle,
+            appearance: effectiveAppearance
+        )
+        let fill = NativeThemeRealization.color(for: projected, theme: theme)
+        composer.wantsLayer = true
+        composer.layer?.backgroundColor = fill.cgColor
+        composer.layer?.borderColor = projected.depth >= UInt16(SEYAL_APP_DEPTH_ACTIVE)
+            ? theme.accent.withAlphaComponent(0.45).cgColor
+            : theme.seam.cgColor
     }
 
     private func recoveryText(_ snapshot: SeyalAppSnapshot) -> String {

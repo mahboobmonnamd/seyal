@@ -120,6 +120,9 @@ pub struct SeyalAppComposer {
     pub draft_utf8: *const u8,
     pub draft_utf8_len: u32,
     pub block_count: u32,
+    pub history_match_count: u32,
+    pub history_query_utf8: *const u8,
+    pub history_query_utf8_len: u32,
 }
 
 #[repr(C)]
@@ -161,6 +164,9 @@ struct AppHandle {
     output: Vec<u8>,
     composer_draft: Vec<u8>,
     palette_query: Vec<u8>,
+    composer_history_query: Vec<u8>,
+    history_text: Vec<u8>,
+    history_rows: Vec<SeyalAppRow>,
     ax_nodes: Vec<SeyalAppAxNode>,
     ax_text: Vec<u8>,
     shell_text: Vec<u8>,
@@ -227,6 +233,9 @@ pub extern "C" fn seyal_app_create() -> u64 {
                 output: Vec::new(),
                 composer_draft: Vec::new(),
                 palette_query: Vec::new(),
+                composer_history_query: Vec::new(),
+                history_text: Vec::new(),
+                history_rows: Vec::new(),
                 ax_nodes: Vec::new(),
                 ax_text: Vec::new(),
                 shell_text: Vec::new(),
@@ -329,6 +338,9 @@ pub extern "C" fn seyal_app_composer(handle: u64) -> SeyalAppComposer {
                 draft_utf8: ptr::null(),
                 draft_utf8_len: 0,
                 block_count: 0,
+                history_match_count: 0,
+                history_query_utf8: ptr::null(),
+                history_query_utf8_len: 0,
             };
         };
         let snap = state.root.snapshot();
@@ -343,15 +355,22 @@ pub extern "C" fn seyal_app_composer(handle: u64) -> SeyalAppComposer {
                 draft_utf8: ptr::null(),
                 draft_utf8_len: 0,
                 block_count: 0,
+                history_match_count: 0,
+                history_query_utf8: ptr::null(),
+                history_query_utf8_len: 0,
             };
         };
         state.composer_draft = composer.draft.as_bytes().to_vec();
+        state.composer_history_query = composer.history_query.as_bytes().to_vec();
         let mut flags = 0u16;
         if composer.can_submit {
             flags |= 1;
         }
         if composer.allows_direct_terminal {
             flags |= 2;
+        }
+        if composer.history_open {
+            flags |= 4;
         }
         SeyalAppComposer {
             version: APP_ABI_VERSION,
@@ -371,7 +390,30 @@ pub extern "C" fn seyal_app_composer(handle: u64) -> SeyalAppComposer {
             },
             draft_utf8_len: state.composer_draft.len() as u32,
             block_count: composer.blocks.len() as u32,
+            history_match_count: composer.history_matches.len() as u32,
+            history_query_utf8: if state.composer_history_query.is_empty() {
+                ptr::null()
+            } else {
+                state.composer_history_query.as_ptr()
+            },
+            history_query_utf8_len: state.composer_history_query.len() as u32,
         }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_app_history_row(handle: u64, index: u32) -> SeyalAppRow {
+    APPS.with(|apps| {
+        let mut apps = apps.borrow_mut();
+        let Some(state) = apps.get_mut(&handle) else {
+            return SeyalAppRow::empty();
+        };
+        encode_history_rows(state);
+        state
+            .history_rows
+            .get(index as usize)
+            .copied()
+            .unwrap_or_else(SeyalAppRow::empty)
     })
 }
 
@@ -975,6 +1017,17 @@ fn decode_action(action: &SeyalAppAction) -> Result<AppAction, i32> {
             delta: action.reserved as i32,
         }),
         32 => Ok(AppAction::PaletteRun),
+        33 => Ok(AppAction::OpenComposerHistory { fence }),
+        34 => Ok(AppAction::SetComposerHistoryQuery {
+            fence,
+            query: read_payload(action.payload, action.payload_len)?,
+        }),
+        35 => Ok(AppAction::SelectComposerHistory {
+            fence,
+            index: action.reserved,
+            composer_epoch: action.target_pty_generation,
+        }),
+        36 => Ok(AppAction::DismissComposerHistory { fence }),
         _ => Err(-6),
     }
 }
@@ -1435,6 +1488,8 @@ fn error_number(error: AppError) -> i32 {
         AppError::ComposerSubmitDisabled => 16,
         AppError::StaleComposerRequest => 17,
         AppError::StaleComposerEpoch => 18,
+        AppError::HistoryClosed => 27,
+        AppError::InvalidHistoryIndex => 28,
         AppError::UnknownAgent => 19,
         AppError::UnknownAttention => 20,
         AppError::UnknownChromeWorkspace => 21,

@@ -1,10 +1,11 @@
-//! Portable composer draft, submission fencing, and Block presentation.
+//! Portable composer draft, submission fencing, history, and Block presentation.
 //!
 //! This module owns per-Pane draft lifecycle, available/busy/hidden eligibility,
-//! request-id correlation, and a read-only projection of Runtime Block metadata.
-//! It is not a BlockTimeline, PTY, VT/grid, or renderer. Hosts dispatch
-//! [`ComposerAction`] and render [`ComposerSnapshot`]. Do not call this from
-//! the PTY→VT→damage path. Do not invent Block completions.
+//! request-id correlation, pane-scoped command history with fuzzy filter, and a
+//! read-only projection of Runtime Block metadata. It is not a BlockTimeline,
+//! PTY, VT/grid, or renderer. Hosts dispatch [`ComposerAction`] and render
+//! [`ComposerSnapshot`]. Do not call this from the PTY→VT→damage path. Do not
+//! invent Block completions.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -12,6 +13,9 @@ use std::fmt;
 use seyal_core::{BlockId, PaneId};
 
 use crate::presentation::{InputRoute, PresentationMode};
+
+/// Maximum retained successful submit commands per Pane.
+pub const HISTORY_CAPACITY: usize = 50;
 
 /// Host-visible composer eligibility for one Pane.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,6 +34,8 @@ pub enum ComposerError {
     SubmitDisabled,
     StaleRequest,
     StaleEpoch,
+    HistoryClosed,
+    InvalidHistoryIndex,
 }
 
 impl ComposerError {
@@ -40,6 +46,8 @@ impl ComposerError {
             Self::SubmitDisabled => "Composer submit is unavailable.",
             Self::StaleRequest => "Composer result does not match the pending request.",
             Self::StaleEpoch => "Composer action epoch is stale.",
+            Self::HistoryClosed => "Composer history overlay is closed.",
+            Self::InvalidHistoryIndex => "Composer history selection is out of range.",
         }
     }
 }
@@ -154,6 +162,21 @@ pub enum ComposerAction {
         pane: PaneId,
         records: Vec<RuntimeBlockRecord>,
     },
+    OpenHistory {
+        pane: PaneId,
+    },
+    SetHistoryQuery {
+        pane: PaneId,
+        query: String,
+    },
+    SelectHistory {
+        pane: PaneId,
+        index: u32,
+        epoch: u64,
+    },
+    DismissHistory {
+        pane: PaneId,
+    },
 }
 
 /// Read-only projection for native hosts.
@@ -167,6 +190,9 @@ pub struct ComposerSnapshot {
     pub epoch: u64,
     pub allows_direct_terminal: bool,
     pub blocks: Vec<BlockProjection>,
+    pub history_open: bool,
+    pub history_query: String,
+    pub history_matches: Vec<String>,
     pub last_error: Option<ComposerError>,
 }
 
@@ -180,6 +206,10 @@ struct PaneComposer {
     presentation_mode: PresentationMode,
     input_route: InputRoute,
     blocks: Vec<BlockProjection>,
+    /// Newest-first successful submit commands for this Pane only.
+    history: Vec<String>,
+    history_open: bool,
+    history_query: String,
 }
 
 impl PaneComposer {
@@ -193,6 +223,9 @@ impl PaneComposer {
             presentation_mode: PresentationMode::Flow,
             input_route: InputRoute::Composer,
             blocks: Vec::new(),
+            history: Vec::new(),
+            history_open: false,
+            history_query: String::new(),
         }
     }
 
@@ -254,6 +287,42 @@ impl PaneComposer {
             })
             .collect()
     }
+
+    fn push_history(&mut self, command: String) {
+        if command.is_empty() {
+            return;
+        }
+        if self.history.first().is_some_and(|first| first == &command) {
+            return;
+        }
+        self.history.insert(0, command);
+        if self.history.len() > HISTORY_CAPACITY {
+            self.history.truncate(HISTORY_CAPACITY);
+        }
+    }
+
+    fn history_matches(&self) -> Vec<String> {
+        self.history
+            .iter()
+            .filter(|entry| fuzzy_match(entry, &self.history_query))
+            .cloned()
+            .collect()
+    }
+
+    fn dismiss_history(&mut self) {
+        self.history_open = false;
+        self.history_query.clear();
+    }
+}
+
+/// Case-insensitive substring match for pane-local history filtering.
+fn fuzzy_match(candidate: &str, query: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    let haystack: String = candidate.chars().flat_map(char::to_lowercase).collect();
+    let needle: String = query.chars().flat_map(char::to_lowercase).collect();
+    haystack.contains(&needle)
 }
 
 /// Authoritative headed composer/Block-projection state.
@@ -306,6 +375,8 @@ impl ComposerState {
                 }
                 composer.pending_request_id = None;
                 if accepted {
+                    let command = composer.draft.clone();
+                    composer.push_history(command);
                     composer.draft.clear();
                 }
                 composer.bump_epoch();
@@ -328,6 +399,9 @@ impl ComposerState {
                 if composer.presentation_mode != mode || composer.input_route != input_route {
                     composer.presentation_mode = mode;
                     composer.input_route = input_route;
+                    if matches!(composer.mode(), ComposerMode::Hidden) {
+                        composer.dismiss_history();
+                    }
                     composer.bump_epoch();
                 }
                 Ok(None)
@@ -335,6 +409,48 @@ impl ComposerState {
             ComposerAction::ApplyRuntimeBlocks { pane, records } => {
                 let composer = self.pane_mut(pane);
                 composer.blocks = composer.project_blocks(pane, &records);
+                Ok(None)
+            }
+            ComposerAction::OpenHistory { pane } => {
+                let composer = self.existing_mut(pane)?;
+                if matches!(composer.mode(), ComposerMode::Hidden) {
+                    return self.fail(ComposerError::SubmitDisabled);
+                }
+                composer.history_open = true;
+                composer.history_query.clear();
+                composer.bump_epoch();
+                Ok(None)
+            }
+            ComposerAction::SetHistoryQuery { pane, query } => {
+                let composer = self.existing_mut(pane)?;
+                if !composer.history_open {
+                    return self.fail(ComposerError::HistoryClosed);
+                }
+                composer.history_query = query;
+                composer.bump_epoch();
+                Ok(None)
+            }
+            ComposerAction::SelectHistory { pane, index, epoch } => {
+                let composer = self.existing_mut(pane)?;
+                composer.require_epoch(epoch)?;
+                if !composer.history_open {
+                    return self.fail(ComposerError::HistoryClosed);
+                }
+                let matches = composer.history_matches();
+                let Some(command) = matches.get(index as usize) else {
+                    return self.fail(ComposerError::InvalidHistoryIndex);
+                };
+                composer.draft = command.clone();
+                composer.dismiss_history();
+                composer.bump_epoch();
+                Ok(None)
+            }
+            ComposerAction::DismissHistory { pane } => {
+                let composer = self.existing_mut(pane)?;
+                if composer.history_open {
+                    composer.dismiss_history();
+                    composer.bump_epoch();
+                }
                 Ok(None)
             }
         }
@@ -351,6 +467,17 @@ impl ComposerState {
             epoch: composer.epoch,
             allows_direct_terminal: composer.input_route == InputRoute::DirectTerminal,
             blocks: composer.blocks.clone(),
+            history_open: composer.history_open,
+            history_query: if composer.history_open {
+                composer.history_query.clone()
+            } else {
+                String::new()
+            },
+            history_matches: if composer.history_open {
+                composer.history_matches()
+            } else {
+                Vec::new()
+            },
             last_error: self.last_error,
         })
     }
@@ -784,5 +911,203 @@ mod tests {
         let snap = state.snapshot(pane).unwrap();
         assert_eq!(snap.blocks[0].state, BlockPresentationState::Failed);
         assert_eq!(snap.blocks[1].state, BlockPresentationState::Running);
+    }
+
+    fn accept_submit(state: &mut ComposerState, pane: PaneId, text: &str) {
+        let epoch = state.snapshot(pane).unwrap().epoch;
+        state
+            .apply(ComposerAction::SetDraft {
+                pane,
+                text: text.into(),
+                epoch,
+            })
+            .unwrap();
+        let request_id = state
+            .apply(ComposerAction::Submit { pane, epoch })
+            .unwrap()
+            .expect("request");
+        state
+            .apply(ComposerAction::ApplyResult {
+                pane,
+                request_id,
+                accepted: true,
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn history_is_isolated_per_pane_and_bounded() {
+        let first = pane();
+        let second = other_pane();
+        let mut state = ComposerState::new();
+        ready(&mut state, first);
+        ready(&mut state, second);
+        accept_submit(&mut state, first, "echo first-a");
+        accept_submit(&mut state, first, "echo first-b");
+        accept_submit(&mut state, second, "echo second-only");
+        state
+            .apply(ComposerAction::OpenHistory { pane: first })
+            .unwrap();
+        state
+            .apply(ComposerAction::OpenHistory { pane: second })
+            .unwrap();
+        assert_eq!(
+            state.snapshot(first).unwrap().history_matches,
+            vec!["echo first-b".to_owned(), "echo first-a".to_owned()]
+        );
+        assert_eq!(
+            state.snapshot(second).unwrap().history_matches,
+            vec!["echo second-only".to_owned()]
+        );
+
+        for i in 0..HISTORY_CAPACITY {
+            accept_submit(&mut state, first, &format!("cmd-{i}"));
+        }
+        state
+            .apply(ComposerAction::OpenHistory { pane: first })
+            .unwrap();
+        let matches = state.snapshot(first).unwrap().history_matches;
+        assert_eq!(matches.len(), HISTORY_CAPACITY);
+        assert_eq!(matches[0], format!("cmd-{}", HISTORY_CAPACITY - 1));
+        assert!(!matches.iter().any(|entry| entry == "echo first-a"));
+    }
+
+    #[test]
+    fn history_fuzzy_filter_is_case_insensitive_substring() {
+        let pane = pane();
+        let mut state = ComposerState::new();
+        ready(&mut state, pane);
+        accept_submit(&mut state, pane, "git status");
+        accept_submit(&mut state, pane, "cargo test -p seyal-client");
+        accept_submit(&mut state, pane, "Git Push Origin");
+        state.apply(ComposerAction::OpenHistory { pane }).unwrap();
+        state
+            .apply(ComposerAction::SetHistoryQuery {
+                pane,
+                query: "git".into(),
+            })
+            .unwrap();
+        let snap = state.snapshot(pane).unwrap();
+        assert_eq!(snap.history_query, "git");
+        assert_eq!(
+            snap.history_matches,
+            vec!["Git Push Origin".to_owned(), "git status".to_owned()]
+        );
+        assert!(!snap
+            .history_matches
+            .iter()
+            .any(|entry| entry.contains("cargo")));
+        state
+            .apply(ComposerAction::SetHistoryQuery {
+                pane,
+                query: "push".into(),
+            })
+            .unwrap();
+        assert_eq!(
+            state.snapshot(pane).unwrap().history_matches,
+            vec!["Git Push Origin".to_owned()]
+        );
+    }
+
+    #[test]
+    fn select_history_inserts_draft_and_dismisses() {
+        let pane = pane();
+        let mut state = ComposerState::new();
+        ready(&mut state, pane);
+        accept_submit(&mut state, pane, "printf hello");
+        accept_submit(&mut state, pane, "pwd");
+        state.apply(ComposerAction::OpenHistory { pane }).unwrap();
+        let epoch = state.snapshot(pane).unwrap().epoch;
+        state
+            .apply(ComposerAction::SelectHistory {
+                pane,
+                index: 1,
+                epoch,
+            })
+            .unwrap();
+        let snap = state.snapshot(pane).unwrap();
+        assert_eq!(snap.draft, "printf hello");
+        assert!(!snap.history_open);
+        assert!(snap.history_matches.is_empty());
+        assert!(snap.can_submit);
+    }
+
+    #[test]
+    fn history_actions_fail_closed() {
+        let pane = pane();
+        let mut state = ComposerState::new();
+        ready(&mut state, pane);
+        assert_eq!(
+            state.apply(ComposerAction::SetHistoryQuery {
+                pane,
+                query: "x".into(),
+            }),
+            Err(ComposerError::HistoryClosed)
+        );
+        assert_eq!(
+            state.apply(ComposerAction::SelectHistory {
+                pane,
+                index: 0,
+                epoch: state.snapshot(pane).unwrap().epoch,
+            }),
+            Err(ComposerError::HistoryClosed)
+        );
+        accept_submit(&mut state, pane, "one");
+        state.apply(ComposerAction::OpenHistory { pane }).unwrap();
+        let epoch = state.snapshot(pane).unwrap().epoch;
+        assert_eq!(
+            state.apply(ComposerAction::SelectHistory {
+                pane,
+                index: 9,
+                epoch,
+            }),
+            Err(ComposerError::InvalidHistoryIndex)
+        );
+        assert!(state.snapshot(pane).unwrap().history_open);
+        state
+            .apply(ComposerAction::ApplyPresentation {
+                pane,
+                mode: PresentationMode::Tui,
+                input_route: InputRoute::DirectTerminal,
+            })
+            .unwrap();
+        assert!(!state.snapshot(pane).unwrap().history_open);
+        assert_eq!(
+            state.apply(ComposerAction::OpenHistory { pane }),
+            Err(ComposerError::SubmitDisabled)
+        );
+        assert_eq!(
+            state.apply(ComposerAction::OpenHistory {
+                pane: PaneId::from_bytes([0x33; 16]),
+            }),
+            Err(ComposerError::UnknownPane)
+        );
+    }
+
+    #[test]
+    fn rejected_submit_does_not_append_history() {
+        let pane = pane();
+        let mut state = ComposerState::new();
+        let epoch = ready(&mut state, pane);
+        state
+            .apply(ComposerAction::SetDraft {
+                pane,
+                text: "ghost".into(),
+                epoch,
+            })
+            .unwrap();
+        let request_id = state
+            .apply(ComposerAction::Submit { pane, epoch })
+            .unwrap()
+            .expect("request");
+        state
+            .apply(ComposerAction::ApplyResult {
+                pane,
+                request_id,
+                accepted: false,
+            })
+            .unwrap();
+        state.apply(ComposerAction::OpenHistory { pane }).unwrap();
+        assert!(state.snapshot(pane).unwrap().history_matches.is_empty());
     }
 }

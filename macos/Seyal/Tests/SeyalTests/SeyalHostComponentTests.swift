@@ -20,7 +20,7 @@ final class SeyalHostComponentTests: XCTestCase {
         XCTAssertEqual(seyal_app_destroy(handle), 0)
         let theme = seyal_app_theme(0)
         XCTAssertNotEqual(theme.canvas, theme.text)
-        XCTAssertEqual(MemoryLayout<SeyalAppComposer>.size, 40)
+        XCTAssertEqual(MemoryLayout<SeyalAppComposer>.size, 64)
         XCTAssertEqual(MemoryLayout<SeyalAppChrome>.size, 24)
         XCTAssertEqual(MemoryLayout<SeyalAppShell>.size, 64)
         XCTAssertEqual(MemoryLayout<SeyalAppRow>.size, 56)

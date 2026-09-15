@@ -57,7 +57,12 @@ enum SeyalAppActionKind {
     SEYAL_APP_ACTION_SET_PALETTE_QUERY = 30,
     /* reserved = signed move delta as i32 bit pattern */
     SEYAL_APP_ACTION_PALETTE_MOVE = 31,
-    SEYAL_APP_ACTION_PALETTE_RUN = 32
+    SEYAL_APP_ACTION_PALETTE_RUN = 32,
+    SEYAL_APP_ACTION_OPEN_COMPOSER_HISTORY = 33,
+    SEYAL_APP_ACTION_SET_COMPOSER_HISTORY_QUERY = 34,
+    /* reserved = filtered match index; target_pty_generation = composer epoch */
+    SEYAL_APP_ACTION_SELECT_COMPOSER_HISTORY = 35,
+    SEYAL_APP_ACTION_DISMISS_COMPOSER_HISTORY = 36
 };
 
 enum SeyalAppEligibility {
@@ -207,6 +212,7 @@ enum SeyalAppComposerMode {
 
 #define SEYAL_APP_COMPOSER_CAN_SUBMIT 1u
 #define SEYAL_APP_COMPOSER_DIRECT_TERMINAL 2u
+#define SEYAL_APP_COMPOSER_HISTORY_OPEN 4u
 
 #define SEYAL_APP_COPY_COMPOSER_PLACEHOLDER 0u
 #define SEYAL_APP_COPY_COMPOSER_EXECUTE 1u
@@ -227,6 +233,9 @@ typedef struct SeyalAppComposer {
     const uint8_t *draft_utf8;
     uint32_t draft_utf8_len;
     uint32_t block_count;
+    uint32_t history_match_count;
+    const uint8_t *history_query_utf8;
+    uint32_t history_query_utf8_len;
 } SeyalAppComposer;
 
 typedef struct SeyalAppChrome {
@@ -326,6 +335,7 @@ int32_t seyal_app_destroy(uint64_t handle);
 int32_t seyal_app_apply(uint64_t handle, const SeyalAppAction *action);
 SeyalAppSnapshot seyal_app_snapshot(uint64_t handle);
 SeyalAppComposer seyal_app_composer(uint64_t handle);
+SeyalAppRow seyal_app_history_row(uint64_t handle, uint32_t index);
 SeyalAppChrome seyal_app_chrome(uint64_t handle);
 SeyalAppShell seyal_app_shell(uint64_t handle);
 SeyalAppRow seyal_app_shell_row(uint64_t handle, uint16_t kind, uint32_t index);

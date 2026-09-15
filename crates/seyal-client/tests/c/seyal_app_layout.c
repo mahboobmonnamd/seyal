@@ -22,7 +22,7 @@ int main(void) {
     REQUIRE(offsetof(SeyalAppSnapshot, recovery_generation) == 104);
     REQUIRE(sizeof(SeyalAppAxNode) == 72);
     REQUIRE(sizeof(SeyalAppAccessibility) == 24);
-    REQUIRE(sizeof(SeyalAppComposer) == 40);
+    REQUIRE(sizeof(SeyalAppComposer) == 64);
     REQUIRE(sizeof(SeyalAppChrome) == 24);
     REQUIRE(sizeof(SeyalAppTheme) == 16);
     REQUIRE(sizeof(SeyalAppShell) == 64);

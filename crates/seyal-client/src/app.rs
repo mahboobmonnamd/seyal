@@ -52,6 +52,8 @@ pub enum AppError {
     ComposerSubmitDisabled,
     StaleComposerRequest,
     StaleComposerEpoch,
+    HistoryClosed,
+    InvalidHistoryIndex,
     UnknownAgent,
     UnknownAttention,
     UnknownChromeWorkspace,
@@ -206,6 +208,21 @@ pub enum AppAction {
         delta: i32,
     },
     PaletteRun,
+    OpenComposerHistory {
+        fence: AppFence,
+    },
+    SetComposerHistoryQuery {
+        fence: AppFence,
+        query: String,
+    },
+    SelectComposerHistory {
+        fence: AppFence,
+        index: u32,
+        composer_epoch: u64,
+    },
+    DismissComposerHistory {
+        fence: AppFence,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -476,6 +493,16 @@ impl ApplicationRoot {
             AppAction::SetPaletteQuery { query } => self.set_palette_query(query),
             AppAction::PaletteMove { delta } => self.palette_move(delta),
             AppAction::PaletteRun => self.palette_run(),
+            AppAction::OpenComposerHistory { fence } => self.open_composer_history(fence),
+            AppAction::SetComposerHistoryQuery { fence, query } => {
+                self.set_composer_history_query(fence, query)
+            }
+            AppAction::SelectComposerHistory {
+                fence,
+                index,
+                composer_epoch,
+            } => self.select_composer_history(fence, index, composer_epoch),
+            AppAction::DismissComposerHistory { fence } => self.dismiss_composer_history(fence),
         };
         match result {
             Ok(()) => {
@@ -743,6 +770,54 @@ impl ApplicationRoot {
             .map_err(composer_error)
     }
 
+    fn open_composer_history(&mut self, fence: AppFence) -> Result<(), AppError> {
+        self.require_fence(fence)?;
+        self.composer
+            .apply(ComposerAction::OpenHistory { pane: fence.pane })
+            .map(|_| ())
+            .map_err(composer_error)
+    }
+
+    fn set_composer_history_query(
+        &mut self,
+        fence: AppFence,
+        query: String,
+    ) -> Result<(), AppError> {
+        self.require_fence(fence)?;
+        self.composer
+            .apply(ComposerAction::SetHistoryQuery {
+                pane: fence.pane,
+                query,
+            })
+            .map(|_| ())
+            .map_err(composer_error)
+    }
+
+    fn select_composer_history(
+        &mut self,
+        fence: AppFence,
+        index: u32,
+        composer_epoch: u64,
+    ) -> Result<(), AppError> {
+        self.require_fence(fence)?;
+        self.composer
+            .apply(ComposerAction::SelectHistory {
+                pane: fence.pane,
+                index,
+                epoch: composer_epoch,
+            })
+            .map(|_| ())
+            .map_err(composer_error)
+    }
+
+    fn dismiss_composer_history(&mut self, fence: AppFence) -> Result<(), AppError> {
+        self.require_fence(fence)?;
+        self.composer
+            .apply(ComposerAction::DismissHistory { pane: fence.pane })
+            .map(|_| ())
+            .map_err(composer_error)
+    }
+
     fn set_left_panel(&mut self, mode: LeftPanelMode) -> Result<(), AppError> {
         let shell = self.shell.snapshot();
         self.chrome
@@ -944,7 +1019,7 @@ impl ApplicationRoot {
         Ok(())
     }
 
-        fn set_split_ratio(&mut self, layout_index: u32, ratio_bps: u16) -> Result<(), AppError> {
+    fn set_split_ratio(&mut self, layout_index: u32, ratio_bps: u16) -> Result<(), AppError> {
         self.shell
             .apply(ShellAction::SetSplitRatio {
                 layout_index,
@@ -957,7 +1032,7 @@ impl ApplicationRoot {
         Ok(())
     }
 
-fn split_focused(&mut self, axis: SplitAxis) -> Result<(), AppError> {
+    fn split_focused(&mut self, axis: SplitAxis) -> Result<(), AppError> {
         self.shell
             .apply(ShellAction::SplitFocused { axis })
             .map_err(shell_error)?;
@@ -1093,6 +1168,8 @@ fn composer_error(error: ComposerError) -> AppError {
         }
         ComposerError::StaleRequest => AppError::StaleComposerRequest,
         ComposerError::StaleEpoch => AppError::StaleComposerEpoch,
+        ComposerError::HistoryClosed => AppError::HistoryClosed,
+        ComposerError::InvalidHistoryIndex => AppError::InvalidHistoryIndex,
     }
 }
 

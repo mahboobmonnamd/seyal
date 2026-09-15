@@ -117,7 +117,8 @@ final class ComposerHistoryOverlayView: NSView, NSTextFieldDelegate {
             move(by: 1)
         case #selector(NSResponder.insertNewline(_:)):
             select()
-        case #selector(NSResponder.cancelOperation(_:)):
+        case #selector(NSResponder.cancelOperation(_:)), #selector(NSStandardKeyBindingResponding.complete(_:)):
+            // NSTextField's field editor reports Escape as either selector.
             close()
         default:
             return false
@@ -195,6 +196,7 @@ final class ComposerHistoryOverlayView: NSView, NSTextFieldDelegate {
             label.stringValue = copyUTF8(row.title, row.title_len) ?? ""
             label.setAccessibilityIdentifier("seyal-composer-history-row-\(index)")
             label.setAccessibilityElement(true)
+            label.setAccessibilityLabel(label.stringValue)
             label.setAccessibilityValue(index == selected ? "selected" : "")
         }
     }

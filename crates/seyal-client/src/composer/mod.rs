@@ -173,7 +173,7 @@ pub enum ComposerAction {
         records: Vec<RuntimeBlockRecord>,
     },
     /// Open the history overlay above this Pane's composer. Requires
-    /// [`ComposerMode::Available`].
+    /// [`ComposerMode::Available`] and at least one recorded entry.
     OpenHistory {
         pane: PaneId,
     },
@@ -415,7 +415,11 @@ impl ComposerState {
             }
             ComposerAction::OpenHistory { pane } => {
                 let composer = self.existing_mut(pane)?;
-                if !matches!(composer.mode(), ComposerMode::Available) {
+                // An empty history has no rows to show; the host affordance is
+                // disabled for the same reason, so the shortcut agrees with it.
+                if !matches!(composer.mode(), ComposerMode::Available)
+                    || composer.history.len() == 0
+                {
                     return self.fail(ComposerError::HistoryUnavailable);
                 }
                 if composer.overlay.is_none() {
@@ -978,12 +982,36 @@ mod tests {
         submit_accepted(&mut state, first, "only in first");
         assert_eq!(state.snapshot(first).unwrap().history_count, 1);
         assert_eq!(state.snapshot(second).unwrap().history_count, 0);
+        assert_eq!(
+            state.apply(ComposerAction::OpenHistory { pane: second }),
+            Err(ComposerError::HistoryUnavailable),
+            "second Pane has no entries of its own"
+        );
+        assert!(state.snapshot(second).unwrap().history.is_none());
         state
-            .apply(ComposerAction::OpenHistory { pane: second })
+            .apply(ComposerAction::OpenHistory { pane: first })
             .unwrap();
-        let overlay = state.snapshot(second).unwrap().history.unwrap();
-        assert!(overlay.rows.is_empty());
-        assert!(state.snapshot(first).unwrap().history.is_none());
+        let overlay = state.snapshot(first).unwrap().history.unwrap();
+        assert_eq!(overlay.rows, vec!["only in first"]);
+        assert!(state.snapshot(second).unwrap().history.is_none());
+    }
+
+    #[test]
+    fn open_history_fails_closed_until_an_accepted_submit_exists() {
+        let pane = pane();
+        let mut state = ComposerState::new();
+        ready(&mut state, pane);
+        assert_eq!(
+            state.apply(ComposerAction::OpenHistory { pane }),
+            Err(ComposerError::HistoryUnavailable)
+        );
+        assert!(state.snapshot(pane).unwrap().history.is_none());
+        submit_accepted(&mut state, pane, "ls");
+        state.apply(ComposerAction::OpenHistory { pane }).unwrap();
+        assert_eq!(
+            state.snapshot(pane).unwrap().history.unwrap().rows,
+            vec!["ls"]
+        );
     }
 
     #[test]

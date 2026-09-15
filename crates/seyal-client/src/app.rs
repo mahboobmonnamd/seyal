@@ -187,6 +187,9 @@ pub enum AppAction {
         inspector: bool,
         tab_strip: bool,
     },
+    SetAttentionPopover {
+        open: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -279,6 +282,23 @@ impl ApplicationRoot {
             mode: PresentationMode::Flow,
             input_route: InputRoute::Frozen,
         });
+        // Host-equivalent M001 preview fixtures until Runtime attention producers
+        // land: one attention row bound to the real default Workspace/Tab.
+        let shell_snap = shell.snapshot();
+        let mut chrome = ChromeState::new();
+        let _ = chrome.apply(
+            ChromeAction::ReplaceAttention {
+                items: vec![crate::chrome::AttentionItem {
+                    id: AttentionId::new("attention-preview-tab"),
+                    title: "Review waiting".into(),
+                    detail: "Agent needs approval".into(),
+                    workspace: Some(shell_snap.active_workspace),
+                    tab: Some(shell_snap.active_tab),
+                    agent: None,
+                }],
+            },
+            &shell_snap,
+        );
         Self {
             presentation: PresentationSession::new(None, PresentationMode::Flow),
             shell,
@@ -291,7 +311,7 @@ impl ApplicationRoot {
             recovery: RecoveryCoordinator::default(),
             pending_recovery: Vec::new(),
             composer,
-            chrome: ChromeState::new(),
+            chrome,
             #[cfg(target_os = "macos")]
             client: None,
         }
@@ -420,6 +440,7 @@ impl ApplicationRoot {
                 inspector,
                 tab_strip,
             } => self.set_shell_visibility(left, inspector, tab_strip),
+            AppAction::SetAttentionPopover { open } => self.set_attention_popover(open),
         };
         match result {
             Ok(()) => {
@@ -723,6 +744,13 @@ impl ApplicationRoot {
             .map_err(chrome_error)
     }
 
+    fn set_attention_popover(&mut self, open: bool) -> Result<(), AppError> {
+        let shell = self.shell.snapshot();
+        self.chrome
+            .apply(ChromeAction::SetAttentionPopover { open }, &shell)
+            .map(|_| ())
+            .map_err(chrome_error)
+    }
     fn select_agent(&mut self, fence: AppFence, id: AgentId) -> Result<(), AppError> {
         self.require_fence(fence)?;
         let shell = self.shell.snapshot();
@@ -1516,6 +1544,25 @@ mod tests {
         assert_eq!(projected[0].id, block);
         assert_eq!(projected[0].state, BlockPresentationState::Completed);
         assert_eq!(projected[0].pane, root.snapshot().pane);
+    }
+
+    #[test]
+    fn attention_popover_opens_and_closes_through_app_root() {
+        let mut root = ApplicationRoot::new();
+        assert_eq!(root.snapshot().chrome.attention_items.len(), 1);
+        assert!(!root.snapshot().chrome.attention_popover_open);
+        root.apply(AppAction::SetAttentionPopover { open: true })
+            .unwrap();
+        assert!(root.snapshot().chrome.attention_popover_open);
+        let id = root.snapshot().chrome.attention_items[0].id.clone();
+        root.apply(AppAction::OpenAttention {
+            fence: root.fence(),
+            id,
+        })
+        .unwrap();
+        let after = root.snapshot().chrome;
+        assert!(after.attention_items.is_empty());
+        assert!(!after.attention_popover_open);
     }
 
     #[test]

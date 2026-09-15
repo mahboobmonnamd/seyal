@@ -156,6 +156,11 @@ pub enum ChromeAction {
         inspector: bool,
         tab_strip: bool,
     },
+    /// Attention popover open/closed. Presentation chrome owned in Rust so
+    /// keyboard/menu toggles share one authoritative bit with the thin host.
+    SetAttentionPopover {
+        open: bool,
+    },
 }
 
 /// Navigation the host must apply to [`crate::shell::ShellState`].
@@ -172,6 +177,7 @@ pub struct ChromeSnapshot {
     pub left_visible: bool,
     pub inspector_visible: bool,
     pub tab_strip_visible: bool,
+    pub attention_popover_open: bool,
     pub selected_agent: Option<AgentId>,
     pub agents: Vec<AgentRecord>,
     pub inspector_rows: Vec<InspectorRow>,
@@ -188,6 +194,7 @@ pub struct ChromeState {
     left_visible: bool,
     inspector_visible: bool,
     tab_strip_visible: bool,
+    attention_popover_open: bool,
     selected_agent: Option<AgentId>,
     agents: HashMap<WorkspaceId, Vec<AgentRecord>>,
     attention: Vec<AttentionItem>,
@@ -204,6 +211,7 @@ impl Default for ChromeState {
             left_visible: true,
             inspector_visible: true,
             tab_strip_visible: true,
+            attention_popover_open: false,
             selected_agent: None,
             agents: HashMap::new(),
             attention: Vec::new(),
@@ -275,6 +283,10 @@ impl ChromeState {
                 self.tab_strip_visible = tab_strip;
                 Ok(ChromeEffect::default())
             }
+            ChromeAction::SetAttentionPopover { open } => {
+                self.attention_popover_open = open;
+                Ok(ChromeEffect::default())
+            }
         }
     }
 
@@ -287,6 +299,7 @@ impl ChromeState {
             left_visible: self.left_visible,
             inspector_visible: self.inspector_visible,
             tab_strip_visible: self.tab_strip_visible,
+            attention_popover_open: self.attention_popover_open,
             selected_agent: self.selected_agent.clone(),
             agents: self.agents_for(shell.active_workspace).to_vec(),
             inspector_rows,
@@ -338,6 +351,7 @@ impl ChromeState {
             self.selected_agent = None;
         }
         self.attention.remove(index);
+        self.attention_popover_open = false;
         Ok(ChromeEffect {
             select_workspace: item.workspace,
             select_tab: item.tab,
@@ -683,6 +697,47 @@ mod tests {
         assert!(!receded.left_visible);
         assert!(!receded.inspector_visible);
         assert!(!receded.tab_strip_visible);
+    }
+
+    #[test]
+    fn attention_popover_toggles_and_closes_on_open() {
+        let shell = seed_shell();
+        let snap = shell.snapshot();
+        let mut chrome = ChromeState::new();
+        assert!(!chrome.snapshot(&snap).attention_popover_open);
+        chrome
+            .apply(ChromeAction::SetAttentionPopover { open: true }, &snap)
+            .unwrap();
+        assert!(chrome.snapshot(&snap).attention_popover_open);
+        seed_agents(&mut chrome, &snap);
+        chrome
+            .apply(
+                ChromeAction::ReplaceAttention {
+                    items: vec![AttentionItem {
+                        id: AttentionId::new("attention-preview-tab"),
+                        title: "Preview attention item".into(),
+                        detail: "Open Agent Development".into(),
+                        workspace: Some(workspace(1)),
+                        tab: Some(tab(2)),
+                        agent: Some(AgentId::new("agent-codex")),
+                    }],
+                },
+                &snap,
+            )
+            .unwrap();
+        chrome
+            .apply(
+                ChromeAction::OpenAttention {
+                    id: AttentionId::new("attention-preview-tab"),
+                },
+                &snap,
+            )
+            .unwrap();
+        assert!(!chrome.snapshot(&shell.snapshot()).attention_popover_open);
+        assert!(chrome
+            .snapshot(&shell.snapshot())
+            .attention_items
+            .is_empty());
     }
 
     #[test]

@@ -922,6 +922,9 @@ fn decode_action(action: &SeyalAppAction) -> Result<AppAction, i32> {
                 action.target_execution_hi,
             )?),
         }),
+        27 => Ok(AppAction::SetAttentionPopover {
+            open: action.reserved != 0,
+        }),
         _ => Err(-6),
     }
 }
@@ -1153,6 +1156,9 @@ fn chrome_visibility_flags(chrome: &crate::chrome::ChromeSnapshot) -> u32 {
     }
     if chrome.tab_strip_visible {
         flags |= 4;
+    }
+    if chrome.attention_popover_open {
+        flags |= 8;
     }
     flags
 }

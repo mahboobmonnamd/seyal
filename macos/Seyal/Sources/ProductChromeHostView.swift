@@ -21,6 +21,8 @@ final class ProductChromeHostView: NSView {
     private let splitRightButton = NSButton(title: "Split Right", target: nil, action: nil)
     private let splitDownButton = NSButton(title: "Split Down", target: nil, action: nil)
     private let closePaneButton = NSButton(title: "Close Pane", target: nil, action: nil)
+    private let attentionBell = NSButton(title: "Attention", target: nil, action: nil)
+    private let attentionPopover = NSStackView()
     private let recoveryLabel = NSTextField(labelWithString: "")
     private let leftItems = NSStackView()
     private let inspectorColumn = NSView()
@@ -102,7 +104,19 @@ final class ProductChromeHostView: NSView {
         expose(inspector, identifier: "seyal-inspector")
         attention.orientation = .vertical
         attention.alignment = .leading
-        expose(attention, identifier: "seyal-attention")
+        expose(attention, identifier: "seyal-agents")
+        attentionPopover.orientation = .vertical
+        attentionPopover.alignment = .leading
+        attentionPopover.spacing = 4
+        attentionPopover.translatesAutoresizingMaskIntoConstraints = false
+        attentionPopover.wantsLayer = true
+        attentionPopover.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.96).cgColor
+        attentionPopover.layer?.cornerRadius = 8
+        attentionPopover.layer?.borderWidth = 1
+        attentionPopover.layer?.borderColor = NSColor.separatorColor.cgColor
+        attentionPopover.isHidden = true
+        expose(attentionPopover, identifier: "seyal-attention-popover")
+        addSubview(attentionPopover)
         recoveryLabel.font = .systemFont(ofSize: 11, weight: .regular)
         recoveryLabel.tag = 2
         recoveryLabel.setAccessibilityElement(true)
@@ -206,6 +220,9 @@ final class ProductChromeHostView: NSView {
             attention.leadingAnchor.constraint(equalTo: inspector.leadingAnchor),
             attention.trailingAnchor.constraint(equalTo: inspector.trailingAnchor),
             attention.topAnchor.constraint(equalTo: inspector.bottomAnchor, constant: 12),
+            attentionPopover.topAnchor.constraint(equalTo: tabStrip.bottomAnchor, constant: 4),
+            attentionPopover.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            attentionPopover.widthAnchor.constraint(equalToConstant: 280),
             recoveryLabel.leadingAnchor.constraint(equalTo: leadingAnchor),
             recoveryLabel.topAnchor.constraint(equalTo: topAnchor),
             recoveryLabel.widthAnchor.constraint(equalToConstant: 1),
@@ -470,15 +487,7 @@ final class ProductChromeHostView: NSView {
             inspector.addArrangedSubview(caption)
             inspector.addArrangedSubview(body)
         }
-        for index in 0..<Int(chrome.attention_count) {
-            let row = seyal_app_chrome_row(pane.appHandle, UInt16(SEYAL_APP_ROW_ATTENTION), UInt32(index))
-            let identity = copyUTF8(row.title, row.title_len) ?? ""
-            let title = copyUTF8(row.detail, row.detail_len) ?? identity
-            let button = borderlessButton(title: title, action: #selector(openAttention(_:)))
-            button.setAccessibilityIdentifier("seyal-attention-\(index)")
-            button.identifier = NSUserInterfaceItemIdentifier(identity)
-            attention.addArrangedSubview(button)
-        }
+        rebuildAttentionPopover(chrome)
         for index in 0..<Int(chrome.agent_count) {
             let row = seyal_app_chrome_row(pane.appHandle, UInt16(SEYAL_APP_ROW_AGENT), UInt32(index))
             let identity = copyUTF8(row.title, row.title_len) ?? ""
@@ -488,6 +497,34 @@ final class ProductChromeHostView: NSView {
             button.identifier = NSUserInterfaceItemIdentifier(identity)
             button.state = row.flags & UInt16(SEYAL_APP_ROW_SELECTED) != 0 ? .on : .off
             attention.addArrangedSubview(button)
+        }
+    }
+
+
+    private func rebuildAttentionPopover(_ chrome: SeyalAppChrome) {
+        attentionPopover.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        let open = chrome.reserved & UInt32(SEYAL_APP_CHROME_ATTENTION_POPOVER_OPEN) != 0
+        attentionPopover.isHidden = !open
+        attentionPopover.setAccessibilityElement(open)
+        let count = Int(chrome.attention_count)
+        let badge = count == 0 ? "Attention" : "Attention (\(count))"
+        attentionBell.title = badge
+        attentionBell.state = open ? .on : .off
+        if count == 0 {
+            let empty = NSTextField(labelWithString: "No attention items")
+            empty.font = .systemFont(ofSize: 12, weight: .regular)
+            empty.setAccessibilityIdentifier("seyal-attention-empty")
+            attentionPopover.addArrangedSubview(empty)
+            return
+        }
+        for index in 0..<count {
+            let row = seyal_app_chrome_row(pane.appHandle, UInt16(SEYAL_APP_ROW_ATTENTION), UInt32(index))
+            let identity = copyUTF8(row.title, row.title_len) ?? ""
+            let title = copyUTF8(row.detail, row.detail_len) ?? identity
+            let button = borderlessButton(title: title, action: #selector(openAttention(_:)))
+            button.setAccessibilityIdentifier("seyal-attention-\(index)")
+            button.identifier = NSUserInterfaceItemIdentifier(identity)
+            attentionPopover.addArrangedSubview(button)
         }
     }
 
@@ -858,6 +895,14 @@ final class ProductChromeHostView: NSView {
         applyIdentity(UInt16(SEYAL_APP_ACTION_FOCUS_PANE.rawValue), button: sender)
     }
 
+    @objc private func toggleAttentionPopover() {
+        let chrome = seyal_app_chrome(pane.appHandle)
+        let open = chrome.reserved & UInt32(SEYAL_APP_CHROME_ATTENTION_POPOVER_OPEN) == 0
+        applyChromeKind(
+            UInt16(SEYAL_APP_ACTION_SET_ATTENTION_POPOVER.rawValue),
+            reserved: open ? 1 : 0
+        )
+    }
     @objc private func openAttention(_ sender: NSButton) {
         applyPayload(UInt16(SEYAL_APP_ACTION_OPEN_ATTENTION.rawValue), text: sender.identifier?.rawValue ?? "")
     }
@@ -918,10 +963,12 @@ final class ProductChromeHostView: NSView {
         styleAction(splitRightButton, identifier: "seyal-split-right", action: #selector(splitRight))
         styleAction(splitDownButton, identifier: "seyal-split-down", action: #selector(splitDown))
         styleAction(closePaneButton, identifier: "seyal-close-pane", action: #selector(closeFocusedPane))
+        styleSwitcher(attentionBell, identifier: "seyal-attention-bell", action: #selector(toggleAttentionPopover))
         chromeActions.arrangedSubviews.forEach { $0.removeFromSuperview() }
         chromeActions.addArrangedSubview(splitRightButton)
         chromeActions.addArrangedSubview(splitDownButton)
         chromeActions.addArrangedSubview(closePaneButton)
+        chromeActions.addArrangedSubview(attentionBell)
     }
 
     private func styleAction(_ button: NSButton, identifier: String, action: Selector) {

@@ -51,6 +51,9 @@ pub enum AppError {
     ComposerSubmitDisabled,
     StaleComposerRequest,
     StaleComposerEpoch,
+    ComposerHistoryUnavailable,
+    ComposerHistoryClosed,
+    ComposerHistoryNoSelection,
     UnknownAgent,
     UnknownAttention,
     UnknownChromeWorkspace,
@@ -172,6 +175,24 @@ pub enum AppAction {
         left: bool,
         inspector: bool,
         tab_strip: bool,
+    },
+    OpenComposerHistory {
+        fence: AppFence,
+    },
+    SetComposerHistoryFilter {
+        fence: AppFence,
+        query: String,
+    },
+    MoveComposerHistorySelection {
+        fence: AppFence,
+        delta: i32,
+    },
+    SelectComposerHistory {
+        fence: AppFence,
+        composer_epoch: u64,
+    },
+    CloseComposerHistory {
+        fence: AppFence,
     },
 }
 
@@ -385,6 +406,36 @@ impl ApplicationRoot {
             AppAction::ApplyRuntimeBlocks { fence, records } => {
                 self.apply_runtime_blocks(fence, records)
             }
+            AppAction::OpenComposerHistory { fence } => {
+                self.composer_history(fence, ComposerAction::OpenHistory { pane: fence.pane })
+            }
+            AppAction::SetComposerHistoryFilter { fence, query } => self.composer_history(
+                fence,
+                ComposerAction::SetHistoryFilter {
+                    pane: fence.pane,
+                    query,
+                },
+            ),
+            AppAction::MoveComposerHistorySelection { fence, delta } => self.composer_history(
+                fence,
+                ComposerAction::MoveHistorySelection {
+                    pane: fence.pane,
+                    delta,
+                },
+            ),
+            AppAction::SelectComposerHistory {
+                fence,
+                composer_epoch,
+            } => self.composer_history(
+                fence,
+                ComposerAction::SelectHistory {
+                    pane: fence.pane,
+                    epoch: composer_epoch,
+                },
+            ),
+            AppAction::CloseComposerHistory { fence } => {
+                self.composer_history(fence, ComposerAction::CloseHistory { pane: fence.pane })
+            }
             AppAction::SetLeftPanel { mode } => self.set_left_panel(mode),
             AppAction::SetInspectorMode { mode } => self.set_inspector_mode(mode),
             AppAction::SelectAgent { fence, id } => self.select_agent(fence, id),
@@ -540,6 +591,9 @@ impl ApplicationRoot {
     fn quit(&mut self) -> Result<(), AppError> {
         self.frozen = true;
         self.pending_effect = NativeEffect::BoundedDetachThenTerminate;
+        // Frozen routes the composer to Hidden, which also closes any open
+        // history overlay; the draft is preserved.
+        self.sync_composer_presentation();
         Ok(())
     }
 
@@ -665,6 +719,20 @@ impl ApplicationRoot {
                 request_id,
                 accepted,
             })
+            .map(|_| ())
+            .map_err(composer_error)
+    }
+
+    /// History recall is fenced like every other pane-sensitive composer
+    /// action: stale Pane/execution/attachment identity fails closed.
+    fn composer_history(
+        &mut self,
+        fence: AppFence,
+        action: ComposerAction,
+    ) -> Result<(), AppError> {
+        self.require_fence(fence)?;
+        self.composer
+            .apply(action)
             .map(|_| ())
             .map_err(composer_error)
     }
@@ -868,6 +936,9 @@ fn composer_error(error: ComposerError) -> AppError {
         }
         ComposerError::StaleRequest => AppError::StaleComposerRequest,
         ComposerError::StaleEpoch => AppError::StaleComposerEpoch,
+        ComposerError::HistoryUnavailable => AppError::ComposerHistoryUnavailable,
+        ComposerError::HistoryClosed => AppError::ComposerHistoryClosed,
+        ComposerError::HistoryNoSelection => AppError::ComposerHistoryNoSelection,
     }
 }
 
@@ -1346,6 +1417,102 @@ mod tests {
         assert_eq!(root.snapshot().recovery_attempts, MAXIMUM_ATTEMPTS);
         assert_eq!(root.snapshot().recovery_stage, RecoveryStage::Exhausted);
         assert_eq!(RETRY_DELAYS.len() as u32 + 1, MAXIMUM_ATTEMPTS);
+    }
+
+    #[test]
+    fn composer_history_is_fenced_and_never_submits() {
+        let mut root = ApplicationRoot::new();
+        // Unbound: fence is valid, composer is not Available.
+        assert_eq!(
+            root.apply(AppAction::OpenComposerHistory {
+                fence: root.fence()
+            }),
+            Err(AppError::ComposerHistoryUnavailable)
+        );
+        root.apply(AppAction::Bind {
+            fence: root.fence(),
+            evidence: evidence(8, true, false),
+        })
+        .unwrap();
+        let epoch = root.snapshot().composer.unwrap().epoch;
+        root.apply(AppAction::SetComposerDraft {
+            fence: root.fence(),
+            text: "make check".into(),
+            composer_epoch: epoch,
+        })
+        .unwrap();
+        root.apply(AppAction::SubmitComposer {
+            fence: root.fence(),
+            composer_epoch: epoch,
+        })
+        .unwrap();
+        let request_id = root
+            .snapshot()
+            .composer
+            .unwrap()
+            .pending_request_id
+            .unwrap();
+        root.apply(AppAction::ApplyComposerResult {
+            fence: root.fence(),
+            request_id,
+            accepted: true,
+        })
+        .unwrap();
+        assert_eq!(root.snapshot().composer.unwrap().history_count, 1);
+
+        let mut stale = root.fence();
+        stale.execution = Some(ExecutionId::from_bytes([0x99; 16]));
+        assert_eq!(
+            root.apply(AppAction::OpenComposerHistory { fence: stale }),
+            Err(AppError::StaleExecution)
+        );
+        assert!(root.snapshot().composer.unwrap().history.is_none());
+
+        root.apply(AppAction::OpenComposerHistory {
+            fence: root.fence(),
+        })
+        .unwrap();
+        root.apply(AppAction::SetComposerHistoryFilter {
+            fence: root.fence(),
+            query: "mk".into(),
+        })
+        .unwrap();
+        root.apply(AppAction::MoveComposerHistorySelection {
+            fence: root.fence(),
+            delta: 1,
+        })
+        .unwrap();
+        let overlay = root.snapshot().composer.unwrap().history.unwrap();
+        assert_eq!(overlay.rows, vec!["make check"]);
+        assert_eq!(overlay.selected, 0);
+        let composer_epoch = root.snapshot().composer.unwrap().epoch;
+        root.apply(AppAction::SelectComposerHistory {
+            fence: root.fence(),
+            composer_epoch,
+        })
+        .unwrap();
+        let after = root.snapshot().composer.unwrap();
+        assert_eq!(after.draft, "make check");
+        assert!(after.history.is_none());
+        assert!(after.pending_request_id.is_none());
+        assert!(after.can_submit);
+
+        root.apply(AppAction::OpenComposerHistory {
+            fence: root.fence(),
+        })
+        .unwrap();
+        root.apply(AppAction::Quit).unwrap();
+        assert!(root.snapshot().frozen);
+        assert_eq!(
+            root.apply(AppAction::CloseComposerHistory {
+                fence: root.fence()
+            }),
+            Err(AppError::Frozen)
+        );
+        assert!(
+            root.snapshot().composer.unwrap().history.is_none(),
+            "frozen root projects no open overlay"
+        );
     }
 
     #[test]

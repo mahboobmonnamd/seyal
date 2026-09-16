@@ -1,7 +1,7 @@
 # ADR-009 — Command Blocks, Pane Composer, and Presentation Takeover
 
-- **Status:** Accepted 2026-08-28; presentation amendment accepted 2026-09-11 by #858 / PR #859 (`8d08f2f`)
-- **Date:** 2026-08-28; presentation amendment 2026-09-11
+- **Status:** Accepted 2026-08-28; presentation amendment accepted 2026-09-11 by #858 / PR #859 (`8d08f2f`); trusted shell-integration injection mechanism accepted 2026-09-16 by #968
+- **Date:** 2026-08-28; presentation amendment 2026-09-11; shell-integration injection amendment 2026-09-16
 - **Scope:** Post-Pass-7 command/Block presentation and Flow/Raw/TUI mode ownership
 - **Supersedes for this behavior:** the Pass 8 minimal-only boundary in `SPEC-007`; historical M001 presentation wording in SPEC-006/SPEC-009 and M001 UI design documents only where it assumes a permanently visible/focusable terminal surface while Flow is active
 - **Depends on:** ADR-004, ADR-005, ADR-006, ADR-007, ADR-008, SPEC-001, SPEC-003, SPEC-004, SPEC-005, SPEC-006
@@ -206,6 +206,57 @@ The GUI consumes read-only Block metadata and terminal display projection while
 an explicit Flow/Raw/TUI state determines how those projections are presented
 and where input is routed.
 
+## 2026-09-16 accepted amendment — silent shell-integration injection
+
+Alternative E selected "trusted shell integration" without specifying how hook
+installation and command-boundary correlation reach the shell without becoming
+visible terminal content. The zsh implementation shipped for #955/#956-adjacent
+work injected an entire hook-install-and-marker script as literal interactive
+PTY input on every composer submission. Live-PTY evidence collected for #968
+shows this is not a suppressible detail: zsh's line editor (ZLE) enables
+bracketed paste and explicitly redraws whatever is written to the PTY while it
+is reading interactively, independent of kernel TTY echo state. That redraw
+made Runtime's own instrumentation script visible inside Block output regions,
+violating invariant 9 below and the Flow output-region promise, and is exactly
+the condition named in this ADR's original reopen conditions
+("if trusted shell integration cannot preserve required shell semantics").
+
+**Accepted mechanism:**
+
+1. Runtime installs the `__seyal_block__` marker function and the
+   `_seyal_block_precmd` hook by pointing the spawned shell's `ZDOTDIR` at a
+   Runtime-managed temporary directory for the duration of that one
+   `TerminalExecution`, before `exec`. The temporary `.zshenv`/`.zshrc` source
+   the user's real dotfiles from their real `ZDOTDIR`/`HOME` first, then define
+   and register the hooks via `add-zsh-hook precmd` and `add-zsh-hook preexec`.
+   Installation happens during ordinary shell startup, before any interactive
+   prompt is drawn, so it is never presented to ZLE as typed input and is never
+   redrawn.
+2. Composer submissions write only the literal, real command text to the PTY
+   (for example `pwd\r`) — never a wrapper, marker, or hook-install prefix.
+3. `preexec` already receives the exact command line as `$1` and fires
+   synchronously and automatically for every command executed in the shell,
+   whether typed directly or composer-submitted. Runtime correlates
+   `CommandStarted`/`CommandFinished` events to its pending composer-command
+   queue by strict FIFO submission order rather than an explicit token
+   embedded in visible input. This is safe because SPEC-004 already bounds
+   `attachments per connection` and `controllers per execution` to one, so
+   input to a given execution is already strictly serialized; no directly-typed
+   raw command can race a pending composer submission's ordering.
+4. A failed/partial hook install (temporary `ZDOTDIR` write failure, hook
+   functions not observed after spawn, and similar) fails closed to
+   `ShellIntegrationMode::Unsupported` — never to a half-installed state that
+   could emit an untrusted or misattributed marker.
+
+Rejected alternatives: keeping inline per-command injection and attempting to
+suppress the echo (e.g. `stty -echo` around the write) — rejected because
+ZLE's redraw is an application-layer behavior independent of kernel echo
+state, confirmed by live-PTY capture, so no such suppression flag exists;
+and installing hooks silently but keeping an explicit per-command token
+delivered out-of-band (environment variable or side-channel file) — rejected
+as unnecessary complexity once FIFO ordering is already race-free under
+SPEC-004's existing serialization guarantee.
+
 ## Normative invariants
 
 1. One Pane owns exactly one composer state and one focused execution route.
@@ -312,6 +363,10 @@ Issue #858 / PR #859 (`8d08f2f`) accepted this architecture correction.
 Production presentation implementation follows in separate TDD Issues after the
 Rust/native host contract is frozen; this ADR does not restore a headed host.
 
+Issue #968 accepted the silent shell-integration injection mechanism above.
+Issue #967 (composer wrapper text visible in Block output regions) returns to
+Ready implementation against that accepted mechanism.
+
 ## Reopen conditions
 
 Reopen this decision if trusted shell integration cannot preserve required shell
@@ -322,4 +377,5 @@ Flow projection or transition fencing blocks terminal progress.
 
 Originally approved by product authority on 2026-08-28. Presentation-mode
 clarification requested by product authority on 2026-09-11 under #858 and
-accepted on merge of PR #859 as `8d08f2f`.
+accepted on merge of PR #859 as `8d08f2f`. Silent shell-integration injection
+mechanism approved by product authority on 2026-09-16 under #968.

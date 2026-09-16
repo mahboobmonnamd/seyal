@@ -553,7 +553,79 @@ impl TerminalState {
         start: HistoryAnchor,
         end: HistoryAnchor,
     ) -> Result<Vec<HistoryUnitView>, HistoryRangeError> {
-        self.core.primary.history().selection(start, end)
+        if start > end {
+            return Err(HistoryRangeError::Unrepresentable);
+        }
+        // Eviction of either endpoint is explicit (SPEC-010 §11). Active-only
+        // anchors resolve as Invalid/not-in-store and may still be copied from
+        // the live grid below.
+        if matches!(
+            self.primary_history_unit(start),
+            HistoryAnchorResolution::Unavailable
+        ) || matches!(
+            self.primary_history_unit(end),
+            HistoryAnchorResolution::Unavailable
+        ) {
+            return Err(HistoryRangeError::Stale);
+        }
+
+        let mut selected = match self.core.primary.history().selection(start, end) {
+            Ok(units) => units,
+            Err(HistoryRangeError::Stale) => Vec::new(),
+            Err(other) => return Err(other),
+        };
+
+        for row in 0..self.core.primary.rows() {
+            let Some(cells) = self.core.primary.cell_row(row) else {
+                continue;
+            };
+            let content_end = cells
+                .iter()
+                .rposition(|cell| cell.role != CellRole::Empty)
+                .map_or(0, |index| index + 1);
+            let break_after = self
+                .core
+                .primary
+                .row_break_after(row)
+                .unwrap_or(HistoryBreakAfter::HardBreak);
+            for (col, cell) in cells[..content_end].iter().enumerate() {
+                let CellRole::Lead = cell.role else {
+                    continue;
+                };
+                let Some(anchor) = self.core.primary.cell_anchor(col as u16, row) else {
+                    continue;
+                };
+                if anchor < start || anchor > end {
+                    continue;
+                }
+                if selected.iter().any(|unit| unit.anchor == anchor) {
+                    continue;
+                }
+                if selected.len() >= crate::history::HISTORY_SELECTION_UNIT_CAP {
+                    return Err(HistoryRangeError::Unrepresentable);
+                }
+                let text = if cell.overflow {
+                    "\u{FFFD}".to_owned()
+                } else {
+                    self.core.grapheme_store.get(cell.store_id).map_or_else(
+                        || cell.character.to_string(),
+                        |bytes| String::from_utf8_lossy(bytes).into_owned(),
+                    )
+                };
+                selected.push(HistoryUnitView {
+                    anchor,
+                    text,
+                    width: cell.width.max(1),
+                    style: cell.style,
+                    break_after,
+                });
+            }
+        }
+        selected.sort_by_key(|unit| unit.anchor);
+        if selected.is_empty() {
+            return Err(HistoryRangeError::Stale);
+        }
+        Ok(selected)
     }
 
     pub fn copy_history_range(
@@ -589,19 +661,35 @@ impl TerminalState {
 
     pub fn set_linear_selection(&mut self, start: VisualPos, end: VisualPos) {
         if let Some((start, end)) = Self::clamp_visual_pair(self.cols(), self.rows(), start, end) {
-            self.core.selection.set_linear(start, end);
+            let start_anchor = self.anchor_at(start.col, start.row);
+            let end_anchor = self.anchor_at(end.col, end.row);
+            self.core
+                .selection
+                .set_linear(start, end, start_anchor, end_anchor);
             self.bump_selection_damage();
         }
     }
 
     pub fn set_rectangular_selection(&mut self, start: VisualPos, end: VisualPos) {
         if let Some((start, end)) = Self::clamp_visual_pair(self.cols(), self.rows(), start, end) {
-            self.core.selection.set_rectangular(start, end);
+            let start_anchor = self.anchor_at(start.col, start.row);
+            let end_anchor = self.anchor_at(end.col, end.row);
+            self.core
+                .selection
+                .set_rectangular(start, end, start_anchor, end_anchor);
             self.bump_selection_damage();
         }
     }
 
     pub fn copy_selection_text(&self) -> Result<String, HistoryRangeError> {
+        // Linear selections with captured source anchors copy from canonical
+        // history so scroll/reflow cannot silently retarget the endpoints.
+        if self.core.selection.kind == SelectionKind::Linear
+            && !self.core.modes.alternate_screen
+            && let Some((start, end)) = self.core.selection.ordered_anchors()
+        {
+            return self.copy_history_range(start, end);
+        }
         let Some((start, end)) = self.core.selection.ordered_corners() else {
             return Err(HistoryRangeError::Stale);
         };
@@ -609,6 +697,23 @@ impl TerminalState {
             SelectionKind::Linear => self.copy_visual_linear(start, end),
             SelectionKind::Rectangular => self.copy_visual_rectangular(start, end),
         }
+    }
+
+    /// True when the cell is inside the current host selection.
+    ///
+    /// Linear selections with source anchors use those anchors (SPEC-010 §11)
+    /// so scrolled-off content does not keep highlighting new occupants.
+    pub fn selection_covers_cell(&self, col: u16, row: u16) -> bool {
+        let selection = self.core.selection;
+        if selection.kind == SelectionKind::Linear
+            && !self.core.modes.alternate_screen
+            && let Some((lo, hi)) = selection.ordered_anchors()
+        {
+            return self
+                .anchor_at(col, row)
+                .is_some_and(|anchor| anchor >= lo && anchor <= hi);
+        }
+        selection.contains_cell(col, row, self.cols())
     }
 
     pub fn search_and_select(&mut self, needle: &str, forward: bool) -> Option<HistoryMatch> {
@@ -622,13 +727,25 @@ impl TerminalState {
         }
         let matches = self.primary_history_search(needle, MAX_SEARCH_MATCHES);
         let found = self.core.search.step(&matches, forward).copied()?;
-        if let (Some(start), Some(end)) = (
-            self.visual_pos_for_anchor(found.start),
-            self.visual_pos_for_anchor(found.end),
-        ) {
-            self.core.selection.set_linear(start, end);
-            self.bump_selection_damage();
+        let start_visual = self.visual_pos_for_anchor(found.start);
+        let end_visual = self.visual_pos_for_anchor(found.end);
+        // Prefer resolved visual corners when both are on-screen; otherwise
+        // still retain the canonical search anchors for copy.
+        match (start_visual, end_visual) {
+            (Some(start), Some(end)) => {
+                self.core
+                    .selection
+                    .set_linear(start, end, Some(found.start), Some(found.end));
+            }
+            _ => {
+                self.core.selection.kind = SelectionKind::Linear;
+                self.core.selection.start = start_visual;
+                self.core.selection.end = end_visual;
+                self.core.selection.start_anchor = Some(found.start);
+                self.core.selection.end_anchor = Some(found.end);
+            }
         }
+        self.bump_selection_damage();
         Some(found)
     }
 
@@ -665,26 +782,43 @@ impl TerminalState {
                 self.cols(),
             );
         }
-        if let Some(selection) = self.core.copy_mode.selection() {
-            self.core.selection = selection;
+        if let Some((start, end, kind)) = self.core.copy_mode.selection() {
+            self.apply_copy_mode_selection(start, end, kind);
         }
         self.bump_selection_damage();
     }
 
     pub fn copy_mode_toggle_anchor(&mut self) {
         self.core.copy_mode.toggle_anchor();
-        if let Some(selection) = self.core.copy_mode.selection() {
-            self.core.selection = selection;
+        if let Some((start, end, kind)) = self.core.copy_mode.selection() {
+            self.apply_copy_mode_selection(start, end, kind);
         }
         self.bump_selection_damage();
     }
 
     pub fn copy_mode_toggle_kind(&mut self) {
         self.core.copy_mode.toggle_kind();
-        if let Some(selection) = self.core.copy_mode.selection() {
-            self.core.selection = selection;
+        if let Some((start, end, kind)) = self.core.copy_mode.selection() {
+            self.apply_copy_mode_selection(start, end, kind);
         }
         self.bump_selection_damage();
+    }
+
+    fn apply_copy_mode_selection(&mut self, start: VisualPos, end: VisualPos, kind: SelectionKind) {
+        let start_anchor = self.anchor_at(start.col, start.row);
+        let end_anchor = self.anchor_at(end.col, end.row);
+        match kind {
+            SelectionKind::Linear => {
+                self.core
+                    .selection
+                    .set_linear(start, end, start_anchor, end_anchor);
+            }
+            SelectionKind::Rectangular => {
+                self.core
+                    .selection
+                    .set_rectangular(start, end, start_anchor, end_anchor);
+            }
+        }
     }
 
     pub fn yank_selection(&mut self) -> Result<String, HistoryRangeError> {

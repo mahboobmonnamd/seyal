@@ -1,5 +1,6 @@
 use seyal_terminal::{
-    CopyModeMotion, HistoryBreakAfter, PasteError, SelectionKind, TerminalState, VisualPos,
+    CopyModeMotion, HistoryBreakAfter, HistoryRangeError, PasteError, SelectionKind, TerminalState,
+    VisualPos,
 };
 
 fn feed(terminal: &mut TerminalState, bytes: &[u8]) {
@@ -148,4 +149,87 @@ fn selection_mutations_commit_display_damage() {
     assert!(damage.full);
     terminal.enter_copy_mode();
     assert!(terminal.take_damage().is_some());
+}
+
+#[test]
+fn linear_selection_copy_survives_scroll_as_source_anchors() {
+    // SPEC-010 §11: selection endpoints are source anchors. Scrolling the
+    // selected text into retained history must not silently retarget copy to
+    // whatever now occupies the original visual cells.
+    let mut terminal = TerminalState::new(8, 2).unwrap();
+    feed(&mut terminal, b"SECRET03");
+    terminal.set_linear_selection(VisualPos { col: 0, row: 0 }, VisualPos { col: 7, row: 0 });
+    assert_eq!(terminal.copy_selection_text().unwrap(), "SECRET03");
+    feed(&mut terminal, b"\r\nKEEPKEEP\r\nNEWNEW01");
+    assert_eq!(
+        terminal.copy_selection_text().unwrap(),
+        "SECRET03",
+        "scroll must not retarget a linear selection to new visual occupants"
+    );
+    // After scroll, SECRET03 is off the 2-row viewport; highlight on the new
+    // occupants must not claim the stale visual corners.
+    let row0 = terminal.row_text(0).unwrap_or_default();
+    assert!(
+        row0.starts_with("KEEP") || row0.starts_with("NEW") || row0.starts_with("SECRET"),
+        "expected scrolled viewport content, got {row0:?}"
+    );
+    if !row0.starts_with("SECRET") {
+        assert!(
+            !terminal.selection_covers_cell(0, 0),
+            "viewport cell with different source must not stay highlighted"
+        );
+    }
+}
+
+#[test]
+fn linear_selection_endpoints_stale_after_eviction() {
+    // SPEC-010 §11: eviction of either endpoint is explicit; do not fall
+    // through to unrelated visual cells.
+    let mut terminal = TerminalState::new(8, 1).unwrap();
+    feed(&mut terminal, b"EVICTME!");
+    terminal.set_linear_selection(VisualPos { col: 0, row: 0 }, VisualPos { col: 7, row: 0 });
+    let start = terminal
+        .selection_session()
+        .start_anchor
+        .expect("selection stores source start");
+    let end = terminal
+        .selection_session()
+        .end_anchor
+        .expect("selection stores source end");
+    assert_eq!(terminal.copy_selection_text().unwrap(), "EVICTME!");
+
+    // Push the selected line into sealed history, then evict that segment.
+    feed(&mut terminal, b"\r\n");
+    let line = format!("{}\r\n", "a".repeat(512));
+    for _ in 0..128 {
+        feed(&mut terminal, line.as_bytes());
+    }
+    assert!(terminal.evict_oldest_primary_history_segment() > 0);
+    match terminal.copy_selection_text() {
+        Err(HistoryRangeError::Stale) => {}
+        Ok(text) => panic!("evicted selection must be Stale, got {text:?}"),
+        Err(other) => panic!("expected Stale after eviction, got {other:?}"),
+    }
+    assert_eq!(terminal.selection_session().start_anchor, Some(start));
+    assert_eq!(terminal.selection_session().end_anchor, Some(end));
+}
+
+#[test]
+fn linear_selection_anchors_stable_across_resize_oscillation() {
+    let mut terminal = TerminalState::new(8, 2).unwrap();
+    feed(&mut terminal, "ab\u{301}cdef".as_bytes());
+    terminal.set_linear_selection(VisualPos { col: 1, row: 0 }, VisualPos { col: 3, row: 0 });
+    let before = terminal.copy_selection_text().unwrap();
+    assert!(
+        before.contains('b') && before.contains('\u{301}'),
+        "pre-resize copy should include the combining grapheme, got {before:?}"
+    );
+    terminal.resize(4, 2).unwrap();
+    terminal.resize(12, 3).unwrap();
+    terminal.resize(8, 2).unwrap();
+    assert_eq!(
+        terminal.copy_selection_text().unwrap(),
+        before,
+        "resize/reflow must keep the same source-anchored selection text"
+    );
 }

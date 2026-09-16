@@ -156,6 +156,17 @@ private struct CompositionDocument: Equatable {
 }
 
 enum TerminalNativeKeyClassifier {
+    /// Hardware key-code → V2 function index. Immutable; not rebuilt per event.
+    private static let functionKeyCodes: [UInt16: UInt32] = [
+        122: 1, 120: 2, 99: 3, 118: 4, 96: 5, 97: 6, 98: 7, 100: 8, 101: 9, 109: 10, 103: 11,
+        111: 12,
+    ]
+    /// Hardware key-code → V2 keypad value. Immutable; not rebuilt per event.
+    private static let keypadKeyCodes: [UInt16: UInt32] = [
+        82: 0, 83: 1, 84: 2, 85: 3, 86: 4, 87: 5, 88: 6, 89: 7, 91: 8, 92: 9, 65: 10, 75: 11,
+        67: 12, 78: 13, 69: 14, 81: 15, 76: 16,
+    ]
+
     static func v2(
         keyCode: UInt16,
         specialKey: NSEvent.SpecialKey?,
@@ -165,21 +176,13 @@ enum TerminalNativeKeyClassifier {
         optionAsAlt: Bool
     ) -> TerminalNativeKeyV2? {
         let flags = modifierFlags.intersection(.deviceIndependentFlagsMask)
-        let functionKeys: [UInt16: UInt32] = [
-            122: 1, 120: 2, 99: 3, 118: 4, 96: 5, 97: 6, 98: 7, 100: 8, 101: 9, 109: 10, 103: 11,
-            111: 12,
-        ]
-        if let function = functionKeys[keyCode] {
+        if let function = functionKeyCodes[keyCode] {
             return assembleV2(
                 kind: 15, value: function, semantic: true, flags: flags, optionAsAlt: optionAsAlt,
                 characters: characters)
         }
         if flags.contains(.numericPad) {
-            let keypad: [UInt16: UInt32] = [
-                82: 0, 83: 1, 84: 2, 85: 3, 86: 4, 87: 5, 88: 6, 89: 7, 91: 8, 92: 9, 65: 10, 75: 11,
-                67: 12, 78: 13, 69: 14, 81: 15, 76: 16,
-            ]
-            if let value = keypad[keyCode] {
+            if let value = keypadKeyCodes[keyCode] {
                 return assembleV2(
                     kind: 16, value: value, semantic: true, flags: flags, optionAsAlt: optionAsAlt,
                     characters: characters)
@@ -416,21 +419,35 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
                 optionAsAlt: optionAsAlt
             )
         {
-            if heldKeyboardKinds[event.keyCode] == nil {
-                guard heldKeyboardKinds.count < Self.maxHeldKeyboardKinds else {
-                    rejectHeldKeyOverflow()
-                    return
-                }
-                heldKeyboardKinds[event.keyCode] = key
+            switch Self.planHeldKeyPress(
+                held: heldKeyboardKinds,
+                keyCode: event.keyCode,
+                isRepeat: event.isARepeat,
+                maxHeld: Self.maxHeldKeyboardKinds
+            ) {
+            case .overflow:
+                rejectHeldKeyOverflow()
+                return
+            case .rejectUntrackedRepeat:
+                return
+            case .submit:
+                break
             }
             guard let actionID = takeNextKeyboardActionID() else { return }
-            _ = terminalSubmitKeyV2(
-                kind: key.kind,
-                modifiers: key.modifiers,
-                value: key.value,
-                event: event.isARepeat ? 2 : 1,
-                shiftedASCII: key.shiftedASCII,
-                actionID: actionID
+            let admitted =
+                terminalSubmitKeyV2(
+                    kind: key.kind,
+                    modifiers: key.modifiers,
+                    value: key.value,
+                    event: event.isARepeat ? 2 : 1,
+                    shiftedASCII: key.shiftedASCII,
+                    actionID: actionID
+                ) == 0
+            Self.recordHeldKeyIfAdmitted(
+                into: &heldKeyboardKinds,
+                keyCode: event.keyCode,
+                key: key,
+                admitted: admitted
             )
             return
         }
@@ -620,6 +637,43 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
         (next == 0 || next == .max) ? nil : next
     }
 
+    enum HeldKeyPressPlan: Equatable {
+        case overflow
+        case rejectUntrackedRepeat
+        case submit
+    }
+
+    /// New presses occupy a held slot only after V2 admission succeeds.
+    /// Repeats of a key that was never admitted are dropped so key-up cannot
+    /// synthesize an orphan release.
+    static func planHeldKeyPress(
+        held: [UInt16: TerminalNativeKeyV2],
+        keyCode: UInt16,
+        isRepeat: Bool,
+        maxHeld: Int
+    ) -> HeldKeyPressPlan {
+        if held[keyCode] != nil {
+            return .submit
+        }
+        if isRepeat {
+            return .rejectUntrackedRepeat
+        }
+        if held.count >= maxHeld {
+            return .overflow
+        }
+        return .submit
+    }
+
+    static func recordHeldKeyIfAdmitted(
+        into held: inout [UInt16: TerminalNativeKeyV2],
+        keyCode: UInt16,
+        key: TerminalNativeKeyV2,
+        admitted: Bool
+    ) {
+        guard admitted, held[keyCode] == nil else { return }
+        held[keyCode] = key
+    }
+
     static func takeHeldKeyForV2Release(
         from held: inout [UInt16: TerminalNativeKeyV2],
         keyCode: UInt16,
@@ -640,6 +694,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
             && semanticKeyMatrixSelfTest()
             && keyReleaseMetadataSelfTest()
             && heldKeyboardCapacitySelfTest()
+            && heldKeyAdmissionSelfTest()
             && capabilityLossDropsHeldKeyReleaseSelfTest()
     }
 
@@ -808,9 +863,35 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
             held[UInt16(index)] = TerminalNativeKeyV2(
                 kind: 17, modifiers: 0, value: 0x61, shiftedASCII: 0)
         }
-        let trackedRepeatAllowed = held[0] != nil && held.count >= maxHeldKeyboardKinds
-        let newPressRejected = held.count >= maxHeldKeyboardKinds && held[300] == nil
+        let trackedRepeatAllowed =
+            planHeldKeyPress(
+                held: held, keyCode: 0, isRepeat: true, maxHeld: maxHeldKeyboardKinds) == .submit
+        let newPressRejected =
+            planHeldKeyPress(
+                held: held, keyCode: 300, isRepeat: false, maxHeld: maxHeldKeyboardKinds)
+            == .overflow
         return trackedRepeatAllowed && newPressRejected
+    }
+
+    private static func heldKeyAdmissionSelfTest() -> Bool {
+        let key = TerminalNativeKeyV2(kind: 5, modifiers: 0, value: 0, shiftedASCII: 0)
+        var held: [UInt16: TerminalNativeKeyV2] = [:]
+        guard
+            planHeldKeyPress(held: held, keyCode: 1, isRepeat: false, maxHeld: 2) == .submit
+        else { return false }
+        recordHeldKeyIfAdmitted(into: &held, keyCode: 1, key: key, admitted: false)
+        guard held.isEmpty else { return false }
+        guard
+            planHeldKeyPress(held: held, keyCode: 1, isRepeat: true, maxHeld: 2)
+                == .rejectUntrackedRepeat
+        else { return false }
+        recordHeldKeyIfAdmitted(into: &held, keyCode: 1, key: key, admitted: true)
+        guard held[1] != nil else { return false }
+        guard planHeldKeyPress(held: held, keyCode: 1, isRepeat: true, maxHeld: 2) == .submit
+        else { return false }
+        recordHeldKeyIfAdmitted(into: &held, keyCode: 1, key: key, admitted: true)
+        recordHeldKeyIfAdmitted(into: &held, keyCode: 2, key: key, admitted: true)
+        return planHeldKeyPress(held: held, keyCode: 3, isRepeat: false, maxHeld: 2) == .overflow
     }
 
     private static func keyReleaseMetadataSelfTest() -> Bool {

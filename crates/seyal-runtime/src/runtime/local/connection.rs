@@ -108,6 +108,8 @@ impl Runtime {
         if let Some(execution_id) = execution_id {
             if let Some(entry) = self.entries.get_mut(&execution_id) {
                 entry.attachments.remove(&attachment_id);
+                entry.mouse_buttons = 0;
+                entry.mouse_host_anchor = None;
             }
             let no_viewers = self
                 .local_ipc

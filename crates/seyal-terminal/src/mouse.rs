@@ -54,7 +54,12 @@ pub fn encode_mouse_report(report: MouseReport, modes: ModeState) -> Option<Vec<
             matches!(report.kind, MouseEventKind::Release),
         )
     } else {
-        encode_x10(button, col, row)
+        let x10_button = if report.kind == MouseEventKind::Release {
+            3 + button.saturating_sub(report.button)
+        } else {
+            button
+        };
+        encode_x10(x10_button, col, row)
     }
 }
 
@@ -202,6 +207,29 @@ mod tests {
         )
         .unwrap();
         assert_eq!(bytes, b"\x1b[<22;10;5m");
+    }
+
+    #[test]
+    fn x10_release_uses_button_three() {
+        let modes = ModeState {
+            mouse_reporting: MouseReporting::Button,
+            mouse_sgr: false,
+            ..ModeState::default()
+        };
+        let bytes = encode_mouse_report(
+            MouseReport {
+                kind: MouseEventKind::Release,
+                button: 0,
+                shift: true,
+                alt: false,
+                control: false,
+                col: 2,
+                row: 1,
+            },
+            modes,
+        )
+        .unwrap();
+        assert_eq!(bytes, b"\x1b[M'#\"");
     }
 
     #[test]

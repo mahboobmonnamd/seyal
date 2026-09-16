@@ -63,6 +63,14 @@ fn sgr_and_x10_reports_follow_canonical_mode() {
         encode_mouse_report(press, terminal.modes()).unwrap(),
         b"\x1b[M #\""
     );
+    let release = MouseReport {
+        kind: MouseEventKind::Release,
+        ..press
+    };
+    assert_eq!(
+        encode_mouse_report(release, terminal.modes()).unwrap(),
+        b"\x1b[M##\""
+    );
 }
 
 #[test]

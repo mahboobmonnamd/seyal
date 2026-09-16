@@ -342,6 +342,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
     var onRequestComposerFocus: (() -> Void)?
     var observedAlternateScreen = false
     private var announcedBridgeUsable = false
+    private var mouseTrackingArea: NSTrackingArea?
 
     init(frame frameRect: NSRect, appHandle: UInt64) {
         self.appHandle = appHandle
@@ -397,6 +398,25 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
 
     override func mouseDragged(with event: NSEvent) {
         submitNativeMouse(event, kind: 3)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        submitNativeMouse(event, kind: 3)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let mouseTrackingArea {
+            removeTrackingArea(mouseTrackingArea)
+        }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        mouseTrackingArea = area
     }
 
     override func rightMouseDown(with event: NSEvent) {
@@ -654,7 +674,14 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
         if flags.contains(.shift) { modifiers |= 1 }
         if flags.contains(.option) { modifiers |= 2 }
         if flags.contains(.control) { modifiers |= 4 }
-        let button = buttonOverride ?? Self.xtermButton(event.buttonNumber)
+        let button: UInt8
+        if let buttonOverride {
+            button = buttonOverride
+        } else if let mapped = Self.xtermButton(event.buttonNumber) {
+            button = mapped
+        } else {
+            return
+        }
         _ = terminalSubmitMouse(
             kind: kind,
             button: button,
@@ -665,12 +692,12 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
         )
     }
 
-    private static func xtermButton(_ buttonNumber: Int) -> UInt8 {
+    private static func xtermButton(_ buttonNumber: Int) -> UInt8? {
         switch buttonNumber {
         case 0: return 0
         case 1: return 2
         case 2: return 1
-        default: return 0
+        default: return nil
         }
     }
 

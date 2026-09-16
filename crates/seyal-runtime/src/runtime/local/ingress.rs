@@ -385,24 +385,6 @@ impl Runtime {
             );
             return;
         };
-        let monotonic = self
-            .local_ipc
-            .as_ref()
-            .and_then(|state| state.connections.get(&token))
-            .is_some_and(|meta| event.action_id > meta.last_terminal_mouse_action_id);
-        if !monotonic {
-            self.send_error(
-                token,
-                ErrorCode::MalformedPayload,
-                MessageType::TerminalMouse as u16,
-            );
-            return;
-        }
-        if let Some(state) = self.local_ipc.as_mut()
-            && let Some(meta) = state.connections.get_mut(&token)
-        {
-            meta.last_terminal_mouse_action_id = event.action_id;
-        }
         let execution_id = match self.local_ipc.as_ref().map(|state| {
             state
                 .attachments
@@ -426,11 +408,25 @@ impl Runtime {
                 return;
             }
         };
-        let host_override = event.modifiers.bits() & TerminalKeyV2Modifiers::SHIFT.bits() != 0;
-        let cell = VisualPos {
-            col: event.col,
-            row: event.row,
-        };
+        let monotonic = self.local_ipc.as_mut().is_some_and(|state| {
+            let Some(meta) = state.connections.get_mut(&token) else {
+                return false;
+            };
+            if event.action_id <= meta.last_terminal_mouse_action_id {
+                false
+            } else {
+                meta.last_terminal_mouse_action_id = event.action_id;
+                true
+            }
+        });
+        if !monotonic {
+            self.send_error(
+                token,
+                ErrorCode::MalformedPayload,
+                MessageType::TerminalMouse as u16,
+            );
+            return;
+        }
         let encoded = {
             let Some(entry) = self.entries.get_mut(&execution_id) else {
                 self.send_error(
@@ -440,19 +436,28 @@ impl Runtime {
                 );
                 return;
             };
-            match event.kind {
-                TerminalMouseKind::Press if event.button <= 2 => {
-                    entry.mouse_buttons |= 1 << event.button;
-                }
-                TerminalMouseKind::Release if event.button <= 2 => {
-                    entry.mouse_buttons &= !(1 << event.button);
-                }
-                _ => {}
+            let cols = entry.execution.terminal().cols();
+            let rows = entry.execution.terminal().rows();
+            if event.col >= cols || event.row >= rows {
+                self.send_error(
+                    token,
+                    ErrorCode::MalformedPayload,
+                    MessageType::TerminalMouse as u16,
+                );
+                return;
             }
-            if host_override
-                || entry.execution.terminal().modes().mouse_reporting
-                    == seyal_exec::MouseReporting::Off
-            {
+            let cell = VisualPos {
+                col: event.col,
+                row: event.row,
+            };
+            let reporting = entry.execution.terminal().modes().mouse_reporting;
+            let shift = event.modifiers.bits() & TerminalKeyV2Modifiers::SHIFT.bits() != 0;
+            let host_latched = entry.mouse_host_anchor.is_some()
+                && matches!(
+                    event.kind,
+                    TerminalMouseKind::Move | TerminalMouseKind::Release
+                );
+            if shift || reporting == seyal_exec::MouseReporting::Off || host_latched {
                 match event.kind {
                     TerminalMouseKind::Press => {
                         entry.mouse_host_anchor = Some(cell);
@@ -506,13 +511,28 @@ impl Runtime {
                         ErrorCode::Backpressure,
                         MessageType::TerminalMouse as u16,
                     );
+                    return;
                 }
             }
-            Err(_) => self.send_error(
-                token,
-                ErrorCode::InvalidExecution,
-                MessageType::TerminalMouse as u16,
-            ),
+            Err(_) => {
+                self.send_error(
+                    token,
+                    ErrorCode::InvalidExecution,
+                    MessageType::TerminalMouse as u16,
+                );
+                return;
+            }
+        }
+        if let Some(entry) = self.entries.get_mut(&execution_id) {
+            match event.kind {
+                TerminalMouseKind::Press if event.button <= 2 => {
+                    entry.mouse_buttons |= 1 << event.button;
+                }
+                TerminalMouseKind::Release if event.button <= 2 => {
+                    entry.mouse_buttons &= !(1 << event.button);
+                }
+                _ => {}
+            }
         }
     }
 

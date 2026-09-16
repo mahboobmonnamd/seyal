@@ -35,6 +35,14 @@ fn seyal_m001_source_includes_implemented_scroll_and_edit_caps() {
             "terminfo must advertise implemented capability prefix {cap}"
         );
     }
+    assert!(
+        source.contains("XM=\\E[?1000;1002;1006%?%p1%{1}%=%th%el%;"),
+        "XM must be a parameterized enable/disable initializer"
+    );
+    assert!(
+        source.contains("xm=\\E[<%p1%d;%p2%d;%p3%d%?%p4%tm%eM%;"),
+        "xm must be a parameterized SGR mouse-event formatter"
+    );
 }
 
 #[cfg(target_os = "macos")]

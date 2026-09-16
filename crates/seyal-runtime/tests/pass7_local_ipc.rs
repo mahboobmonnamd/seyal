@@ -852,3 +852,50 @@ fn shift_override_does_not_write_application_mouse() {
     );
     wait_for_text(&mut harness, &mut cache, "120");
 }
+
+#[test]
+fn shift_press_latches_host_override_through_unshifted_release() {
+    let command = CommandSpec::new("/bin/sh").args([
+        "-c",
+        "printf '\\033[?1000h\\033[?1006hREADY\\n'; stty raw -echo; od -An -tu1 -N1 | tr -s ' ' | sed 's/^ //'",
+    ]);
+    let (mut harness, execution_id) = Harness::new(command);
+    harness.hello();
+    let (attached, mut cache) = harness.attach(execution_id, Role::Controller);
+    wait_for_text(&mut harness, &mut cache, "READY");
+    harness.send(
+        MessageType::TerminalMouse,
+        &TerminalMouse {
+            attachment_id: attached.attachment_id,
+            action_id: 1,
+            kind: TerminalMouseKind::Press,
+            button: 0,
+            modifiers: TerminalKeyV2Modifiers::SHIFT,
+            col: 1,
+            row: 1,
+        }
+        .encode(),
+    );
+    harness.send(
+        MessageType::TerminalMouse,
+        &TerminalMouse {
+            attachment_id: attached.attachment_id,
+            action_id: 2,
+            kind: TerminalMouseKind::Release,
+            button: 0,
+            modifiers: TerminalKeyV2Modifiers::NONE,
+            col: 2,
+            row: 1,
+        }
+        .encode(),
+    );
+    harness.send(
+        MessageType::Input,
+        &InputRef {
+            attachment_id: attached.attachment_id,
+            bytes: b"x",
+        }
+        .encode(),
+    );
+    wait_for_text(&mut harness, &mut cache, "120");
+}

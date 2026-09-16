@@ -15,6 +15,7 @@ mod grapheme_store;
 mod history;
 mod line;
 mod modes;
+mod mouse;
 mod parser;
 mod presentation;
 mod protocol_reply;
@@ -42,7 +43,11 @@ pub use history::{
     HISTORY_RUNTIME_DERIVED_INDEX_CAP, HISTORY_SEGMENT_PAYLOAD_TARGET, HISTORY_TAIL_PAYLOAD_LIMIT,
 };
 pub use line::LineId;
-pub use modes::ModeState;
+pub use modes::{ModeState, MouseReporting};
+pub use mouse::{
+    apply_host_mouse_gesture, encode_mouse_report, mouse_event_admitted, mouse_takes_host_override,
+    MouseEventKind, MouseReport,
+};
 pub use presentation::{
     HostPresentationEvent, PresentationPayload, MAX_HOST_PRESENTATION_EVENTS,
     MAX_PRESENTATION_PAYLOAD_BYTES,

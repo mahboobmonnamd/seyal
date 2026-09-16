@@ -67,10 +67,10 @@ pub use errors::{
 };
 #[allow(unused_imports)]
 pub use input::{
-    seyal_bridge_copied_text, seyal_bridge_copied_text_consume, seyal_bridge_propose_geometry,
-    seyal_bridge_retry_resize, seyal_bridge_submit_composer, seyal_bridge_submit_host_search,
-    seyal_bridge_submit_host_selection, seyal_bridge_submit_key, seyal_bridge_submit_paste,
-    seyal_bridge_submit_utf8,
+    seyal_bridge_copied_text, seyal_bridge_copied_text_consume, seyal_bridge_mouse_cell,
+    seyal_bridge_propose_geometry, seyal_bridge_retry_resize, seyal_bridge_submit_composer,
+    seyal_bridge_submit_host_search, seyal_bridge_submit_host_selection, seyal_bridge_submit_key,
+    seyal_bridge_submit_mouse, seyal_bridge_submit_paste, seyal_bridge_submit_utf8,
 };
 #[allow(unused_imports)]
 pub use session::{

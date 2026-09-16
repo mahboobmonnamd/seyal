@@ -1,3 +1,16 @@
+/// Xterm mouse reporting level. 1000/1002/1003 are mutually exclusive.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MouseReporting {
+    #[default]
+    Off,
+    /// DECSET 1000 — press and release.
+    Button,
+    /// DECSET 1002 — press, release, and motion while a button is down.
+    ButtonDrag,
+    /// DECSET 1003 — press, release, and all motion.
+    Any,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ModeState {
     pub alternate_screen: bool,
@@ -14,6 +27,10 @@ pub struct ModeState {
     pub application_keypad: bool,
     /// Negotiated Kitty progressive keyboard flags, masked to 1|2.
     pub keyboard_flags: u8,
+    /// DECSET 1000/1002/1003 reporting level.
+    pub mouse_reporting: MouseReporting,
+    /// DECSET 1006 — SGR mouse encoding when set; otherwise X10.
+    pub mouse_sgr: bool,
 }
 
 impl Default for ModeState {
@@ -30,6 +47,8 @@ impl Default for ModeState {
             application_cursor: false,
             application_keypad: false,
             keyboard_flags: 0,
+            mouse_reporting: MouseReporting::Off,
+            mouse_sgr: false,
         }
     }
 }

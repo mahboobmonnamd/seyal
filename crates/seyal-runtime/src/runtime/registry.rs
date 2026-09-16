@@ -174,6 +174,10 @@ impl Runtime {
             reserved_input,
             ingress_active,
             #[cfg(target_os = "macos")]
+            mouse_buttons: 0,
+            #[cfg(target_os = "macos")]
+            mouse_host_anchor: None,
+            #[cfg(target_os = "macos")]
             pending_composer_commands: VecDeque::new(),
             #[cfg(target_os = "macos")]
             shell_integration_mode: shell_integration_mode(&command),

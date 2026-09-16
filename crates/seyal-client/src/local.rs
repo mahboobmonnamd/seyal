@@ -30,7 +30,9 @@ use seyal_runtime::local_ipc::framing::{
 };
 
 pub use discovery::DiscoveryFailure;
-pub use input_resize::{derive_grid_geometry, GridGeometry, InputAdmissionFailure, ResizeFailure};
+pub use input_resize::{
+    cell_from_point, derive_grid_geometry, GridGeometry, InputAdmissionFailure, ResizeFailure,
+};
 
 pub(crate) const READ_CHUNK_BYTES: usize = 64 * 1024;
 pub(crate) const MAX_BUFFERED_BYTES: usize = (MAX_FRAME_PAYLOAD as usize + HEADER_LEN) * 2;
@@ -127,6 +129,7 @@ pub struct LocalDisplayClient {
     pub(crate) last_admitted_v2_action_id: u32,
     pub(crate) last_sent_v2_action_id: u32,
     pub(crate) highest_v2_error_id: u32,
+    pub(crate) last_admitted_mouse_action_id: u32,
 }
 
 impl LocalDisplayClient {
@@ -579,6 +582,7 @@ mod tests {
             last_admitted_v2_action_id: 0,
             last_sent_v2_action_id: 0,
             highest_v2_error_id: 0,
+            last_admitted_mouse_action_id: 0,
         }
     }
 

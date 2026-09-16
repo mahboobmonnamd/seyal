@@ -1,4 +1,4 @@
-use seyal_terminal::{Color, TerminalState};
+use seyal_terminal::{Color, LineId, TerminalState};
 
 fn render(terminal: &TerminalState) -> String {
     let mut output = String::new();
@@ -135,4 +135,53 @@ fn retained_m002_osc_presentation_fixture_preserves_grid() {
     terminal.feed(input).expect("fixture feed succeeds");
     assert_eq!(render(&terminal), expected);
     assert_eq!(terminal.diagnostics().malformed_sequences, 0);
+}
+
+/// SPEC-010 §17 `hist-m001-corpus`: retained M001 fixtures replay into canonical history.
+#[test]
+fn hist_m001_corpus_replays_through_canonical_history() {
+    let fixtures: &[(&[u8], u16, u16)] = &[
+        (
+            include_bytes!("../../../tests/fixtures/vt/m001-basic.input"),
+            8,
+            3,
+        ),
+        (
+            include_bytes!("../../../tests/fixtures/vt/m001-utf8.input"),
+            8,
+            2,
+        ),
+        (
+            include_bytes!("../../../tests/fixtures/vt/m001-ecma48-core.input"),
+            8,
+            3,
+        ),
+        (
+            include_bytes!("../../../tests/fixtures/vt/m001-xterm-private.input"),
+            8,
+            2,
+        ),
+    ];
+    for (input, cols, rows) in fixtures {
+        let mut one_shot = TerminalState::new(*cols, *rows).expect("dims");
+        one_shot.feed(input).expect("one-shot");
+        // Force active rows into retained history when the fixture left them live.
+        one_shot.feed(b"\r\n\r\n").expect("scroll into history");
+
+        let mut chunked = TerminalState::new(*cols, *rows).expect("dims");
+        for chunk in input.chunks(3) {
+            chunked.feed(chunk).expect("chunk");
+        }
+        chunked.feed(b"\r\n\r\n").expect("scroll into history");
+
+        let one_units = one_shot.primary_history_units_range(LineId(1), LineId(u64::MAX), 4_096);
+        let chunk_units = chunked.primary_history_units_range(LineId(1), LineId(u64::MAX), 4_096);
+        assert_eq!(
+            one_units, chunk_units,
+            "canonical history must be chunk-invariant for M001 corpus"
+        );
+        let cached = one_shot.primary_history_reflow(*cols, 64);
+        let uncached = one_shot.primary_history_reflow_uncached(*cols, 64);
+        assert_eq!(cached, uncached);
+    }
 }

@@ -7,13 +7,17 @@ use crate::{
         framing::{
             self, ComposerCommandRef, ComposerResult, ComposerResultCode, ErrorCode, HostSearch,
             HostSelectionAction, MessageType, TerminalKey as WireTerminalKey, TerminalKeyKind,
-            TerminalKeyV2, CAP_COMMAND_BLOCKS, CAP_EXTENDED_TERMINAL_KEY, MAX_INPUT_BYTES,
+            TerminalKeyV2, TerminalKeyV2Modifiers, TerminalMouse, TerminalMouseKind,
+            CAP_COMMAND_BLOCKS, CAP_EXTENDED_TERMINAL_KEY, MAX_INPUT_BYTES,
         },
     },
     RuntimeError,
 };
 
-use seyal_exec::{CopyModeMotion, PasteError};
+use seyal_exec::{
+    apply_host_mouse_gesture, encode_mouse_report, mouse_takes_host_override, CopyModeMotion,
+    MouseEventKind, MouseReport, PasteError, VisualPos,
+};
 
 use super::super::shell_integration::ComposerAdmission;
 use super::super::Runtime;
@@ -370,6 +374,151 @@ impl Runtime {
         }
         if let Some(text) = copied {
             self.emit_copied_text(token, command.attachment_id, &text);
+        }
+    }
+
+    pub(super) fn handle_terminal_mouse(&mut self, token: u64, payload: &[u8]) {
+        let Ok(event) = TerminalMouse::decode(payload) else {
+            self.send_error(
+                token,
+                ErrorCode::MalformedPayload,
+                MessageType::TerminalMouse as u16,
+            );
+            return;
+        };
+        let execution_id = match self.local_ipc.as_ref().map(|state| {
+            state
+                .attachments
+                .authorize_mutation(token, event.attachment_id)
+        }) {
+            Some(Ok(id)) => id,
+            Some(Err(AttachmentError::PermissionDenied)) => {
+                self.send_error(
+                    token,
+                    ErrorCode::PermissionDenied,
+                    MessageType::TerminalMouse as u16,
+                );
+                return;
+            }
+            _ => {
+                self.send_error(
+                    token,
+                    ErrorCode::StaleIdentity,
+                    MessageType::TerminalMouse as u16,
+                );
+                return;
+            }
+        };
+        let monotonic = self.local_ipc.as_mut().is_some_and(|state| {
+            let Some(meta) = state.connections.get_mut(&token) else {
+                return false;
+            };
+            if event.action_id <= meta.last_terminal_mouse_action_id {
+                false
+            } else {
+                meta.last_terminal_mouse_action_id = event.action_id;
+                true
+            }
+        });
+        if !monotonic {
+            self.send_error(
+                token,
+                ErrorCode::MalformedPayload,
+                MessageType::TerminalMouse as u16,
+            );
+            return;
+        }
+        let encoded = {
+            let Some(entry) = self.entries.get_mut(&execution_id) else {
+                self.send_error(
+                    token,
+                    ErrorCode::InvalidExecution,
+                    MessageType::TerminalMouse as u16,
+                );
+                return;
+            };
+            let cols = entry.execution.terminal().cols();
+            let rows = entry.execution.terminal().rows();
+            if event.col >= cols || event.row >= rows {
+                self.send_error(
+                    token,
+                    ErrorCode::MalformedPayload,
+                    MessageType::TerminalMouse as u16,
+                );
+                return;
+            }
+            let cell = VisualPos {
+                col: event.col,
+                row: event.row,
+            };
+            let reporting = entry.execution.terminal().modes().mouse_reporting;
+            let shift = event.modifiers.bits() & TerminalKeyV2Modifiers::SHIFT.bits() != 0;
+            let kind = match event.kind {
+                TerminalMouseKind::Press => MouseEventKind::Press,
+                TerminalMouseKind::Release => MouseEventKind::Release,
+                TerminalMouseKind::Move => MouseEventKind::Move,
+                TerminalMouseKind::Wheel => MouseEventKind::Wheel,
+            };
+            if mouse_takes_host_override(reporting, shift, entry.mouse_host_anchor, kind) {
+                if let Some((start, end)) =
+                    apply_host_mouse_gesture(&mut entry.mouse_host_anchor, kind, cell)
+                {
+                    entry.execution.set_linear_selection(start, end);
+                }
+                return;
+            }
+            let report_button = if event.kind == TerminalMouseKind::Move && entry.mouse_buttons == 0
+            {
+                3
+            } else {
+                event.button
+            };
+            encode_mouse_report(
+                MouseReport {
+                    kind,
+                    button: report_button,
+                    shift: false,
+                    alt: event.modifiers.bits() & TerminalKeyV2Modifiers::ALT.bits() != 0,
+                    control: event.modifiers.bits() & TerminalKeyV2Modifiers::CONTROL.bits() != 0,
+                    col: event.col,
+                    row: event.row,
+                },
+                entry.execution.terminal().modes(),
+            )
+        };
+        let Some(bytes) = encoded else {
+            return;
+        };
+        match self.input_ingress(execution_id) {
+            Ok(ingress) => {
+                if ingress.try_submit(bytes).is_err() {
+                    self.send_error(
+                        token,
+                        ErrorCode::Backpressure,
+                        MessageType::TerminalMouse as u16,
+                    );
+                    return;
+                }
+            }
+            Err(_) => {
+                self.send_error(
+                    token,
+                    ErrorCode::InvalidExecution,
+                    MessageType::TerminalMouse as u16,
+                );
+                return;
+            }
+        }
+        if let Some(entry) = self.entries.get_mut(&execution_id) {
+            match event.kind {
+                TerminalMouseKind::Press if event.button <= 2 => {
+                    entry.mouse_buttons |= 1 << event.button;
+                }
+                TerminalMouseKind::Release if event.button <= 2 => {
+                    entry.mouse_buttons &= !(1 << event.button);
+                }
+                _ => {}
+            }
         }
     }
 

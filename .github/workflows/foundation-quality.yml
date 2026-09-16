@@ -44,7 +44,9 @@ jobs:
       - name: Benchmark contract guardrails
         run: python3 scripts/check-benchmark-contract.py
       - name: M002 performance evidence contract
-        run: python3 scripts/check-m002-performance-contract.py
+        run: |
+          python3 scripts/check-m002-performance-contract.py
+          python3 scripts/check-m002-performance-contract.py --self-test
       - name: Native UI test policy
         run: python3 scripts/check-ui-test-policy.py
       - name: Host product-fixture fence

@@ -533,6 +533,7 @@ impl LocalDisplayClient {
             last_admitted_v2_action_id: 0,
             last_sent_v2_action_id: 0,
             highest_v2_error_id: 0,
+            last_admitted_mouse_action_id: 0,
         })
     }
 }

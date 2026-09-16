@@ -338,12 +338,14 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
     private let optionAsAlt: Bool
     private var composition = CompositionDocument()
     private var nextKeyboardActionID: UInt32 = 1
+    private var nextMouseActionID: UInt32 = 1
     private var heldKeyboardKinds: [UInt16: TerminalNativeKeyV2] = [:]
     private static let maxHeldKeyboardKinds = 256
     var onBridgeBecameUsable: (() -> Void)?
     var onRequestComposerFocus: (() -> Void)?
     var observedAlternateScreen = false
     private var announcedBridgeUsable = false
+    private var mouseTrackingArea: NSTrackingArea?
 
     init(frame frameRect: NSRect, appHandle: UInt64) {
         self.appHandle = appHandle
@@ -374,6 +376,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
             announcedBridgeUsable = false
             heldKeyboardKinds.removeAll(keepingCapacity: true)
             nextKeyboardActionID = 1
+            nextMouseActionID = 1
             composition.clear()
         }
     }
@@ -389,12 +392,74 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
     }
 
     override func mouseDown(with event: NSEvent) {
-        if allowsDirectTerminalInput {
-            window?.makeFirstResponder(self)
-        } else {
-            onRequestComposerFocus?()
+        submitNativeMouse(event, kind: 1)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        submitNativeMouse(event, kind: 2)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        submitNativeMouse(event, kind: 3)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        submitNativeMouse(event, kind: 3)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let mouseTrackingArea {
+            removeTrackingArea(mouseTrackingArea)
         }
-        super.mouseDown(with: event)
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        mouseTrackingArea = area
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        submitNativeMouse(event, kind: 1)
+    }
+
+    override func rightMouseUp(with event: NSEvent) {
+        submitNativeMouse(event, kind: 2)
+    }
+
+    override func rightMouseDragged(with event: NSEvent) {
+        submitNativeMouse(event, kind: 3)
+    }
+
+    override func otherMouseDown(with event: NSEvent) {
+        submitNativeMouse(event, kind: 1)
+    }
+
+    override func otherMouseUp(with event: NSEvent) {
+        submitNativeMouse(event, kind: 2)
+    }
+
+    override func otherMouseDragged(with event: NSEvent) {
+        submitNativeMouse(event, kind: 3)
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        guard allowsDirectTerminalInput else {
+            super.scrollWheel(with: event)
+            return
+        }
+        let button: UInt8
+        if abs(event.scrollingDeltaY) >= abs(event.scrollingDeltaX) {
+            if event.scrollingDeltaY == 0 { return }
+            button = event.scrollingDeltaY > 0 ? 64 : 65
+        } else {
+            if event.scrollingDeltaX == 0 { return }
+            button = event.scrollingDeltaX > 0 ? 66 : 67
+        }
+        submitNativeMouse(event, kind: 4, buttonOverride: button)
     }
 
     override func keyDown(with event: NSEvent) {
@@ -614,6 +679,66 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
         SeyalAccessibilityAnnouncement.post(message, element: self)
     }
 
+    private func submitNativeMouse(_ event: NSEvent, kind: UInt8, buttonOverride: UInt8? = nil) {
+        if !allowsDirectTerminalInput {
+            if kind == 1 {
+                onRequestComposerFocus?()
+            }
+            return
+        }
+        window?.makeFirstResponder(self)
+        guard let cell = terminalMouseCell(for: event),
+            let actionID = takeNextMouseActionID()
+        else { return }
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        var modifiers: UInt16 = 0
+        if flags.contains(.shift) { modifiers |= 1 }
+        if flags.contains(.option) { modifiers |= 2 }
+        if flags.contains(.control) { modifiers |= 4 }
+        let button: UInt8
+        if let buttonOverride {
+            button = buttonOverride
+        } else if let mapped = Self.xtermButton(event.buttonNumber) {
+            button = mapped
+        } else {
+            return
+        }
+        _ = terminalSubmitMouse(
+            kind: kind,
+            button: button,
+            modifiers: modifiers,
+            col: cell.0,
+            row: cell.1,
+            actionID: actionID
+        )
+    }
+
+    private static func xtermButton(_ buttonNumber: Int) -> UInt8? {
+        switch buttonNumber {
+        case 0: return 0
+        case 1: return 2
+        case 2: return 1
+        default: return nil
+        }
+    }
+
+    private static func xtermButtonSelfTest() -> Bool {
+        xtermButton(0) == 0
+            && xtermButton(1) == 2
+            && xtermButton(2) == 1
+            && xtermButton(3) == nil
+            && xtermButton(-1) == nil
+    }
+
+    private func takeNextMouseActionID() -> UInt32? {
+        guard let actionID = Self.v2ActionIDBeforeExhaustion(nextMouseActionID) else {
+            terminalStopForProtocolRecovery()
+            return nil
+        }
+        nextMouseActionID = actionID + 1
+        return actionID
+    }
+
     private func takeNextKeyboardActionID() -> UInt32? {
         guard let actionID = Self.v2ActionIDBeforeExhaustion(nextKeyboardActionID) else {
             terminalStopForProtocolRecovery()
@@ -701,6 +826,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
             && heldKeyAdmissionSelfTest()
             && capabilityLossDropsHeldKeyReleaseSelfTest()
             && RustDisplayBridge.pasteAdmissionSelfTest()
+            && xtermButtonSelfTest()
     }
 
     private static func controlNormalizationSelfTest() -> Bool {

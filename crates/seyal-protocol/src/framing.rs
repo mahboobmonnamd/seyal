@@ -563,6 +563,93 @@ impl HostSelection {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum TerminalMouseKind {
+    Press = 1,
+    Release = 2,
+    Move = 3,
+    Wheel = 4,
+}
+
+impl TerminalMouseKind {
+    fn from_u8(value: u8) -> Result<Self, FramingError> {
+        match value {
+            1 => Ok(Self::Press),
+            2 => Ok(Self::Release),
+            3 => Ok(Self::Move),
+            4 => Ok(Self::Wheel),
+            _ => Err(FramingError::MalformedPayload),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TerminalMouse {
+    pub attachment_id: AttachmentId,
+    pub action_id: u32,
+    pub kind: TerminalMouseKind,
+    pub button: u8,
+    pub modifiers: TerminalKeyV2Modifiers,
+    pub col: u16,
+    pub row: u16,
+}
+
+impl TerminalMouse {
+    pub const WIRE_LEN: usize = 32;
+
+    pub fn encode(&self) -> Vec<u8> {
+        debug_assert!(self.validate().is_ok());
+        let mut out = Vec::with_capacity(Self::WIRE_LEN);
+        out.extend_from_slice(&self.attachment_id.to_bytes());
+        out.extend_from_slice(&self.action_id.to_le_bytes());
+        out.push(self.kind as u8);
+        out.push(self.button);
+        out.extend_from_slice(&self.modifiers.bits().to_le_bytes());
+        out.extend_from_slice(&self.col.to_le_bytes());
+        out.extend_from_slice(&self.row.to_le_bytes());
+        out.extend_from_slice(&[0u8; 4]);
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, FramingError> {
+        exact_len(bytes, Self::WIRE_LEN)?;
+        if bytes[28..32] != [0u8; 4] {
+            return Err(FramingError::MalformedPayload);
+        }
+        let value = Self {
+            attachment_id: attachment_id_from(&bytes[..16]),
+            action_id: u32::from_le_bytes(bytes[16..20].try_into().unwrap()),
+            kind: TerminalMouseKind::from_u8(bytes[20])?,
+            button: bytes[21],
+            modifiers: TerminalKeyV2Modifiers::from_bits_for_ffi(u16::from_le_bytes(
+                bytes[22..24].try_into().unwrap(),
+            ))
+            .ok_or(FramingError::MalformedPayload)?,
+            col: u16::from_le_bytes(bytes[24..26].try_into().unwrap()),
+            row: u16::from_le_bytes(bytes[26..28].try_into().unwrap()),
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    pub fn validate(&self) -> Result<(), FramingError> {
+        if self.action_id == 0 || self.col >= 512 || self.row >= 256 {
+            return Err(FramingError::MalformedPayload);
+        }
+        let button_ok = match self.kind {
+            TerminalMouseKind::Press | TerminalMouseKind::Release => self.button <= 2,
+            TerminalMouseKind::Move => self.button <= 3,
+            TerminalMouseKind::Wheel => (64..=67).contains(&self.button),
+        };
+        if button_ok {
+            Ok(())
+        } else {
+            Err(FramingError::MalformedPayload)
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HostSearch<'a> {
     pub attachment_id: AttachmentId,
     pub forward: bool,
@@ -709,6 +796,8 @@ pub enum MessageType {
     CopiedText = 32,
     /// Host history search. Never written to the PTY.
     HostSearch = 33,
+    /// Native mouse event. Runtime encodes SGR/X10 from canonical modes.
+    TerminalMouse = 34,
 }
 impl MessageType {
     pub fn from_u16(value: u16) -> Option<Self> {
@@ -745,6 +834,7 @@ impl MessageType {
             31 => Self::HostSelection,
             32 => Self::CopiedText,
             33 => Self::HostSearch,
+            34 => Self::TerminalMouse,
             _ => return None,
         })
     }
@@ -784,6 +874,7 @@ pub enum Message<'a> {
     HostSelection(HostSelection),
     CopiedText(InputRef<'a>),
     HostSearch(HostSearch<'a>),
+    TerminalMouse(TerminalMouse),
 }
 
 pub fn decode_message<'a>(
@@ -844,6 +935,7 @@ pub fn decode_message<'a>(
         MessageType::HostSelection => Message::HostSelection(HostSelection::decode(payload)?),
         MessageType::CopiedText => Message::CopiedText(InputRef::decode(payload)?),
         MessageType::HostSearch => Message::HostSearch(HostSearch::decode(payload)?),
+        MessageType::TerminalMouse => Message::TerminalMouse(TerminalMouse::decode(payload)?),
     })
 }
 
@@ -928,6 +1020,27 @@ mod tests {
         assert_eq!(MessageType::from_u16(31), Some(MessageType::HostSelection));
         assert_eq!(MessageType::from_u16(32), Some(MessageType::CopiedText));
         assert_eq!(MessageType::from_u16(33), Some(MessageType::HostSearch));
+        assert_eq!(MessageType::from_u16(34), Some(MessageType::TerminalMouse));
+    }
+
+    #[test]
+    fn terminal_mouse_round_trips() {
+        let event = TerminalMouse {
+            attachment_id: attach_id(),
+            action_id: 1,
+            kind: TerminalMouseKind::Press,
+            button: 0,
+            modifiers: TerminalKeyV2Modifiers::SHIFT,
+            col: 3,
+            row: 4,
+        };
+        assert_eq!(TerminalMouse::decode(&event.encode()).unwrap(), event);
+        let mut reserved = event.encode();
+        reserved[31] = 1;
+        assert_eq!(
+            TerminalMouse::decode(&reserved),
+            Err(FramingError::MalformedPayload)
+        );
     }
 
     #[test]

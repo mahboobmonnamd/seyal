@@ -149,6 +149,35 @@ final class SeyalHostComponentTests: XCTestCase {
         XCTAssertTrue(InteractiveMetalSurfaceView.pass7InputSelfTest())
     }
 
+    /// Hygiene #962: orphaned `--renderer-self-test` scaffolding is gone; the
+    /// production Metal surface remains constructible without that path.
+    @MainActor
+    func testMetalSurfaceRetainsProductionPathWithoutOrphanedSelfTestScaffolding() {
+        let sourceRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources", isDirectory: true)
+        let metalSurface = sourceRoot.appendingPathComponent("MetalSurfaceView.swift")
+        let main = sourceRoot.appendingPathComponent("Main.swift")
+        let metalText = (try? String(contentsOf: metalSurface, encoding: .utf8)) ?? ""
+        let mainText = (try? String(contentsOf: main, encoding: .utf8)) ?? ""
+        XCTAssertFalse(metalText.contains("Pass6RegressionValidation"))
+        XCTAssertFalse(metalText.contains("static func smokeTest()"))
+        XCTAssertFalse(mainText.contains("--renderer-self-test"))
+        XCTAssertTrue(mainText.contains("--renderer-benchmark"))
+        let surface = MetalSurfaceView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        XCTAssertEqual(surface.frame.size, CGSize(width: 320, height: 200))
+        let handle = seyal_app_create()
+        defer { XCTAssertEqual(seyal_app_destroy(handle), 0) }
+        let interactive = InteractiveMetalSurfaceView(
+            frame: NSRect(x: 0, y: 0, width: 320, height: 200),
+            appHandle: handle
+        )
+        XCTAssertEqual(interactive.accessibilityIdentifier(), "terminal-input")
+        XCTAssertTrue(InteractiveMetalSurfaceView.pass7InputSelfTest())
+    }
+
     func testTranscriptFrameRejectsZeroBlockIdentity() {
         let invalid = NativeTranscriptFrame(
             revision: 1,

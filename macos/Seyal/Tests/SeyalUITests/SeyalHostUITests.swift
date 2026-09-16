@@ -49,6 +49,20 @@ final class SeyalHostUITests: XCTestCase {
         waitForUsablePty(in: app)
     }
 
+    /// Hygiene #962: after removing orphaned Metal self-test scaffolding, the
+    /// headed host still exposes the interactive terminal input surface.
+    func testInteractiveMetalSurfaceRemainsAvailableWithoutSelfTestScaffolding() throws {
+        let app = hostedApp()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
+        let terminal = app.descendants(matching: .any)["terminal-input"]
+        XCTAssertTrue(terminal.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.descendants(matching: .any)["seyal-thin-pane"].waitForExistence(timeout: 5))
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        XCTAssertEqual(app.state, .runningForeground, "Seyal.app crashed while hosting Metal input")
+        waitForUsablePty(in: app)
+        XCTAssertTrue(terminal.exists)
+    }
+
     func testFlowSurfaceIsComposerAndBlocks() throws {
         let app = hostedApp()
         XCTAssertTrue(app.descendants(matching: .any)["seyal-composer"].waitForExistence(timeout: 10))

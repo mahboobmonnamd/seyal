@@ -367,6 +367,7 @@ impl LocalDisplayClient {
                 Ok(Some(InputAdmissionFailure::ClientBackpressure))
             }
             crate::v2_error::V2IncomingDisposition::LostController => {
+                self.role = Role::Observer;
                 Ok(Some(InputAdmissionFailure::LostController))
             }
             crate::v2_error::V2IncomingDisposition::Protocol => Err(ClientError::Protocol),

@@ -843,6 +843,28 @@ mod tests {
     }
 
     #[test]
+    fn v2_lost_controller_demotes_role_and_rejects_later_keys() {
+        let (client_stream, _server_stream) = UnixStream::pair().expect("socket pair");
+        let mut client = test_client(client_stream);
+        client.extended_terminal_key_supported = true;
+        submit_v2(&mut client, 4).expect("send 4");
+        assert_eq!(client.role, Role::Controller);
+
+        assert_eq!(
+            client
+                .classify_incoming_error(type29(ErrorCode::PermissionDenied, 4))
+                .unwrap(),
+            Some(InputAdmissionFailure::LostController)
+        );
+        assert_eq!(client.role, Role::Observer);
+        assert_eq!(submit_v2(&mut client, 5), Err(ClientError::LostController));
+        assert_eq!(
+            client.input_failure,
+            Some(InputAdmissionFailure::LostController)
+        );
+    }
+
+    #[test]
     fn v2_sent_bound_advances_only_after_wire_complete() {
         let (client_stream, mut server_stream) = UnixStream::pair().expect("socket pair");
         client_stream

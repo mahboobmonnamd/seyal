@@ -1,5 +1,6 @@
 use seyal_terminal::{
-    encode_mouse_report, MouseEventKind, MouseReport, MouseReporting, TerminalState,
+    apply_host_mouse_gesture, encode_mouse_report, mouse_takes_host_override, MouseEventKind,
+    MouseReport, MouseReporting, TerminalState, VisualPos,
 };
 
 fn terminal() -> TerminalState {
@@ -126,4 +127,146 @@ fn wheel_encodes_sgr_buttons() {
     )
     .unwrap();
     assert_eq!(bytes, b"\x1b[<64;1;1M");
+}
+
+#[test]
+fn shift_press_latches_host_and_suppresses_report() {
+    let mut anchor = None;
+    let cell = VisualPos { col: 1, row: 1 };
+    assert!(mouse_takes_host_override(
+        MouseReporting::Button,
+        true,
+        anchor,
+        MouseEventKind::Press
+    ));
+    assert_eq!(
+        apply_host_mouse_gesture(&mut anchor, MouseEventKind::Press, cell),
+        Some((cell, cell))
+    );
+    assert_eq!(anchor, Some(cell));
+    // Application encoding must not run on the host path; prove Button+Press
+    // would otherwise encode so the helper is what suppresses the report.
+    let would_encode = encode_mouse_report(
+        MouseReport {
+            kind: MouseEventKind::Press,
+            button: 0,
+            shift: false,
+            alt: false,
+            control: false,
+            col: 1,
+            row: 1,
+        },
+        mode_button_sgr(),
+    );
+    assert!(would_encode.is_some());
+}
+
+#[test]
+fn unshifted_move_release_while_latched_stay_host_no_report() {
+    let mut anchor = Some(VisualPos { col: 1, row: 1 });
+    let move_cell = VisualPos { col: 3, row: 1 };
+    assert!(mouse_takes_host_override(
+        MouseReporting::Button,
+        false,
+        anchor,
+        MouseEventKind::Move
+    ));
+    assert_eq!(
+        apply_host_mouse_gesture(&mut anchor, MouseEventKind::Move, move_cell),
+        Some((VisualPos { col: 1, row: 1 }, move_cell))
+    );
+    assert_eq!(anchor, Some(VisualPos { col: 1, row: 1 }));
+
+    let release_cell = VisualPos { col: 4, row: 1 };
+    assert!(mouse_takes_host_override(
+        MouseReporting::Any,
+        false,
+        anchor,
+        MouseEventKind::Release
+    ));
+    assert_eq!(
+        apply_host_mouse_gesture(&mut anchor, MouseEventKind::Release, release_cell),
+        Some((VisualPos { col: 1, row: 1 }, release_cell))
+    );
+    assert_eq!(anchor, None);
+}
+
+#[test]
+fn after_release_unshifted_press_resumes_application_report() {
+    let anchor = None;
+    assert!(!mouse_takes_host_override(
+        MouseReporting::Button,
+        false,
+        anchor,
+        MouseEventKind::Press
+    ));
+    let bytes = encode_mouse_report(
+        MouseReport {
+            kind: MouseEventKind::Press,
+            button: 0,
+            shift: false,
+            alt: false,
+            control: false,
+            col: 0,
+            row: 0,
+        },
+        mode_button_sgr(),
+    )
+    .unwrap();
+    assert_eq!(bytes, b"\x1b[<0;1;1M");
+}
+
+#[test]
+fn reporting_off_press_is_host_without_shift() {
+    let mut anchor = None;
+    let cell = VisualPos { col: 2, row: 2 };
+    assert!(mouse_takes_host_override(
+        MouseReporting::Off,
+        false,
+        anchor,
+        MouseEventKind::Press
+    ));
+    assert_eq!(
+        apply_host_mouse_gesture(&mut anchor, MouseEventKind::Press, cell),
+        Some((cell, cell))
+    );
+}
+
+#[test]
+fn shift_wheel_is_host_noop_no_selection_change() {
+    let mut anchor = None;
+    assert!(mouse_takes_host_override(
+        MouseReporting::Any,
+        true,
+        anchor,
+        MouseEventKind::Wheel
+    ));
+    assert_eq!(
+        apply_host_mouse_gesture(
+            &mut anchor,
+            MouseEventKind::Wheel,
+            VisualPos { col: 5, row: 5 }
+        ),
+        None
+    );
+    assert_eq!(anchor, None);
+}
+
+#[test]
+fn host_latched_move_ignores_reporting_any() {
+    let anchor = Some(VisualPos { col: 0, row: 0 });
+    assert!(mouse_takes_host_override(
+        MouseReporting::Any,
+        false,
+        anchor,
+        MouseEventKind::Move
+    ));
+}
+
+fn mode_button_sgr() -> seyal_terminal::ModeState {
+    seyal_terminal::ModeState {
+        mouse_reporting: MouseReporting::Button,
+        mouse_sgr: true,
+        ..seyal_terminal::ModeState::default()
+    }
 }

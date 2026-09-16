@@ -44,7 +44,10 @@ pub use history::{
 };
 pub use line::LineId;
 pub use modes::{ModeState, MouseReporting};
-pub use mouse::{encode_mouse_report, mouse_event_admitted, MouseEventKind, MouseReport};
+pub use mouse::{
+    apply_host_mouse_gesture, encode_mouse_report, mouse_event_admitted, mouse_takes_host_override,
+    MouseEventKind, MouseReport,
+};
 pub use presentation::{
     HostPresentationEvent, PresentationPayload, MAX_HOST_PRESENTATION_EVENTS,
     MAX_PRESENTATION_PAYLOAD_BYTES,

@@ -42,6 +42,8 @@ Ready Issue
 → implementation
 ```
 
+Unassigned Ready Issues must be assigned to the current authenticated GitHub login before implementation starts. Follow `.agents/skills/implement-issue/SKILL.md` for the add-assignees write; do not use `gh issue edit --add-assignee`. If GitHub denies that write, post the skill's `<!-- seyal-claim -->` comment and continue only after a re-fetch shows you as the sole assignee.
+
 If the Issue is already assigned to another developer, has multiple assignees, the current GitHub identity cannot be resolved, or the deterministic `issue/<number>` branch already exists for work you were not explicitly asked to resume, stop and report the collision. Do not create another branch or overwrite the existing assignee.
 
 Ownership transfer is explicit: stop current edits, record the existing branch/PR/check state, reassign the Issue, and have the new developer re-run the implementation preflight before resuming the same branch.

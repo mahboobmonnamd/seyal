@@ -13,11 +13,11 @@ Follow the canonical generic procedure in `.sdlc/framework/skills/implementation
 
 Claiming the Issue is a coordination preflight, not implementation permission. Perform it before planning, worktree/branch creation, generated files, or production edits.
 
-1. Resolve the current implementer's **authenticated GitHub login** using the project-approved GitHub tooling. Do not guess from git author name, OS username, chat name, or repository owner. If the authenticated login cannot be resolved uniquely, stop with `BLOCKED: implementation identity unavailable` and do not claim or edit the Issue.
-2. Fetch the owning GitHub Issue fresh from GitHub immediately before pickup. Cached project context, chat state, an earlier fetch, or the Issue body alone is not sufficient for assignee state.
+1. Resolve the current implementer's **authenticated GitHub login** using the project-approved GitHub tooling (`gh api user --jq .login`, or the equivalent GitHub MCP actor login). Do not guess from git author name, OS username, chat name, or repository owner. A sandbox/`Forbidden` failure is not `identity unavailable` until retried against live GitHub. If the authenticated login still cannot be resolved uniquely, stop with `BLOCKED: implementation identity unavailable` and do not claim or edit the Issue.
+2. Fetch the owning GitHub Issue fresh from GitHub immediately before pickup. Cached project context, chat state, an earlier fetch, or the Issue body alone is not sufficient for assignee state. Use the Issue's canonical `owner/repo` from its GitHub URL, not a fork remote.
 3. Verify the Issue is still open and **Ready** under `docs/engineering/ISSUE-PROTOCOL.md`. Readiness and ownership are separate gates.
 4. Inspect the complete assignee list:
-   - **No assignee:** assign exactly the authenticated current implementer, then fetch the Issue again.
+   - **No assignee:** assign exactly the authenticated current implementer using the assignment write below, then fetch the Issue again. Skipping this write leaves the ticket unclaimed and is `BLOCKED`.
    - **Exactly the current implementer:** treat this only as a potential resume; continue the collision checks below.
    - **Exactly another implementer:** stop before planning or edits and report `Issue #N is already taken by @login` with the Issue URL.
    - **Multiple assignees:** stop as an ownership collision. Seyal implementation Issues have exactly one active implementer.
@@ -25,6 +25,35 @@ Claiming the Issue is a coordination preflight, not implementation permission. P
 6. Do not clear, replace, or steal another implementer's assignment. Ownership transfer requires an explicit handoff/reassignment under `ISSUE-PROTOCOL.md`.
 
 The GitHub assignee is the human-visible ownership claim. Project status such as `In Progress` is lifecycle metadata and must never substitute for the assignee check.
+
+### Assignment write
+
+On an unassigned Issue, add the current login. Do not use `gh issue edit --add-assignee`, which calls GraphQL `ReplaceActorsForAssignable` and fails for pull-only/triage-less tokens even when adding the first assignee.
+
+```sh
+LOGIN="$(gh api user --jq .login)"
+# OWNER/REPO is the Issue repository from the GitHub URL.
+gh api --method POST "repos/${OWNER}/${REPO}/issues/${N}/assignees" --input - <<EOF
+{"assignees":["${LOGIN}"]}
+EOF
+```
+
+GitHub MCP is acceptable only when it performs this same add-assignees mutation, not a replace-actors edit.
+
+If that write fails because `$LOGIN` is not assignable or the token lacks assignee permission (`403`, `422`, `ReplaceActorsForAssignable`, or `does not have the correct permissions`):
+
+1. Post this exact claim comment on the canonical Issue (public issues allow commenters to become assignable; the `Issue claim` workflow then writes the GitHub assignee):
+
+   ```text
+   <!-- seyal-claim -->
+   @LOGIN is claiming this Issue for implementation.
+   ```
+
+   Substitute the resolved login for `LOGIN`. The HTML comment marker and `@login` must both be present.
+2. Boundedly re-fetch assignees until `$LOGIN` is the sole assignee, or stop. Do not busy-loop; a few spaced polls totaling about two minutes is enough for the workflow.
+3. If the re-fetch still shows no assignee, a different assignee, or multiple assignees, stop as `BLOCKED` with the API/workflow error. Do not continue unassigned.
+
+Never treat a claim comment, Project status, or local checkout as a substitute for a verified GitHub assignee.
 
 ## Plan first
 

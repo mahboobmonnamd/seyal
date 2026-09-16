@@ -48,7 +48,10 @@ Rules:
 - Production implementation of a GitHub Issue must enter through `.agents/skills/implement-issue/SKILL.md`.
 - Resolve the authenticated GitHub login from project-approved GitHub tooling. Never infer identity from git author configuration, local username, chat name, or repository ownership.
 - Fetch assignee state fresh immediately before pickup. Cached context is not ownership authority.
-- An unassigned Ready Issue may be assigned to the current authenticated implementer. Re-fetch after assignment; continue only if that implementer is now the sole assignee.
+- An unassigned Ready Issue must be assigned to the current authenticated implementer before planning or production work. Re-fetch after the assignment write; continue only if that implementer is now the sole assignee. Skipping the write leaves the ticket unclaimed and is `BLOCKED`.
+- Perform that write with `POST /repos/{owner}/{repo}/issues/{number}/assignees` adding the current login. Do not use `gh issue edit --add-assignee`, which calls GraphQL `ReplaceActorsForAssignable` and fails for tokens without that mutation even when adding the first assignee.
+- A sandbox/`Forbidden` failure on identity or assignment is not `identity unavailable` until retried against live GitHub.
+- If the authenticated login cannot write assignees directly, post the `<!-- seyal-claim -->` comment specified by `implement-issue` and wait for the repository `Issue claim` workflow to assign that commenter. A claim comment is not itself the ownership lock; continue only after a re-fetch shows the current implementer as the sole GitHub assignee.
 - If exactly one different assignee exists, the Issue is already taken. Report the assignee and stop before planning, worktree/branch creation, or production edits.
 - Multiple assignees are an ownership collision for an implementation Issue. Stop and require explicit resolution.
 - If implementer identity, assignment write, or fresh verification is unavailable/ambiguous, fail closed. Do not code first and repair metadata later.

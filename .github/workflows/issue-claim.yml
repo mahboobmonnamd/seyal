@@ -1,0 +1,54 @@
+# Assigns the commenter on an unassigned Issue when implement-issue posts
+# the `<!-- seyal-claim -->` marker. Pull-only tokens cannot call
+# ReplaceActorsForAssignable; this workflow is the assignee write for that case.
+# Not a Foundation Quality required check.
+name: Issue claim
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+concurrency:
+  group: issue-claim-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  assign-claimer:
+    if: >-
+      github.event.issue.pull_request == null &&
+      contains(github.event.comment.body, '<!-- seyal-claim -->')
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      issues: write
+    steps:
+      - name: Assign commenter when the Issue is unassigned
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          BODY="$(jq -r '.comment.body' "${GITHUB_EVENT_PATH}")"
+          CLAIMER="$(jq -r '.comment.user.login' "${GITHUB_EVENT_PATH}")"
+          ISSUE_NUMBER="$(jq -r '.issue.number' "${GITHUB_EVENT_PATH}")"
+          if [[ -z "${CLAIMER}" || "${CLAIMER}" == "null" ]]; then
+            echo "claim comment has no GitHub login; ignoring" >&2
+            exit 0
+          fi
+          case "${BODY}" in
+            *"@${CLAIMER}"*) ;;
+            *)
+              echo "claim comment does not name @${CLAIMER}; ignoring" >&2
+              exit 0
+              ;;
+          esac
+          assignees="$(gh api "repos/${GH_REPO}/issues/${ISSUE_NUMBER}" --jq '[.assignees[].login] | join(",")')"
+          if [[ -n "${assignees}" ]]; then
+            echo "Issue already assigned to ${assignees}; not stealing"
+            exit 0
+          fi
+          gh api --method POST "repos/${GH_REPO}/issues/${ISSUE_NUMBER}/assignees" --input - <<EOF
+          {"assignees":["${CLAIMER}"]}
+          EOF

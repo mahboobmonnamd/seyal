@@ -70,13 +70,28 @@ grep -Fq 'Issue #N is already taken by @login' "$claim_skill" || fail "implement
 grep -Fq 'Multiple assignees' "$claim_skill" || fail "implement-issue must fail closed on multiple assignees"
 grep -Fq 'exact remote branch name `issue/<number>`' "$claim_skill" || fail "implement-issue must use the deterministic issue branch collision backstop"
 grep -Fq 'never overwrite another valid claim to win a race' "$claim_skill" || fail "implement-issue must not steal a concurrent claim"
+grep -Fq 'Do not use `gh issue edit --add-assignee`' "$claim_skill" || fail "implement-issue must not use gh issue edit --add-assignee"
+grep -Fq 'ReplaceActorsForAssignable' "$claim_skill" || fail "implement-issue must name the failing GraphQL mutation"
+grep -Fq '/assignees' "$claim_skill" || fail "implement-issue must use the add-assignees REST write"
+grep -Fq '<!-- seyal-claim -->' "$claim_skill" || fail "implement-issue must post the seyal-claim comment when assignee writes are denied"
+grep -Fq 'Skipping this write leaves the ticket unclaimed' "$claim_skill" || fail "implement-issue must treat a skipped assignment write as BLOCKED"
 grep -Fq 'Any request to **implement, fix, finish, code, or complete a specific GitHub Issue** must enter through' AGENTS.md || fail "AGENTS.md must route implementation requests through implement-issue"
 grep -Fq 'one deterministic issue/<number> branch' docs/engineering/DEVELOPMENT.md || fail "development workflow must use the deterministic issue branch"
 if grep -Fq '→ issue/<number>-<short-name>' docs/engineering/DEVELOPMENT.md; then
   fail "new development workflow must not retain the legacy non-deterministic branch convention"
 fi
 grep -Fq 'GitHub assignee state is the human-visible claim' docs/engineering/ISSUE-PROTOCOL.md || fail "Issue protocol must define assignee ownership authority"
+grep -Fq 'An unassigned Ready Issue must be assigned' docs/engineering/ISSUE-PROTOCOL.md || fail "Issue protocol must require assignment of unassigned Ready Issues"
 grep -Fq 'Project status (`Ready`, `In Progress`, and so on) is lifecycle metadata, not an ownership lock' docs/engineering/ISSUE-PROTOCOL.md || fail "Issue protocol must not use Project status as the ownership lock"
+
+claim_workflow=.github/workflows/issue-claim.yml
+[[ -f "$claim_workflow" ]] || fail "Issue claim workflow is missing"
+grep -Fq '<!-- seyal-claim -->' "$claim_workflow" || fail "Issue claim workflow must match the implement-issue claim marker"
+grep -Fq 'not stealing' "$claim_workflow" || fail "Issue claim workflow must refuse to overwrite an existing assignee"
+grep -Fq 'issues: write' "$claim_workflow" || fail "Issue claim workflow must request issues: write"
+if grep -Eq '^[[:space:]]+contents:[[:space:]]+write' "$claim_workflow"; then
+  fail "Issue claim workflow must not request contents: write"
+fi
 
 [[ -f .sdlc/context/_meta.yaml ]] || fail "Seyal SDLC context metadata is missing"
 [[ -f .sdlc/graph/context-index.json ]] || fail "Seyal derived context index is missing"

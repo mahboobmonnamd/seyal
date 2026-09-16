@@ -113,6 +113,7 @@ These are **not** Foundation required checks. A green Foundation run can therefo
 
 | Workflow / gate | Trigger | What it proves | What it does **not** prove |
 |---|---|---|---|
+| `Issue claim` (`.github/workflows/issue-claim.yml`) | `issue_comment.created` containing `<!-- seyal-claim -->` | assigns that commenter on an **unassigned** Issue when `implement-issue` cannot write assignees directly | ownership of already-assigned Issues; Foundation quality; permission to steal a claim |
 | `Docs` (`.github/workflows/docs.yml`) | path-filtered to `site/**`, docs skills, and itself | Astro docs build with SHA-pinned actions and `npm ci` against `site/package-lock.json` | product/runtime correctness |
 | `Pass 5 Production Fuzz` (`.github/workflows/pass5-fuzz.yml`) | path-filtered to runtime/exec/protocol/fuzz surfaces (plus `workflow_dispatch`) | short libFuzzer campaigns (~30s) against locked fuzz workspace deps | continuous / milestone-length fuzz campaigns; Foundation already green without this workflow |
 | Fuzz registry smoke inside `repository-policy` | every Foundation run | registry/corpus/adapter smoke via `scripts/fuzz-smoke.py` | libFuzzer campaign coverage or “fuzz clean” Pass 10 evidence |

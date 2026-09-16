@@ -146,6 +146,15 @@ def write_record(
     baseline_values = load_samples(baseline)
     p50, p95, p99 = (nearest_rank(candidate_values, p) for p in (50, 95, 99))
     b50, b95, b99 = (nearest_rank(baseline_values, p) for p in (50, 95, 99))
+    ceilings = CEILINGS[gate]
+    allowed = 10
+    absolute_ok = p50 <= ceilings[0] and p95 <= ceilings[1] and p99 <= ceilings[2]
+    relative_ok = (
+        p50 <= b50 * (1 + allowed / 100)
+        and p95 <= b95 * (1 + allowed / 100)
+        and p99 <= b99 * (1 + allowed / 100)
+    )
+    status = "PASS" if absolute_ok and relative_ok else "FAIL"
     record = evidence_root / "record.toml"
     workload_hash = hashlib.sha256(workload.encode()).hexdigest()
     rel = lambda path: path.relative_to(ROOT).as_posix()
@@ -176,6 +185,7 @@ def write_record(
                 "environment_status = 'VALID'",
                 "platform_limit_reason = ''",
                 "comparator = 'less_equal'",
+                f"status = {toml_str(status)}",
                 f"p50 = {p50!r}",
                 f"p95 = {p95!r}",
                 f"p99 = {p99!r}",
@@ -210,7 +220,7 @@ def main() -> None:
         gate_root = evidence_root / gate
         candidate = gate_root / "cohorts"
         baseline = gate_root / "baseline-cohorts"
-        log = gate_root / "raw.log"
+        log = gate_root / "raw-output.txt"
         candidate_log = collect_cohorts(gate, candidate, sha)
         baseline_log = collect_cohorts(gate, baseline, sha)
         log.write_text(candidate_log + "\n" + baseline_log, encoding="utf-8")
@@ -226,9 +236,11 @@ def main() -> None:
         checked = run(["python3", str(VALIDATOR), "--record", str(record)])
         sys.stdout.write(checked.stdout)
         if checked.returncode != 0:
-            raise SystemExit(f"validator rejected {record}")
+            raise SystemExit(f"validator rejected {record}:\n{checked.stdout}")
+        if f"M002 performance result: PASS metric={gate}" not in checked.stdout:
+            raise SystemExit(f"validator did not PASS {gate}:\n{checked.stdout}")
         ceilings = CEILINGS[gate]
-        print(f"[m002-673] {gate} validator accepted; frozen ceilings p50/p95/p99={ceilings}")
+        print(f"[m002-673] {gate} PASS; frozen ceilings p50/p95/p99={ceilings}")
     print(f"[m002-673] evidence root {evidence_root.relative_to(ROOT)}")
 
 

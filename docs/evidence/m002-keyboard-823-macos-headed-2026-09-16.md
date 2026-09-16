@@ -69,3 +69,31 @@ A subsequent `open` of the same signed Debug `Seyal.app` created the exclusive `
 3. Latency / physical perf remains `#673` / `#824` authority.
 
 Do not open a closing PR from this attempt.
+
+## Owner correction — 2026-09-16 later
+
+Owner: headed XCUI must run as Flow/Blocks. A launch that looks like a
+normal terminal is a fail. Alternate-screen / raw `dd` key capture is not a
+headed oracle.
+
+`SeyalHostUITests` now fail-closes after attach if composer, `seyal-blocks`,
+or a full-height transcript is missing. The previous key→PTY case no longer
+enters `1049h` or types into a raw terminal. Composer submit plus Cmd-C /
+ArrowUp must leave the session on Flow/Blocks.
+
+#673: owner accepted the versioned contract. Physical measured rows are
+deferred until after remaining M002 implementations complete. Do not start
+#673 measurements from this branch.
+
+Focused `SeyalHostUITests` after the fail-closed change:
+
+```text
+** TEST EXECUTE SUCCEEDED **
+Executed 6 tests, with 0 failures in 110.106s
+```
+
+Default launch stayed on Flow/Blocks (composer + `seyal-blocks` + full-height
+transcript). The earlier headed case that entered `1049h` and typed into a
+raw terminal is what looked like a normal terminal; that path is withdrawn.
+This is still not `Closes #823` (six-step IME/Neovim/TUI and independent GO
+remain).

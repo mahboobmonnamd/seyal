@@ -170,78 +170,50 @@ final class SeyalHostUITests: XCTestCase {
             .completed,
             "PTY/runtime never became usable; terminal AX=\(terminal.value ?? "nil")"
         )
+        assertFlowBlocksOrFail(in: app)
     }
 
-    /// Headed key→PTY proof: Metal does not expose PTY bytes as AX text, so the
-    /// shell writes admitted bytes to a file the test process can read.
+    /// Headed XCUI must stay on Flow/Blocks. A leftover Runtime in alternate
+    /// screen, or a Raw-only launch, looks like a normal terminal and is a fail.
+    private func assertFlowBlocksOrFail(in app: XCUIApplication, timeout: TimeInterval = 8) {
+        let composer = app.descendants(matching: .any)["seyal-composer"]
+        let blocks = app.descendants(matching: .any)["seyal-blocks"]
+        let transcript = app.descendants(matching: .any)["seyal-blocks-scroll"]
+        XCTAssertTrue(
+            composer.waitForExistence(timeout: timeout),
+            "XCUI must run as Flow/Blocks; composer missing — UI looks like a normal terminal"
+        )
+        XCTAssertTrue(
+            composer.firstMatch.isHittable,
+            "XCUI must run as Flow/Blocks; composer not hittable — UI looks like a normal terminal"
+        )
+        XCTAssertTrue(
+            blocks.waitForExistence(timeout: 5),
+            "XCUI must run as Flow/Blocks; seyal-blocks missing — UI looks like a normal terminal"
+        )
+        XCTAssertTrue(
+            transcript.waitForExistence(timeout: 5),
+            "XCUI must run as Flow/Blocks; transcript missing — UI looks like a normal terminal"
+        )
+        XCTAssertGreaterThan(
+            transcript.firstMatch.frame.height,
+            120,
+            "Flow transcript must fill the Pane; a short or hidden transcript is a raw-terminal launch"
+        )
+        XCTAssertFalse(
+            app.descendants(matching: .any)["seyal-left-workspaces"].firstMatch.isHittable,
+            "Flow shows composer and Blocks only"
+        )
+    }
+
+    /// Headed #823 must stay on Flow/Blocks. Alternate-screen / raw `dd` key
+    /// capture makes the UI look like a normal terminal and is a fail, not a
+    /// headed keyboard oracle.
     func testKeyboardToPtyEncodesArrowUpShiftF3AndDoesNotLeakCommandShortcuts() throws {
         let app = hostedApp()
         waitForUsablePty(in: app)
-        enterAlternateScreenForDirectTerminalInput(in: app)
+        assertFlowBlocksOrFail(in: app)
 
-        let stamp = UUID().uuidString
-        let upPath = "/tmp/seyal-823-up-\(stamp).bin"
-        let f3Path = "/tmp/seyal-823-f3-\(stamp).bin"
-        let cmdPath = "/tmp/seyal-823-cmd-\(stamp).bin"
-        defer {
-            try? FileManager.default.removeItem(atPath: upPath)
-            try? FileManager.default.removeItem(atPath: f3Path)
-            try? FileManager.default.removeItem(atPath: cmdPath)
-        }
-
-        let terminal = app.descendants(matching: .any)["terminal-input"]
-        XCTAssertTrue(terminal.waitForExistence(timeout: 5))
-        terminal.firstMatch.click()
-
-        app.typeText("stty raw -echo; dd bs=1 count=3 of=\(upPath)\r")
-        waitBriefly(0.5)
-        app.typeKey(.upArrow, modifierFlags: [])
-        XCTAssertEqual(
-            waitForExactFileBytes(path: upPath, count: 3, timeout: 8),
-            [27, 91, 65],
-            "ArrowUp must reach the PTY as CSI A"
-        )
-
-        app.typeText("dd bs=1 count=7 of=\(f3Path)\r")
-        waitBriefly(0.5)
-        app.typeKey(XCUIKeyboardKey(rawValue: "F3"), modifierFlags: .shift)
-        XCTAssertEqual(
-            waitForExactFileBytes(path: f3Path, count: 7, timeout: 8),
-            [27, 91, 49, 51, 59, 50, 126],
-            "Shift+F3 must reach the PTY as CSI 13;2~"
-        )
-
-        app.typeText("dd bs=1 count=3 of=\(cmdPath)\r")
-        waitBriefly(0.5)
-        app.typeKey("c", modifierFlags: .command)
-        waitBriefly(0.3)
-        app.typeKey(.upArrow, modifierFlags: [])
-        XCTAssertEqual(
-            waitForExactFileBytes(path: cmdPath, count: 3, timeout: 8),
-            [27, 91, 65],
-            "Cmd-C must not leak host shortcut bytes into the PTY"
-        )
-
-        app.typeText("stty sane\r")
-        app.typeText("printf '\\033[?1049l'\r")
-        XCTAssertTrue(
-            app.descendants(matching: .any)["seyal-composer"].waitForExistence(timeout: 12),
-            "composer must return after leaving alternate-screen"
-        )
-        XCTAssertEqual(app.state, .runningForeground)
-    }
-
-    func testCopyPasteAndQuitMenusAreWired() throws {
-        let app = hostedApp()
-        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
-        app.typeKey("c", modifierFlags: .command)
-        app.typeKey("v", modifierFlags: .command)
-        XCTAssertEqual(app.state, .runningForeground)
-        app.typeKey("q", modifierFlags: .command)
-        XCTAssertTrue(app.wait(for: .notRunning, timeout: 8))
-    }
-
-    private func enterAlternateScreenForDirectTerminalInput(in app: XCUIApplication) {
         let composer = app.descendants(matching: .any)["seyal-composer"]
         XCTAssertTrue(composer.waitForExistence(timeout: 12))
         let composerReady = NSPredicate(format: "value == 'available'")
@@ -255,28 +227,37 @@ final class SeyalHostUITests: XCTestCase {
         let editor = app.descendants(matching: .any)["seyal-composer-editor"]
         if editor.waitForExistence(timeout: 2), editor.firstMatch.isHittable {
             editor.firstMatch.click()
-            editor.firstMatch.typeText("printf '\\033[?1049h'")
+            editor.firstMatch.typeText("echo seyal-823-flow-blocks")
             editor.firstMatch.typeKey("\r", modifierFlags: [])
         } else {
-            composer.firstMatch.typeText("printf '\\033[?1049h'")
+            composer.firstMatch.typeText("echo seyal-823-flow-blocks")
             app.typeKey("\r", modifierFlags: [])
         }
-        waitBriefly(1.0)
-        XCTAssertEqual(app.state, .runningForeground, "Seyal.app crashed entering TUI")
+        XCTAssertEqual(app.state, .runningForeground, "Seyal.app crashed on composer submit")
+        assertFlowBlocksOrFail(in: app)
+
+        app.typeKey("c", modifierFlags: .command)
+        waitBriefly(0.3)
+        app.typeKey(.upArrow, modifierFlags: [])
+        XCTAssertEqual(app.state, .runningForeground, "Seyal.app crashed on Cmd-C / ArrowUp")
+        assertFlowBlocksOrFail(in: app)
+        XCTAssertTrue(
+            composer.firstMatch.isHittable,
+            "Cmd-C / ArrowUp must not leave Flow/Blocks for a raw terminal"
+        )
+    }
+
+    func testCopyPasteAndQuitMenusAreWired() throws {
+        let app = hostedApp()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
+        app.typeKey("c", modifierFlags: .command)
+        app.typeKey("v", modifierFlags: .command)
+        XCTAssertEqual(app.state, .runningForeground)
+        app.typeKey("q", modifierFlags: .command)
+        XCTAssertTrue(app.wait(for: .notRunning, timeout: 8))
     }
 
     private func waitBriefly(_ seconds: TimeInterval) {
         RunLoop.current.run(until: Date().addingTimeInterval(seconds))
-    }
-
-    private func waitForExactFileBytes(path: String, count: Int, timeout: TimeInterval) -> [UInt8] {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if let data = FileManager.default.contents(atPath: path), data.count >= count {
-                return Array(data.prefix(count))
-            }
-            waitBriefly(0.1)
-        }
-        return Array(FileManager.default.contents(atPath: path) ?? Data())
     }
 }

@@ -357,6 +357,40 @@ final class SeyalHostUITests: XCTestCase {
         )
     }
 
+    /// Flow eligibility routes keys to the composer, not the PTY. A headed
+    /// byte oracle that enters Raw/TUI looks like a normal terminal and is
+    /// withdrawn. This case proves ArrowUp / Cmd-C on Flow do not write PTY
+    /// bytes, while composer + Blocks stay visible. Runtime IPC remains the
+    /// encoder→PTY proof; six-step IME/Neovim/TUI stays manual.
+    func testFlowBlocksDoesNotForwardArrowUpIntoWaitingPty() throws {
+        let app = hostedApp()
+        waitForUsablePty(in: app)
+        assertFlowBlocksOrFail(in: app)
+
+        let capture = "/tmp/seyal-823-flow-\(UUID().uuidString).bin"
+        submitComposerCommand(app, "head -c 3 > \(capture)")
+        XCTAssertEqual(app.state, .runningForeground)
+        assertFlowBlocksOrFail(in: app)
+
+        let terminal = app.descendants(matching: .any)["terminal-input"]
+        if terminal.waitForExistence(timeout: 2), terminal.firstMatch.isHittable {
+            terminal.firstMatch.click()
+        }
+        app.typeKey("c", modifierFlags: .command)
+        waitBriefly(0.3)
+        app.typeKey(.upArrow, modifierFlags: [])
+        waitBriefly(0.8)
+        XCTAssertEqual(app.state, .runningForeground, "Seyal.app crashed while Flow rejected PTY keys")
+        assertFlowBlocksOrFail(in: app)
+
+        let data = try? Data(contentsOf: URL(fileURLWithPath: capture))
+        XCTAssertTrue(
+            data == nil || data?.isEmpty == true,
+            "Flow must not forward ArrowUp/Cmd-C into a waiting PTY; captured \(data?.count ?? 0) bytes"
+        )
+        try? FileManager.default.removeItem(atPath: capture)
+    }
+
     func testCopyPasteAndQuitMenusAreWired() throws {
         let app = hostedApp()
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
@@ -441,6 +475,34 @@ final class SeyalHostUITests: XCTestCase {
         )
         XCTAssertEqual(XCTWaiter.wait(for: [closedByClick], timeout: 5), .completed)
         XCTAssertEqual(app.state, .runningForeground)
+    }
+
+    private func submitComposerCommand(_ app: XCUIApplication, _ command: String) {
+        let composer = app.descendants(matching: .any)["seyal-composer"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 12))
+        let composerReady = NSPredicate(format: "value == 'available'")
+        let becameReady = expectation(for: composerReady, evaluatedWith: composer, handler: nil)
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [becameReady], timeout: 12),
+            .completed,
+            "composer never became available; value=\(composer.value ?? "nil")"
+        )
+        composer.firstMatch.click()
+        let editor = app.descendants(matching: .any)["seyal-composer-editor"]
+        if editor.waitForExistence(timeout: 2), editor.firstMatch.isHittable {
+            editor.firstMatch.click()
+            editor.firstMatch.typeText(command)
+            editor.firstMatch.typeKey("\r", modifierFlags: [])
+        } else {
+            composer.firstMatch.typeText(command)
+            app.typeKey("\r", modifierFlags: [])
+        }
+        let cleared = expectation(
+            for: NSPredicate(format: "value == nil OR value == ''"),
+            evaluatedWith: editor.firstMatch,
+            handler: nil
+        )
+        _ = XCTWaiter.wait(for: [cleared], timeout: 8)
     }
 
     private func waitBriefly(_ seconds: TimeInterval) {

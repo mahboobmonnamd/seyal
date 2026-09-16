@@ -1122,7 +1122,8 @@ final class RustDisplayBridge {
   }
 
   func supportsKeyV2() -> Bool {
-    seyal_bridge_supports_key_v2() != 0
+    guard isConnected, selectClient() else { return false }
+    return seyal_bridge_supports_key_v2() != 0
   }
 
   @discardableResult

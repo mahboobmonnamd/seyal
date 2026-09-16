@@ -1,7 +1,5 @@
 //! Active grapheme anchor and printable-unit placement (SPEC-011 §§6–9).
 
-#![allow(dead_code)]
-
 use crate::{
     grapheme_store::{GraphemeStore, StoreAdmit, INLINE_STORE_ID, MAX_ACTIVE_GRAPHEME_BYTES},
     width::{extends_active_grapheme, grapheme_terminal_width, AmbiguousWidthPolicy},
@@ -23,13 +21,6 @@ impl ActiveGrapheme {
     pub(crate) fn as_str(&self) -> &str {
         &self.utf8
     }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct PlaceOutcome {
-    pub mutation_row: u16,
-    pub mutation_row_end: u16,
-    pub soft_wrapped: bool,
 }
 
 /// Decides how a newly completed width interacts with DECAWM at the final column.
@@ -110,7 +101,6 @@ pub(crate) fn append_payload(
         // Still same grapheme boundary-wise but payload frozen.
         return AppendResult {
             width: active.width,
-            rejected_extension: false,
             width_changed: false,
         };
     }
@@ -127,7 +117,6 @@ pub(crate) fn append_payload(
         }
         return AppendResult {
             width: active.width,
-            rejected_extension: false,
             width_changed: false,
         };
     }
@@ -137,7 +126,6 @@ pub(crate) fn append_payload(
     let width_changed = new_width != active.width;
     AppendResult {
         width: new_width,
-        rejected_extension: false,
         width_changed,
     }
 }
@@ -145,7 +133,6 @@ pub(crate) fn append_payload(
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct AppendResult {
     pub width: u8,
-    pub rejected_extension: bool,
     pub width_changed: bool,
 }
 

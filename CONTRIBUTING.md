@@ -11,10 +11,16 @@ Thank you for helping improve Seyal. This repository is the public open-source f
 
 ## Development workflow
 
-Initialize the repository and reviewed agent skills with:
+Initialize the repository toolchain (and on macOS, native Xcode/Metal tooling when that host tree exists) with:
 
 ```sh
 make bootstrap
+```
+
+Optional coding-agent / MCP / pinned AI-SDLC framework setup is separate and never required for terminal/runtime operation:
+
+```sh
+make bootstrap-agents
 ```
 
 Run the canonical checks relevant to your change:

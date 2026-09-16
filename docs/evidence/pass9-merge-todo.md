@@ -1,21 +1,23 @@
 # Pass 9 final merge TODO
 
-> **Historical / superseded.** This checklist was the delivery boundary for
-> Issue #719 / PR #734 during Pass 9. M001 is **Done / closed**. Do not treat
-> unchecked items below as a live merge gate.
+> **Historical / superseded — archive only.** Relocated from `docs/pass9-merge-todo.md`
+> into `docs/evidence/` under Issue #962. This checklist was the delivery boundary
+> for Issue #719 / PR #734 during Pass 9. M001 is **Done / closed**. Do **not**
+> treat unchecked items below, or the contemporaneous **Merge status: BLOCKED**
+> line near the end, as a live merge gate.
 >
 > Authoritative M001 acceptance and freeze evidence:
-> - [`docs/milestones/MILESTONE-001.md`](milestones/MILESTONE-001.md) (Status: Done / closed)
-> - [`docs/engineering/M001-PASS10-EVIDENCE.md`](engineering/M001-PASS10-EVIDENCE.md)
-> - [`docs/evidence/m001-pass10-independent-final-review.md`](evidence/m001-pass10-independent-final-review.md)
-> - [`docs/evidence/pass10-final-freeze-clean-demo-c536c54.md`](evidence/pass10-final-freeze-clean-demo-c536c54.md)
+> - [`docs/milestones/MILESTONE-001.md`](../milestones/MILESTONE-001.md) (Status: Done / closed)
+> - [`docs/engineering/M001-PASS10-EVIDENCE.md`](../engineering/M001-PASS10-EVIDENCE.md)
+> - [`docs/evidence/m001-pass10-independent-final-review.md`](m001-pass10-independent-final-review.md)
+> - [`docs/evidence/pass10-final-freeze-clean-demo-c536c54.md`](pass10-final-freeze-clean-demo-c536c54.md)
 >
 > The investigation narrative and checklist body are retained as historical
 > evidence. Later Pass 9 input/IME/VoiceOver qualification and Pass 10 freeze
 > work superseded several unchecked evidence boxes without rewriting this
 > document’s contemporaneous checklist state.
 
-This checklist is the delivery boundary for Issue #719 and PR #734. It mirrors
+This checklist was the delivery boundary for Issue #719 and PR #734. It mirrors
 the closure rebaseline in Issue #719 comment `5498085185` and keeps production
 implementation separate from acceptance evidence. A checked implementation
 item does not waive any exact-head evidence or independent-review gate.
@@ -406,9 +408,10 @@ independent of the implementer.
 
 **Historical note:** The **Merge status: BLOCKED** wording below reflects the
 Pass 9/#719 contemporaneous gate. It is superseded by M001 Pass 10 closeout
-(see banner at top of this document). Retain for audit trail only.
+(see banner at top of this document). Retain for audit trail only. It is **not**
+a current repository merge blocker.
 
-**Merge status: BLOCKED** — CI is green and the concrete test-failure blocker
+**Merge status: BLOCKED** *(historical contemporaneous text only)* — CI is green and the concrete test-failure blocker
 is resolved, but the independent-review gate and the remaining evidence items
 above are unmet. This is now a documentation/evidence-collection blocker, not
 a known-broken-code blocker.

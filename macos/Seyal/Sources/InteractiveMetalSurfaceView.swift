@@ -1,5 +1,4 @@
 import AppKit
-import QuartzCore
 
 private let maxCompositionUTF8Bytes = 65_536
 

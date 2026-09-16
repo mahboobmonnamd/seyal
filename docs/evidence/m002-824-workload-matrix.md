@@ -10,7 +10,9 @@
 
 This is retained automated + classified native/manual evidence for the #672
 workload matrix. It does **not** close #824 or #672. Comparative/release
-performance remains #673 authority (`performance_claim=false` here).
+performance remains #673 authority (`performance_claim=false` here). PTY
+smokes spawn with `TERM=seyal-m001` and a `tic`-compiled bundled terminfo
+directory, not `xterm-256color`.
 
 ## Matrix
 
@@ -19,7 +21,7 @@ performance remains #673 authority (`performance_claim=false` here).
 | zsh | VT fixture `zsh_bash_fish_prompt_color_clear_and_multiline_stay_one_authority`; PTY `zsh_bash_and_optional_fish_print_through_one_pty_vt` | `/bin/zsh` present | Interactive editing/history/resize: headed ledger | Automated PASS |
 | bash | same VT + PTY | `/bin/bash` present | same | Automated PASS |
 | fish | same VT; PTY when `fish` exists | `fish` present | same | Automated PASS |
-| SSH / nested SSH | VT `ssh_and_nested_ssh_keep_a_single_terminal_state` (one `TerminalState`, DA replies, stacked OSC titles) | `ssh` present; no dedicated remote host | Interactive remote + nested SSH | Automated PASS for single-PTY authority; remote interactive `ENVIRONMENT_UNSUPPORTED` this session |
+| SSH / nested SSH | VT `ssh_and_nested_ssh_keep_a_single_terminal_state` — DA + stacked OSC titles on one `TerminalState`, **not** a live `ssh(1)` child | `ssh` present; no dedicated remote host | Interactive remote + nested SSH | Automated PASS for single-authority stand-in; live `ssh` `ENVIRONMENT_UNSUPPORTED` |
 | Vim / Neovim | VT `vim_neovim_alternate_screen_unicode_mouse_and_keys_restore_primary` | `vim` and `nvim` present | Insert/search/splits/mouse/keys | Automated PASS for alt-screen restore; interactive TUI headed/manual |
 | tmux-as-child | VT `tmux_as_child_is_vt_bytes_not_seyal_panes`; PTY `tmux_as_child_owns_one_pty_when_present` | `tmux` present | windows/panes/copy-mode/detach inside tmux | Automated PASS: one Seyal PTY/child; tmux hierarchy is not Seyal panes |
 | htop / watch / ncurses | VT `htop_watch_ncurses_restore_primary_after_alt_screen` | `watch` present; `htop` **absent** | keyboard+mouse+alt-screen return | Automated PASS for sequences; `htop` `PLATFORM_LIMITED` |

@@ -66,8 +66,8 @@ fn zsh_bash_fish_prompt_color_clear_and_multiline_stay_one_authority() {
 #[test]
 fn ssh_and_nested_ssh_keep_a_single_terminal_state() {
     let mut terminal = TerminalState::new(40, 4).unwrap();
-    // Local ssh client DA, then remote title, then nested-ssh title. Still one
-    // authority; replies are opaque protocol bytes, not a second engine.
+    // Stand-in, not a live `ssh(1)` child: local DA plus stacked OSC titles on
+    // one TerminalState. Interactive remote/nested SSH remains headed/manual.
     feed(&mut terminal, b"\x1b[c");
     assert_eq!(
         terminal.take_protocol_reply().unwrap().as_bytes(),
@@ -125,8 +125,8 @@ fn vim_neovim_alternate_screen_unicode_mouse_and_keys_restore_primary() {
         }
     }
     assert!(
-        restored.contains("日本語") || !terminal.primary_history_search("日本語", 4).is_empty(),
-        "primary CJK lost after vim-like alternate-screen; visible={restored:?} grid={:?}",
+        restored.contains("日本語") || contains_visible(&terminal, "日本語"),
+        "primary CJK must remain on the restored live grid after vim-like alternate-screen; visible={restored:?} grid={:?}",
         visible(&terminal)
     );
     assert!(!contains_visible(&terminal, "VIM"));

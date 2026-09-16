@@ -41,7 +41,7 @@ Record PASS / FAIL / ENVIRONMENT_UNSUPPORTED / PLATFORM_LIMITED per case. Never 
 | 1. zsh/bash/fish interactive | ENVIRONMENT_UNSUPPORTED (no exclusive headed Runtime) |
 | 2. SSH then nested SSH | ENVIRONMENT_UNSUPPORTED (no remote host exercise) |
 | 3. Vim/Neovim interactive | ENVIRONMENT_UNSUPPORTED |
-| 4. tmux child windows/panes/copy-mode | ENVIRONMENT_UNSUPPORTED for headed; automated one-PTY proof exists |
+| 4. tmux child windows/panes/copy-mode | ENVIRONMENT_UNSUPPORTED for headed; automated one-PTY proof requires the child marker (alternate-screen alone is not enough) |
 | 5. htop/watch/ncurses | `htop` PLATFORM_LIMITED; headed ENVIRONMENT_UNSUPPORTED |
 | 6. git/docker/kubectl/terraform TTY | terraform PLATFORM_LIMITED; headed ENVIRONMENT_UNSUPPORTED |
 | 7. CLI-agent TUI | ENVIRONMENT_UNSUPPORTED; VT equivalent retained |
@@ -50,3 +50,15 @@ Record PASS / FAIL / ENVIRONMENT_UNSUPPORTED / PLATFORM_LIMITED per case. Never 
 | 10. GUI close/reopen M001 reconnect | headed INCONCLUSIVE (socket occupied) |
 
 A later exclusive-Runtime macOS pass should fill the XCUI four-case table and the interactive rows without inventing a raw-terminal headed oracle.
+
+## SPEC-011 IME fixtures 37–41
+
+| Fixture | This Refs PR |
+| --- | --- |
+| 37 IME marked text → commit | Unverified. Not claimed. |
+| 38 IME cancel/abandon | Unverified. Not claimed. |
+| 39 IME replacement commit | Unverified. Not claimed. |
+| 40 IME candidate-coordinate validity | Unverified. Not claimed. |
+| 41 detach/reconnect discards stale preedit | Unverified. Not claimed. |
+
+Baseline AppKit IME remains #817. Language-specific input-source breadth remains post-M004 #836; this Issue does not pull #836. **Classification for M002 technical preview:** not required to land this automated `Refs #824` evidence PR. **Classification before `Closes #824`:** owner must accept this unverified row or add a tiny headed IME evidence case. Metal/AX is not an IME oracle.

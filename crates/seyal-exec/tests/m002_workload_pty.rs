@@ -6,7 +6,8 @@
 
 use std::{
     path::PathBuf,
-    sync::{Mutex, MutexGuard},
+    process::Command,
+    sync::{Mutex, MutexGuard, OnceLock},
     time::{Duration, Instant},
 };
 
@@ -36,6 +37,31 @@ fn which(name: &str) -> Option<PathBuf> {
 
 fn size() -> WindowSize {
     WindowSize::cells(80, 24).expect("valid size")
+}
+
+fn compiled_seyal_terminfo() -> PathBuf {
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| {
+        let out = std::env::temp_dir().join(format!("seyal-824-terminfo-{}", std::process::id()));
+        std::fs::create_dir_all(&out).expect("terminfo output dir");
+        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../resources/terminfo/seyal-m001.src");
+        let status = Command::new("tic")
+            .args(["-x", "-o"])
+            .arg(&out)
+            .arg(&src)
+            .status()
+            .expect("tic available");
+        assert!(status.success(), "tic must compile seyal-m001");
+        out
+    })
+    .clone()
+}
+
+fn seyal_term(command: CommandSpec) -> CommandSpec {
+    command
+        .env("TERM", "seyal-m001")
+        .env("TERMINFO", compiled_seyal_terminfo())
 }
 
 fn drain_until(
@@ -103,9 +129,7 @@ fn zsh_bash_and_optional_fish_print_through_one_pty_vt() {
             "seyal-bash-ok",
         ),
     ] {
-        let command = CommandSpec::new(program)
-            .args(args.iter().copied())
-            .env("TERM", "xterm-256color");
+        let command = seyal_term(CommandSpec::new(program).args(args.iter().copied()));
         let mut execution = TerminalExecution::spawn(&command, size()).expect("spawn shell");
         let child = execution.child_id();
         let bytes = drain_until(&mut execution, marker.as_bytes(), IO_TIMEOUT).expect("drain");
@@ -122,9 +146,11 @@ fn zsh_bash_and_optional_fish_print_through_one_pty_vt() {
         eprintln!("PLATFORM_LIMITED: fish not installed; zsh/bash PTY rows still ran");
         return;
     };
-    let command = CommandSpec::new(&fish)
-        .args(["--no-config", "-c", "printf 'seyal-fish-ok\\n'"])
-        .env("TERM", "xterm-256color");
+    let command = seyal_term(CommandSpec::new(&fish).args([
+        "--no-config",
+        "-c",
+        "printf 'seyal-fish-ok\\n'",
+    ]));
     let mut execution = TerminalExecution::spawn(&command, size()).expect("spawn fish");
     let bytes = drain_until(&mut execution, b"seyal-fish-ok", IO_TIMEOUT).expect("drain fish");
     assert!(
@@ -142,9 +168,12 @@ fn git_representative_color_output_feeds_canonical_state() {
         eprintln!("PLATFORM_LIMITED: git not installed");
         return;
     };
-    let command = CommandSpec::new(&git)
-        .args(["--no-pager", "-c", "color.ui=always", "--version"])
-        .env("TERM", "xterm-256color");
+    let command = seyal_term(CommandSpec::new(&git).args([
+        "--no-pager",
+        "-c",
+        "color.ui=always",
+        "--version",
+    ]));
     let mut execution = TerminalExecution::spawn(&command, size()).expect("spawn git");
     let bytes = drain_until(&mut execution, b"git version", IO_TIMEOUT).expect("drain git");
     assert!(
@@ -178,20 +207,18 @@ fn tmux_as_child_owns_one_pty_when_present() {
         }
     }
     let _tmux_guard = TmuxServerGuard(socket.clone());
-    let command = CommandSpec::new(&tmux)
-        .args([
-            "-L",
-            &socket,
-            "-f",
-            "/dev/null",
-            "new-session",
-            "-x",
-            "80",
-            "-y",
-            "24",
-            "printf seyal-tmux-child; sleep 2",
-        ])
-        .env("TERM", "xterm-256color");
+    let command = seyal_term(CommandSpec::new(&tmux).args([
+        "-L",
+        &socket,
+        "-f",
+        "/dev/null",
+        "new-session",
+        "-x",
+        "80",
+        "-y",
+        "24",
+        "printf seyal-tmux-child; sleep 2",
+    ]));
     let mut execution = TerminalExecution::spawn(&command, size()).expect("spawn tmux child");
     let child = execution.child_id();
     let bytes = drain_until(&mut execution, b"seyal-tmux-child", Duration::from_secs(8))
@@ -203,9 +230,8 @@ fn tmux_as_child_owns_one_pty_when_present() {
     );
     assert!(
         bytes.windows(16).any(|w| w == b"seyal-tmux-child")
-            || visible_contains(&execution, "seyal-tmux-child")
-            || execution.terminal().modes().alternate_screen,
-        "tmux-as-child produced neither marker nor alternate-screen on the one PTY"
+            || visible_contains(&execution, "seyal-tmux-child"),
+        "tmux-as-child must emit the child marker on the one Seyal PTY; alternate-screen alone is not enough"
     );
     terminate(&mut execution);
 }
@@ -251,9 +277,7 @@ fn optional_docker_kubectl_terraform_are_recorded_when_absent() {
             eprintln!("PLATFORM_LIMITED: {name} not installed");
             continue;
         };
-        let command = CommandSpec::new(&bin)
-            .args(args.iter().copied())
-            .env("TERM", "xterm-256color");
+        let command = seyal_term(CommandSpec::new(&bin).args(args.iter().copied()));
         let mut execution = TerminalExecution::spawn(&command, size()).expect("spawn devops cli");
         let bytes = drain_until(&mut execution, needle, IO_TIMEOUT).expect("drain devops");
         assert!(

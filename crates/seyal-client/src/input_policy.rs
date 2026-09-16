@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::theme::{parse_toml, TomlError, TomlValue, ENV_CONFIG};
+use crate::theme::{parse_toml, TomlError, ENV_CONFIG};
 
 /// Immutable routing intent consumed by the native keyboard classifier.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -29,7 +29,11 @@ pub fn load_input_policy(toml_text: Option<&str>) -> (InputPolicy, Vec<String>) 
         Ok(root) => root,
         Err(TomlError(_)) => return (policy, warnings),
     };
-    let Some(input) = root.get("input").and_then(TomlValue::as_table) else {
+    let Some(input_value) = root.get("input") else {
+        return (policy, warnings);
+    };
+    let Some(input) = input_value.as_table() else {
+        warnings.push("input ignored; expected table".into());
         return (policy, warnings);
     };
     for key in input.keys() {
@@ -123,6 +127,10 @@ mod tests {
         let (policy, warnings) = load_input_policy(Some("this is not = toml ["));
         assert!(!policy.option_as_alt);
         assert!(warnings.is_empty());
+
+        let (policy, warnings) = load_input_policy(Some("input = \"wrong-shape\""));
+        assert!(!policy.option_as_alt);
+        assert_eq!(warnings, vec!["input ignored; expected table"]);
     }
 
     #[test]

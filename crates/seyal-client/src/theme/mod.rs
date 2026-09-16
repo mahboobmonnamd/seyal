@@ -168,6 +168,14 @@ size = "huge"
             .iter()
             .any(|warning| warning == "unknown key input.extra ignored"));
         assert!(!loaded.diagnostics.used_full_default_fallback);
+
+        let loaded = load_ui_configuration(Some("input = \"wrong-shape\""), &[], None);
+        assert!(loaded
+            .diagnostics
+            .warnings
+            .iter()
+            .any(|warning| warning == "input ignored; expected table"));
+        assert!(!loaded.diagnostics.used_full_default_fallback);
     }
 
     #[test]

@@ -4,7 +4,7 @@
 | --- | --- |
 | Owning Issue | #824 (parent #672) |
 | Classification | production validation / focused gap closure |
-| Exact head at this record | recorded at PR open; branch `issue/824` from `master` `4121c12` |
+| Exact head at this record | `dcbb90faaf870fdabbc543e6947adff2af48c8a3` (`issue/824` from `master` `4121c12`). This docs-only follow-up does not re-run that matrix. |
 | Host | Darwin arm64 / macOS 26.5 / Rust 1.98.0 |
 | Date (UTC) | 2026-09-16 |
 

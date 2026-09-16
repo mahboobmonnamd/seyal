@@ -817,6 +817,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
             && heldKeyboardCapacitySelfTest()
             && heldKeyAdmissionSelfTest()
             && capabilityLossDropsHeldKeyReleaseSelfTest()
+            && RustDisplayBridge.pasteAdmissionSelfTest()
     }
 
     private static func controlNormalizationSelfTest() -> Bool {

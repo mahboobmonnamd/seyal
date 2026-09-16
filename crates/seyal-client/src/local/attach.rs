@@ -21,7 +21,7 @@ use crate::block_cache::{is_epoch_quarantined, BlockCache};
 use super::{
     discovery::{
         canonical_control_socket_path, connect_stream_until, extended_terminal_key_supported,
-        hello_until, read_exact_until, send_control_until,
+        hello_until_with_legacy_key_fallback, read_exact_until, send_control_until,
     },
     display_apply::PendingDisplayBatch,
     input_resize::GridGeometry,
@@ -213,7 +213,13 @@ impl LocalDisplayClient {
         let socket_path = canonical_control_socket_path()?;
 
         let mut stream = connect_stream_until(&socket_path, deadline)?;
-        let mut server_hello = hello_until(&mut stream, role == Role::Controller, true, deadline)?;
+        let mut server_hello = hello_until_with_legacy_key_fallback(
+            &mut stream,
+            || connect_stream_until(&socket_path, deadline),
+            role == Role::Controller,
+            true,
+            deadline,
+        )?;
         send_control_until(&mut stream, MessageType::ListExecutions, &[], deadline)?;
         let (kind, payload) = read_blocking_frame_until(&mut stream, deadline)?;
         if kind != MessageType::ExecutionList {
@@ -225,7 +231,13 @@ impl LocalDisplayClient {
         if is_epoch_quarantined(server_hello.runtime_id, execution_id) {
             drop(stream);
             stream = connect_stream_until(&socket_path, deadline)?;
-            server_hello = hello_until(&mut stream, role == Role::Controller, false, deadline)?;
+            server_hello = hello_until_with_legacy_key_fallback(
+                &mut stream,
+                || connect_stream_until(&socket_path, deadline),
+                role == Role::Controller,
+                false,
+                deadline,
+            )?;
         }
         let block_metadata_negotiated =
             server_hello.server_capabilities & seyal_runtime::pass8::CAP_BLOCK_METADATA != 0
@@ -262,11 +274,23 @@ impl LocalDisplayClient {
         deadline: Instant,
     ) -> Result<Self, ClientError> {
         let mut stream = connect_stream_until(socket_path, deadline)?;
-        let mut server_hello = hello_until(&mut stream, role == Role::Controller, true, deadline)?;
+        let mut server_hello = hello_until_with_legacy_key_fallback(
+            &mut stream,
+            || connect_stream_until(socket_path, deadline),
+            role == Role::Controller,
+            true,
+            deadline,
+        )?;
         if is_epoch_quarantined(server_hello.runtime_id, execution_id) {
             drop(stream);
             stream = connect_stream_until(socket_path, deadline)?;
-            server_hello = hello_until(&mut stream, role == Role::Controller, false, deadline)?;
+            server_hello = hello_until_with_legacy_key_fallback(
+                &mut stream,
+                || connect_stream_until(socket_path, deadline),
+                role == Role::Controller,
+                false,
+                deadline,
+            )?;
         }
         let block_metadata_negotiated =
             server_hello.server_capabilities & seyal_runtime::pass8::CAP_BLOCK_METADATA != 0
@@ -295,7 +319,13 @@ impl LocalDisplayClient {
     ) -> Result<Self, ClientError> {
         let deadline = Instant::now() + STARTUP_TIMEOUT;
         let mut stream = connect_stream_until(socket_path, deadline)?;
-        let server_hello = hello_until(&mut stream, role == Role::Controller, false, deadline)?;
+        let server_hello = hello_until_with_legacy_key_fallback(
+            &mut stream,
+            || connect_stream_until(socket_path, deadline),
+            role == Role::Controller,
+            false,
+            deadline,
+        )?;
         Self::finish_attach_with_deadline(
             stream,
             execution_id,

@@ -33,12 +33,10 @@ IPC ArrowUp→PTY is Runtime-wire evidence, not headed AppKit→client→Runtime
 
 ## Headed XCUI
 
-Added `SeyalHostUITests.testKeyboardToPtyEncodesArrowUpShiftF3AndDoesNotLeakCommandShortcuts`.
-It enters alternate-screen TUI so `terminal-input` is the direct route, then captures admitted bytes via `dd` files:
-
-- ArrowUp → `CSI A` (`27 91 65`)
-- Shift+F3 → `CSI 13;2~`
-- Cmd-C must not leak; following ArrowUp must still be `CSI A`
+Headed XCUI on this path is `SeyalHostUITests.testComposerSubmitAndHostShortcutsStayOnFlowBlocks`:
+composer submit plus Cmd-C / ArrowUp must remain on Flow/Blocks. It is not a
+TerminalKeyV2 byte oracle; headed key-to-PTY and the six-step IME/Neovim/TUI
+matrix remain open.
 
 `xcodebuild test-without-building` for that case failed before any assertion:
 

@@ -683,8 +683,16 @@ mod tests {
 
     #[test]
     fn raw_metadata_fallback_keeps_pass71_but_drops_only_pass8_capability() {
-        let full = discovery::requested_capabilities(true);
-        let fallback = discovery::requested_capabilities(false);
+        let full = discovery::requested_capabilities(true, true);
+        let fallback = discovery::requested_capabilities(false, true);
+        assert_ne!(
+            full & seyal_runtime::local_ipc::framing::CAP_EXTENDED_TERMINAL_KEY,
+            0
+        );
+        assert_ne!(
+            fallback & seyal_runtime::local_ipc::framing::CAP_EXTENDED_TERMINAL_KEY,
+            0
+        );
         assert_ne!(full & CAP_BLOCK_METADATA, 0);
         assert_eq!(fallback & CAP_BLOCK_METADATA, 0);
         assert_ne!(

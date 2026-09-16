@@ -151,6 +151,26 @@ size = "huge"
     }
 
     #[test]
+    fn input_policy_warnings_reach_configuration_diagnostics() {
+        let loaded = load_ui_configuration(
+            Some("[input]\noption_as_alt = \"yes\"\nextra = 1"),
+            &[],
+            None,
+        );
+        assert!(loaded
+            .diagnostics
+            .warnings
+            .iter()
+            .any(|warning| { warning == "input.option_as_alt ignored; expected boolean" }));
+        assert!(loaded
+            .diagnostics
+            .warnings
+            .iter()
+            .any(|warning| warning == "unknown key input.extra ignored"));
+        assert!(!loaded.diagnostics.used_full_default_fallback);
+    }
+
+    #[test]
     fn environment_and_overlay_precedence() {
         let overlay = StaticOverlay(ConfigPatch {
             ui_font_size: Some(15.0),

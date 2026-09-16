@@ -188,6 +188,9 @@ pub fn load_ui_configuration(
         match parse_toml(text) {
             Ok(root) => {
                 apply_toml(&root, &mut settings, &mut diagnostics);
+                diagnostics
+                    .warnings
+                    .extend(crate::input_policy::load_input_policy(Some(text)).1);
                 source = String::from("toml");
             }
             Err(TomlError(message)) => {

@@ -316,10 +316,10 @@ final class SeyalHostUITests: XCTestCase {
         )
     }
 
-    /// Headed #823 must stay on Flow/Blocks. Alternate-screen / raw `dd` key
-    /// capture makes the UI look like a normal terminal and is a fail, not a
-    /// headed keyboard oracle.
-    func testKeyboardToPtyEncodesArrowUpShiftF3AndDoesNotLeakCommandShortcuts() throws {
+    /// Headed #823 smoke: composer submit plus Cmd-C / ArrowUp must stay on
+    /// Flow/Blocks. This is not a TerminalKeyV2 byte oracle; headed key-to-PTY
+    /// and the six-step IME/Neovim/TUI matrix remain open.
+    func testComposerSubmitAndHostShortcutsStayOnFlowBlocks() throws {
         let app = hostedApp()
         waitForUsablePty(in: app)
         assertFlowBlocksOrFail(in: app)

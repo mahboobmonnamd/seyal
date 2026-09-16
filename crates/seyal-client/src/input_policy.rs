@@ -67,10 +67,20 @@ pub fn load_input_policy_from_path(path: Option<&Path>) -> (InputPolicy, Vec<Str
     load_input_policy(text.as_deref())
 }
 
+fn loaded_input_policy() -> &'static (InputPolicy, Vec<String>) {
+    static LOADED: std::sync::OnceLock<(InputPolicy, Vec<String>)> = std::sync::OnceLock::new();
+    LOADED.get_or_init(|| load_input_policy_from_path(input_policy_config_path().as_deref()))
+}
+
 /// Process-wide immutable result captured once at first native query.
 pub fn process_input_policy() -> InputPolicy {
-    static POLICY: std::sync::OnceLock<InputPolicy> = std::sync::OnceLock::new();
-    *POLICY.get_or_init(|| load_input_policy_from_path(input_policy_config_path().as_deref()).0)
+    loaded_input_policy().0
+}
+
+/// Non-secret `[input]` diagnostics from the same cold load. The typed policy
+/// stays immutable; callers must not reinterpret these strings as policy.
+pub fn process_input_policy_warnings() -> &'static [String] {
+    loaded_input_policy().1.as_slice()
 }
 
 #[cfg(test)]

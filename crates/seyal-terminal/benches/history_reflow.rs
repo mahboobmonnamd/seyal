@@ -1,4 +1,4 @@
-use std::{env, hint::black_box, process::Command, time::Instant};
+use std::{env, fs, hint::black_box, path::PathBuf, process::Command, time::Instant};
 
 use seyal_terminal::TerminalState;
 use stats_alloc::{Region, StatsAlloc, INSTRUMENTED_SYSTEM};
@@ -47,6 +47,80 @@ fn parse_samples() -> usize {
         .and_then(|value| value.parse().ok())
         .filter(|value: &usize| *value > 0)
         .unwrap_or(DEFAULT_SAMPLES)
+}
+
+fn parse_usize_env(name: &str, default: usize) -> usize {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|value: &usize| *value > 0)
+        .unwrap_or(default)
+}
+
+fn contract_gate() -> Option<String> {
+    env::var("SEYAL_M002_CONTRACT_GATE")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+fn populate(lines: usize, workload: &str) -> TerminalState {
+    let (line, _) = line_for(workload, 0);
+    let mut terminal = TerminalState::new(120, 40).expect("valid benchmark geometry");
+    for _ in 0..lines {
+        terminal.feed(&line).expect("history feed succeeds");
+    }
+    terminal
+}
+
+fn sample_ms(gate: &str, terminal: &mut TerminalState, columns: u16) -> f64 {
+    let started = Instant::now();
+    match gate {
+        "history_active_reflow_ms" => {
+            terminal.drop_primary_history_derived_cache();
+            black_box(terminal.primary_history_reflow(columns, ACTIVE_WINDOW_ROWS));
+        }
+        "history_sealed_segment_reflow_ms" => {
+            black_box(terminal.primary_history_reflow_uncached(columns, ACTIVE_WINDOW_ROWS));
+        }
+        other => panic!("unsupported M002 contract gate {other:?}"),
+    }
+    started.elapsed().as_secs_f64() * 1_000.0
+}
+
+fn write_cohort_file(path: &str, cohort: usize, samples: &[f64]) {
+    let mut body = format!("cohort = {cohort}\nsamples = [");
+    for (index, value) in samples.iter().enumerate() {
+        if index > 0 {
+            body.push_str(", ");
+        }
+        body.push_str(&format!("{value:.9}"));
+    }
+    body.push_str("]\n");
+    fs::write(PathBuf::from(path), body).expect("write M002 cohort file");
+}
+
+fn run_contract_cohort() {
+    let gate = contract_gate().expect("contract gate");
+    let cohort = parse_usize_env("SEYAL_M002_COHORT", 1);
+    let warmups = parse_usize_env("SEYAL_M002_WARMUPS", 20);
+    let samples = parse_usize_env("SEYAL_M002_SAMPLES", 100);
+    let out = env::var("SEYAL_M002_COHORT_OUT").expect("SEYAL_M002_COHORT_OUT");
+    let lines = parse_scales("SEYAL_HISTORY_BENCH_LINES", &[10_000])[0];
+    let columns = parse_scales("SEYAL_HISTORY_BENCH_COLUMNS", &[80])[0];
+    let workload = workload_names()[0];
+    let mut terminal = populate(lines, workload);
+    for _ in 0..warmups {
+        let _ = sample_ms(&gate, &mut terminal, columns);
+    }
+    let mut retained = Vec::with_capacity(samples);
+    for _ in 0..samples {
+        retained.push(sample_ms(&gate, &mut terminal, columns));
+    }
+    write_cohort_file(&out, cohort, &retained);
+    println!(
+        "[seyal history benchmark] m002_contract gate={gate} cohort={cohort} warmups={warmups} samples={samples} lines={lines} columns={columns} workload={workload} out={out}"
+    );
 }
 
 fn workload_names() -> Vec<&'static str> {
@@ -214,6 +288,11 @@ fn measure(
 }
 
 fn main() {
+    if contract_gate().is_some() {
+        run_contract_cohort();
+        return;
+    }
+
     let full = full_matrix_enabled();
     let lines = parse_scales(
         "SEYAL_HISTORY_BENCH_LINES",

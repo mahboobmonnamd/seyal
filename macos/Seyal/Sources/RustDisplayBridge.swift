@@ -1010,21 +1010,33 @@ final class RustDisplayBridge {
     return finishMutation(result)
   }
 
+  /// Empty paste is invalid (`-4`); UTF-8 above `MAX_INPUT_BYTES` is CommitTooLarge (`-14`).
+  static func pasteAdmissionCode(_ text: String) -> Int32 {
+    let byteCount = text.utf8.count
+    if byteCount == 0 { return -4 }
+    if byteCount > 65_536 { return -14 }
+    return 0
+  }
+
+  static func pasteAdmissionSelfTest() -> Bool {
+    pasteAdmissionCode("") == -4
+      && pasteAdmissionCode("a") == 0
+      && pasteAdmissionCode(String(repeating: "x", count: 65_536)) == 0
+      && pasteAdmissionCode(String(repeating: "x", count: 65_537)) == -14
+  }
+
   @discardableResult
   func submitPaste(_ text: String) -> Int32 {
+    let admission = Self.pasteAdmissionCode(text)
+    guard admission == 0 else {
+      onStatusChanged()
+      return admission
+    }
     guard isConnected, reconstructionState.canMutate, selectClient() else {
       onStatusChanged()
       return -10
     }
     let byteCount = text.utf8.count
-    guard byteCount > 0 else {
-      onStatusChanged()
-      return -4
-    }
-    guard byteCount <= 65_536 else {
-      onStatusChanged()
-      return -14
-    }
     let count = UInt32(byteCount)
     let result =
       text.utf8.withContiguousStorageIfAvailable { buffer -> Int32 in

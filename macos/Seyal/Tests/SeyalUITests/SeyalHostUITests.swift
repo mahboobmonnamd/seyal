@@ -360,9 +360,11 @@ final class SeyalHostUITests: XCTestCase {
     func testCopyPasteAndQuitMenusAreWired() throws {
         let app = hostedApp()
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
+        waitForUsablePty(in: app)
         app.typeKey("c", modifierFlags: .command)
         app.typeKey("v", modifierFlags: .command)
-        XCTAssertEqual(app.state, .runningForeground)
+        XCTAssertEqual(app.state, .runningForeground, "Seyal.app crashed on Cmd-C / Cmd-V")
+        assertFlowBlocksOrFail(in: app)
         app.typeKey("q", modifierFlags: .command)
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 8))
     }

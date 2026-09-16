@@ -139,6 +139,10 @@ final class SeyalHostComponentTests: XCTestCase {
         XCTAssertTrue(InteractiveMetalSurfaceView.pass7InputSelfTest())
     }
 
+    func testHostPasteAdmissionRejectsEmptyAndOversizedUTF8() {
+        XCTAssertTrue(RustDisplayBridge.pasteAdmissionSelfTest())
+    }
+
     func testTranscriptFrameRejectsZeroBlockIdentity() {
         let invalid = NativeTranscriptFrame(
             revision: 1,

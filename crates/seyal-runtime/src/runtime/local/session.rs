@@ -63,6 +63,7 @@ impl Runtime {
             MessageType::Paste => self.handle_paste(token, payload),
             MessageType::HostSelection => self.handle_host_selection(token, payload),
             MessageType::HostSearch => self.handle_host_search(token, payload),
+            MessageType::TerminalMouse => self.handle_terminal_mouse(token, payload),
             MessageType::TerminalKey => self.handle_terminal_key(token, payload),
             MessageType::TerminalKeyV2 => self.handle_terminal_key_v2(token, payload),
             MessageType::ComposerCommand => self.handle_composer_command(token, payload),

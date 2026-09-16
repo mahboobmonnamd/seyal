@@ -56,6 +56,9 @@ fn decode_pass7_payload(kind: MessageType, payload: &[u8]) {
         MessageType::HostSearch => {
             let _ = seyal_protocol::framing::HostSearch::decode(payload);
         }
+        MessageType::TerminalMouse => {
+            let _ = seyal_protocol::framing::TerminalMouse::decode(payload);
+        }
         _ => {}
     }
 }
@@ -92,4 +95,5 @@ fn pass7_protocol_decode_seed() {
     decode_pass7_payload(MessageType::HostSelection, &bytes);
     decode_pass7_payload(MessageType::CopiedText, &bytes);
     decode_pass7_payload(MessageType::HostSearch, &bytes);
+    decode_pass7_payload(MessageType::TerminalMouse, &bytes);
 }

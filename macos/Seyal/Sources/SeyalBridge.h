@@ -220,6 +220,26 @@ SeyalPass9DiagSnapshot seyal_bridge_pass9_diag_snapshot(void);
 int32_t seyal_bridge_submit_key(uint16_t kind, uint32_t scalar);
 uint8_t seyal_bridge_supports_key_v2(void);
 int32_t seyal_bridge_submit_key_v2(uint16_t kind, uint16_t modifiers, uint32_t value, uint8_t event, uint32_t shifted_ascii, uint32_t action_id);
+uint8_t seyal_bridge_mouse_cell(
+    double pixel_x,
+    double pixel_y_from_top,
+    double viewport_width,
+    double viewport_height,
+    double horizontal_insets,
+    double vertical_insets,
+    double cell_width,
+    double cell_height,
+    uint16_t *col,
+    uint16_t *row
+);
+int32_t seyal_bridge_submit_mouse(
+    uint8_t kind,
+    uint8_t button,
+    uint16_t modifiers,
+    uint16_t col,
+    uint16_t row,
+    uint32_t action_id
+);
 int32_t seyal_bridge_propose_geometry(
     double viewport_width,
     double viewport_height,

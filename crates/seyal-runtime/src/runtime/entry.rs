@@ -6,7 +6,7 @@ use std::{
     },
 };
 
-use seyal_exec::{RegistrationToken, TerminalExecution};
+use seyal_exec::{RegistrationToken, TerminalExecution, VisualPos};
 
 #[cfg(target_os = "macos")]
 use crate::command_block_timeline::{CommandBlockId, CommandBlockTimeline};
@@ -38,6 +38,8 @@ pub(in crate::runtime) struct Entry {
     pub(in crate::runtime) pending_input: VecDeque<AcceptedInput>,
     pub(in crate::runtime) reserved_input: Arc<AtomicUsize>,
     pub(in crate::runtime) ingress_active: Arc<AtomicBool>,
+    pub(in crate::runtime) mouse_buttons: u8,
+    pub(in crate::runtime) mouse_host_anchor: Option<VisualPos>,
     /// Accepted composer commands awaiting trusted OSC-133 `CommandStarted`.
     /// This is metadata only; PTY input continues through `pending_input`.
     #[cfg(target_os = "macos")]

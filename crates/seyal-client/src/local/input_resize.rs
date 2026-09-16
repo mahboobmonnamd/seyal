@@ -4,7 +4,7 @@ use seyal_runtime::local_ipc::framing::{
     encode_frame, ErrorCode, ErrorMessage, HostSearch, HostSelection, HostSelectionAction,
     InputRef, MessageType, ResizeRequest, ResizeResult, ResizeResultCode, Resync, Role,
     TerminalKey, TerminalKeyKind, TerminalKeyModifiers, TerminalKeyV2, TerminalKeyV2Event,
-    TerminalKeyV2Kind, TerminalKeyV2Modifiers, MAX_INPUT_BYTES,
+    TerminalKeyV2Kind, TerminalKeyV2Modifiers, TerminalMouse, TerminalMouseKind, MAX_INPUT_BYTES,
 };
 
 use super::{
@@ -85,6 +85,43 @@ pub fn derive_grid_geometry(
     Some(GridGeometry { rows, columns })
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn cell_from_point(
+    pixel_x: f64,
+    pixel_y_from_top: f64,
+    viewport_width: f64,
+    viewport_height: f64,
+    horizontal_insets: f64,
+    vertical_insets: f64,
+    cell_width: f64,
+    cell_height: f64,
+) -> Option<(u16, u16)> {
+    let geometry = derive_grid_geometry(
+        viewport_width,
+        viewport_height,
+        horizontal_insets,
+        vertical_insets,
+        cell_width,
+        cell_height,
+    )?;
+    if !pixel_x.is_finite() || !pixel_y_from_top.is_finite() {
+        return None;
+    }
+    let x = pixel_x - horizontal_insets;
+    let y = pixel_y_from_top - vertical_insets;
+    if x < 0.0 || y < 0.0 {
+        return None;
+    }
+    let col = (x / cell_width).floor();
+    let row = (y / cell_height).floor();
+    if !col.is_finite() || !row.is_finite() {
+        return None;
+    }
+    let col = (col as u16).min(geometry.columns.saturating_sub(1));
+    let row = (row as u16).min(geometry.rows.saturating_sub(1));
+    Some((col, row))
+}
+
 pub(crate) fn valid_terminal_key_request(kind: TerminalKeyKind, scalar: u32) -> bool {
     match kind {
         TerminalKeyKind::ControlAscii => matches!(scalar, 0x20 | 0x3f | 0x40 | 0x41..=0x5f),
@@ -100,6 +137,9 @@ pub(crate) enum OutboundKind {
     HostSelection,
     HostSearch,
     TerminalKeyV2 {
+        action_id: u32,
+    },
+    TerminalMouse {
         action_id: u32,
     },
     Resize {
@@ -198,7 +238,8 @@ pub(crate) fn classify_server_error(
             || error.offending_message_type == MessageType::TerminalKey as u16
             || error.offending_message_type == MessageType::Paste as u16
             || error.offending_message_type == MessageType::HostSelection as u16
-            || error.offending_message_type == MessageType::HostSearch as u16)
+            || error.offending_message_type == MessageType::HostSearch as u16
+            || error.offending_message_type == MessageType::TerminalMouse as u16)
     {
         return Ok(Some(InputAdmissionFailure::ClientBackpressure));
     }
@@ -430,6 +471,42 @@ impl LocalDisplayClient {
             return Err(error);
         }
         self.last_admitted_v2_action_id = action_id;
+        self.input_failure = None;
+        self.flush_control_write()
+    }
+
+    pub fn submit_terminal_mouse(
+        &mut self,
+        kind: TerminalMouseKind,
+        button: u8,
+        modifiers: TerminalKeyV2Modifiers,
+        col: u16,
+        row: u16,
+        action_id: u32,
+    ) -> Result<(), ClientError> {
+        self.require_controller()?;
+        if action_id == 0 || action_id <= self.last_admitted_mouse_action_id {
+            return Err(ClientError::Protocol);
+        }
+        let event = TerminalMouse {
+            attachment_id: self.attachment_id,
+            action_id,
+            kind,
+            button,
+            modifiers,
+            col,
+            row,
+        };
+        if event.validate().is_err() {
+            return Err(ClientError::Protocol);
+        }
+        let payload = event.encode();
+        let frame = encode_frame(MessageType::TerminalMouse, &payload);
+        if let Err(error) = self.admit_frame(frame, OutboundKind::TerminalMouse { action_id }) {
+            self.input_failure = Some(InputAdmissionFailure::ClientBackpressure);
+            return Err(error);
+        }
+        self.last_admitted_mouse_action_id = action_id;
         self.input_failure = None;
         self.flush_control_write()
     }
@@ -855,6 +932,22 @@ mod tests {
 
     fn geometry(rows: u16, columns: u16) -> GridGeometry {
         GridGeometry { rows, columns }
+    }
+
+    #[test]
+    fn mouse_cell_uses_top_origin_and_clamps_to_grid() {
+        assert_eq!(
+            cell_from_point(15.0, 25.0, 80.0, 48.0, 0.0, 0.0, 8.0, 16.0),
+            Some((1, 1))
+        );
+        assert_eq!(
+            cell_from_point(79.0, 47.0, 80.0, 48.0, 0.0, 0.0, 8.0, 16.0),
+            Some((9, 2))
+        );
+        assert_eq!(
+            cell_from_point(-1.0, 0.0, 80.0, 48.0, 0.0, 0.0, 8.0, 16.0),
+            None
+        );
     }
 
     #[test]

@@ -335,6 +335,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
     private let optionAsAlt: Bool
     private var composition = CompositionDocument()
     private var nextKeyboardActionID: UInt32 = 1
+    private var nextMouseActionID: UInt32 = 1
     private var heldKeyboardKinds: [UInt16: TerminalNativeKeyV2] = [:]
     private static let maxHeldKeyboardKinds = 256
     var onBridgeBecameUsable: (() -> Void)?
@@ -371,6 +372,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
             announcedBridgeUsable = false
             heldKeyboardKinds.removeAll(keepingCapacity: true)
             nextKeyboardActionID = 1
+            nextMouseActionID = 1
             composition.clear()
         }
     }
@@ -386,12 +388,55 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
     }
 
     override func mouseDown(with event: NSEvent) {
-        if allowsDirectTerminalInput {
-            window?.makeFirstResponder(self)
-        } else {
-            onRequestComposerFocus?()
+        submitNativeMouse(event, kind: 1)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        submitNativeMouse(event, kind: 2)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        submitNativeMouse(event, kind: 3)
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        submitNativeMouse(event, kind: 1)
+    }
+
+    override func rightMouseUp(with event: NSEvent) {
+        submitNativeMouse(event, kind: 2)
+    }
+
+    override func rightMouseDragged(with event: NSEvent) {
+        submitNativeMouse(event, kind: 3)
+    }
+
+    override func otherMouseDown(with event: NSEvent) {
+        submitNativeMouse(event, kind: 1)
+    }
+
+    override func otherMouseUp(with event: NSEvent) {
+        submitNativeMouse(event, kind: 2)
+    }
+
+    override func otherMouseDragged(with event: NSEvent) {
+        submitNativeMouse(event, kind: 3)
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        guard allowsDirectTerminalInput else {
+            super.scrollWheel(with: event)
+            return
         }
-        super.mouseDown(with: event)
+        let button: UInt8
+        if abs(event.scrollingDeltaY) >= abs(event.scrollingDeltaX) {
+            if event.scrollingDeltaY == 0 { return }
+            button = event.scrollingDeltaY > 0 ? 64 : 65
+        } else {
+            if event.scrollingDeltaX == 0 { return }
+            button = event.scrollingDeltaX > 0 ? 66 : 67
+        }
+        submitNativeMouse(event, kind: 4, buttonOverride: button)
     }
 
     override func keyDown(with event: NSEvent) {
@@ -591,6 +636,51 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
         let message = "Input not sent: terminal client is busy. Retry the input."
         setAccessibilityValue(message)
         SeyalAccessibilityAnnouncement.post(message, element: self)
+    }
+
+    private func submitNativeMouse(_ event: NSEvent, kind: UInt8, buttonOverride: UInt8? = nil) {
+        if !allowsDirectTerminalInput {
+            if kind == 1 {
+                onRequestComposerFocus?()
+            }
+            return
+        }
+        window?.makeFirstResponder(self)
+        guard let cell = terminalMouseCell(for: event),
+            let actionID = takeNextMouseActionID()
+        else { return }
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        var modifiers: UInt16 = 0
+        if flags.contains(.shift) { modifiers |= 1 }
+        if flags.contains(.option) { modifiers |= 2 }
+        if flags.contains(.control) { modifiers |= 4 }
+        let button = buttonOverride ?? Self.xtermButton(event.buttonNumber)
+        _ = terminalSubmitMouse(
+            kind: kind,
+            button: button,
+            modifiers: modifiers,
+            col: cell.0,
+            row: cell.1,
+            actionID: actionID
+        )
+    }
+
+    private static func xtermButton(_ buttonNumber: Int) -> UInt8 {
+        switch buttonNumber {
+        case 0: return 0
+        case 1: return 2
+        case 2: return 1
+        default: return 0
+        }
+    }
+
+    private func takeNextMouseActionID() -> UInt32? {
+        guard let actionID = Self.v2ActionIDBeforeExhaustion(nextMouseActionID) else {
+            terminalStopForProtocolRecovery()
+            return nil
+        }
+        nextMouseActionID = actionID + 1
+        return actionID
     }
 
     private func takeNextKeyboardActionID() -> UInt32? {

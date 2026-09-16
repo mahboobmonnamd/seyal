@@ -121,7 +121,15 @@ impl ConnectionState {
                 | (Self::Ready, ListExecutions | Attach | Goodbye)
                 | (
                     Self::Attached,
-                    Input | Paste | HostSelection | HostSearch | Resize | Resync | Detach | Goodbye
+                    Input
+                        | Paste
+                        | HostSelection
+                        | HostSearch
+                        | TerminalMouse
+                        | Resize
+                        | Resync
+                        | Detach
+                        | Goodbye
                 )
         );
         allowed.then_some(()).ok_or(StateError::InvalidState)

@@ -10,10 +10,8 @@ fn terminfo_source() -> PathBuf {
 #[test]
 fn seyal_m001_source_omits_unimplemented_capabilities() {
     let source = fs::read_to_string(terminfo_source()).expect("terminfo source");
-    // Strong negative set required by #821 (and deferred #822 mouse / graphics).
-    let required_absent = [
-        "kmous", "XM", "xm", "sixel", "Ms", "Smolx", "rmolx", "kitty", "RGB",
-    ];
+    // Strong negative set required by #821. Mouse is implemented by #822.
+    let required_absent = ["sixel", "Ms", "Smolx", "rmolx", "kitty", "RGB"];
     for cap in required_absent {
         let advertised = source
             .split(|c: char| c == ',' || c == '\n' || c.is_whitespace())
@@ -29,7 +27,8 @@ fn seyal_m001_source_omits_unimplemented_capabilities() {
 fn seyal_m001_source_includes_implemented_scroll_and_edit_caps() {
     let source = fs::read_to_string(terminfo_source()).expect("terminfo source");
     for cap in [
-        "csr=", "il=", "dl=", "ich=", "dch=", "ech=", "indn=", "rin=", "ri=",
+        "csr=", "il=", "dl=", "ich=", "dch=", "ech=", "indn=", "rin=", "ri=", "kmous=", "XM=",
+        "xm=",
     ] {
         assert!(
             source.contains(cap),
@@ -40,7 +39,7 @@ fn seyal_m001_source_includes_implemented_scroll_and_edit_caps() {
 
 #[cfg(target_os = "macos")]
 #[test]
-fn compiled_seyal_m001_resolves_and_omits_mouse() {
+fn compiled_seyal_m001_resolves_and_advertises_mouse() {
     let source = terminfo_source();
     let out = tempfile_dir();
     let status = Command::new("tic")
@@ -60,12 +59,14 @@ fn compiled_seyal_m001_resolves_and_omits_mouse() {
     let text = String::from_utf8_lossy(&output.stdout);
     assert!(text.contains("csr="), "compiled entry should include csr");
     assert!(text.contains("il="), "compiled entry should include il");
-    for banned in ["kmous", "XM=", "sixel"] {
-        assert!(
-            !text.contains(banned),
-            "compiled terminfo must not contain {banned}"
-        );
-    }
+    assert!(
+        text.contains("kmous="),
+        "compiled entry should include kmous"
+    );
+    assert!(
+        !text.contains("sixel"),
+        "compiled terminfo must not contain sixel"
+    );
 }
 
 #[cfg(target_os = "macos")]

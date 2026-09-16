@@ -1125,6 +1125,49 @@ final class RustDisplayBridge {
     return finishMutation(seyal_bridge_submit_key_v2(kind, modifiers, value, event, shiftedASCII, actionID))
   }
 
+  func mouseCell(
+    pixelX: Double,
+    pixelYFromTop: Double,
+    viewportWidth: Double,
+    viewportHeight: Double,
+    horizontalInsets: Double,
+    verticalInsets: Double,
+    cellWidth: Double,
+    cellHeight: Double
+  ) -> (UInt16, UInt16)? {
+    var col: UInt16 = 0
+    var row: UInt16 = 0
+    let ok = seyal_bridge_mouse_cell(
+      pixelX,
+      pixelYFromTop,
+      viewportWidth,
+      viewportHeight,
+      horizontalInsets,
+      verticalInsets,
+      cellWidth,
+      cellHeight,
+      &col,
+      &row
+    )
+    return ok != 0 ? (col, row) : nil
+  }
+
+  @discardableResult
+  func submitMouse(
+    kind: UInt8,
+    button: UInt8,
+    modifiers: UInt16,
+    col: UInt16,
+    row: UInt16,
+    actionID: UInt32
+  ) -> Int32 {
+    guard isConnected, reconstructionState.canMutate, selectClient() else {
+      onStatusChanged()
+      return -10
+    }
+    return finishMutation(seyal_bridge_submit_mouse(kind, button, modifiers, col, row, actionID))
+  }
+
   @discardableResult
   func proposeGeometry(
     viewportWidth: Double,

@@ -520,6 +520,41 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
     bridge?.submitKeyV2(kind: kind, modifiers: modifiers, value: value, event: event, shiftedASCII: shiftedASCII, actionID: actionID) ?? -10
   }
 
+  func terminalMouseCell(for event: NSEvent) -> (UInt16, UInt16)? {
+    let point = convert(event.locationInWindow, from: nil)
+    let cell = terminalPresentationCellSize()
+    guard cell.width > 0, cell.height > 0 else { return nil }
+    return bridge?.mouseCell(
+      pixelX: Double(point.x),
+      pixelYFromTop: Double(bounds.height - point.y),
+      viewportWidth: Double(bounds.width),
+      viewportHeight: Double(bounds.height),
+      horizontalInsets: 0,
+      verticalInsets: 0,
+      cellWidth: Double(cell.width),
+      cellHeight: Double(cell.height)
+    )
+  }
+
+  @discardableResult
+  func terminalSubmitMouse(
+    kind: UInt8,
+    button: UInt8,
+    modifiers: UInt16,
+    col: UInt16,
+    row: UInt16,
+    actionID: UInt32
+  ) -> Int32 {
+    bridge?.submitMouse(
+      kind: kind,
+      button: button,
+      modifiers: modifiers,
+      col: col,
+      row: row,
+      actionID: actionID
+    ) ?? -10
+  }
+
   @discardableResult
   func terminalProposeGeometry(
     viewportWidth: Double,

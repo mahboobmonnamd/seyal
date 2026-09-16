@@ -17,8 +17,8 @@ use seyal_runtime::{
         HistoryRangeRequest, HistoryRangeSnapshot, HistoryRangeStatus, InputRef, MessageType,
         ResizeRequest, ResizeResult, ResizeResultCode, Role, ServerHello, TerminalKey,
         TerminalKeyKind, TerminalKeyModifiers, TerminalKeyV2, TerminalKeyV2Event,
-        TerminalKeyV2Kind, TerminalKeyV2Modifiers, CAP_CORRELATED_RESIZE,
-        CAP_EXTENDED_TERMINAL_KEY, CAP_SEMANTIC_TERMINAL_KEY, HEADER_LEN,
+        TerminalKeyV2Kind, TerminalKeyV2Modifiers, TerminalMouse, TerminalMouseKind,
+        CAP_CORRELATED_RESIZE, CAP_EXTENDED_TERMINAL_KEY, CAP_SEMANTIC_TERMINAL_KEY, HEADER_LEN,
         HISTORY_CELL_SIDECAR_FLAG,
     },
     AttachmentId, LocalIpcMode, Runtime, RuntimeConfig,
@@ -779,4 +779,76 @@ fn history_range_over_wire_budget_returns_truncated_not_capacity_error() {
             other => panic!("unexpected reply while waiting for history: {other:?}"),
         }
     }
+}
+
+fn wait_for_text(harness: &mut Harness, cache: &mut DisplayCache, needle: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let text: String = cache.cells.iter().map(|cell| cell.scalar).collect();
+        if text.contains(needle) {
+            return;
+        }
+        assert!(Instant::now() < deadline, "missing {needle:?} on display");
+        harness.next_display(cache);
+    }
+}
+
+#[test]
+fn controller_sgr_mouse_reaches_pty_after_canonical_mode() {
+    let command = CommandSpec::new("/bin/sh").args([
+        "-c",
+        "printf '\\033[?1000h\\033[?1006hREADY\\n'; stty raw -echo; od -An -tu1 -N9 | tr -s ' ' | sed 's/^ //'",
+    ]);
+    let (mut harness, execution_id) = Harness::new(command);
+    harness.hello();
+    let (attached, mut cache) = harness.attach(execution_id, Role::Controller);
+    wait_for_text(&mut harness, &mut cache, "READY");
+    harness.send(
+        MessageType::TerminalMouse,
+        &TerminalMouse {
+            attachment_id: attached.attachment_id,
+            action_id: 1,
+            kind: TerminalMouseKind::Press,
+            button: 0,
+            modifiers: TerminalKeyV2Modifiers::NONE,
+            col: 0,
+            row: 0,
+        }
+        .encode(),
+    );
+    wait_for_text(&mut harness, &mut cache, "27 91 60");
+}
+
+#[test]
+fn shift_override_does_not_write_application_mouse() {
+    let command = CommandSpec::new("/bin/sh").args([
+        "-c",
+        "printf '\\033[?1000h\\033[?1006hREADY\\n'; stty raw -echo; od -An -tu1 -N1 | tr -s ' ' | sed 's/^ //'",
+    ]);
+    let (mut harness, execution_id) = Harness::new(command);
+    harness.hello();
+    let (attached, mut cache) = harness.attach(execution_id, Role::Controller);
+    wait_for_text(&mut harness, &mut cache, "READY");
+    harness.send(
+        MessageType::TerminalMouse,
+        &TerminalMouse {
+            attachment_id: attached.attachment_id,
+            action_id: 1,
+            kind: TerminalMouseKind::Press,
+            button: 0,
+            modifiers: TerminalKeyV2Modifiers::SHIFT,
+            col: 1,
+            row: 1,
+        }
+        .encode(),
+    );
+    harness.send(
+        MessageType::Input,
+        &InputRef {
+            attachment_id: attached.attachment_id,
+            bytes: b"x",
+        }
+        .encode(),
+    );
+    wait_for_text(&mut harness, &mut cache, "120");
 }

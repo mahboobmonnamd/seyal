@@ -373,6 +373,7 @@ typedef struct SeyalAppPalette {
 
 uint64_t seyal_app_create(void);
 int32_t seyal_app_destroy(uint64_t handle);
+uint8_t seyal_app_option_as_alt(uint64_t handle);
 int32_t seyal_app_apply(uint64_t handle, const SeyalAppAction *action);
 SeyalAppSnapshot seyal_app_snapshot(uint64_t handle);
 SeyalAppComposer seyal_app_composer(uint64_t handle);

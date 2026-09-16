@@ -3,7 +3,7 @@ use std::{env, fs, path::PathBuf};
 use seyal_protocol::framing::{
     decode_message, BlockTimeline, ComposerCommandRef, ComposerResult, ComposerStatus, FrameHeader,
     HistoryRangeRequest, HistoryRangeSnapshot, MessageType, ResizeRequest, ResizeResult,
-    TerminalKey, HEADER_LEN,
+    TerminalKey, TerminalKeyV2, HEADER_LEN,
 };
 
 fn input() -> Vec<u8> {
@@ -16,6 +16,9 @@ fn decode_pass7_payload(kind: MessageType, payload: &[u8]) {
     match kind {
         MessageType::TerminalKey => {
             let _ = TerminalKey::decode(payload);
+        }
+        MessageType::TerminalKeyV2 => {
+            let _ = TerminalKeyV2::decode(payload);
         }
         MessageType::ResizeRequest => {
             let _ = ResizeRequest::decode(payload);
@@ -64,6 +67,7 @@ fn pass7_protocol_decode_seed() {
     }
 
     decode_pass7_payload(MessageType::TerminalKey, &bytes);
+    decode_pass7_payload(MessageType::TerminalKeyV2, &bytes);
     decode_pass7_payload(MessageType::ResizeRequest, &bytes);
     decode_pass7_payload(MessageType::ResizeResult, &bytes);
     decode_pass7_payload(MessageType::ComposerCommand, &bytes);

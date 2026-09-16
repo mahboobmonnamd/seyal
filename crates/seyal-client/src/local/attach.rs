@@ -20,8 +20,8 @@ use crate::block_cache::{is_epoch_quarantined, BlockCache};
 
 use super::{
     discovery::{
-        canonical_control_socket_path, connect_stream_until, hello_until, read_exact_until,
-        send_control_until,
+        canonical_control_socket_path, connect_stream_until, extended_terminal_key_supported,
+        hello_until_with_legacy_key_fallback, read_exact_until, send_control_until,
     },
     display_apply::PendingDisplayBatch,
     input_resize::GridGeometry,
@@ -213,7 +213,13 @@ impl LocalDisplayClient {
         let socket_path = canonical_control_socket_path()?;
 
         let mut stream = connect_stream_until(&socket_path, deadline)?;
-        let mut server_hello = hello_until(&mut stream, role == Role::Controller, true, deadline)?;
+        let mut server_hello = hello_until_with_legacy_key_fallback(
+            &mut stream,
+            || connect_stream_until(&socket_path, deadline),
+            role == Role::Controller,
+            true,
+            deadline,
+        )?;
         send_control_until(&mut stream, MessageType::ListExecutions, &[], deadline)?;
         let (kind, payload) = read_blocking_frame_until(&mut stream, deadline)?;
         if kind != MessageType::ExecutionList {
@@ -225,7 +231,13 @@ impl LocalDisplayClient {
         if is_epoch_quarantined(server_hello.runtime_id, execution_id) {
             drop(stream);
             stream = connect_stream_until(&socket_path, deadline)?;
-            server_hello = hello_until(&mut stream, role == Role::Controller, false, deadline)?;
+            server_hello = hello_until_with_legacy_key_fallback(
+                &mut stream,
+                || connect_stream_until(&socket_path, deadline),
+                role == Role::Controller,
+                false,
+                deadline,
+            )?;
         }
         let block_metadata_negotiated =
             server_hello.server_capabilities & seyal_runtime::pass8::CAP_BLOCK_METADATA != 0
@@ -235,6 +247,7 @@ impl LocalDisplayClient {
             execution_id,
             role,
             server_hello.server_capabilities & CAP_COMMAND_BLOCKS != 0,
+            extended_terminal_key_supported(server_hello.server_capabilities),
             server_hello.runtime_id,
             block_metadata_negotiated,
             deadline,
@@ -261,11 +274,23 @@ impl LocalDisplayClient {
         deadline: Instant,
     ) -> Result<Self, ClientError> {
         let mut stream = connect_stream_until(socket_path, deadline)?;
-        let mut server_hello = hello_until(&mut stream, role == Role::Controller, true, deadline)?;
+        let mut server_hello = hello_until_with_legacy_key_fallback(
+            &mut stream,
+            || connect_stream_until(socket_path, deadline),
+            role == Role::Controller,
+            true,
+            deadline,
+        )?;
         if is_epoch_quarantined(server_hello.runtime_id, execution_id) {
             drop(stream);
             stream = connect_stream_until(socket_path, deadline)?;
-            server_hello = hello_until(&mut stream, role == Role::Controller, false, deadline)?;
+            server_hello = hello_until_with_legacy_key_fallback(
+                &mut stream,
+                || connect_stream_until(socket_path, deadline),
+                role == Role::Controller,
+                false,
+                deadline,
+            )?;
         }
         let block_metadata_negotiated =
             server_hello.server_capabilities & seyal_runtime::pass8::CAP_BLOCK_METADATA != 0
@@ -275,6 +300,7 @@ impl LocalDisplayClient {
             execution_id,
             role,
             server_hello.server_capabilities & CAP_COMMAND_BLOCKS != 0,
+            extended_terminal_key_supported(server_hello.server_capabilities),
             server_hello.runtime_id,
             block_metadata_negotiated,
             deadline,
@@ -293,12 +319,19 @@ impl LocalDisplayClient {
     ) -> Result<Self, ClientError> {
         let deadline = Instant::now() + STARTUP_TIMEOUT;
         let mut stream = connect_stream_until(socket_path, deadline)?;
-        let server_hello = hello_until(&mut stream, role == Role::Controller, false, deadline)?;
+        let server_hello = hello_until_with_legacy_key_fallback(
+            &mut stream,
+            || connect_stream_until(socket_path, deadline),
+            role == Role::Controller,
+            false,
+            deadline,
+        )?;
         Self::finish_attach_with_deadline(
             stream,
             execution_id,
             role,
             server_hello.server_capabilities & CAP_COMMAND_BLOCKS != 0,
+            extended_terminal_key_supported(server_hello.server_capabilities),
             server_hello.runtime_id,
             false,
             deadline,
@@ -311,6 +344,7 @@ impl LocalDisplayClient {
         execution_id: ExecutionId,
         role: Role,
         command_blocks_supported: bool,
+        extended_terminal_key_supported: bool,
         runtime_id: u128,
         block_metadata_negotiated: bool,
     ) -> Result<Self, ClientError> {
@@ -319,17 +353,20 @@ impl LocalDisplayClient {
             execution_id,
             role,
             command_blocks_supported,
+            extended_terminal_key_supported,
             runtime_id,
             block_metadata_negotiated,
             Instant::now() + STARTUP_TIMEOUT,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn finish_attach_with_deadline(
         mut stream: UnixStream,
         execution_id: ExecutionId,
         role: Role,
         command_blocks_supported: bool,
+        extended_terminal_key_supported: bool,
         runtime_id: u128,
         block_metadata_negotiated: bool,
         deadline: Instant,
@@ -464,6 +501,7 @@ impl LocalDisplayClient {
             attachment_id: attached.attachment_id,
             role,
             block_metadata_negotiated,
+            extended_terminal_key_supported,
             block_cache: BlockCache::default(),
             cache,
             prepared,
@@ -489,6 +527,9 @@ impl LocalDisplayClient {
             history_ranges: HashMap::new(),
             history_requests: HashMap::new(),
             next_history_request_id: 1,
+            last_admitted_v2_action_id: 0,
+            last_sent_v2_action_id: 0,
+            highest_v2_error_id: 0,
         })
     }
 }
@@ -611,6 +652,7 @@ mod tests {
                 execution_id,
                 Role::Controller,
                 false,
+                false,
                 9,
                 false,
             );
@@ -644,6 +686,7 @@ mod tests {
             execution_id,
             Role::Observer,
             false,
+            false,
             9,
             false,
         );
@@ -669,6 +712,7 @@ mod tests {
             client,
             execution_id,
             Role::Controller,
+            false,
             false,
             9,
             false,
@@ -783,6 +827,7 @@ mod tests {
             execution_id,
             Role::Controller,
             false,
+            false,
             9,
             false,
             std::time::Instant::now() + Duration::from_millis(250),
@@ -820,6 +865,7 @@ mod tests {
             client,
             execution_id,
             Role::Controller,
+            false,
             false,
             9,
             false,
@@ -875,6 +921,7 @@ mod tests {
             client,
             execution_id,
             Role::Controller,
+            false,
             false,
             9,
             false,
@@ -932,6 +979,7 @@ mod tests {
             execution_id,
             Role::Controller,
             true,
+            false,
             9,
             false,
             std::time::Instant::now() + Duration::from_millis(250),

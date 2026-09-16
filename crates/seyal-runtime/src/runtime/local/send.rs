@@ -70,10 +70,20 @@ impl Runtime {
     }
 
     pub(super) fn send_error(&mut self, token: u64, code: ErrorCode, offending: u16) {
+        self.send_error_detail(token, code, offending, 0);
+    }
+
+    pub(super) fn send_error_detail(
+        &mut self,
+        token: u64,
+        code: ErrorCode,
+        offending: u16,
+        detail_code: u32,
+    ) {
         let message = framing::ErrorMessage {
             error_code: code as u16,
             offending_message_type: offending,
-            detail_code: 0,
+            detail_code,
         };
         let _ = self.send_mandatory_frame(
             token,

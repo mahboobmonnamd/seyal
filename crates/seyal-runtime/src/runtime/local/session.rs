@@ -39,12 +39,19 @@ impl Runtime {
             && matches!(
                 kind,
                 MessageType::TerminalKey
+                    | MessageType::TerminalKeyV2
                     | MessageType::ResizeRequest
                     | MessageType::ComposerCommand
                     | MessageType::HistoryRangeRequest
             );
         if !pass7_attached && current_state.validate_incoming(kind).is_err() {
-            self.send_error(token, ErrorCode::InvalidState, message_type);
+            if kind == MessageType::TerminalKeyV2 {
+                // SPEC-006 §21.5: unnegotiated / pre-attachment type-29 is
+                // connection-fatal after at most one bounded generic error.
+                self.fatal_terminal_key_v2(token);
+            } else {
+                self.send_error(token, ErrorCode::InvalidState, message_type);
+            }
             return;
         }
         match kind {
@@ -54,6 +61,7 @@ impl Runtime {
             MessageType::Detach => self.handle_detach(token, payload),
             MessageType::Input => self.handle_input(token, payload),
             MessageType::TerminalKey => self.handle_terminal_key(token, payload),
+            MessageType::TerminalKeyV2 => self.handle_terminal_key_v2(token, payload),
             MessageType::ComposerCommand => self.handle_composer_command(token, payload),
             MessageType::HistoryRangeRequest => self.handle_history_range_request(token, payload),
             MessageType::Resize => self.handle_resize(token, payload),
@@ -80,7 +88,10 @@ impl Runtime {
             return;
         };
         if hello.client_capabilities
-            & !(CAP_COMMAND_BLOCKS | CAP_BLOCK_METADATA | framing::CAP_GRAPHEME_DISPLAY)
+            & !(CAP_COMMAND_BLOCKS
+                | CAP_BLOCK_METADATA
+                | framing::CAP_GRAPHEME_DISPLAY
+                | framing::CAP_EXTENDED_TERMINAL_KEY)
             != 0
         {
             self.send_error(
@@ -96,6 +107,7 @@ impl Runtime {
                 | framing::CAP_OBSERVER
                 | framing::CAP_SEMANTIC_TERMINAL_KEY
                 | framing::CAP_CORRELATED_RESIZE
+                | framing::CAP_EXTENDED_TERMINAL_KEY
                 | CAP_COMMAND_BLOCKS
                 | CAP_BLOCK_METADATA
                 | framing::CAP_GRAPHEME_DISPLAY,

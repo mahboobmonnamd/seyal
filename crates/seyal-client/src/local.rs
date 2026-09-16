@@ -24,6 +24,11 @@ use seyal_runtime::{
 
 use crate::block_cache::{quarantine_epoch, BlockApply, BlockCache};
 
+#[cfg(test)]
+use seyal_runtime::local_ipc::framing::{
+    TerminalKeyV2Event, TerminalKeyV2Kind, TerminalKeyV2Modifiers,
+};
+
 pub use discovery::DiscoveryFailure;
 pub use input_resize::{derive_grid_geometry, GridGeometry, InputAdmissionFailure, ResizeFailure};
 
@@ -85,6 +90,9 @@ pub struct LocalDisplayClient {
     pub(crate) attachment_id: AttachmentId,
     pub(crate) role: Role,
     pub(crate) block_metadata_negotiated: bool,
+    /// Whether the attached Runtime negotiated the additive TerminalKeyV2
+    /// message. Native input must fall back to M001 semantics when absent.
+    pub(crate) extended_terminal_key_supported: bool,
     pub(crate) block_cache: BlockCache,
     pub(crate) cache: DisplayCache,
     pub(crate) prepared: PreparedSurface,
@@ -112,6 +120,12 @@ pub struct LocalDisplayClient {
     pub(crate) history_ranges: HashMap<(u64, u64), HistoryRangeSnapshot>,
     pub(crate) history_requests: HashMap<u64, (u64, u64, u64)>,
     pub(crate) next_history_request_id: u64,
+    /// Connection-local SPEC-006 §21.5 sent/highest-error bounds. Zero means none.
+    /// `last_admitted` is the highest V2 ID accepted into the outbound FIFO.
+    /// `last_sent` advances only after that frame is fully written to the socket.
+    pub(crate) last_admitted_v2_action_id: u32,
+    pub(crate) last_sent_v2_action_id: u32,
+    pub(crate) highest_v2_error_id: u32,
 }
 
 impl LocalDisplayClient {
@@ -129,6 +143,10 @@ impl LocalDisplayClient {
 
     pub fn attachment_id(&self) -> AttachmentId {
         self.attachment_id
+    }
+
+    pub fn extended_terminal_key_supported(&self) -> bool {
+        self.extended_terminal_key_supported
     }
 
     pub fn role(&self) -> Role {
@@ -383,7 +401,7 @@ impl LocalDisplayClient {
                         // bounded, retryable failure without dropping later
                         // FIFO work. Other Error frames retain their fatal
                         // protocol/authority semantics.
-                        if let Some(failure) = input_resize::classify_server_error(error)? {
+                        if let Some(failure) = self.classify_incoming_error(error)? {
                             self.input_failure = Some(failure);
                         }
                     }
@@ -496,6 +514,7 @@ pub(crate) fn validate_composer_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use seyal_runtime::local_ipc::framing::{ErrorCode, ErrorMessage, MessageType};
     use seyal_runtime::pass8::CAP_BLOCK_METADATA;
     use std::io::{Read, Write};
 
@@ -512,6 +531,7 @@ mod tests {
             attachment_id: AttachmentId::from_bytes([2; 16]),
             role: Role::Controller,
             block_metadata_negotiated: false,
+            extended_terminal_key_supported: false,
             block_cache: BlockCache::default(),
             cache: seyal_runtime::display::empty_cache(),
             prepared: PreparedSurface::default(),
@@ -546,6 +566,9 @@ mod tests {
             history_ranges: HashMap::new(),
             history_requests: HashMap::new(),
             next_history_request_id: 1,
+            last_admitted_v2_action_id: 0,
+            last_sent_v2_action_id: 0,
+            highest_v2_error_id: 0,
         }
     }
 
@@ -660,8 +683,16 @@ mod tests {
 
     #[test]
     fn raw_metadata_fallback_keeps_pass71_but_drops_only_pass8_capability() {
-        let full = discovery::requested_capabilities(true);
-        let fallback = discovery::requested_capabilities(false);
+        let full = discovery::requested_capabilities(true, true);
+        let fallback = discovery::requested_capabilities(false, true);
+        assert_ne!(
+            full & seyal_runtime::local_ipc::framing::CAP_EXTENDED_TERMINAL_KEY,
+            0
+        );
+        assert_ne!(
+            fallback & seyal_runtime::local_ipc::framing::CAP_EXTENDED_TERMINAL_KEY,
+            0
+        );
         assert_ne!(full & CAP_BLOCK_METADATA, 0);
         assert_eq!(fallback & CAP_BLOCK_METADATA, 0);
         assert_ne!(
@@ -671,6 +702,232 @@ mod tests {
         assert_ne!(
             fallback & seyal_runtime::local_ipc::framing::CAP_COMMAND_BLOCKS,
             0
+        );
+    }
+
+    #[test]
+    fn v2_key_is_rejected_when_extended_capability_was_not_negotiated() {
+        let (client_stream, _server_stream) = UnixStream::pair().expect("socket pair");
+        let mut client = test_client(client_stream);
+        let error = client
+            .submit_terminal_key_v2(
+                TerminalKeyV2Kind::ArrowUp,
+                TerminalKeyV2Modifiers::NONE,
+                0,
+                TerminalKeyV2Event::Press,
+                0,
+                1,
+            )
+            .expect_err("old-server clients must not encode TerminalKeyV2");
+        assert_eq!(error, ClientError::UnsupportedInteractiveCapability);
+        assert!(client.outbound.is_empty());
+    }
+
+    #[test]
+    fn v2_key_zero_action_id_is_rejected_before_encoding() {
+        let (client_stream, _server_stream) = UnixStream::pair().expect("socket pair");
+        let mut client = test_client(client_stream);
+        client.extended_terminal_key_supported = true;
+        let error = client
+            .submit_terminal_key_v2(
+                TerminalKeyV2Kind::ArrowUp,
+                TerminalKeyV2Modifiers::NONE,
+                0,
+                TerminalKeyV2Event::Press,
+                0,
+                0,
+            )
+            .expect_err("action_id 0 is not a correlated V2 action");
+        assert_eq!(error, ClientError::Protocol);
+        assert!(client.outbound.is_empty());
+    }
+
+    fn type29(error_code: ErrorCode, detail_code: u32) -> ErrorMessage {
+        ErrorMessage {
+            error_code: error_code as u16,
+            offending_message_type: MessageType::TerminalKeyV2 as u16,
+            detail_code,
+        }
+    }
+
+    fn submit_v2(client: &mut LocalDisplayClient, action_id: u32) -> Result<(), ClientError> {
+        client.submit_terminal_key_v2(
+            TerminalKeyV2Kind::ArrowUp,
+            TerminalKeyV2Modifiers::NONE,
+            0,
+            TerminalKeyV2Event::Press,
+            0,
+            action_id,
+        )
+    }
+
+    #[test]
+    fn v2_backpressure_uses_sent_and_highest_error_bounds() {
+        let (client_stream, _server_stream) = UnixStream::pair().expect("socket pair");
+        let mut client = test_client(client_stream);
+        client.extended_terminal_key_supported = true;
+        submit_v2(&mut client, 7).expect("in-range V2 send");
+        assert_eq!(client.last_admitted_v2_action_id, 7);
+        assert_eq!(client.last_sent_v2_action_id, 7);
+
+        assert_eq!(
+            client
+                .classify_incoming_error(type29(ErrorCode::Backpressure, 7))
+                .unwrap(),
+            Some(InputAdmissionFailure::ClientBackpressure)
+        );
+        assert_eq!(client.highest_v2_error_id, 7);
+
+        assert_eq!(
+            client.classify_incoming_error(type29(ErrorCode::Backpressure, 7)),
+            Err(ClientError::Protocol)
+        );
+        assert_eq!(
+            client.classify_incoming_error(type29(ErrorCode::Backpressure, 3)),
+            Err(ClientError::Protocol)
+        );
+        assert_eq!(
+            client.classify_incoming_error(type29(ErrorCode::Backpressure, 9)),
+            Err(ClientError::Protocol)
+        );
+        assert_eq!(
+            client.classify_incoming_error(type29(ErrorCode::Backpressure, 0)),
+            Err(ClientError::Protocol)
+        );
+    }
+
+    #[test]
+    fn v2_type29_authorization_and_encoding_keep_the_connection() {
+        let (client_stream, _server_stream) = UnixStream::pair().expect("socket pair");
+        let mut client = test_client(client_stream);
+        client.extended_terminal_key_supported = true;
+        submit_v2(&mut client, 4).expect("send 4");
+        submit_v2(&mut client, 5).expect("send 5");
+        submit_v2(&mut client, 6).expect("send 6");
+        submit_v2(&mut client, 8).expect("send 8");
+
+        assert_eq!(
+            client
+                .classify_incoming_error(type29(ErrorCode::PermissionDenied, 4))
+                .unwrap(),
+            Some(InputAdmissionFailure::LostController)
+        );
+        assert_eq!(
+            client
+                .classify_incoming_error(type29(ErrorCode::StaleIdentity, 5))
+                .unwrap(),
+            Some(InputAdmissionFailure::LostController)
+        );
+        assert_eq!(
+            client
+                .classify_incoming_error(type29(ErrorCode::InvalidExecution, 6))
+                .unwrap(),
+            Some(InputAdmissionFailure::LostController)
+        );
+        assert_eq!(
+            client
+                .classify_incoming_error(type29(ErrorCode::MalformedPayload, 8))
+                .unwrap(),
+            Some(InputAdmissionFailure::ClientBackpressure)
+        );
+        assert_eq!(client.highest_v2_error_id, 8);
+
+        assert_eq!(
+            client.classify_incoming_error(type29(ErrorCode::PermissionDenied, 4)),
+            Err(ClientError::Protocol)
+        );
+        assert_eq!(
+            client.classify_incoming_error(type29(ErrorCode::PermissionDenied, 9)),
+            Err(ClientError::Protocol)
+        );
+        assert_eq!(
+            client.classify_incoming_error(type29(ErrorCode::PermissionDenied, 0)),
+            Err(ClientError::Protocol)
+        );
+        assert_eq!(
+            client.classify_incoming_error(type29(ErrorCode::MalformedPayload, 0)),
+            Err(ClientError::Server(ErrorCode::MalformedPayload))
+        );
+    }
+
+    #[test]
+    fn v2_lost_controller_demotes_role_and_rejects_later_keys() {
+        let (client_stream, _server_stream) = UnixStream::pair().expect("socket pair");
+        let mut client = test_client(client_stream);
+        client.extended_terminal_key_supported = true;
+        submit_v2(&mut client, 4).expect("send 4");
+        assert_eq!(client.role, Role::Controller);
+
+        assert_eq!(
+            client
+                .classify_incoming_error(type29(ErrorCode::PermissionDenied, 4))
+                .unwrap(),
+            Some(InputAdmissionFailure::LostController)
+        );
+        assert_eq!(client.role, Role::Observer);
+        assert_eq!(submit_v2(&mut client, 5), Err(ClientError::LostController));
+        assert_eq!(
+            client.input_failure,
+            Some(InputAdmissionFailure::LostController)
+        );
+    }
+
+    #[test]
+    fn v2_sent_bound_advances_only_after_wire_complete() {
+        let (client_stream, mut server_stream) = UnixStream::pair().expect("socket pair");
+        client_stream
+            .set_nonblocking(true)
+            .expect("nonblocking client");
+        server_stream
+            .set_nonblocking(true)
+            .expect("nonblocking server");
+        let mut client = test_client(client_stream);
+        client.extended_terminal_key_supported = true;
+
+        let chunk = "x".repeat(8192);
+        for _ in 0..64 {
+            match client.submit_committed_text(&chunk) {
+                Ok(()) => {
+                    if !client.outbound.is_empty() {
+                        break;
+                    }
+                }
+                Err(ClientError::ClientBackpressure) => break,
+                Err(error) => panic!("fill: {error:?}"),
+            }
+        }
+        assert!(
+            !client.outbound.is_empty(),
+            "an unread peer must leave FIFO bytes after a blocked flush"
+        );
+
+        submit_v2(&mut client, 7).expect("V2 admits ahead of a blocked flush");
+        assert_eq!(client.last_admitted_v2_action_id, 7);
+        assert_eq!(
+            client.last_sent_v2_action_id, 0,
+            "WouldBlock/partial writes must not advance the sent high-water"
+        );
+        assert_eq!(
+            client.classify_incoming_error(type29(ErrorCode::Backpressure, 7)),
+            Err(ClientError::Protocol)
+        );
+
+        let mut drain = [0u8; 65_536];
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while client.wants_write() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "flush did not complete after the peer drained"
+            );
+            let _ = server_stream.read(&mut drain);
+            client.flush_control_write().expect("flush after drain");
+        }
+        assert_eq!(client.last_sent_v2_action_id, 7);
+        assert_eq!(
+            client
+                .classify_incoming_error(type29(ErrorCode::Backpressure, 7))
+                .unwrap(),
+            Some(InputAdmissionFailure::ClientBackpressure)
         );
     }
 }

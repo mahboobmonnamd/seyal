@@ -18,6 +18,7 @@ pub use tokens::{
     ResolvedMaterial, SeamRole, Srgb, TypographyRole, LUA_ACCEPTED_INPUT, LUA_FORBIDDEN_DOMAINS,
     LUA_RUNTIME_STATUS,
 };
+pub(crate) use toml::{parse_toml, TomlError, TomlValue};
 
 #[cfg(test)]
 mod tests {
@@ -146,6 +147,26 @@ size = "huge"
             UserUiSettings::default().ui_font_size
         );
         assert!(!loaded.diagnostics.warnings.is_empty());
+        assert!(!loaded.diagnostics.used_full_default_fallback);
+    }
+
+    #[test]
+    fn input_policy_warnings_reach_configuration_diagnostics() {
+        let loaded = load_ui_configuration(
+            Some("[input]\noption_as_alt = \"yes\"\nextra = 1"),
+            &[],
+            None,
+        );
+        assert!(loaded
+            .diagnostics
+            .warnings
+            .iter()
+            .any(|warning| { warning == "input.option_as_alt ignored; expected boolean" }));
+        assert!(loaded
+            .diagnostics
+            .warnings
+            .iter()
+            .any(|warning| warning == "unknown key input.extra ignored"));
         assert!(!loaded.diagnostics.used_full_default_fallback);
     }
 

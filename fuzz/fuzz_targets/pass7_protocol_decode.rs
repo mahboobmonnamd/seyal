@@ -4,7 +4,7 @@ use libfuzzer_sys::fuzz_target;
 use seyal_protocol::framing::{
     BlockTimeline, ComposerCommandRef, ComposerResult, ComposerStatus, FrameHeader, HEADER_LEN,
     HistoryRangeRequest, HistoryRangeSnapshot, MessageType, ResizeRequest, ResizeResult,
-    TerminalKey, decode_message,
+    TerminalKey, TerminalKeyV2, decode_message,
 };
 
 const MAX_FRAMES_PER_INPUT: usize = 32;
@@ -13,6 +13,9 @@ fn decode_pass7_payload(kind: MessageType, payload: &[u8]) {
     match kind {
         MessageType::TerminalKey => {
             let _ = TerminalKey::decode(payload);
+        }
+        MessageType::TerminalKeyV2 => {
+            let _ = TerminalKeyV2::decode(payload);
         }
         MessageType::ResizeRequest => {
             let _ = ResizeRequest::decode(payload);
@@ -75,6 +78,7 @@ fuzz_target!(|data: &[u8]| {
     }
 
     decode_pass7_payload(MessageType::TerminalKey, data);
+    decode_pass7_payload(MessageType::TerminalKeyV2, data);
     decode_pass7_payload(MessageType::ResizeRequest, data);
     decode_pass7_payload(MessageType::ResizeResult, data);
     decode_pass7_payload(MessageType::ComposerCommand, data);

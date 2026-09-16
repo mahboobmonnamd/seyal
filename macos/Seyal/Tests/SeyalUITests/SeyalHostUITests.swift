@@ -280,6 +280,81 @@ final class SeyalHostUITests: XCTestCase {
             .completed,
             "PTY/runtime never became usable; terminal AX=\(terminal.value ?? "nil")"
         )
+        assertFlowBlocksOrFail(in: app)
+    }
+
+    /// Headed XCUI must stay on Flow/Blocks. A leftover Runtime in alternate
+    /// screen, or a Raw-only launch, looks like a normal terminal and is a fail.
+    private func assertFlowBlocksOrFail(in app: XCUIApplication, timeout: TimeInterval = 8) {
+        let composer = app.descendants(matching: .any)["seyal-composer"]
+        let blocks = app.descendants(matching: .any)["seyal-blocks"]
+        let transcript = app.descendants(matching: .any)["seyal-blocks-scroll"]
+        XCTAssertTrue(
+            composer.waitForExistence(timeout: timeout),
+            "XCUI must run as Flow/Blocks; composer missing — UI looks like a normal terminal"
+        )
+        XCTAssertTrue(
+            composer.firstMatch.isHittable,
+            "XCUI must run as Flow/Blocks; composer not hittable — UI looks like a normal terminal"
+        )
+        XCTAssertTrue(
+            blocks.waitForExistence(timeout: 5),
+            "XCUI must run as Flow/Blocks; seyal-blocks missing — UI looks like a normal terminal"
+        )
+        XCTAssertTrue(
+            transcript.waitForExistence(timeout: 5),
+            "XCUI must run as Flow/Blocks; transcript missing — UI looks like a normal terminal"
+        )
+        XCTAssertGreaterThan(
+            transcript.firstMatch.frame.height,
+            120,
+            "Flow transcript must fill the Pane; a short or hidden transcript is a raw-terminal launch"
+        )
+        XCTAssertFalse(
+            app.descendants(matching: .any)["seyal-left-workspaces"].firstMatch.isHittable,
+            "Flow shows composer and Blocks only"
+        )
+    }
+
+    /// Headed #823 smoke: composer submit plus Cmd-C / ArrowUp must stay on
+    /// Flow/Blocks. This is not a TerminalKeyV2 byte oracle; headed key-to-PTY
+    /// and the six-step IME/Neovim/TUI matrix remain open.
+    func testComposerSubmitAndHostShortcutsStayOnFlowBlocks() throws {
+        let app = hostedApp()
+        waitForUsablePty(in: app)
+        assertFlowBlocksOrFail(in: app)
+
+        let composer = app.descendants(matching: .any)["seyal-composer"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 12))
+        let composerReady = NSPredicate(format: "value == 'available'")
+        let becameReady = expectation(for: composerReady, evaluatedWith: composer, handler: nil)
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [becameReady], timeout: 12),
+            .completed,
+            "composer never became available; value=\(composer.value ?? "nil")"
+        )
+        composer.firstMatch.click()
+        let editor = app.descendants(matching: .any)["seyal-composer-editor"]
+        if editor.waitForExistence(timeout: 2), editor.firstMatch.isHittable {
+            editor.firstMatch.click()
+            editor.firstMatch.typeText("echo seyal-823-flow-blocks")
+            editor.firstMatch.typeKey("\r", modifierFlags: [])
+        } else {
+            composer.firstMatch.typeText("echo seyal-823-flow-blocks")
+            app.typeKey("\r", modifierFlags: [])
+        }
+        XCTAssertEqual(app.state, .runningForeground, "Seyal.app crashed on composer submit")
+        assertFlowBlocksOrFail(in: app)
+
+        app.typeKey("c", modifierFlags: .command)
+        waitBriefly(0.3)
+        app.typeKey(.upArrow, modifierFlags: [])
+        XCTAssertEqual(app.state, .runningForeground, "Seyal.app crashed on Cmd-C / ArrowUp")
+        assertFlowBlocksOrFail(in: app)
+        XCTAssertTrue(
+            composer.firstMatch.isHittable,
+            "Cmd-C / ArrowUp must not leave Flow/Blocks for a raw terminal"
+        )
     }
 
     func testCopyPasteAndQuitMenusAreWired() throws {
@@ -364,5 +439,9 @@ final class SeyalHostUITests: XCTestCase {
         )
         XCTAssertEqual(XCTWaiter.wait(for: [closedByClick], timeout: 5), .completed)
         XCTAssertEqual(app.state, .runningForeground)
+    }
+
+    private func waitBriefly(_ seconds: TimeInterval) {
+        RunLoop.current.run(until: Date().addingTimeInterval(seconds))
     }
 }

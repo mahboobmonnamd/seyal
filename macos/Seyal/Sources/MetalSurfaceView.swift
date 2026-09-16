@@ -477,6 +477,21 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
     bridge?.submitKey(kind: kind, scalar: scalar) ?? -10
   }
 
+  func terminalSupportsKeyV2() -> Bool {
+    bridge?.supportsKeyV2() ?? false
+  }
+
+  /// Stop the current attachment so the existing recovery coordinator can
+  /// establish a fresh connection. Used when V2 action IDs are exhausted.
+  func terminalStopForProtocolRecovery() {
+    bridge?.stop()
+  }
+
+  @discardableResult
+  func terminalSubmitKeyV2(kind: UInt16, modifiers: UInt16, value: UInt32, event: UInt8, shiftedASCII: UInt32, actionID: UInt32) -> Int32 {
+    bridge?.submitKeyV2(kind: kind, modifiers: modifiers, value: value, event: event, shiftedASCII: shiftedASCII, actionID: actionID) ?? -10
+  }
+
   @discardableResult
   func terminalProposeGeometry(
     viewportWidth: Double,

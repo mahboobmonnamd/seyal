@@ -14,6 +14,7 @@ use crate::composer::{
     ComposerMode, RuntimeBlockRecord, BLOCK_PROMPT, COMPOSER_EXECUTE_LABEL, COMPOSER_HISTORY_LABEL,
     COMPOSER_HISTORY_PLACEHOLDER,
 };
+use crate::input_policy::process_input_policy;
 use crate::recovery::{AttemptOutcome, LaunchResult, RecoveryEffect, RecoveryStage};
 
 use super::{allocate_handle, with_active_client};
@@ -291,6 +292,18 @@ impl SeyalAppAccessibility {
             reserved: 0,
         }
     }
+}
+
+/// Cold SPEC-006 §21.3 routing intent. Immutable until process restart.
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_app_option_as_alt(handle: u64) -> u8 {
+    APPS.with(|apps| {
+        if apps.borrow().contains_key(&handle) {
+            u8::from(process_input_policy().option_as_alt)
+        } else {
+            0
+        }
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -1813,6 +1826,7 @@ mod tests {
         assert_eq!(seyal_app_destroy(handle), -1);
         let missing = seyal_app_snapshot(handle);
         assert_eq!(missing.generation, 0);
+        assert_eq!(seyal_app_option_as_alt(u64::MAX), 0);
     }
 
     #[test]

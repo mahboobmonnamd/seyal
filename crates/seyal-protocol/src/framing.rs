@@ -11,10 +11,11 @@ pub use crate::pass7::{
     ComposerResult, ComposerResultCode, ComposerStatus, HistoryCell, HistoryRangeRequest,
     HistoryRangeSnapshot, HistoryRangeStatus, HistoryRow, HistorySourceCell, ResizeRequest,
     ResizeResult, ResizeResultCode, TerminalKey, TerminalKeyKind, TerminalKeyModifiers,
-    CAP_CORRELATED_RESIZE, CAP_SEMANTIC_TERMINAL_KEY, HISTORY_CELL_CONTINUATION_FLAG,
-    HISTORY_CELL_SIDECAR_FLAG, HISTORY_CELL_WIDTH_MASK, HISTORY_CELL_WIDTH_SHIFT,
-    MAX_HISTORY_GRAPHEME_BYTES, MAX_HISTORY_RANGE_BYTES, MAX_HISTORY_RANGE_CELLS,
-    MAX_HISTORY_RANGE_LINES, MAX_HISTORY_SIDECAR_BYTES,
+    TerminalKeyV2, TerminalKeyV2Event, TerminalKeyV2Kind, TerminalKeyV2Modifiers,
+    CAP_CORRELATED_RESIZE, CAP_EXTENDED_TERMINAL_KEY, CAP_SEMANTIC_TERMINAL_KEY,
+    HISTORY_CELL_CONTINUATION_FLAG, HISTORY_CELL_SIDECAR_FLAG, HISTORY_CELL_WIDTH_MASK,
+    HISTORY_CELL_WIDTH_SHIFT, MAX_HISTORY_GRAPHEME_BYTES, MAX_HISTORY_RANGE_BYTES,
+    MAX_HISTORY_RANGE_CELLS, MAX_HISTORY_RANGE_LINES, MAX_HISTORY_SIDECAR_BYTES,
 };
 
 pub const MAGIC: [u8; 8] = *b"SEYALIPC";
@@ -575,6 +576,7 @@ pub enum MessageType {
     HistoryRangeSnapshot = 25,
     DisplaySnapshotV2 = 27,
     DisplayDeltaV2 = 28,
+    TerminalKeyV2 = 29,
 }
 impl MessageType {
     pub fn from_u16(value: u16) -> Option<Self> {
@@ -606,6 +608,7 @@ impl MessageType {
             25 => Self::HistoryRangeSnapshot,
             27 => Self::DisplaySnapshotV2,
             28 => Self::DisplayDeltaV2,
+            29 => Self::TerminalKeyV2,
             _ => return None,
         })
     }
@@ -640,6 +643,7 @@ pub enum Message<'a> {
     ComposerStatus(ComposerStatus),
     HistoryRangeRequest(HistoryRangeRequest),
     HistoryRangeSnapshot(HistoryRangeSnapshot),
+    TerminalKeyV2(TerminalKeyV2),
 }
 
 pub fn decode_message<'a>(
@@ -695,6 +699,7 @@ pub fn decode_message<'a>(
         MessageType::HistoryRangeSnapshot => {
             Message::HistoryRangeSnapshot(HistoryRangeSnapshot::decode(payload)?)
         }
+        MessageType::TerminalKeyV2 => Message::TerminalKeyV2(TerminalKeyV2::decode(payload)?),
     })
 }
 

@@ -153,6 +153,116 @@ final class SeyalHostUITests: XCTestCase {
 
     /// Metal does not expose PTY bytes as AX text. The live connection token on
     /// `terminal-input` is the host-observable proof that Runtime attached.
+
+    func testComposerHistoryRecallOpensFiltersInsertsAndDismisses() throws {
+        let app = hostedApp()
+        waitForUsablePty(in: app)
+        let composer = app.descendants(matching: .any)["seyal-composer"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 12))
+        let composerReady = NSPredicate(format: "value == 'available'")
+        let becameReady = expectation(for: composerReady, evaluatedWith: composer, handler: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [becameReady], timeout: 12), .completed)
+        let editor = app.descendants(matching: .any)["seyal-composer-editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        editor.firstMatch.click()
+        let overlay = app.descendants(matching: .any)["seyal-composer-history"]
+        let toggle = app.descendants(matching: .any)["seyal-composer-history-toggle"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+        XCTAssertFalse(toggle.firstMatch.isEnabled, "no accepted submit yet: recall is disabled")
+        editor.firstMatch.typeKey("r", modifierFlags: [.control])
+        XCTAssertFalse(overlay.firstMatch.isHittable, "Rust rejects open with empty history")
+
+        editor.firstMatch.typeText("echo seyal-history-recall")
+        editor.firstMatch.typeKey("\r", modifierFlags: [])
+        let cleared = expectation(
+            for: NSPredicate(format: "value == nil OR value == ''"),
+            evaluatedWith: editor.firstMatch,
+            handler: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [cleared], timeout: 8), .completed)
+        let readyAgain = expectation(for: composerReady, evaluatedWith: composer, handler: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [readyAgain], timeout: 12), .completed)
+
+        editor.firstMatch.click()
+        editor.firstMatch.typeKey("r", modifierFlags: [.control])
+        XCTAssertTrue(overlay.waitForExistence(timeout: 5))
+        XCTAssertTrue(overlay.firstMatch.isHittable, "⌃R opens the Rust history overlay")
+        let query = app.descendants(matching: .any)["seyal-composer-history-query"]
+        XCTAssertTrue(query.waitForExistence(timeout: 5))
+        let row = app.descendants(matching: .any)["seyal-composer-history-row-0"]
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        XCTAssertEqual(row.firstMatch.label, "echo seyal-history-recall")
+
+        query.firstMatch.typeText("zzz-no-match")
+        let noRows = expectation(for: NSPredicate(format: "value == '0'"), evaluatedWith: overlay.firstMatch, handler: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [noRows], timeout: 5), .completed, "type-to-filter runs in Rust")
+        app.typeKey(.escape, modifierFlags: [])
+        let dismissed = expectation(for: NSPredicate(format: "isHittable == false"), evaluatedWith: overlay.firstMatch, handler: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed, "Escape closes the overlay")
+
+        toggle.firstMatch.click()
+        XCTAssertTrue(overlay.firstMatch.waitForExistence(timeout: 5))
+        query.firstMatch.typeText("recall")
+        app.typeKey("\r", modifierFlags: [])
+        let inserted = expectation(
+            for: NSPredicate(format: "value == 'echo seyal-history-recall'"),
+            evaluatedWith: editor.firstMatch,
+            handler: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [inserted], timeout: 5), .completed, "Enter inserts into the draft")
+        XCTAssertFalse(overlay.firstMatch.isHittable)
+        XCTAssertEqual(app.state, .runningForeground)
+    }
+
+    func testSelectingABlockRevealsRustBlockDetailsInInspector() throws {
+        let app = hostedApp()
+        waitForUsablePty(in: app)
+        let composer = app.descendants(matching: .any)["seyal-composer"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 12))
+        let composerReady = NSPredicate(format: "value == 'available'")
+        let becameReady = expectation(for: composerReady, evaluatedWith: composer, handler: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [becameReady], timeout: 12), .completed)
+        let inspector = app.descendants(matching: .any)["seyal-inspector"]
+        XCTAssertFalse(inspector.firstMatch.isHittable, "inspector is receded before any selection")
+        let editor = app.descendants(matching: .any)["seyal-composer-editor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        editor.firstMatch.click()
+        editor.firstMatch.typeText("echo seyal-block-details")
+        editor.firstMatch.typeKey("\r", modifierFlags: [])
+        let cleared = expectation(
+            for: NSPredicate(format: "value == nil OR value == ''"),
+            evaluatedWith: editor.firstMatch,
+            handler: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [cleared], timeout: 8), .completed)
+
+        // Blocks are Runtime timeline metadata (OSC 133); the card appears when
+        // Runtime publishes the revision. Without shell integration there is no
+        // Block and therefore nothing to select: the test proves the host never
+        // fabricates one.
+        let card = app.descendants(matching: .any)["seyal-block-0"]
+        guard card.waitForExistence(timeout: 10) else {
+            XCTAssertFalse(inspector.firstMatch.isHittable, "no Block, no Block details")
+            return
+        }
+        card.firstMatch.click()
+        XCTAssertTrue(inspector.waitForExistence(timeout: 5))
+        let revealed = expectation(for: NSPredicate(format: "isHittable == true"), evaluatedWith: inspector.firstMatch, handler: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [revealed], timeout: 5), .completed, "selecting a Block reveals the inspector")
+        let selected = expectation(for: NSPredicate(format: "value == 'selected'"), evaluatedWith: card.firstMatch, handler: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 5), .completed, "card reflects the Rust selected flag")
+        let commandRow = inspector.descendants(matching: .staticText)["Block · Command"]
+        XCTAssertTrue(commandRow.waitForExistence(timeout: 5), "inspector shows Rust Block rows")
+        XCTAssertTrue(inspector.descendants(matching: .staticText)["echo seyal-block-details"].waitForExistence(timeout: 5))
+        XCTAssertFalse(inspector.descendants(matching: .staticText)["Block · Duration"].exists, "no fabricated telemetry")
+
+        card.firstMatch.click()
+        let deselected = expectation(for: NSPredicate(format: "value == nil OR value == ''"), evaluatedWith: card.firstMatch, handler: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [deselected], timeout: 5), .completed, "clicking again clears the selection")
+        XCTAssertFalse(commandRow.exists, "Block rows leave with the selection")
+        XCTAssertEqual(app.state, .runningForeground)
+    }
+
     private func waitForUsablePty(in app: XCUIApplication, timeout: TimeInterval = 20) {
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
         let terminal = app.descendants(matching: .any)["terminal-input"]
@@ -170,6 +280,81 @@ final class SeyalHostUITests: XCTestCase {
             .completed,
             "PTY/runtime never became usable; terminal AX=\(terminal.value ?? "nil")"
         )
+        assertFlowBlocksOrFail(in: app)
+    }
+
+    /// Headed XCUI must stay on Flow/Blocks. A leftover Runtime in alternate
+    /// screen, or a Raw-only launch, looks like a normal terminal and is a fail.
+    private func assertFlowBlocksOrFail(in app: XCUIApplication, timeout: TimeInterval = 8) {
+        let composer = app.descendants(matching: .any)["seyal-composer"]
+        let blocks = app.descendants(matching: .any)["seyal-blocks"]
+        let transcript = app.descendants(matching: .any)["seyal-blocks-scroll"]
+        XCTAssertTrue(
+            composer.waitForExistence(timeout: timeout),
+            "XCUI must run as Flow/Blocks; composer missing — UI looks like a normal terminal"
+        )
+        XCTAssertTrue(
+            composer.firstMatch.isHittable,
+            "XCUI must run as Flow/Blocks; composer not hittable — UI looks like a normal terminal"
+        )
+        XCTAssertTrue(
+            blocks.waitForExistence(timeout: 5),
+            "XCUI must run as Flow/Blocks; seyal-blocks missing — UI looks like a normal terminal"
+        )
+        XCTAssertTrue(
+            transcript.waitForExistence(timeout: 5),
+            "XCUI must run as Flow/Blocks; transcript missing — UI looks like a normal terminal"
+        )
+        XCTAssertGreaterThan(
+            transcript.firstMatch.frame.height,
+            120,
+            "Flow transcript must fill the Pane; a short or hidden transcript is a raw-terminal launch"
+        )
+        XCTAssertFalse(
+            app.descendants(matching: .any)["seyal-left-workspaces"].firstMatch.isHittable,
+            "Flow shows composer and Blocks only"
+        )
+    }
+
+    /// Headed #823 smoke: composer submit plus Cmd-C / ArrowUp must stay on
+    /// Flow/Blocks. This is not a TerminalKeyV2 byte oracle; headed key-to-PTY
+    /// and the six-step IME/Neovim/TUI matrix remain open.
+    func testComposerSubmitAndHostShortcutsStayOnFlowBlocks() throws {
+        let app = hostedApp()
+        waitForUsablePty(in: app)
+        assertFlowBlocksOrFail(in: app)
+
+        let composer = app.descendants(matching: .any)["seyal-composer"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 12))
+        let composerReady = NSPredicate(format: "value == 'available'")
+        let becameReady = expectation(for: composerReady, evaluatedWith: composer, handler: nil)
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [becameReady], timeout: 12),
+            .completed,
+            "composer never became available; value=\(composer.value ?? "nil")"
+        )
+        composer.firstMatch.click()
+        let editor = app.descendants(matching: .any)["seyal-composer-editor"]
+        if editor.waitForExistence(timeout: 2), editor.firstMatch.isHittable {
+            editor.firstMatch.click()
+            editor.firstMatch.typeText("echo seyal-823-flow-blocks")
+            editor.firstMatch.typeKey("\r", modifierFlags: [])
+        } else {
+            composer.firstMatch.typeText("echo seyal-823-flow-blocks")
+            app.typeKey("\r", modifierFlags: [])
+        }
+        XCTAssertEqual(app.state, .runningForeground, "Seyal.app crashed on composer submit")
+        assertFlowBlocksOrFail(in: app)
+
+        app.typeKey("c", modifierFlags: .command)
+        waitBriefly(0.3)
+        app.typeKey(.upArrow, modifierFlags: [])
+        XCTAssertEqual(app.state, .runningForeground, "Seyal.app crashed on Cmd-C / ArrowUp")
+        assertFlowBlocksOrFail(in: app)
+        XCTAssertTrue(
+            composer.firstMatch.isHittable,
+            "Cmd-C / ArrowUp must not leave Flow/Blocks for a raw terminal"
+        )
     }
 
     func testCopyPasteAndQuitMenusAreWired() throws {
@@ -180,5 +365,83 @@ final class SeyalHostUITests: XCTestCase {
         XCTAssertEqual(app.state, .runningForeground)
         app.typeKey("q", modifierFlags: .command)
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 8))
+    }
+
+    func testCommandPaletteOpensFiltersRunsAndDismisses() throws {
+        let app = hostedApp()
+        waitForUsablePty(in: app)
+        let inspector = app.descendants(matching: .any)["seyal-inspector"]
+        XCTAssertFalse(inspector.firstMatch.isHittable, "inspector is receded before any command runs")
+
+        let palette = app.descendants(matching: .any)["seyal-command-palette"]
+        app.typeKey("k", modifierFlags: .command)
+        XCTAssertTrue(palette.waitForExistence(timeout: 5), "⌘K opens the Rust-backed palette")
+        XCTAssertTrue(palette.firstMatch.isHittable)
+
+        let query = app.descendants(matching: .any)["seyal-command-palette-query"]
+        XCTAssertTrue(query.waitForExistence(timeout: 5))
+        query.firstMatch.click()
+        query.firstMatch.typeText("Show Inspector")
+        let row = app.descendants(matching: .any)["seyal-command-palette-row-0"]
+        let filtered = expectation(
+            for: NSPredicate(format: "exists == true"),
+            evaluatedWith: row,
+            handler: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [filtered], timeout: 5), .completed, "type-to-filter runs in Rust")
+        XCTAssertEqual(row.label, "Show Inspector")
+
+        app.typeKey("\r", modifierFlags: [])
+        let dismissed = expectation(
+            for: NSPredicate(format: "isHittable == false"),
+            evaluatedWith: palette.firstMatch,
+            handler: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed, "Enter runs the row and closes")
+        let revealed = expectation(
+            for: NSPredicate(format: "isHittable == true"),
+            evaluatedWith: inspector.firstMatch,
+            handler: nil
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [revealed], timeout: 5),
+            .completed,
+            "the resolved command actually ran, not just an overlay animation"
+        )
+        XCTAssertEqual(app.state, .runningForeground)
+    }
+
+    func testCommandPaletteEscapeAndClickOutsideBothDismissWithoutRunning() throws {
+        let app = hostedApp()
+        waitForUsablePty(in: app)
+        let palette = app.descendants(matching: .any)["seyal-command-palette"]
+        let scrim = app.descendants(matching: .any)["seyal-command-palette-scrim"]
+
+        app.typeKey("k", modifierFlags: .command)
+        XCTAssertTrue(palette.waitForExistence(timeout: 5))
+        app.typeKey(.escape, modifierFlags: [])
+        let closedByEscape = expectation(
+            for: NSPredicate(format: "isHittable == false"),
+            evaluatedWith: palette.firstMatch,
+            handler: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [closedByEscape], timeout: 5), .completed)
+
+        app.typeKey("k", modifierFlags: .command)
+        XCTAssertTrue(palette.waitForExistence(timeout: 5))
+        // Click near the top-left corner of the scrim, well outside the
+        // centered card, to exercise click-outside-to-close.
+        scrim.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.02)).click()
+        let closedByClick = expectation(
+            for: NSPredicate(format: "isHittable == false"),
+            evaluatedWith: palette.firstMatch,
+            handler: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [closedByClick], timeout: 5), .completed)
+        XCTAssertEqual(app.state, .runningForeground)
+    }
+
+    private func waitBriefly(_ seconds: TimeInterval) {
+        RunLoop.current.run(until: Date().addingTimeInterval(seconds))
     }
 }

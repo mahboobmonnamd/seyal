@@ -13,6 +13,10 @@ final class ProductChromeHostView: NSView {
     private let transcript = NSScrollView()
     private let blocks = NSStackView()
     private let composer: ComposerBridgeView
+    /// Rust-owned history overlay (#933); internal for component tests.
+    let historyOverlay: ComposerHistoryOverlayView
+    /// Global command palette overlay (#932); internal for component tests.
+    let commandPalette: CommandPaletteOverlayView
     private let workspacesButton = NSButton(title: "Workspaces", target: nil, action: nil)
     private let tabsButton = NSButton(title: "Tabs", target: nil, action: nil)
     private let recoveryLabel = NSTextField(labelWithString: "")
@@ -39,6 +43,8 @@ final class ProductChromeHostView: NSView {
     override init(frame frameRect: NSRect) {
         pane = ThinPaneHostView(frame: frameRect)
         composer = ComposerBridgeView(appHandle: pane.appHandle)
+        historyOverlay = ComposerHistoryOverlayView(appHandle: pane.appHandle)
+        commandPalette = CommandPaletteOverlayView(appHandle: pane.appHandle)
         super.init(frame: frameRect)
         translatesAutoresizingMaskIntoConstraints = false
         setAccessibilityIdentifier("seyal-product-chrome")
@@ -125,6 +131,7 @@ final class ProductChromeHostView: NSView {
         centerColumn.addSubview(transcript)
         centerColumn.addSubview(pane)
         centerColumn.addSubview(composer)
+        centerColumn.addSubview(historyOverlay)
 
         addSubview(tabStrip)
         addSubview(left)
@@ -133,6 +140,22 @@ final class ProductChromeHostView: NSView {
         addSubview(recoveryLabel)
         recoveryLabel.alphaValue = 0
         recoveryLabel.setAccessibilityElement(true)
+
+        // Topmost subview: the palette floats above every other region,
+        // including the inspector, when Rust opens it.
+        addSubview(commandPalette)
+        NSLayoutConstraint.activate([
+            commandPalette.leadingAnchor.constraint(equalTo: leadingAnchor),
+            commandPalette.trailingAnchor.constraint(equalTo: trailingAnchor),
+            commandPalette.topAnchor.constraint(equalTo: topAnchor),
+            commandPalette.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+        commandPalette.onChanged = { [weak self] in
+            self?.reconcileChrome()
+        }
+        commandPalette.onDismissed = { [weak self] in
+            self?.routeFocus()
+        }
 
         pane.setContentHuggingPriority(.defaultLow, for: .vertical)
         pane.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
@@ -190,6 +213,9 @@ final class ProductChromeHostView: NSView {
             composer.trailingAnchor.constraint(equalTo: centerColumn.trailingAnchor, constant: -24),
             composer.topAnchor.constraint(equalTo: transcript.bottomAnchor, constant: 12),
             composer.bottomAnchor.constraint(equalTo: centerColumn.bottomAnchor, constant: -16),
+            historyOverlay.leadingAnchor.constraint(equalTo: composer.leadingAnchor),
+            historyOverlay.trailingAnchor.constraint(equalTo: composer.trailingAnchor),
+            historyOverlay.bottomAnchor.constraint(equalTo: composer.topAnchor, constant: -8),
             blocks.topAnchor.constraint(equalTo: transcript.contentView.topAnchor),
             blocks.leadingAnchor.constraint(equalTo: transcript.contentView.leadingAnchor),
             blocks.widthAnchor.constraint(equalTo: transcript.contentView.widthAnchor),
@@ -224,6 +250,15 @@ final class ProductChromeHostView: NSView {
             self?.pane.inputSurface.terminalSubmitCommittedText(command) ?? -10
         }
         pane.inputSurface.onRequestComposerFocus = { [weak self] in
+            self?.composer.focusEditor()
+        }
+        composer.onHistoryOpened = { [weak self] in
+            self?.reconcileChrome()
+        }
+        historyOverlay.onChanged = { [weak self] in
+            self?.reconcileChrome()
+        }
+        historyOverlay.onDismissed = { [weak self] in
             self?.composer.focusEditor()
         }
         pane.inputSurface.onTimelineChanged = { [weak self] in
@@ -293,6 +328,8 @@ final class ProductChromeHostView: NSView {
         let eligibilityChanged = snapshot.eligibility != lastEligibility
         if snapshot.generation == lastSnapshotGeneration && !eligibilityChanged {
             composer.reconcile()
+            historyOverlay.reconcile()
+            commandPalette.reconcile()
             driveRecovery()
             return
         }
@@ -319,6 +356,8 @@ final class ProductChromeHostView: NSView {
         applyTranscriptPresentation(snapshot)
         recoveryLabel.stringValue = recoveryText(snapshot)
         composer.reconcile()
+        historyOverlay.reconcile()
+        commandPalette.reconcile()
         driveRecovery()
         if eligibilityChanged {
             routeFocus()
@@ -326,7 +365,16 @@ final class ProductChromeHostView: NSView {
         applyTheme()
     }
 
+    /// Global keyboard-first command palette (#932): the menu action target.
+    /// Opening is Rust-owned; a rejected open leaves focus untouched.
+    @objc func openCommandPalette() {
+        commandPalette.requestOpen()
+    }
+
     func routeFocus() {
+        // An open palette owns focus; eligibility-driven routing resumes
+        // only after it closes (see `onDismissed`).
+        guard !commandPalette.isOpen else { return }
         let snapshot = seyal_app_snapshot(pane.appHandle)
         let composerSnap = seyal_app_composer(pane.appHandle)
         if snapshot.eligibility == UInt16(SEYAL_APP_ELIGIBILITY_FLOW.rawValue),
@@ -506,12 +554,18 @@ final class ProductChromeHostView: NSView {
                 prompt: prompt,
                 title: title,
                 detail: detail,
-                state: row.flags,
+                state: row.flags & UInt16(SEYAL_APP_BLOCK_STATE_MASK),
                 cellHeight: cellHeight,
                 lines: lines
             )
             card.setAccessibilityIdentifier("seyal-block-\(index)")
             card.body.setAccessibilityIdentifier("seyal-block-\(index)-body")
+            card.isSelected = row.flags & UInt16(SEYAL_APP_BLOCK_SELECTED) != 0
+            let idLo = row.id_lo
+            let idHi = row.id_hi
+            card.onSelect = { [weak self] selected in
+                self?.selectBlock(idLo: idLo, idHi: idHi, deselect: selected)
+            }
             blocks.addArrangedSubview(card)
             if blockID != 0 {
                 blockCards[blockID] = card
@@ -620,6 +674,8 @@ final class ProductChromeHostView: NSView {
         transcript.backgroundColor = .clear
         left.layer?.borderWidth = 0
         composer.apply(theme: theme)
+        historyOverlay.apply(theme: theme)
+        commandPalette.apply(theme: theme)
         for view in blocks.arrangedSubviews {
             (view as? CommandBlockView)?.apply(theme: theme)
         }
@@ -774,6 +830,27 @@ final class ProductChromeHostView: NSView {
         reconcileChrome()
     }
 
+    /// Block selection is Rust-owned (#935): the click only names the Block
+    /// identity; Rust validates it against the focused Pane's Block list.
+    private func selectBlock(idLo: UInt64, idHi: UInt64, deselect: Bool) {
+        let snapshot = seyal_app_snapshot(pane.appHandle)
+        var action = SeyalAppAction()
+        action.version = UInt16(SEYAL_APP_ABI_VERSION)
+        action.size = UInt16(MemoryLayout<SeyalAppAction>.size)
+        action.kind = UInt16(
+            deselect
+                ? SEYAL_APP_ACTION_CLEAR_BLOCK_SELECTION.rawValue
+                : SEYAL_APP_ACTION_SELECT_BLOCK.rawValue
+        )
+        action.applySnapshotFence(snapshot)
+        action.target_execution_lo = idLo
+        action.target_execution_hi = idHi
+        guard seyal_app_apply(pane.appHandle, &action) == 0 else { return }
+        // A successful apply bumps the snapshot generation; reconcile rebuilds
+        // cards (selected flag), inspector rows and inspector visibility.
+        reconcileChrome()
+    }
+
     private func applyPayload(_ kind: UInt16, text: String) {
         let snapshot = seyal_app_snapshot(pane.appHandle)
         var action = SeyalAppAction()
@@ -857,6 +934,15 @@ private final class IdentityButton: NSButton {
 
 private final class CommandBlockView: NSView {
     let body = NSView()
+    /// Host click on the header; `true` when the card is already selected.
+    var onSelect: ((Bool) -> Void)?
+    /// Projected from the Rust block row's SEYAL_APP_BLOCK_SELECTED flag.
+    var isSelected = false {
+        didSet {
+            setAccessibilityValue(isSelected ? "selected" : "")
+            if let theme { apply(theme: theme) }
+        }
+    }
     private let header = NSView()
     private let prompt = NSTextField(labelWithString: "")
     private let command = NSTextField(labelWithString: "")
@@ -864,6 +950,7 @@ private final class CommandBlockView: NSView {
     private let seam = NSView()
     private let state: UInt16
     private var bodyHeight: NSLayoutConstraint!
+    private var theme: NativeTheme?
 
     init(
         prompt: String,
@@ -906,6 +993,11 @@ private final class CommandBlockView: NSView {
         header.addSubview(self.prompt)
         header.addSubview(command)
         header.addSubview(status)
+        header.wantsLayer = true
+        header.layer?.cornerRadius = 6
+        header.addGestureRecognizer(
+            NSClickGestureRecognizer(target: self, action: #selector(headerClicked))
+        )
         addSubview(header)
         addSubview(body)
         addSubview(seam)
@@ -945,11 +1037,19 @@ private final class CommandBlockView: NSView {
         bodyHeight.constant = max(cellHeight, 1) * CGFloat(max(lines, 1))
     }
 
+    @objc private func headerClicked() {
+        onSelect?(isSelected)
+    }
+
     func apply(theme: NativeTheme) {
+        self.theme = theme
         body.layer?.isOpaque = false
         body.layer?.backgroundColor = NSColor.clear.cgColor
         prompt.textColor = theme.accent
         command.textColor = theme.accent
+        header.layer?.backgroundColor = isSelected
+            ? theme.accent.withAlphaComponent(0.14).cgColor
+            : NSColor.clear.cgColor
         if state == UInt16(SEYAL_APP_BLOCK_STATE_FAILED) {
             status.textColor = theme.danger
             seam.layer?.backgroundColor = theme.danger.withAlphaComponent(0.45).cgColor

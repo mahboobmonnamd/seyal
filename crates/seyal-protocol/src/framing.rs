@@ -11,10 +11,11 @@ pub use crate::pass7::{
     ComposerResult, ComposerResultCode, ComposerStatus, HistoryCell, HistoryRangeRequest,
     HistoryRangeSnapshot, HistoryRangeStatus, HistoryRow, HistorySourceCell, ResizeRequest,
     ResizeResult, ResizeResultCode, TerminalKey, TerminalKeyKind, TerminalKeyModifiers,
-    CAP_CORRELATED_RESIZE, CAP_SEMANTIC_TERMINAL_KEY, HISTORY_CELL_CONTINUATION_FLAG,
-    HISTORY_CELL_SIDECAR_FLAG, HISTORY_CELL_WIDTH_MASK, HISTORY_CELL_WIDTH_SHIFT,
-    MAX_HISTORY_GRAPHEME_BYTES, MAX_HISTORY_RANGE_BYTES, MAX_HISTORY_RANGE_CELLS,
-    MAX_HISTORY_RANGE_LINES, MAX_HISTORY_SIDECAR_BYTES,
+    TerminalKeyV2, TerminalKeyV2Event, TerminalKeyV2Kind, TerminalKeyV2Modifiers,
+    CAP_CORRELATED_RESIZE, CAP_EXTENDED_TERMINAL_KEY, CAP_SEMANTIC_TERMINAL_KEY,
+    HISTORY_CELL_CONTINUATION_FLAG, HISTORY_CELL_SIDECAR_FLAG, HISTORY_CELL_WIDTH_MASK,
+    HISTORY_CELL_WIDTH_SHIFT, MAX_HISTORY_GRAPHEME_BYTES, MAX_HISTORY_RANGE_BYTES,
+    MAX_HISTORY_RANGE_CELLS, MAX_HISTORY_RANGE_LINES, MAX_HISTORY_SIDECAR_BYTES,
 };
 
 pub const MAGIC: [u8; 8] = *b"SEYALIPC";
@@ -697,10 +698,10 @@ pub enum MessageType {
     HistoryRangeSnapshot = 25,
     DisplaySnapshotV2 = 27,
     DisplayDeltaV2 = 28,
+    TerminalKeyV2 = 29,
     /// Host clipboard paste. Same payload layout as `Input`; Runtime wraps
     /// the bytes using canonical bracketed-paste mode before PTY admission.
     /// Type 26 is Pass 8 block-state metadata (not a control MessageType).
-    /// Type 29 is reserved for TerminalKeyV2 (#823).
     Paste = 30,
     /// Host selection/copy-mode commands. Never written to the PTY.
     HostSelection = 31,
@@ -739,6 +740,7 @@ impl MessageType {
             25 => Self::HistoryRangeSnapshot,
             27 => Self::DisplaySnapshotV2,
             28 => Self::DisplayDeltaV2,
+            29 => Self::TerminalKeyV2,
             30 => Self::Paste,
             31 => Self::HostSelection,
             32 => Self::CopiedText,
@@ -777,6 +779,7 @@ pub enum Message<'a> {
     ComposerStatus(ComposerStatus),
     HistoryRangeRequest(HistoryRangeRequest),
     HistoryRangeSnapshot(HistoryRangeSnapshot),
+    TerminalKeyV2(TerminalKeyV2),
     Paste(InputRef<'a>),
     HostSelection(HostSelection),
     CopiedText(InputRef<'a>),
@@ -836,6 +839,7 @@ pub fn decode_message<'a>(
         MessageType::HistoryRangeSnapshot => {
             Message::HistoryRangeSnapshot(HistoryRangeSnapshot::decode(payload)?)
         }
+        MessageType::TerminalKeyV2 => Message::TerminalKeyV2(TerminalKeyV2::decode(payload)?),
         MessageType::Paste => Message::Paste(InputRef::decode(payload)?),
         MessageType::HostSelection => Message::HostSelection(HostSelection::decode(payload)?),
         MessageType::CopiedText => Message::CopiedText(InputRef::decode(payload)?),

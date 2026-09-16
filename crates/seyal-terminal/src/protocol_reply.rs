@@ -80,6 +80,15 @@ pub(crate) fn encode_primary_da() -> Option<ProtocolReply> {
     ProtocolReply::from_slice(b"\x1b[?1;2c")
 }
 
+pub(crate) fn encode_kitty_flags(flags: u8) -> Option<ProtocolReply> {
+    let flags = flags & 0b11;
+    let mut bytes = [0u8; MAX_PROTOCOL_REPLY_BYTES];
+    bytes[..3].copy_from_slice(b"\x1b[?");
+    bytes[3] = b'0' + flags;
+    bytes[4] = b'u';
+    ProtocolReply::from_slice(&bytes[..5])
+}
+
 fn write_u16(out: &mut [u8], value: u16) -> Option<usize> {
     let mut tmp = [0_u8; 5];
     let mut n = value;

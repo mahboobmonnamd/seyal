@@ -1,10 +1,13 @@
+use seyal_exec::ModeState;
+
 use crate::{
+    key_v2_encode::encode_terminal_key_v2,
     local_ipc::{
         attachment::AttachmentError,
         framing::{
             self, ComposerCommandRef, ComposerResult, ComposerResultCode, ErrorCode, HostSearch,
             HostSelectionAction, MessageType, TerminalKey as WireTerminalKey, TerminalKeyKind,
-            CAP_COMMAND_BLOCKS, MAX_INPUT_BYTES,
+            TerminalKeyV2, CAP_COMMAND_BLOCKS, CAP_EXTENDED_TERMINAL_KEY, MAX_INPUT_BYTES,
         },
     },
     RuntimeError,
@@ -37,16 +40,40 @@ fn copy_mode_key_action(kind: TerminalKeyKind) -> CopyModeKeyAction {
     }
 }
 
-fn encode_terminal_key(key: WireTerminalKey) -> Vec<u8> {
+fn encode_terminal_key(key: WireTerminalKey, modes: ModeState) -> Vec<u8> {
     match key.kind {
         TerminalKeyKind::Enter => vec![0x0d],
         TerminalKeyKind::Tab => vec![0x09],
         TerminalKeyKind::Backspace => vec![0x7f],
         TerminalKeyKind::Escape => vec![0x1b],
-        TerminalKeyKind::ArrowUp => b"\x1b[A".to_vec(),
-        TerminalKeyKind::ArrowDown => b"\x1b[B".to_vec(),
-        TerminalKeyKind::ArrowRight => b"\x1b[C".to_vec(),
-        TerminalKeyKind::ArrowLeft => b"\x1b[D".to_vec(),
+        TerminalKeyKind::ArrowUp => {
+            if modes.application_cursor {
+                b"\x1bOA".to_vec()
+            } else {
+                b"\x1b[A".to_vec()
+            }
+        }
+        TerminalKeyKind::ArrowDown => {
+            if modes.application_cursor {
+                b"\x1bOB".to_vec()
+            } else {
+                b"\x1b[B".to_vec()
+            }
+        }
+        TerminalKeyKind::ArrowRight => {
+            if modes.application_cursor {
+                b"\x1bOC".to_vec()
+            } else {
+                b"\x1b[C".to_vec()
+            }
+        }
+        TerminalKeyKind::ArrowLeft => {
+            if modes.application_cursor {
+                b"\x1bOD".to_vec()
+            } else {
+                b"\x1b[D".to_vec()
+            }
+        }
         TerminalKeyKind::ControlAscii => {
             let scalar = key.scalar as u8;
             vec![match scalar {
@@ -65,6 +92,20 @@ fn encode_terminal_key(key: WireTerminalKey) -> Vec<u8> {
 }
 
 impl Runtime {
+    pub(super) fn fatal_terminal_key_v2(&mut self, token: u64) {
+        self.send_error(
+            token,
+            ErrorCode::MalformedPayload,
+            MessageType::TerminalKeyV2 as u16,
+        );
+        if let Some(state) = self.local_ipc.as_mut()
+            && let Some(meta) = state.connections.get_mut(&token)
+        {
+            meta.close_after_flush = true;
+        }
+        let _ = self.sync_local_writable(token);
+    }
+
     pub(super) fn handle_input(&mut self, token: u64, payload: &[u8]) {
         let Ok(input) = framing::InputRef::decode(payload) else {
             self.send_error(
@@ -211,7 +252,19 @@ impl Runtime {
         if self.intercept_copy_mode_key(token, execution_id, key.kind, key.attachment_id) {
             return;
         }
-        let bytes = encode_terminal_key(key);
+        let modes = self
+            .entries
+            .get(&execution_id)
+            .map(|entry| entry.execution.terminal().modes());
+        let Some(modes) = modes else {
+            self.send_error(
+                token,
+                ErrorCode::InvalidExecution,
+                MessageType::TerminalKey as u16,
+            );
+            return;
+        };
+        let bytes = encode_terminal_key(key, modes);
         match self.input_ingress(execution_id) {
             Ok(ingress) => {
                 if ingress.try_submit(bytes).is_err() {
@@ -433,6 +486,103 @@ impl Runtime {
         true
     }
 
+    pub(super) fn handle_terminal_key_v2(&mut self, token: u64, payload: &[u8]) {
+        let Ok(key) = TerminalKeyV2::decode(payload) else {
+            self.fatal_terminal_key_v2(token);
+            return;
+        };
+        let supports = self
+            .local_ipc
+            .as_ref()
+            .and_then(|state| state.connections.get(&token))
+            .is_some_and(|meta| meta.client_capabilities & CAP_EXTENDED_TERMINAL_KEY != 0);
+        if !supports {
+            self.fatal_terminal_key_v2(token);
+            return;
+        }
+        let monotonic = self
+            .local_ipc
+            .as_ref()
+            .and_then(|state| state.connections.get(&token))
+            .is_some_and(|meta| key.action_id > meta.last_terminal_key_action_id);
+        if !monotonic {
+            self.fatal_terminal_key_v2(token);
+            return;
+        }
+        if let Some(state) = self.local_ipc.as_mut()
+            && let Some(meta) = state.connections.get_mut(&token)
+        {
+            meta.last_terminal_key_action_id = key.action_id;
+        }
+        let execution_id = match self.local_ipc.as_ref().map(|state| {
+            state
+                .attachments
+                .authorize_mutation(token, key.attachment_id)
+        }) {
+            Some(Ok(id)) => id,
+            Some(Err(AttachmentError::PermissionDenied)) => {
+                self.send_error_detail(
+                    token,
+                    ErrorCode::PermissionDenied,
+                    MessageType::TerminalKeyV2 as u16,
+                    key.action_id,
+                );
+                return;
+            }
+            _ => {
+                self.send_error_detail(
+                    token,
+                    ErrorCode::StaleIdentity,
+                    MessageType::TerminalKeyV2 as u16,
+                    key.action_id,
+                );
+                return;
+            }
+        };
+        let Some(modes) = self
+            .entries
+            .get(&execution_id)
+            .map(|entry| entry.execution.terminal().modes())
+        else {
+            self.send_error_detail(
+                token,
+                ErrorCode::InvalidExecution,
+                MessageType::TerminalKeyV2 as u16,
+                key.action_id,
+            );
+            return;
+        };
+        let Ok(bytes) = encode_terminal_key_v2(key, modes) else {
+            self.send_error_detail(
+                token,
+                ErrorCode::MalformedPayload,
+                MessageType::TerminalKeyV2 as u16,
+                key.action_id,
+            );
+            return;
+        };
+        if !bytes.is_empty() {
+            match self.input_ingress(execution_id) {
+                Ok(ingress) => {
+                    if ingress.try_submit(bytes).is_err() {
+                        self.send_error_detail(
+                            token,
+                            ErrorCode::Backpressure,
+                            MessageType::TerminalKeyV2 as u16,
+                            key.action_id,
+                        );
+                    }
+                }
+                Err(_) => self.send_error_detail(
+                    token,
+                    ErrorCode::InvalidExecution,
+                    MessageType::TerminalKeyV2 as u16,
+                    key.action_id,
+                ),
+            }
+        }
+    }
+
     pub(super) fn handle_composer_command(&mut self, token: u64, payload: &[u8]) {
         let Ok(request) = ComposerCommandRef::decode(payload) else {
             self.send_error(
@@ -603,5 +753,21 @@ mod tests {
             copy_mode_key_action(TerminalKeyKind::ControlAscii),
             CopyModeKeyAction::Swallow
         );
+    }
+
+    #[test]
+    fn m001_arrows_follow_canonical_cursor_mode() {
+        let key = WireTerminalKey {
+            attachment_id: crate::AttachmentId::from_bytes([0; 16]),
+            kind: TerminalKeyKind::ArrowUp,
+            modifiers: seyal_protocol::framing::TerminalKeyModifiers::NONE,
+            scalar: 0,
+        };
+        assert_eq!(encode_terminal_key(key, ModeState::default()), b"\x1b[A");
+        let modes = ModeState {
+            application_cursor: true,
+            ..ModeState::default()
+        };
+        assert_eq!(encode_terminal_key(key, modes), b"\x1bOA");
     }
 }

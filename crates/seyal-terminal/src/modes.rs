@@ -8,6 +8,12 @@ pub struct ModeState {
     pub wraparound: bool,
     /// DEC private mode 2004 — bracketed paste when set.
     pub bracketed_paste: bool,
+    /// DEC private mode 1 (DECCKM) — application cursor keys.
+    pub application_cursor: bool,
+    /// DEC private mode 66 (DECNKM) — application keypad.
+    pub application_keypad: bool,
+    /// Negotiated Kitty progressive keyboard flags, masked to 1|2.
+    pub keyboard_flags: u8,
 }
 
 impl Default for ModeState {
@@ -21,6 +27,9 @@ impl Default for ModeState {
             wraparound: true,
             // Bracketed paste starts reset; shells/TUIs enable it explicitly.
             bracketed_paste: false,
+            application_cursor: false,
+            application_keypad: false,
+            keyboard_flags: 0,
         }
     }
 }

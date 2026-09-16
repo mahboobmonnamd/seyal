@@ -1,6 +1,7 @@
 //! Canonical xterm mouse reports. Runtime selects encoding from `ModeState`.
 
 use crate::modes::{ModeState, MouseReporting};
+use crate::selection::VisualPos;
 
 const MAX_REPORT_BYTES: usize = 32;
 const X10_COORD_MAX: u16 = 223;
@@ -36,6 +37,47 @@ pub fn mouse_event_admitted(kind: MouseEventKind, button: u8, modes: ModeState) 
             MouseEventKind::Move => button <= 2,
         },
         MouseReporting::Any => true,
+    }
+}
+
+/// Host selection/copy override wins over application mouse reporting.
+///
+/// Shift forces host immediately. Reporting Off is always host. Once a host
+/// press latches an anchor, subsequent Move/Release stay host until Release
+/// clears the latch — even if Shift is no longer held.
+pub fn mouse_takes_host_override(
+    reporting: MouseReporting,
+    shift: bool,
+    host_anchor: Option<VisualPos>,
+    kind: MouseEventKind,
+) -> bool {
+    let host_latched =
+        host_anchor.is_some() && matches!(kind, MouseEventKind::Move | MouseEventKind::Release);
+    shift || reporting == MouseReporting::Off || host_latched
+}
+
+/// Updates the host latch and returns the linear selection corners to apply.
+///
+/// Wheel never changes selection or latch. Press latches `cell`. Move/Release
+/// extend from the latch; Release clears it.
+pub fn apply_host_mouse_gesture(
+    host_anchor: &mut Option<VisualPos>,
+    kind: MouseEventKind,
+    cell: VisualPos,
+) -> Option<(VisualPos, VisualPos)> {
+    match kind {
+        MouseEventKind::Press => {
+            *host_anchor = Some(cell);
+            Some((cell, cell))
+        }
+        MouseEventKind::Move | MouseEventKind::Release => {
+            let selection = host_anchor.map(|anchor| (anchor, cell));
+            if kind == MouseEventKind::Release {
+                *host_anchor = None;
+            }
+            selection
+        }
+        MouseEventKind::Wheel => None,
     }
 }
 

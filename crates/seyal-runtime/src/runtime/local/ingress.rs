@@ -15,7 +15,8 @@ use crate::{
 };
 
 use seyal_exec::{
-    encode_mouse_report, CopyModeMotion, MouseEventKind, MouseReport, PasteError, VisualPos,
+    apply_host_mouse_gesture, encode_mouse_report, mouse_takes_host_override, CopyModeMotion,
+    MouseEventKind, MouseReport, PasteError, VisualPos,
 };
 
 use super::super::shell_integration::ComposerAdmission;
@@ -452,35 +453,20 @@ impl Runtime {
             };
             let reporting = entry.execution.terminal().modes().mouse_reporting;
             let shift = event.modifiers.bits() & TerminalKeyV2Modifiers::SHIFT.bits() != 0;
-            let host_latched = entry.mouse_host_anchor.is_some()
-                && matches!(
-                    event.kind,
-                    TerminalMouseKind::Move | TerminalMouseKind::Release
-                );
-            if shift || reporting == seyal_exec::MouseReporting::Off || host_latched {
-                match event.kind {
-                    TerminalMouseKind::Press => {
-                        entry.mouse_host_anchor = Some(cell);
-                        entry.execution.set_linear_selection(cell, cell);
-                    }
-                    TerminalMouseKind::Move | TerminalMouseKind::Release => {
-                        if let Some(anchor) = entry.mouse_host_anchor {
-                            entry.execution.set_linear_selection(anchor, cell);
-                        }
-                        if event.kind == TerminalMouseKind::Release {
-                            entry.mouse_host_anchor = None;
-                        }
-                    }
-                    TerminalMouseKind::Wheel => {}
-                }
-                return;
-            }
             let kind = match event.kind {
                 TerminalMouseKind::Press => MouseEventKind::Press,
                 TerminalMouseKind::Release => MouseEventKind::Release,
                 TerminalMouseKind::Move => MouseEventKind::Move,
                 TerminalMouseKind::Wheel => MouseEventKind::Wheel,
             };
+            if mouse_takes_host_override(reporting, shift, entry.mouse_host_anchor, kind) {
+                if let Some((start, end)) =
+                    apply_host_mouse_gesture(&mut entry.mouse_host_anchor, kind, cell)
+                {
+                    entry.execution.set_linear_selection(start, end);
+                }
+                return;
+            }
             let report_button = if event.kind == TerminalMouseKind::Move && entry.mouse_buttons == 0
             {
                 3

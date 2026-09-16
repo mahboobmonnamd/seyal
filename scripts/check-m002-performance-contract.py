@@ -76,19 +76,10 @@ def require_exact_head(production_sha: str) -> None:
         raise SystemExit("M002 performance result production_sha does not match validation checkout")
 
 
-def main() -> None:
-    if not CONTRACT.is_file():
-        raise SystemExit(f"missing M002 performance contract: {CONTRACT.relative_to(ROOT)}")
-    if not SCHEMA.is_file():
-        raise SystemExit(f"missing M002 performance schema: {SCHEMA.relative_to(ROOT)}")
-    text = CONTRACT.read_text(encoding="utf-8")
+def validate_contract_shape(text: str, schema: dict, schema_text: str) -> None:
     missing = [token for token in REQUIRED if token not in text]
     if missing:
         raise SystemExit("M002 performance contract missing: " + ", ".join(repr(token) for token in missing))
-    try:
-        schema = tomllib.loads(SCHEMA.read_text(encoding="utf-8"))
-    except tomllib.TOMLDecodeError as error:
-        raise SystemExit(f"invalid M002 performance schema: {error}") from error
     if schema.get("schema") != "seyal.m002.performance-contract" or schema.get("version") != 1:
         raise SystemExit("M002 performance schema has unsupported identity")
     if schema.get("status") != "proposed":
@@ -151,7 +142,7 @@ def main() -> None:
         or matrix.get("workloads") != ["ASCII", "styled", "CJK", "emoji-combining"]
     ):
         raise SystemExit("M002 performance matrix is incomplete")
-    if "performance_claim=true" in text or "performance_claim=true" in SCHEMA.read_text(encoding="utf-8"):
+    if "performance_claim=true" in text or "performance_claim=true" in schema_text:
         raise SystemExit("M002 performance contract must not claim a gate passed")
     result_schema = schema.get("result_schema", {})
     required_result_fields = set(result_schema.get("required", []))
@@ -164,11 +155,70 @@ def main() -> None:
     }
     if required_result_fields != expected_result_fields:
         raise SystemExit("M002 performance result schema is incomplete")
-    args = argparse.ArgumentParser(add_help=False)
-    args.add_argument("--record")
-    record_args, _ = args.parse_known_args()
-    if record_args.record:
-        evaluate_record(Path(record_args.record), schema)
+
+
+def self_test() -> None:
+    """CI/SYNTHETIC negatives: reject weakened contracts without inventing ceilings."""
+    text = CONTRACT.read_text(encoding="utf-8")
+    schema_text = SCHEMA.read_text(encoding="utf-8")
+    schema = tomllib.loads(schema_text)
+    validate_contract_shape(text, schema, schema_text)
+
+    def expect_fail(label: str, mutated_text: str, mutated_schema: dict, mutated_schema_text: str) -> None:
+        try:
+            validate_contract_shape(mutated_text, mutated_schema, mutated_schema_text)
+        except SystemExit:
+            return
+        raise SystemExit(f"M002 performance self-test accepted invalid fixture: {label}")
+
+    claim_true = text + "\nperformance_claim=true\n"
+    expect_fail("markdown performance_claim=true", claim_true, schema, schema_text)
+
+    weak = dict(schema)
+    weak_caps = dict(schema["resource_caps"])
+    weak_caps["history_per_execution_bytes"] = weak_caps["history_per_execution_bytes"] * 2
+    weak["resource_caps"] = weak_caps
+    expect_fail("weakened history_per_execution_bytes", text, weak, schema_text)
+
+    weak_gate = dict(schema)
+    gates = {name: dict(gate) for name, gate in schema["gates"].items()}
+    gates["history_active_reflow_ms"]["p99"] = 99
+    weak_gate["gates"] = gates
+    expect_fail("weakened history_active_reflow_ms p99", text, weak_gate, schema_text)
+
+    bad_cohorts = dict(schema)
+    bad_cohorts["cohorts"] = 3
+    expect_fail("reduced cohort count", text, bad_cohorts, schema_text)
+
+    if nearest_rank([1.0, 2.0, 3.0, 4.0], 50) != 2.0:
+        raise SystemExit("nearest-rank self-check failed")
+    print("M002 performance contract self-test passed.")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--record")
+    parser.add_argument("--self-test", action="store_true")
+    args, _ = parser.parse_known_args()
+
+    if not CONTRACT.is_file():
+        raise SystemExit(f"missing M002 performance contract: {CONTRACT.relative_to(ROOT)}")
+    if not SCHEMA.is_file():
+        raise SystemExit(f"missing M002 performance schema: {SCHEMA.relative_to(ROOT)}")
+    text = CONTRACT.read_text(encoding="utf-8")
+    schema_text = SCHEMA.read_text(encoding="utf-8")
+    try:
+        schema = tomllib.loads(schema_text)
+    except tomllib.TOMLDecodeError as error:
+        raise SystemExit(f"invalid M002 performance schema: {error}") from error
+
+    if args.self_test:
+        self_test()
+        return
+
+    validate_contract_shape(text, schema, schema_text)
+    if args.record:
+        evaluate_record(Path(args.record), schema)
     print("M002 performance contract shape passed.")
 
 

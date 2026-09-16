@@ -6,13 +6,13 @@ use std::{
     },
 };
 
-use seyal_exec::{RegistrationToken, TerminalExecution, VisualPos};
+use seyal_exec::{RegistrationToken, TerminalExecution};
 
 #[cfg(target_os = "macos")]
 use crate::command_block_timeline::{CommandBlockId, CommandBlockTimeline};
 use crate::{AttachmentId, ExecutionId, WorkspaceId};
 #[cfg(target_os = "macos")]
-use seyal_exec::ShellIntegrationToken;
+use seyal_exec::{ShellIntegrationToken, VisualPos};
 
 use super::config::PtyEofReapProbe;
 use super::lifecycle::{ExecutionLifecycle, Lifecycle};
@@ -38,7 +38,9 @@ pub(in crate::runtime) struct Entry {
     pub(in crate::runtime) pending_input: VecDeque<AcceptedInput>,
     pub(in crate::runtime) reserved_input: Arc<AtomicUsize>,
     pub(in crate::runtime) ingress_active: Arc<AtomicBool>,
+    #[cfg(target_os = "macos")]
     pub(in crate::runtime) mouse_buttons: u8,
+    #[cfg(target_os = "macos")]
     pub(in crate::runtime) mouse_host_anchor: Option<VisualPos>,
     /// Accepted composer commands awaiting trusted OSC-133 `CommandStarted`.
     /// This is metadata only; PTY input continues through `pending_input`.

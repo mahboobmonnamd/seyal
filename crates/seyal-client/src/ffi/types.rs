@@ -453,3 +453,21 @@ impl SeyalPreparedFrame {
         }
     }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C)]
+pub struct SeyalCopiedText {
+    pub utf8: *const u8,
+    pub len: u32,
+    pub reserved: u32,
+}
+
+impl SeyalCopiedText {
+    pub(crate) const fn empty() -> Self {
+        Self {
+            utf8: ptr::null(),
+            len: 0,
+            reserved: 0,
+        }
+    }
+}

@@ -50,6 +50,66 @@ impl TerminalExecution {
         &self.terminal
     }
 
+    pub fn copy_mode_active(&self) -> bool {
+        self.terminal.copy_mode().active
+    }
+
+    pub fn enter_copy_mode(&mut self) {
+        self.terminal.enter_copy_mode();
+    }
+
+    pub fn exit_copy_mode(&mut self) {
+        self.terminal.exit_copy_mode();
+    }
+
+    pub fn copy_mode_toggle_anchor(&mut self) {
+        self.terminal.copy_mode_toggle_anchor();
+    }
+
+    pub fn copy_mode_toggle_kind(&mut self) {
+        self.terminal.copy_mode_toggle_kind();
+    }
+
+    pub fn copy_mode_motion(&mut self, motion: seyal_terminal::CopyModeMotion) {
+        self.terminal.copy_mode_motion(motion);
+    }
+
+    pub fn yank_selection(&mut self) -> Result<String, seyal_terminal::HistoryRangeError> {
+        self.terminal.yank_selection()
+    }
+
+    pub fn take_copy_buffer(&mut self) -> Option<String> {
+        self.terminal.take_copy_buffer()
+    }
+
+    pub fn set_linear_selection(
+        &mut self,
+        start: seyal_terminal::VisualPos,
+        end: seyal_terminal::VisualPos,
+    ) {
+        self.terminal.set_linear_selection(start, end);
+    }
+
+    pub fn set_rectangular_selection(
+        &mut self,
+        start: seyal_terminal::VisualPos,
+        end: seyal_terminal::VisualPos,
+    ) {
+        self.terminal.set_rectangular_selection(start, end);
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.terminal.clear_selection();
+    }
+
+    pub fn search_and_select(
+        &mut self,
+        needle: &str,
+        forward: bool,
+    ) -> Option<seyal_terminal::HistoryMatch> {
+        self.terminal.search_and_select(needle, forward)
+    }
+
     /// Stable canonical primary-screen logical line present when this
     /// execution was created. It is immutable across scroll, resize,
     /// alternate-screen transitions, projection resync, detach and reattach.

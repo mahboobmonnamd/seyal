@@ -6,6 +6,8 @@ pub struct ModeState {
     pub unicode_core: bool,
     /// DEC private mode 7 (DECAWM) — autowrap when set.
     pub wraparound: bool,
+    /// DEC private mode 2004 — bracketed paste when set.
+    pub bracketed_paste: bool,
     /// DEC private mode 1 (DECCKM) — application cursor keys.
     pub application_cursor: bool,
     /// DEC private mode 66 (DECNKM) — application keypad.
@@ -23,6 +25,8 @@ impl Default for ModeState {
             unicode_core: true,
             // DECAWM defaults to set (wrap); fixtures explicitly reset it.
             wraparound: true,
+            // Bracketed paste starts reset; shells/TUIs enable it explicitly.
+            bracketed_paste: false,
             application_cursor: false,
             application_keypad: false,
             keyboard_flags: 0,

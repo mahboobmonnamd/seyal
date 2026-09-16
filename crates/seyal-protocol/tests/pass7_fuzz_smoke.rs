@@ -2,7 +2,7 @@ use std::{env, fs, path::PathBuf};
 
 use seyal_protocol::framing::{
     decode_message, BlockTimeline, ComposerCommandRef, ComposerResult, ComposerStatus, FrameHeader,
-    HistoryRangeRequest, HistoryRangeSnapshot, MessageType, ResizeRequest, ResizeResult,
+    HistoryRangeRequest, HistoryRangeSnapshot, InputRef, MessageType, ResizeRequest, ResizeResult,
     TerminalKey, TerminalKeyV2, HEADER_LEN,
 };
 
@@ -44,6 +44,18 @@ fn decode_pass7_payload(kind: MessageType, payload: &[u8]) {
         MessageType::HistoryRangeSnapshot => {
             let _ = HistoryRangeSnapshot::decode(payload);
         }
+        MessageType::Paste => {
+            let _ = InputRef::decode(payload);
+        }
+        MessageType::HostSelection => {
+            let _ = seyal_protocol::framing::HostSelection::decode(payload);
+        }
+        MessageType::CopiedText => {
+            let _ = InputRef::decode(payload);
+        }
+        MessageType::HostSearch => {
+            let _ = seyal_protocol::framing::HostSearch::decode(payload);
+        }
         _ => {}
     }
 }
@@ -76,4 +88,8 @@ fn pass7_protocol_decode_seed() {
     decode_pass7_payload(MessageType::BlockTimeline, &bytes);
     decode_pass7_payload(MessageType::HistoryRangeRequest, &bytes);
     decode_pass7_payload(MessageType::HistoryRangeSnapshot, &bytes);
+    decode_pass7_payload(MessageType::Paste, &bytes);
+    decode_pass7_payload(MessageType::HostSelection, &bytes);
+    decode_pass7_payload(MessageType::CopiedText, &bytes);
+    decode_pass7_payload(MessageType::HostSearch, &bytes);
 }

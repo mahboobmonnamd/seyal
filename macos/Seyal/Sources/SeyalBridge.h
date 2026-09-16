@@ -183,6 +183,23 @@ int32_t seyal_bridge_ensure_prepared(void);
 int32_t seyal_bridge_wants_write(void);
 int32_t seyal_bridge_flush_writable(void);
 int32_t seyal_bridge_submit_utf8(const uint8_t *bytes, uint32_t len);
+int32_t seyal_bridge_submit_paste(const uint8_t *bytes, uint32_t len);
+int32_t seyal_bridge_submit_host_selection(
+    uint8_t action,
+    uint8_t kind,
+    uint16_t start_col,
+    uint16_t start_row,
+    uint16_t end_col,
+    uint16_t end_row
+);
+int32_t seyal_bridge_submit_host_search(const uint8_t *bytes, uint32_t len, uint8_t forward);
+typedef struct SeyalCopiedText {
+    const uint8_t *utf8;
+    uint32_t len;
+    uint32_t reserved;
+} SeyalCopiedText;
+SeyalCopiedText seyal_bridge_copied_text(void);
+int32_t seyal_bridge_copied_text_consume(void);
 int32_t seyal_bridge_submit_composer(const uint8_t *bytes, uint32_t len);
 int32_t seyal_bridge_request_history_range(
     uint64_t block_id,

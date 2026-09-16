@@ -449,6 +449,7 @@ final class RustDisplayBridge {
   private let onComposerResult: ComposerResultHandler
   private let onError: ErrorHandler
   var onStatusChanged: StatusHandler
+  var onCopiedText: ((String) -> Void)?
   private var readSource: DispatchSourceRead?
   private var writeSource: DispatchSourceWrite?
   private var socketFileDescriptor: Int32 = -1
@@ -1009,6 +1010,98 @@ final class RustDisplayBridge {
     return finishMutation(result)
   }
 
+  /// Empty paste is invalid (`-4`); UTF-8 above `MAX_INPUT_BYTES` is CommitTooLarge (`-14`).
+  static func pasteAdmissionCode(_ text: String) -> Int32 {
+    let byteCount = text.utf8.count
+    if byteCount == 0 { return -4 }
+    if byteCount > 65_536 { return -14 }
+    return 0
+  }
+
+  static func pasteAdmissionSelfTest() -> Bool {
+    pasteAdmissionCode("") == -4
+      && pasteAdmissionCode("a") == 0
+      && pasteAdmissionCode(String(repeating: "x", count: 65_536)) == 0
+      && pasteAdmissionCode(String(repeating: "x", count: 65_537)) == -14
+  }
+
+  @discardableResult
+  func submitPaste(_ text: String) -> Int32 {
+    let admission = Self.pasteAdmissionCode(text)
+    guard admission == 0 else {
+      onStatusChanged()
+      return admission
+    }
+    guard isConnected, reconstructionState.canMutate, selectClient() else {
+      onStatusChanged()
+      return -10
+    }
+    let byteCount = text.utf8.count
+    let count = UInt32(byteCount)
+    let result =
+      text.utf8.withContiguousStorageIfAvailable { buffer -> Int32 in
+        seyal_bridge_submit_paste(buffer.baseAddress, count)
+      }
+      ?? Array(text.utf8).withUnsafeBufferPointer { buffer in
+        seyal_bridge_submit_paste(buffer.baseAddress, count)
+      }
+    return finishMutation(result)
+  }
+
+  @discardableResult
+  func submitHostSelection(
+    action: UInt8,
+    kind: UInt8 = 0,
+    startCol: UInt16 = 0,
+    startRow: UInt16 = 0,
+    endCol: UInt16 = 0,
+    endRow: UInt16 = 0
+  ) -> Int32 {
+    guard isConnected, reconstructionState.canMutate, selectClient() else {
+      onStatusChanged()
+      return -10
+    }
+    return finishMutation(
+      seyal_bridge_submit_host_selection(action, kind, startCol, startRow, endCol, endRow)
+    )
+  }
+
+  @discardableResult
+  func submitHostSearch(_ needle: String, forward: Bool) -> Int32 {
+    guard isConnected, reconstructionState.canMutate, selectClient() else {
+      onStatusChanged()
+      return -10
+    }
+    let byteCount = needle.utf8.count
+    guard byteCount <= Int(UInt32.max) else {
+      onStatusChanged()
+      return -14
+    }
+    let count = UInt32(byteCount)
+    let result =
+      needle.utf8.withContiguousStorageIfAvailable { buffer -> Int32 in
+        seyal_bridge_submit_host_search(buffer.baseAddress, count, forward ? 1 : 0)
+      }
+      ?? Array(needle.utf8).withUnsafeBufferPointer { buffer in
+        seyal_bridge_submit_host_search(buffer.baseAddress, count, forward ? 1 : 0)
+      }
+    return finishMutation(result)
+  }
+
+  func copiedText() -> String? {
+    guard selectClient() else { return nil }
+    let copied = seyal_bridge_copied_text()
+    guard copied.len > 0, let utf8 = copied.utf8 else { return nil }
+    let buffer = UnsafeBufferPointer(start: utf8, count: Int(copied.len))
+    return String(decoding: buffer, as: UTF8.self)
+  }
+
+  @discardableResult
+  func consumeCopiedText() -> Int32 {
+    guard selectClient() else { return -1 }
+    return seyal_bridge_copied_text_consume()
+  }
+
   @discardableResult
   func submitComposerCommand(_ text: String) -> Int32 {
     guard isConnected, reconstructionState.canMutate, selectClient() else {
@@ -1128,6 +1221,10 @@ final class RustDisplayBridge {
       runtimeBlockMetadata = currentBlockMetadata()
       publishHistoryRanges()
       publishComposerResult()
+      if let text = copiedText() {
+        onCopiedText?(text)
+        _ = consumeCopiedText()
+      }
       let revision = seyal_bridge_block_timeline_revision()
       if revision != lastTimelineRevision {
         lastTimelineRevision = revision

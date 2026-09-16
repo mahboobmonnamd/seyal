@@ -1,9 +1,10 @@
 use std::{collections::VecDeque, io::Write};
 
 use seyal_runtime::local_ipc::framing::{
-    encode_frame, ErrorCode, ErrorMessage, InputRef, MessageType, ResizeRequest, ResizeResult,
-    ResizeResultCode, Resync, Role, TerminalKey, TerminalKeyKind, TerminalKeyModifiers,
-    TerminalKeyV2, TerminalKeyV2Event, TerminalKeyV2Kind, TerminalKeyV2Modifiers, MAX_INPUT_BYTES,
+    encode_frame, ErrorCode, ErrorMessage, HostSearch, HostSelection, HostSelectionAction,
+    InputRef, MessageType, ResizeRequest, ResizeResult, ResizeResultCode, Resync, Role,
+    TerminalKey, TerminalKeyKind, TerminalKeyModifiers, TerminalKeyV2, TerminalKeyV2Event,
+    TerminalKeyV2Kind, TerminalKeyV2Modifiers, MAX_INPUT_BYTES,
 };
 
 use super::{
@@ -94,7 +95,10 @@ pub(crate) fn valid_terminal_key_request(kind: TerminalKeyKind, scalar: u32) -> 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum OutboundKind {
     Input,
+    Paste,
     TerminalKey,
+    HostSelection,
+    HostSearch,
     TerminalKeyV2 {
         action_id: u32,
     },
@@ -191,7 +195,10 @@ pub(crate) fn classify_server_error(
 ) -> Result<Option<InputAdmissionFailure>, ClientError> {
     if error.error_code == ErrorCode::Backpressure as u16
         && (error.offending_message_type == MessageType::Input as u16
-            || error.offending_message_type == MessageType::TerminalKey as u16)
+            || error.offending_message_type == MessageType::TerminalKey as u16
+            || error.offending_message_type == MessageType::Paste as u16
+            || error.offending_message_type == MessageType::HostSelection as u16
+            || error.offending_message_type == MessageType::HostSearch as u16)
     {
         return Ok(Some(InputAdmissionFailure::ClientBackpressure));
     }
@@ -199,6 +206,14 @@ pub(crate) fn classify_server_error(
     // a healthy attachment because a Block body exceeded the wire byte budget.
     if error.error_code == ErrorCode::CapacityExceeded as u16
         && error.offending_message_type == MessageType::HistoryRangeRequest as u16
+    {
+        return Ok(None);
+    }
+    // Expected host outcomes: no search match, yank with no/stale selection.
+    // These must not tear down a healthy attachment.
+    if error.error_code == ErrorCode::InvalidState as u16
+        && (error.offending_message_type == MessageType::HostSearch as u16
+            || error.offending_message_type == MessageType::HostSelection as u16)
     {
         return Ok(None);
     }
@@ -267,6 +282,92 @@ impl LocalDisplayClient {
         }
         self.input_failure = None;
         self.flush_control_write()
+    }
+
+    pub fn submit_paste(&mut self, bytes: &[u8]) -> Result<(), ClientError> {
+        self.require_controller()?;
+        if bytes.is_empty() || bytes.len() > MAX_INPUT_BYTES as usize {
+            self.input_failure = Some(InputAdmissionFailure::CommitTooLarge);
+            return Err(ClientError::CommitTooLarge);
+        }
+        let payload = InputRef {
+            attachment_id: self.attachment_id,
+            bytes,
+        }
+        .encode();
+        let frame = encode_frame(MessageType::Paste, &payload);
+        if let Err(error) = self.admit_frame(frame, OutboundKind::Paste) {
+            self.input_failure = Some(InputAdmissionFailure::ClientBackpressure);
+            return Err(error);
+        }
+        self.input_failure = None;
+        self.flush_control_write()
+    }
+
+    pub fn submit_host_selection(
+        &mut self,
+        action: HostSelectionAction,
+        kind: u8,
+        start_col: u16,
+        start_row: u16,
+        end_col: u16,
+        end_row: u16,
+    ) -> Result<(), ClientError> {
+        self.require_controller()?;
+        let payload = HostSelection {
+            attachment_id: self.attachment_id,
+            action,
+            kind,
+            start_col,
+            start_row,
+            end_col,
+            end_row,
+        }
+        .encode();
+        let frame = encode_frame(MessageType::HostSelection, &payload);
+        if let Err(error) = self.admit_frame(frame, OutboundKind::HostSelection) {
+            self.input_failure = Some(InputAdmissionFailure::ClientBackpressure);
+            return Err(error);
+        }
+        self.input_failure = None;
+        self.flush_control_write()
+    }
+
+    pub fn submit_host_search(&mut self, needle: &str, forward: bool) -> Result<(), ClientError> {
+        self.require_controller()?;
+        if needle.len() > MAX_INPUT_BYTES as usize {
+            self.input_failure = Some(InputAdmissionFailure::CommitTooLarge);
+            return Err(ClientError::CommitTooLarge);
+        }
+        let payload = HostSearch {
+            attachment_id: self.attachment_id,
+            forward,
+            needle,
+        }
+        .encode();
+        let frame = encode_frame(MessageType::HostSearch, &payload);
+        if let Err(error) = self.admit_frame(frame, OutboundKind::HostSearch) {
+            self.input_failure = Some(InputAdmissionFailure::ClientBackpressure);
+            return Err(error);
+        }
+        self.input_failure = None;
+        self.flush_control_write()
+    }
+
+    pub fn copied_text(&self) -> Option<&[u8]> {
+        if self.copied_text.is_empty() {
+            None
+        } else {
+            Some(self.copied_text.as_slice())
+        }
+    }
+
+    pub fn take_copied_text(&mut self) -> Option<Vec<u8>> {
+        if self.copied_text.is_empty() {
+            None
+        } else {
+            Some(std::mem::take(&mut self.copied_text))
+        }
     }
 
     pub fn submit_terminal_key(
@@ -966,6 +1067,22 @@ mod tests {
                 detail_code: 0,
             }),
             Err(ClientError::Server(ErrorCode::CapacityExceeded))
+        );
+        assert_eq!(
+            classify_server_error(ErrorMessage {
+                error_code: ErrorCode::InvalidState as u16,
+                offending_message_type: MessageType::HostSearch as u16,
+                detail_code: 0,
+            }),
+            Ok(None)
+        );
+        assert_eq!(
+            classify_server_error(ErrorMessage {
+                error_code: ErrorCode::InvalidState as u16,
+                offending_message_type: MessageType::HostSelection as u16,
+                detail_code: 0,
+            }),
+            Ok(None)
         );
     }
 

@@ -19,6 +19,7 @@ mod parser;
 mod presentation;
 mod protocol_reply;
 mod screen;
+mod selection;
 mod style;
 mod terminal;
 mod unicode_version;
@@ -47,6 +48,11 @@ pub use presentation::{
     MAX_PRESENTATION_PAYLOAD_BYTES,
 };
 pub use protocol_reply::{ProtocolReply, MAX_PROTOCOL_REPLIES, MAX_PROTOCOL_REPLY_BYTES};
+pub use selection::{
+    encode_paste, format_history_copy, CopyMode, CopyModeMotion, PasteError, SearchSession,
+    SelectionKind, SelectionSession, VisualPos, MAX_COPY_BYTES, MAX_PASTE_BYTES,
+    MAX_SEARCH_MATCHES,
+};
 pub use style::Style;
 pub use terminal::{
     Diagnostics, PreparedResize, ShellIntegrationEvent, ShellIntegrationToken, TerminalState,

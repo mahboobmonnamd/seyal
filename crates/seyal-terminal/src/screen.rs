@@ -200,7 +200,6 @@ impl Screen {
         self.line_ids.get(usize::from(row)).copied()
     }
 
-    #[cfg(test)]
     pub(crate) fn row_break_after(&self, row: u16) -> Option<HistoryBreakAfter> {
         self.row_breaks.get(usize::from(row)).copied().flatten()
     }

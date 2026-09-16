@@ -353,6 +353,10 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
         executionIdentity: executionIdentity,
         allowsImplicitExecutionBootstrap: allowsImplicitExecutionBootstrap
       )
+      bridge.onCopiedText = { text in
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+      }
       self.bridge = bridge
       // A production surface must not perform a synchronous pre-attempt on the
       // AppKit thread. Visibility starts the one authoritative recovery episode
@@ -450,6 +454,30 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
   @discardableResult
   func terminalSubmitCommittedText(_ text: String) -> Int32 {
     bridge?.submitCommittedText(text) ?? -10
+  }
+
+  @discardableResult
+  func terminalSubmitPaste(_ text: String) -> Int32 {
+    bridge?.submitPaste(text) ?? -10
+  }
+
+  @discardableResult
+  func terminalSubmitHostSelection(
+    action: UInt8,
+    kind: UInt8 = 0,
+    startCol: UInt16 = 0,
+    startRow: UInt16 = 0,
+    endCol: UInt16 = 0,
+    endRow: UInt16 = 0
+  ) -> Int32 {
+    bridge?.submitHostSelection(
+      action: action,
+      kind: kind,
+      startCol: startCol,
+      startRow: startRow,
+      endCol: endCol,
+      endRow: endRow
+    ) ?? -10
   }
 
   func terminalSubmitComposerCommand(_ text: String) -> Int32 {

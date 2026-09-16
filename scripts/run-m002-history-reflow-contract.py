@@ -10,10 +10,12 @@ history_sealed_segment_reflow_ms. Proposed #673 gates are left unevaluated.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import platform
 import subprocess
 import sys
+import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -34,15 +36,21 @@ CEILINGS = {
 
 
 def run(command: list[str], *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    merged = os.environ.copy() if env is None else env
+    merged.setdefault("CARGO_TERM_COLOR", "never")
     return subprocess.run(
         command,
         cwd=ROOT,
-        env=env,
+        env=merged,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         check=False,
     )
+
+
+def toml_str(value: str) -> str:
+    return json.dumps(value, ensure_ascii=True)
 
 
 def git_sha() -> str:
@@ -116,11 +124,11 @@ def collect_cohorts(gate: str, dest: Path, sha: str) -> str:
 def load_samples(directory: Path) -> list[float]:
     values: list[float] = []
     for path in sorted(directory.glob("*.toml")):
-        text = path.read_text(encoding="utf-8")
-        start = text.index("[") + 1
-        end = text.index("]")
-        chunk = [float(part.strip()) for part in text[start:end].split(",") if part.strip()]
-        values.extend(chunk)
+        cohort = tomllib.loads(path.read_text(encoding="utf-8"))
+        samples = cohort.get("samples")
+        if not isinstance(samples, list):
+            raise SystemExit(f"invalid cohort file {path}")
+        values.extend(float(value) for value in samples)
     return values
 
 
@@ -146,21 +154,21 @@ def write_record(
             [
                 "contract_schema = 'seyal.m002.performance-contract'",
                 "contract_version = 1",
-                f"production_sha = '{sha}'",
-                f"harness_sha = '{sha}'",
-                f"baseline_sha = '{sha}'",
+                f"production_sha = {toml_str(sha)}",
+                f"harness_sha = {toml_str(sha)}",
+                f"baseline_sha = {toml_str(sha)}",
                 "build_mode = 'release'",
-                f"os_version = '{platform.platform()}'",
-                f"toolchain = '{rustc_version()}'",
-                f"hardware = '{hardware()}'",
+                f"os_version = {toml_str(platform.platform())}",
+                f"toolchain = {toml_str(rustc_version())}",
+                f"hardware = {toml_str(hardware())}",
                 "display = 'none-headless-history-reflow'",
                 "power_thermal_state = 'uncontrolled-developer-host'",
-                f"workload_hash = '{workload_hash}'",
+                f"workload_hash = {toml_str(workload_hash)}",
                 "topology = 'one-execution-headless-TerminalState'",
                 "evidence_class = 'PHYSICAL_ARM64'",
-                f"gate = '{gate}'",
-                f"metric = '{gate}'",
-                f"boundary = '{BOUNDARIES[gate]}'",
+                f"gate = {toml_str(gate)}",
+                f"metric = {toml_str(gate)}",
+                f"boundary = {toml_str(BOUNDARIES[gate])}",
                 "unit = 'ms'",
                 "percentile_method = 'nearest-rank'",
                 "sample_count = 500",
@@ -168,16 +176,16 @@ def write_record(
                 "environment_status = 'VALID'",
                 "platform_limit_reason = ''",
                 "comparator = 'less_equal'",
-                f"p50 = {p50}",
-                f"p95 = {p95}",
-                f"p99 = {p99}",
-                f"baseline_p50 = {b50}",
-                f"baseline_p95 = {b95}",
-                f"baseline_p99 = {b99}",
+                f"p50 = {p50!r}",
+                f"p95 = {p95!r}",
+                f"p99 = {p99!r}",
+                f"baseline_p50 = {b50!r}",
+                f"baseline_p95 = {b95!r}",
+                f"baseline_p99 = {b99!r}",
                 "relative_regression_percent = 10",
-                f"raw_log = '{rel(raw_log)}'",
-                f"raw_cohorts = '{rel(candidate)}/'",
-                f"baseline_raw_cohorts = '{rel(baseline)}/'",
+                f"raw_log = {toml_str(rel(raw_log))}",
+                f"raw_cohorts = {toml_str(rel(candidate) + '/')}",
+                f"baseline_raw_cohorts = {toml_str(rel(baseline) + '/')}",
                 "",
             ]
         ),

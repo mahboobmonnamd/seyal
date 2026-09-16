@@ -74,18 +74,20 @@ fn populate(lines: usize, workload: &str) -> TerminalState {
 }
 
 fn sample_ms(gate: &str, terminal: &mut TerminalState, columns: u16) -> f64 {
-    let started = Instant::now();
     match gate {
         "history_active_reflow_ms" => {
             terminal.drop_primary_history_derived_cache();
+            let started = Instant::now();
             black_box(terminal.primary_history_reflow(columns, ACTIVE_WINDOW_ROWS));
+            started.elapsed().as_secs_f64() * 1_000.0
         }
         "history_sealed_segment_reflow_ms" => {
+            let started = Instant::now();
             black_box(terminal.primary_history_reflow_uncached(columns, ACTIVE_WINDOW_ROWS));
+            started.elapsed().as_secs_f64() * 1_000.0
         }
         other => panic!("unsupported M002 contract gate {other:?}"),
     }
-    started.elapsed().as_secs_f64() * 1_000.0
 }
 
 fn write_cohort_file(path: &str, cohort: usize, samples: &[f64]) {

@@ -1,15 +1,34 @@
 import AppKit
 
+/// Composer editor that reports `⌃R` (history recall, #933) instead of
+/// letting NSTextView swallow it. Every other key stays native.
+@MainActor
+private final class ComposerTextView: NSTextView {
+    var onHistoryShortcut: (() -> Void)?
+
+    override func keyDown(with event: NSEvent) {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags == .control, event.charactersIgnoringModifiers == "r" {
+            onHistoryShortcut?()
+            return
+        }
+        super.keyDown(with: event)
+    }
+}
+
 /// Native IME/editor bridge only. Draft, submit, and C09 copy stay Rust-owned.
 @MainActor
 final class ComposerBridgeView: NSView, NSTextViewDelegate {
     var onSubmitComposer: ((String) -> Int32)?
     var onSubmitRaw: ((String) -> Int32)?
+    /// Rust accepted OpenComposerHistory; the host reconciles the overlay.
+    var onHistoryOpened: (() -> Void)?
 
     private let appHandle: UInt64
-    private let textView = NSTextView()
+    private let textView = ComposerTextView()
     private let placeholder = NSTextField(labelWithString: "")
     private let execute = NSButton(title: "", target: nil, action: nil)
+    private let history = NSButton(title: "", target: nil, action: nil)
     private var heightConstraint: NSLayoutConstraint!
     private var lastEpoch: UInt64 = 0
     private var theme: NativeTheme?
@@ -45,7 +64,20 @@ final class ComposerBridgeView: NSView, NSTextViewDelegate {
         execute.setAccessibilityIdentifier("seyal-composer-execute")
         execute.setAccessibilityRole(.button)
 
+        history.target = self
+        history.action = #selector(historyClicked)
+        history.isBordered = false
+        history.font = .systemFont(ofSize: 11, weight: .medium)
+        history.focusRingType = .none
+        history.setButtonType(.momentaryPushIn)
+        history.setContentHuggingPriority(.required, for: .horizontal)
+        history.setContentCompressionResistancePriority(.required, for: .horizontal)
+        history.setAccessibilityIdentifier("seyal-composer-history-toggle")
+        history.setAccessibilityRole(.button)
+        history.toolTip = "Command history"
+
         textView.delegate = self
+        textView.onHistoryShortcut = { [weak self] in self?.openHistory() }
         textView.isRichText = false
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
@@ -62,14 +94,19 @@ final class ComposerBridgeView: NSView, NSTextViewDelegate {
 
         addSubview(textView)
         addSubview(placeholder)
+        addSubview(history)
         addSubview(execute)
         placeholder.translatesAutoresizingMaskIntoConstraints = false
+        history.translatesAutoresizingMaskIntoConstraints = false
         execute.translatesAutoresizingMaskIntoConstraints = false
         heightConstraint = heightAnchor.constraint(equalToConstant: 40)
         NSLayoutConstraint.activate([
             heightConstraint,
             textView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
-            textView.trailingAnchor.constraint(equalTo: execute.leadingAnchor, constant: -8),
+            textView.trailingAnchor.constraint(equalTo: history.leadingAnchor, constant: -8),
+            history.trailingAnchor.constraint(equalTo: execute.leadingAnchor, constant: -4),
+            history.centerYAnchor.constraint(equalTo: centerYAnchor),
+            history.heightAnchor.constraint(equalToConstant: 28),
             textView.topAnchor.constraint(equalTo: topAnchor, constant: 8),
             textView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
             placeholder.leadingAnchor.constraint(equalTo: textView.leadingAnchor),
@@ -109,6 +146,9 @@ final class ComposerBridgeView: NSView, NSTextViewDelegate {
         textView.isEditable = available
         execute.title = copyString(UInt16(SEYAL_APP_COPY_COMPOSER_EXECUTE))
         execute.isEnabled = composer.flags & UInt16(SEYAL_APP_COMPOSER_CAN_SUBMIT) != 0
+        let recall = seyal_app_composer_history(appHandle)
+        history.title = copyString(UInt16(SEYAL_APP_COPY_COMPOSER_HISTORY))
+        history.isEnabled = available && recall.flags & UInt16(SEYAL_APP_HISTORY_HAS_ENTRIES) != 0
         placeholder.stringValue = copyString(UInt16(SEYAL_APP_COPY_COMPOSER_PLACEHOLDER))
         setAccessibilityValue(available ? "available" : (busy ? "busy" : "hidden"))
         if composer.epoch != lastEpoch {
@@ -171,6 +211,24 @@ final class ComposerBridgeView: NSView, NSTextViewDelegate {
         submit()
     }
 
+    @objc private func historyClicked() {
+        openHistory()
+    }
+
+    /// Rust decides whether recall is available (mode, entries); a rejected
+    /// open leaves the composer untouched.
+    private func openHistory() {
+        pushDraft()
+        let snapshot = seyal_app_snapshot(appHandle)
+        var action = SeyalAppAction()
+        action.version = UInt16(SEYAL_APP_ABI_VERSION)
+        action.size = UInt16(MemoryLayout<SeyalAppAction>.size)
+        action.kind = UInt16(SEYAL_APP_ACTION_OPEN_COMPOSER_HISTORY.rawValue)
+        action.applySnapshotFence(snapshot)
+        guard seyal_app_apply(appHandle, &action) == 0 else { return }
+        onHistoryOpened?()
+    }
+
     private func shiftHeld() -> Bool {
         NSApp.currentEvent?.modifierFlags.contains(.shift) == true
     }
@@ -188,6 +246,13 @@ final class ComposerBridgeView: NSView, NSTextViewDelegate {
             attributes: [
                 .font: NSFont.systemFont(ofSize: 13, weight: .medium),
                 .foregroundColor: execute.isEnabled ? theme.accent : theme.muted,
+            ]
+        )
+        history.attributedTitle = NSAttributedString(
+            string: history.title,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 11, weight: .medium),
+                .foregroundColor: history.isEnabled ? theme.secondary : theme.muted,
             ]
         )
     }

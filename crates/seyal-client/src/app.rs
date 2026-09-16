@@ -8,7 +8,7 @@
 
 use std::time::Duration;
 
-use seyal_core::{AttachmentId, ExecutionId, PaneId, TabId, WorkspaceId};
+use seyal_core::{AttachmentId, BlockId, ExecutionId, PaneId, TabId, WorkspaceId};
 
 use crate::chrome::{
     AgentId, AttentionId, ChromeAction, ChromeError, ChromeSnapshot, ChromeState, InspectorMode,
@@ -17,13 +17,14 @@ use crate::chrome::{
 use crate::composer::{
     ComposerAction, ComposerError, ComposerSnapshot, ComposerState, RuntimeBlockRecord,
 };
+use crate::palette::{PaletteAction, PaletteCommand, PaletteError, PaletteSnapshot, PaletteState};
 use crate::presentation::{
     InputRoute, PresentationAction, PresentationIdentity, PresentationMode, PresentationSession,
 };
 use crate::recovery::{
     AttemptOutcome, LaunchResult, RecoveryCoordinator, RecoveryEffect, RecoveryStage,
 };
-use crate::shell::{ShellAction, ShellSnapshot, ShellState};
+use crate::shell::{ShellAction, ShellSnapshot, ShellState, SplitAxis};
 
 #[cfg(target_os = "macos")]
 use crate::LocalDisplayClient;
@@ -51,10 +52,18 @@ pub enum AppError {
     ComposerSubmitDisabled,
     StaleComposerRequest,
     StaleComposerEpoch,
+    ComposerHistoryUnavailable,
+    ComposerHistoryClosed,
+    ComposerHistoryNoSelection,
     UnknownAgent,
     UnknownAttention,
     UnknownChromeWorkspace,
     UnknownChromeTab,
+    PaletteNotOpen,
+    PaletteNoSelection,
+    TabCreationUnavailable,
+    PaneSplitUnavailable,
+    UnknownBlock,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -173,6 +182,52 @@ pub enum AppAction {
         inspector: bool,
         tab_strip: bool,
     },
+    OpenComposerHistory {
+        fence: AppFence,
+    },
+    SetComposerHistoryFilter {
+        fence: AppFence,
+        query: String,
+    },
+    MoveComposerHistorySelection {
+        fence: AppFence,
+        delta: i32,
+    },
+    SelectComposerHistory {
+        fence: AppFence,
+        composer_epoch: u64,
+    },
+    CloseComposerHistory {
+        fence: AppFence,
+    },
+    /// Global keyboard-first command palette (#932). Rows/selection are
+    /// derived fresh from Shell/Chrome; no command is ever fabricated.
+    OpenPalette {
+        fence: AppFence,
+    },
+    SetPaletteQuery {
+        fence: AppFence,
+        query: String,
+    },
+    MovePaletteSelection {
+        fence: AppFence,
+        delta: i32,
+    },
+    /// Run the command bound to the current selection, then close.
+    RunPalette {
+        fence: AppFence,
+    },
+    ClosePalette {
+        fence: AppFence,
+    },
+    /// Bind the inspector to one Block of the focused Pane (#935).
+    SelectBlock {
+        fence: AppFence,
+        id: BlockId,
+    },
+    ClearBlockSelection {
+        fence: AppFence,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -219,6 +274,7 @@ pub struct AppSnapshot {
     pub recovery_effect: Option<RecoveryEffect>,
     pub composer: Option<ComposerSnapshot>,
     pub chrome: ChromeSnapshot,
+    pub palette: PaletteSnapshot,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -244,6 +300,7 @@ pub struct ApplicationRoot {
     pending_recovery: Vec<RecoveryEffect>,
     composer: ComposerState,
     chrome: ChromeState,
+    palette: PaletteState,
     #[cfg(target_os = "macos")]
     client: Option<LocalDisplayClient>,
 }
@@ -278,6 +335,7 @@ impl ApplicationRoot {
             pending_recovery: Vec::new(),
             composer,
             chrome: ChromeState::new(),
+            palette: PaletteState::new(),
             #[cfg(target_os = "macos")]
             client: None,
         }
@@ -306,7 +364,19 @@ impl ApplicationRoot {
     pub fn snapshot(&self) -> AppSnapshot {
         let shell = self.shell.snapshot();
         let composer = self.composer.snapshot(shell.focused_pane).ok();
-        let chrome = self.chrome.snapshot(&shell);
+        let chrome = self.chrome.snapshot(
+            &shell,
+            composer
+                .as_ref()
+                .map(|composer| composer.blocks.as_slice())
+                .unwrap_or(&[]),
+        );
+        let palette = self.palette.snapshot(
+            &shell,
+            &chrome,
+            self.shell.allows_tab_creation(),
+            self.shell.allows_pane_splitting(),
+        );
         let eligibility = self.eligibility();
         let composer_eligible = eligibility == PresentationEligibility::Flow && !self.frozen;
         AppSnapshot {
@@ -335,6 +405,7 @@ impl ApplicationRoot {
             recovery_effect: self.pending_recovery.first().copied(),
             composer,
             chrome,
+            palette,
         }
     }
 
@@ -385,6 +456,36 @@ impl ApplicationRoot {
             AppAction::ApplyRuntimeBlocks { fence, records } => {
                 self.apply_runtime_blocks(fence, records)
             }
+            AppAction::OpenComposerHistory { fence } => {
+                self.composer_history(fence, ComposerAction::OpenHistory { pane: fence.pane })
+            }
+            AppAction::SetComposerHistoryFilter { fence, query } => self.composer_history(
+                fence,
+                ComposerAction::SetHistoryFilter {
+                    pane: fence.pane,
+                    query,
+                },
+            ),
+            AppAction::MoveComposerHistorySelection { fence, delta } => self.composer_history(
+                fence,
+                ComposerAction::MoveHistorySelection {
+                    pane: fence.pane,
+                    delta,
+                },
+            ),
+            AppAction::SelectComposerHistory {
+                fence,
+                composer_epoch,
+            } => self.composer_history(
+                fence,
+                ComposerAction::SelectHistory {
+                    pane: fence.pane,
+                    epoch: composer_epoch,
+                },
+            ),
+            AppAction::CloseComposerHistory { fence } => {
+                self.composer_history(fence, ComposerAction::CloseHistory { pane: fence.pane })
+            }
             AppAction::SetLeftPanel { mode } => self.set_left_panel(mode),
             AppAction::SetInspectorMode { mode } => self.set_inspector_mode(mode),
             AppAction::SelectAgent { fence, id } => self.select_agent(fence, id),
@@ -394,6 +495,15 @@ impl ApplicationRoot {
                 agents,
                 attention,
             } => self.replace_chrome(fence, agents, attention),
+            AppAction::SelectBlock { fence, id } => self.select_block(fence, id),
+            AppAction::ClearBlockSelection { fence } => {
+                self.require_fence(fence)?;
+                let shell = self.shell.snapshot();
+                self.chrome
+                    .apply(ChromeAction::ClearBlockSelection, &shell)
+                    .map(|_| ())
+                    .map_err(chrome_error)
+            }
             AppAction::SelectWorkspace { id } => self.select_workspace(id),
             AppAction::SelectTab { id } => self.select_tab(id),
             AppAction::FocusPane { id } => self.focus_pane(id),
@@ -402,6 +512,13 @@ impl ApplicationRoot {
                 inspector,
                 tab_strip,
             } => self.set_shell_visibility(left, inspector, tab_strip),
+            AppAction::OpenPalette { fence } => self.open_palette(fence),
+            AppAction::SetPaletteQuery { fence, query } => self.set_palette_query(fence, query),
+            AppAction::MovePaletteSelection { fence, delta } => {
+                self.move_palette_selection(fence, delta)
+            }
+            AppAction::RunPalette { fence } => self.run_palette(fence),
+            AppAction::ClosePalette { fence } => self.close_palette(fence),
         };
         match result {
             Ok(()) => {
@@ -540,6 +657,9 @@ impl ApplicationRoot {
     fn quit(&mut self) -> Result<(), AppError> {
         self.frozen = true;
         self.pending_effect = NativeEffect::BoundedDetachThenTerminate;
+        // Frozen routes the composer to Hidden, which also closes any open
+        // history overlay; the draft is preserved.
+        self.sync_composer_presentation();
         Ok(())
     }
 
@@ -667,6 +787,136 @@ impl ApplicationRoot {
             })
             .map(|_| ())
             .map_err(composer_error)
+    }
+
+    fn focused_blocks(&self) -> Vec<crate::composer::BlockProjection> {
+        let pane = self.shell.snapshot().focused_pane;
+        self.composer
+            .snapshot(pane)
+            .map(|composer| composer.blocks)
+            .unwrap_or_default()
+    }
+
+    fn select_block(&mut self, fence: AppFence, id: BlockId) -> Result<(), AppError> {
+        self.require_fence(fence)?;
+        let shell = self.shell.snapshot();
+        let blocks = self.focused_blocks();
+        self.chrome
+            .apply(ChromeAction::SelectBlock { id, blocks }, &shell)
+            .map(|_| ())
+            .map_err(chrome_error)
+    }
+
+    /// History recall is fenced like every other pane-sensitive composer
+    /// action: stale Pane/execution/attachment identity fails closed.
+    fn composer_history(
+        &mut self,
+        fence: AppFence,
+        action: ComposerAction,
+    ) -> Result<(), AppError> {
+        self.require_fence(fence)?;
+        self.composer
+            .apply(action)
+            .map(|_| ())
+            .map_err(composer_error)
+    }
+
+    fn create_tab(&mut self) -> Result<(), AppError> {
+        self.shell
+            .apply(ShellAction::CreateTab)
+            .map_err(|_| AppError::TabCreationUnavailable)?;
+        let _ = self
+            .chrome
+            .apply(ChromeAction::ContextNavigated, &self.shell.snapshot());
+        Ok(())
+    }
+
+    fn split_focused(&mut self, axis: SplitAxis) -> Result<(), AppError> {
+        self.shell
+            .apply(ShellAction::SplitFocused { axis })
+            .map_err(|_| AppError::PaneSplitUnavailable)?;
+        let _ = self
+            .chrome
+            .apply(ChromeAction::ContextNavigated, &self.shell.snapshot());
+        Ok(())
+    }
+
+    fn open_palette(&mut self, fence: AppFence) -> Result<(), AppError> {
+        self.require_fence(fence)?;
+        self.palette
+            .apply(PaletteAction::Open, 0)
+            .map_err(palette_error)
+    }
+
+    fn set_palette_query(&mut self, fence: AppFence, query: String) -> Result<(), AppError> {
+        self.require_fence(fence)?;
+        self.palette
+            .apply(PaletteAction::SetQuery(query), 0)
+            .map_err(palette_error)
+    }
+
+    fn move_palette_selection(&mut self, fence: AppFence, delta: i32) -> Result<(), AppError> {
+        self.require_fence(fence)?;
+        let row_count = self.palette_snapshot().rows.len();
+        self.palette
+            .apply(PaletteAction::MoveSelection(delta), row_count)
+            .map_err(palette_error)
+    }
+
+    fn close_palette(&mut self, fence: AppFence) -> Result<(), AppError> {
+        self.require_fence(fence)?;
+        self.palette
+            .apply(PaletteAction::Close, 0)
+            .map_err(palette_error)
+    }
+
+    /// Current palette rows from a fresh Shell/Chrome pass. Used only to
+    /// clamp `MoveSelection`; the same pass happens again in `snapshot()`.
+    fn palette_snapshot(&self) -> PaletteSnapshot {
+        let shell = self.shell.snapshot();
+        let chrome = self.chrome.snapshot(&shell, &self.focused_blocks());
+        self.palette.snapshot(
+            &shell,
+            &chrome,
+            self.shell.allows_tab_creation(),
+            self.shell.allows_pane_splitting(),
+        )
+    }
+
+    fn run_palette(&mut self, fence: AppFence) -> Result<(), AppError> {
+        self.require_fence(fence)?;
+        let shell = self.shell.snapshot();
+        let chrome = self.chrome.snapshot(&shell, &self.focused_blocks());
+        let command = self.palette.resolve(
+            &shell,
+            &chrome,
+            self.shell.allows_tab_creation(),
+            self.shell.allows_pane_splitting(),
+        );
+        let Some(command) = command else {
+            return Err(palette_error(PaletteError::NoSelection));
+        };
+        self.palette.close();
+        self.run_command(fence, command)
+    }
+
+    fn run_command(&mut self, fence: AppFence, command: PaletteCommand) -> Result<(), AppError> {
+        match command {
+            PaletteCommand::CreateTab => self.create_tab(),
+            PaletteCommand::SplitFocused(axis) => self.split_focused(axis),
+            PaletteCommand::SwitchWorkspace(id) => self.select_workspace(id),
+            PaletteCommand::SwitchTab(id) => self.select_tab(id),
+            PaletteCommand::FocusPane(id) => self.focus_pane(id),
+            PaletteCommand::SetLeftPanel(mode) => self.set_left_panel(mode),
+            PaletteCommand::SetShellVisibility {
+                left,
+                inspector,
+                tab_strip,
+            } => self.set_shell_visibility(left, inspector, tab_strip),
+            PaletteCommand::SetInspectorMode(mode) => self.set_inspector_mode(mode),
+            PaletteCommand::OpenAttention(id) => self.open_attention(fence, id),
+            PaletteCommand::FocusAgent(id) => self.select_agent(fence, id),
+        }
     }
 
     fn set_left_panel(&mut self, mode: LeftPanelMode) -> Result<(), AppError> {
@@ -802,7 +1052,13 @@ impl ApplicationRoot {
                 records,
             })
             .map(|_| ())
-            .map_err(composer_error)
+            .map_err(composer_error)?;
+        // A selected Block that Runtime no longer lists is not inspectable.
+        if self.chrome.selected_block_is_stale(&self.focused_blocks()) {
+            let shell = self.shell.snapshot();
+            let _ = self.chrome.apply(ChromeAction::ClearBlockSelection, &shell);
+        }
+        Ok(())
     }
 
     fn derive_presentation(&mut self, alternate_screen: bool) -> Result<(), AppError> {
@@ -857,6 +1113,14 @@ fn chrome_error(error: ChromeError) -> AppError {
         ChromeError::UnknownAttention => AppError::UnknownAttention,
         ChromeError::UnknownWorkspace => AppError::UnknownChromeWorkspace,
         ChromeError::UnknownTab => AppError::UnknownChromeTab,
+        ChromeError::UnknownBlock => AppError::UnknownBlock,
+    }
+}
+
+fn palette_error(error: PaletteError) -> AppError {
+    match error {
+        PaletteError::NotOpen => AppError::PaletteNotOpen,
+        PaletteError::NoSelection => AppError::PaletteNoSelection,
     }
 }
 
@@ -868,6 +1132,9 @@ fn composer_error(error: ComposerError) -> AppError {
         }
         ComposerError::StaleRequest => AppError::StaleComposerRequest,
         ComposerError::StaleEpoch => AppError::StaleComposerEpoch,
+        ComposerError::HistoryUnavailable => AppError::ComposerHistoryUnavailable,
+        ComposerError::HistoryClosed => AppError::ComposerHistoryClosed,
+        ComposerError::HistoryNoSelection => AppError::ComposerHistoryNoSelection,
     }
 }
 
@@ -1346,6 +1613,304 @@ mod tests {
         assert_eq!(root.snapshot().recovery_attempts, MAXIMUM_ATTEMPTS);
         assert_eq!(root.snapshot().recovery_stage, RecoveryStage::Exhausted);
         assert_eq!(RETRY_DELAYS.len() as u32 + 1, MAXIMUM_ATTEMPTS);
+    }
+
+    #[test]
+    fn composer_history_is_fenced_and_never_submits() {
+        let mut root = ApplicationRoot::new();
+        // Unbound: fence is valid, composer is not Available.
+        assert_eq!(
+            root.apply(AppAction::OpenComposerHistory {
+                fence: root.fence()
+            }),
+            Err(AppError::ComposerHistoryUnavailable)
+        );
+        root.apply(AppAction::Bind {
+            fence: root.fence(),
+            evidence: evidence(8, true, false),
+        })
+        .unwrap();
+        let epoch = root.snapshot().composer.unwrap().epoch;
+        root.apply(AppAction::SetComposerDraft {
+            fence: root.fence(),
+            text: "make check".into(),
+            composer_epoch: epoch,
+        })
+        .unwrap();
+        root.apply(AppAction::SubmitComposer {
+            fence: root.fence(),
+            composer_epoch: epoch,
+        })
+        .unwrap();
+        let request_id = root
+            .snapshot()
+            .composer
+            .unwrap()
+            .pending_request_id
+            .unwrap();
+        root.apply(AppAction::ApplyComposerResult {
+            fence: root.fence(),
+            request_id,
+            accepted: true,
+        })
+        .unwrap();
+        assert_eq!(root.snapshot().composer.unwrap().history_count, 1);
+
+        let mut stale = root.fence();
+        stale.execution = Some(ExecutionId::from_bytes([0x99; 16]));
+        assert_eq!(
+            root.apply(AppAction::OpenComposerHistory { fence: stale }),
+            Err(AppError::StaleExecution)
+        );
+        assert!(root.snapshot().composer.unwrap().history.is_none());
+
+        root.apply(AppAction::OpenComposerHistory {
+            fence: root.fence(),
+        })
+        .unwrap();
+        root.apply(AppAction::SetComposerHistoryFilter {
+            fence: root.fence(),
+            query: "mk".into(),
+        })
+        .unwrap();
+        root.apply(AppAction::MoveComposerHistorySelection {
+            fence: root.fence(),
+            delta: 1,
+        })
+        .unwrap();
+        let overlay = root.snapshot().composer.unwrap().history.unwrap();
+        assert_eq!(overlay.rows, vec!["make check"]);
+        assert_eq!(overlay.selected, 0);
+        let composer_epoch = root.snapshot().composer.unwrap().epoch;
+        root.apply(AppAction::SelectComposerHistory {
+            fence: root.fence(),
+            composer_epoch,
+        })
+        .unwrap();
+        let after = root.snapshot().composer.unwrap();
+        assert_eq!(after.draft, "make check");
+        assert!(after.history.is_none());
+        assert!(after.pending_request_id.is_none());
+        assert!(after.can_submit);
+
+        root.apply(AppAction::OpenComposerHistory {
+            fence: root.fence(),
+        })
+        .unwrap();
+        root.apply(AppAction::Quit).unwrap();
+        assert!(root.snapshot().frozen);
+        assert_eq!(
+            root.apply(AppAction::CloseComposerHistory {
+                fence: root.fence()
+            }),
+            Err(AppError::Frozen)
+        );
+        assert!(
+            root.snapshot().composer.unwrap().history.is_none(),
+            "frozen root projects no open overlay"
+        );
+    }
+
+    #[test]
+    fn palette_open_filter_run_is_fenced_and_omits_disallowed_commands() {
+        let mut root = ApplicationRoot::new();
+        // Unbound: require_fence passes (the Pane itself exists), so the
+        // palette is usable before any Runtime attach.
+        root.apply(AppAction::OpenPalette {
+            fence: root.fence(),
+        })
+        .unwrap();
+        let opened = root.snapshot();
+        assert!(opened.palette.open);
+        assert!(
+            !opened.palette.rows.iter().any(|row| row.label == "New Tab"),
+            "M001 default shell policy disallows tab creation; the command is omitted, not disabled"
+        );
+        assert!(!opened.palette.rows.is_empty());
+
+        // A stale fence rejects every subsequent palette action and leaves
+        // state untouched.
+        let mut stale = root.fence();
+        stale.execution = Some(ExecutionId::from_bytes([0x77; 16]));
+        assert_eq!(
+            root.apply(AppAction::MovePaletteSelection {
+                fence: stale,
+                delta: 1
+            }),
+            Err(AppError::StaleExecution)
+        );
+        assert!(root.snapshot().palette.open);
+
+        // A query matching nothing fails Run closed without dismissing.
+        root.apply(AppAction::SetPaletteQuery {
+            fence: root.fence(),
+            query: "zzz-no-such-command".into(),
+        })
+        .unwrap();
+        assert!(root.snapshot().palette.rows.is_empty());
+        assert_eq!(
+            root.apply(AppAction::RunPalette {
+                fence: root.fence()
+            }),
+            Err(AppError::PaletteNoSelection)
+        );
+        assert!(
+            root.snapshot().palette.open,
+            "failed Run does not close the palette"
+        );
+
+        // Filter to exactly one row and run it: the resolved command applies
+        // through the same path as a direct SetShellVisibility action, and
+        // the palette closes itself afterward.
+        root.apply(AppAction::SetPaletteQuery {
+            fence: root.fence(),
+            query: "Show Inspector".into(),
+        })
+        .unwrap();
+        let filtered = root.snapshot().palette;
+        assert_eq!(filtered.rows.len(), 1);
+        assert_eq!(filtered.rows[0].label, "Show Inspector");
+        assert!(!root.snapshot().chrome.inspector_visible);
+        root.apply(AppAction::RunPalette {
+            fence: root.fence(),
+        })
+        .unwrap();
+        let after = root.snapshot();
+        assert!(!after.palette.open, "Run closes the palette");
+        assert_eq!(after.palette.query, "");
+        assert!(
+            after.chrome.inspector_visible,
+            "the resolved command actually ran"
+        );
+    }
+
+    #[test]
+    fn palette_move_selection_and_close_are_fenced_and_reversible() {
+        let mut root = ApplicationRoot::new();
+        assert_eq!(
+            root.apply(AppAction::SetPaletteQuery {
+                fence: root.fence(),
+                query: "x".into()
+            }),
+            Err(AppError::PaletteNotOpen)
+        );
+        root.apply(AppAction::OpenPalette {
+            fence: root.fence(),
+        })
+        .unwrap();
+        let row_count = root.snapshot().palette.rows.len();
+        assert!(
+            row_count >= 2,
+            "enough commands to exercise selection movement"
+        );
+        root.apply(AppAction::MovePaletteSelection {
+            fence: root.fence(),
+            delta: 1,
+        })
+        .unwrap();
+        assert_eq!(root.snapshot().palette.selected, 1);
+        root.apply(AppAction::MovePaletteSelection {
+            fence: root.fence(),
+            delta: -100,
+        })
+        .unwrap();
+        assert_eq!(root.snapshot().palette.selected, 0);
+        root.apply(AppAction::ClosePalette {
+            fence: root.fence(),
+        })
+        .unwrap();
+        let closed = root.snapshot();
+        assert!(!closed.palette.open);
+        assert!(closed.palette.rows.is_empty());
+        assert_eq!(
+            root.apply(AppAction::ClosePalette {
+                fence: root.fence()
+            }),
+            Ok(()),
+            "closing an already-closed palette is idempotent"
+        );
+    }
+
+    #[test]
+    fn block_selection_is_fenced_and_sourced_from_runtime_blocks() {
+        use crate::chrome::InspectorMode;
+        use seyal_core::BlockId;
+
+        let mut root = ApplicationRoot::new();
+        let known = BlockId::from_bytes([0x51; 16]);
+        let unknown = BlockId::from_bytes([0x52; 16]);
+        // Unbound: fence valid, but there is no Block list yet.
+        assert_eq!(
+            root.apply(AppAction::SelectBlock {
+                fence: root.fence(),
+                id: known,
+            }),
+            Err(AppError::UnknownBlock)
+        );
+        root.apply(AppAction::Bind {
+            fence: root.fence(),
+            evidence: evidence(8, true, false),
+        })
+        .unwrap();
+        root.apply(AppAction::ApplyRuntimeBlocks {
+            fence: root.fence(),
+            records: vec![RuntimeBlockRecord {
+                id: known,
+                command: "git status".into(),
+                start_line: 1,
+                end_line: Some(3),
+                running: false,
+                exit_status: Some(0),
+            }],
+        })
+        .unwrap();
+        assert_eq!(
+            root.apply(AppAction::SelectBlock {
+                fence: root.fence(),
+                id: unknown,
+            }),
+            Err(AppError::UnknownBlock)
+        );
+        let mut stale = root.fence();
+        stale.execution = Some(ExecutionId::from_bytes([0x99; 16]));
+        assert_eq!(
+            root.apply(AppAction::SelectBlock {
+                fence: stale,
+                id: known,
+            }),
+            Err(AppError::StaleExecution)
+        );
+        assert!(root.snapshot().chrome.selected_block.is_none());
+
+        root.apply(AppAction::SelectBlock {
+            fence: root.fence(),
+            id: known,
+        })
+        .unwrap();
+        let snap = root.snapshot();
+        assert_eq!(snap.chrome.selected_block, Some(known));
+        assert_eq!(snap.chrome.inspector_mode, InspectorMode::Block);
+        assert!(snap.chrome.inspector_visible);
+        let rows = &snap.chrome.visible_inspector_rows;
+        assert_eq!(rows[0].value, "git status");
+        assert_eq!(rows[1].value, "Completed");
+        assert_eq!(rows[2].value, "0");
+        assert_eq!(rows[3].value, "3");
+
+        // Runtime republishes without that Block: selection clears itself.
+        root.apply(AppAction::ApplyRuntimeBlocks {
+            fence: root.fence(),
+            records: vec![],
+        })
+        .unwrap();
+        let after = root.snapshot();
+        assert!(after.chrome.selected_block.is_none());
+        assert_eq!(after.chrome.inspector_mode, InspectorMode::Context);
+        assert!(after
+            .chrome
+            .inspector_rows
+            .iter()
+            .all(|row| row.section != "Block"));
     }
 
     #[test]

@@ -722,6 +722,14 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
         }
     }
 
+    private static func xtermButtonSelfTest() -> Bool {
+        xtermButton(0) == 0
+            && xtermButton(1) == 2
+            && xtermButton(2) == 1
+            && xtermButton(3) == nil
+            && xtermButton(-1) == nil
+    }
+
     private func takeNextMouseActionID() -> UInt32? {
         guard let actionID = Self.v2ActionIDBeforeExhaustion(nextMouseActionID) else {
             terminalStopForProtocolRecovery()
@@ -818,6 +826,7 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
             && heldKeyAdmissionSelfTest()
             && capabilityLossDropsHeldKeyReleaseSelfTest()
             && RustDisplayBridge.pasteAdmissionSelfTest()
+            && xtermButtonSelfTest()
     }
 
     private static func controlNormalizationSelfTest() -> Bool {

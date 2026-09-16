@@ -369,6 +369,17 @@ final class SeyalHostUITests: XCTestCase {
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 8))
     }
 
+    func testHostMouseClickStaysOnFlowBlocks() throws {
+        let app = hostedApp()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
+        waitForUsablePty(in: app)
+        let surface = app.descendants(matching: .any)["terminal-input"]
+        XCTAssertTrue(surface.waitForExistence(timeout: 5))
+        surface.firstMatch.click()
+        XCTAssertEqual(app.state, .runningForeground, "Seyal.app crashed on host mouse click")
+        assertFlowBlocksOrFail(in: app)
+    }
+
     func testCommandPaletteOpensFiltersRunsAndDismisses() throws {
         let app = hostedApp()
         waitForUsablePty(in: app)

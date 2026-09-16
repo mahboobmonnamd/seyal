@@ -143,6 +143,10 @@ final class SeyalHostComponentTests: XCTestCase {
         XCTAssertTrue(RustDisplayBridge.pasteAdmissionSelfTest())
     }
 
+    func testXtermButtonMapDropsButtonsBeyondRight() {
+        XCTAssertTrue(InteractiveMetalSurfaceView.pass7InputSelfTest())
+    }
+
     func testTranscriptFrameRejectsZeroBlockIdentity() {
         let invalid = NativeTranscriptFrame(
             revision: 1,

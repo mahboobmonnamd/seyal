@@ -699,3 +699,90 @@ fn row_text(row: &seyal_terminal::ReflowRow) -> String {
         .map(|cell| cell.text.as_str())
         .collect()
 }
+
+/// SPEC-010 §17 `hist-hard-soft-lineage`: LF/VT/FF are HardBreak; CR alone is not.
+#[test]
+fn hist_hard_soft_lineage_cr_alone_vs_lf_vt_ff() {
+    let mut terminal = TerminalState::new(4, 2).expect("terminal");
+    // SoftWrap chain then LF HardBreak.
+    terminal.feed(b"abcd\n").expect("soft+lf");
+    // VT and FF hard breaks.
+    terminal.feed(b"B\x0bC\x0c").expect("vt/ff");
+    // CR alone overwrites; LF then seals.
+    terminal.feed(b"XY\rZ\n").expect("cr alone");
+
+    let units = terminal.primary_history_units_range(LineId(1), LineId(u64::MAX), 64);
+    assert!(
+        units
+            .iter()
+            .any(|unit| unit.break_after == HistoryBreakAfter::SoftWrap),
+        "autowrap must record SoftWrap lineage"
+    );
+    assert!(
+        units
+            .iter()
+            .any(|unit| unit.break_after == HistoryBreakAfter::HardBreak),
+        "LF/VT/FF must record HardBreak lineage"
+    );
+    // Search must not cross HardBreak separators invented by LF.
+    assert!(terminal.primary_history_search("dB", 8).is_empty());
+    // CR alone should overwrite rather than invent an extra HardBreak between X and Z.
+    let text = units_text(&units);
+    assert!(
+        text.contains('Z'),
+        "CR overwrite should leave Z in retained text, got {text:?}"
+    );
+}
+
+/// SPEC-010 §17 `hist-search-soft-span`: matches stay width-independent across resize.
+#[test]
+fn hist_search_soft_span_is_width_independent() {
+    let mut terminal = TerminalState::new(4, 1).expect("terminal");
+    terminal.feed(b"abcdefgh\r\n").expect("soft wrap history");
+    let before = terminal.primary_history_search("de", 1);
+    assert_eq!(before.len(), 1);
+    let start = before[0].start;
+    let end = before[0].end;
+    for cols in [8u16, 6, 40, 4] {
+        terminal.resize(cols, 1).expect("resize");
+        let after = terminal.primary_history_search("de", 1);
+        assert_eq!(after.len(), 1, "soft-span search must survive width {cols}");
+        assert_eq!(after[0].start, start);
+        assert_eq!(after[0].end, end);
+    }
+}
+
+/// SPEC-010 §17 `hist-cache-rebuild-equiv`: drop derived caches then rebuild.
+#[test]
+fn hist_cache_drop_rebuild_equals_prior_projection() {
+    let mut terminal = TerminalState::new(4, 2).expect("terminal");
+    terminal.feed(b"abcdefgh\r\nijkl\r\n").expect("feed");
+    let prior = terminal.primary_history_reflow(3, 32);
+    terminal.drop_primary_history_derived_cache();
+    let rebuilt = terminal.primary_history_reflow(3, 32);
+    assert_eq!(prior, rebuilt);
+    let uncached = terminal.primary_history_reflow_uncached(3, 32);
+    assert_eq!(rebuilt, uncached);
+}
+
+/// SPEC-010 §17 `hist-wide-grapheme`: overflow sentinel retained in history.
+#[test]
+fn hist_wide_grapheme_overflow_sentinel_is_retained() {
+    let mut terminal = TerminalState::new(40, 2).expect("terminal");
+    let mut payload = String::from("a");
+    for _ in 0..4096 {
+        payload.push('\u{0301}');
+    }
+    assert!(payload.len() > 8192);
+    terminal
+        .feed(payload.as_bytes())
+        .expect("overflow grapheme");
+    assert!(terminal.diagnostics().grapheme_payload_overflow_count >= 1);
+    terminal.feed(b"\r\n").expect("retain");
+    let units = terminal.primary_history_units_range(LineId(1), LineId(u64::MAX), 8);
+    assert!(
+        units.iter().any(|unit| unit.text == "\u{FFFD}"),
+        "overflow sentinel must be retained in canonical history, got {:?}",
+        units_text(&units)
+    );
+}

@@ -61,3 +61,13 @@ No Debug `Seyal.app` was launched. All six headed steps remain
 `ENVIRONMENT_UNSUPPORTED`. See `m002-keyboard-823-macos-handoff.md` for the
 macOS exclusive-Runtime procedure and `m002-keyboard-823-379f8c6-rereview.md`
 for the Linux SOURCE_GO / CLOSE_NO_GO verdict.
+
+## 2026-09-16 Apple Silicon attempt (exact source `379f8c6`)
+
+- **Host:** Darwin 25.5.0 arm64 / macOS 26.5.2
+- **Exact source head:** `379f8c655452acc4313f4987d90b875e11337d7d`
+- **Classification:** exclusive Runtime **unblocked**; headed XCUI `ENVIRONMENT_UNSUPPORTED` (automation-mode timeout)
+
+The prior shared-socket occupant is gone. Host-component 8/8 and focused
+Runtime/key_v2 suites passed. The new key→PTY XCUI case did not start. See
+`m002-keyboard-823-macos-headed-2026-09-16.md`.

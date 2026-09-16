@@ -8,7 +8,8 @@ Do not run concurrently with another worktree that binds the per-user Runtime so
 | Item | Value |
 | --- | --- |
 | Branch | `issue/823` |
-| Exact head | `379f8c655452acc4313f4987d90b875e11337d7d` |
+| Exact source head | `379f8c655452acc4313f4987d90b875e11337d7d` |
+| 2026-09-16 macOS attempt | Exclusive Runtime was free; XCUI timed out enabling automation mode. See `m002-keyboard-823-macos-headed-2026-09-16.md`. |
 | Relationship | `Refs #823` until headed PASS + independent close GO |
 | Linux source status | SOURCE_GO at this head (see `m002-keyboard-823-379f8c6-rereview.md`) |
 

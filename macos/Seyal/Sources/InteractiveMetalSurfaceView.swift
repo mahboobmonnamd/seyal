@@ -547,6 +547,10 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
     }
 
     override func keyUp(with event: NSEvent) {
+        guard allowsDirectTerminalInput else {
+            heldKeyboardKinds.removeValue(forKey: event.keyCode)
+            return
+        }
         guard let key = Self.takeHeldKeyForV2Release(
             from: &heldKeyboardKinds,
             keyCode: event.keyCode,

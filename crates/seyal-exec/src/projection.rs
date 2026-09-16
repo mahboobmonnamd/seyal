@@ -201,10 +201,7 @@ pub(crate) fn update(
 }
 
 fn host_highlight(terminal: &TerminalState, col: u16, row: u16) -> bool {
-    if terminal
-        .selection_session()
-        .contains_cell(col, row, terminal.cols())
-    {
+    if terminal.selection_covers_cell(col, row) {
         return true;
     }
     let copy_mode = terminal.copy_mode();

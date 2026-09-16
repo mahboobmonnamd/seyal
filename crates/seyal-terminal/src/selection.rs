@@ -4,7 +4,9 @@
 //! are derived views over canonical source anchors (SPEC-010 §11–§12). They
 //! never become a second transcript store and never run on the PTY feed path.
 
-use crate::{CellRole, HistoryBreakAfter, HistoryMatch, HistoryRangeError, HistoryUnitView};
+use crate::{
+    CellRole, HistoryAnchor, HistoryBreakAfter, HistoryMatch, HistoryRangeError, HistoryUnitView,
+};
 
 /// Bounded paste payload before bracket wrapping. Stays inside the existing
 /// local-IPC input ceiling (`MAX_INPUT_BYTES` = 64 KiB) after wrappers.
@@ -41,8 +43,13 @@ pub enum CopyModeMotion {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SelectionSession {
     pub kind: SelectionKind,
+    /// Hit-tested visual corners for presentation / rectangular coverage.
     pub start: Option<VisualPos>,
     pub end: Option<VisualPos>,
+    /// Canonical source endpoints (SPEC-010 §11). Linear copy and highlight
+    /// prefer these so scroll/reflow cannot silently retarget the selection.
+    pub start_anchor: Option<HistoryAnchor>,
+    pub end_anchor: Option<HistoryAnchor>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -158,22 +165,48 @@ impl SelectionSession {
         *self = Self::default();
     }
 
-    pub fn set_linear(&mut self, start: VisualPos, end: VisualPos) {
+    pub fn set_linear(
+        &mut self,
+        start: VisualPos,
+        end: VisualPos,
+        start_anchor: Option<HistoryAnchor>,
+        end_anchor: Option<HistoryAnchor>,
+    ) {
         self.kind = SelectionKind::Linear;
         self.start = Some(start);
         self.end = Some(end);
+        self.start_anchor = start_anchor;
+        self.end_anchor = end_anchor;
     }
 
-    pub fn set_rectangular(&mut self, start: VisualPos, end: VisualPos) {
+    pub fn set_rectangular(
+        &mut self,
+        start: VisualPos,
+        end: VisualPos,
+        start_anchor: Option<HistoryAnchor>,
+        end_anchor: Option<HistoryAnchor>,
+    ) {
         self.kind = SelectionKind::Rectangular;
         self.start = Some(start);
         self.end = Some(end);
+        self.start_anchor = start_anchor;
+        self.end_anchor = end_anchor;
     }
 
     pub fn ordered_corners(self) -> Option<(VisualPos, VisualPos)> {
         let start = self.start?;
         let end = self.end?;
         Some(order_visual(start, end))
+    }
+
+    pub fn ordered_anchors(self) -> Option<(HistoryAnchor, HistoryAnchor)> {
+        let start = self.start_anchor?;
+        let end = self.end_anchor?;
+        if start <= end {
+            Some((start, end))
+        } else {
+            Some((end, start))
+        }
     }
 
     /// Visual coverage matching `copy_visual_cells`. `cols` is the current
@@ -220,6 +253,8 @@ mod selection_contains_tests {
             kind: SelectionKind::Linear,
             start: Some(VisualPos { col: 2, row: 0 }),
             end: Some(VisualPos { col: 1, row: 2 }),
+            start_anchor: None,
+            end_anchor: None,
         };
         assert!(session.contains_cell(2, 0, 4));
         assert!(session.contains_cell(3, 0, 4));
@@ -237,6 +272,8 @@ mod selection_contains_tests {
             kind: SelectionKind::Rectangular,
             start: Some(VisualPos { col: 1, row: 0 }),
             end: Some(VisualPos { col: 2, row: 1 }),
+            start_anchor: None,
+            end_anchor: None,
         };
         assert!(session.contains_cell(1, 0, 4));
         assert!(session.contains_cell(2, 1, 4));
@@ -347,16 +384,12 @@ impl CopyMode {
         };
     }
 
-    pub fn selection(&self) -> Option<SelectionSession> {
+    pub fn selection(&self) -> Option<(VisualPos, VisualPos, SelectionKind)> {
         if !self.active {
             return None;
         }
         let start = self.anchor?;
-        Some(SelectionSession {
-            kind: self.kind,
-            start: Some(start),
-            end: Some(self.cursor),
-        })
+        Some((start, self.cursor, self.kind))
     }
 }
 

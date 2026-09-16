@@ -458,7 +458,7 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
 
   @discardableResult
   func terminalSubmitPaste(_ text: String) -> Int32 {
-    bridge?.submitPaste(Array(text.utf8)) ?? -10
+    bridge?.submitPaste(text) ?? -10
   }
 
   @discardableResult

@@ -1011,19 +1011,28 @@ final class RustDisplayBridge {
   }
 
   @discardableResult
-  func submitPaste(_ bytes: [UInt8]) -> Int32 {
+  func submitPaste(_ text: String) -> Int32 {
     guard isConnected, reconstructionState.canMutate, selectClient() else {
       onStatusChanged()
       return -10
     }
-    guard !bytes.isEmpty, bytes.count <= Int(UInt32.max) else {
+    let byteCount = text.utf8.count
+    guard byteCount > 0 else {
       onStatusChanged()
       return -4
     }
-    let count = UInt32(bytes.count)
-    let result = bytes.withUnsafeBufferPointer { buffer in
-      seyal_bridge_submit_paste(buffer.baseAddress, count)
+    guard byteCount <= 65_536 else {
+      onStatusChanged()
+      return -14
     }
+    let count = UInt32(byteCount)
+    let result =
+      text.utf8.withContiguousStorageIfAvailable { buffer -> Int32 in
+        seyal_bridge_submit_paste(buffer.baseAddress, count)
+      }
+      ?? Array(text.utf8).withUnsafeBufferPointer { buffer in
+        seyal_bridge_submit_paste(buffer.baseAddress, count)
+      }
     return finishMutation(result)
   }
 

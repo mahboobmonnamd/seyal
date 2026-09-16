@@ -2,10 +2,13 @@ use std::{slice, str};
 
 use seyal_runtime::local_ipc::framing::{
     HostSelectionAction, TerminalKeyKind, TerminalKeyV2Event, TerminalKeyV2Kind,
-    TerminalKeyV2Modifiers,
+    TerminalKeyV2Modifiers, TerminalMouseKind,
 };
 
-use crate::{local::derive_grid_geometry, LocalDisplayClient};
+use crate::{
+    local::{cell_from_point, derive_grid_geometry},
+    LocalDisplayClient,
+};
 
 use super::{error_code, with_active_client, with_active_client_mut, SeyalCopiedText};
 
@@ -196,6 +199,64 @@ pub extern "C" fn seyal_bridge_submit_key_v2(
     .map_or(-1, |result| result.map_or_else(error_code, |_| 0))
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_mouse_cell(
+    pixel_x: f64,
+    pixel_y_from_top: f64,
+    viewport_width: f64,
+    viewport_height: f64,
+    horizontal_insets: f64,
+    vertical_insets: f64,
+    cell_width: f64,
+    cell_height: f64,
+    col: *mut u16,
+    row: *mut u16,
+) -> u8 {
+    if col.is_null() || row.is_null() {
+        return 0;
+    }
+    match cell_from_point(
+        pixel_x,
+        pixel_y_from_top,
+        viewport_width,
+        viewport_height,
+        horizontal_insets,
+        vertical_insets,
+        cell_width,
+        cell_height,
+    ) {
+        Some((cell_col, cell_row)) => {
+            unsafe {
+                *col = cell_col;
+                *row = cell_row;
+            }
+            1
+        }
+        None => 0,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_submit_mouse(
+    kind: u8,
+    button: u8,
+    modifiers: u16,
+    col: u16,
+    row: u16,
+    action_id: u32,
+) -> i32 {
+    let Some(kind) = terminal_mouse_kind(kind) else {
+        return -4;
+    };
+    let Some(modifiers) = TerminalKeyV2Modifiers::from_bits_for_ffi(modifiers) else {
+        return -4;
+    };
+    with_active_client_mut(|client| {
+        client.submit_terminal_mouse(kind, button, modifiers, col, row, action_id)
+    })
+    .map_or(-1, |result| result.map_or_else(error_code, |_| 0))
+}
+
 /// Validate logical viewport/cell metrics, derive a bounded rows/columns
 /// proposal, and reconcile it through correlated Pass-7 resize.
 #[unsafe(no_mangle)]
@@ -273,6 +334,16 @@ fn terminal_key_v2_event(value: u8) -> Option<TerminalKeyV2Event> {
         1 => TerminalKeyV2Event::Press,
         2 => TerminalKeyV2Event::Repeat,
         3 => TerminalKeyV2Event::Release,
+        _ => return None,
+    })
+}
+
+fn terminal_mouse_kind(value: u8) -> Option<TerminalMouseKind> {
+    Some(match value {
+        1 => TerminalMouseKind::Press,
+        2 => TerminalMouseKind::Release,
+        3 => TerminalMouseKind::Move,
+        4 => TerminalMouseKind::Wheel,
         _ => return None,
     })
 }

@@ -21,7 +21,7 @@ use crate::{
     width::{grapheme_terminal_width, AmbiguousWidthPolicy},
     Cell, CellRole, CursorState, Damage, HistoryAnchor, HistoryAnchorResolution, HistoryBreakAfter,
     HistoryMatch, HistoryRangeError, HistoryUnitView, HistoryWireCell, LineId, ModeState,
-    ReflowRow, TerminalError,
+    MouseReporting, ReflowRow, TerminalError,
 };
 use std::collections::VecDeque;
 
@@ -1189,8 +1189,40 @@ impl TerminalCore {
                         self.record_deferred();
                     }
                 }
+                1000 => self.reply_mouse_reporting(1000, MouseReporting::Button),
+                1002 => self.reply_mouse_reporting(1002, MouseReporting::ButtonDrag),
+                1003 => self.reply_mouse_reporting(1003, MouseReporting::Any),
+                1006 => {
+                    let status = if self.modes.mouse_sgr { 1 } else { 2 };
+                    if let Some(reply) = encode_decrqm_private(1006, status) {
+                        self.enqueue_protocol_reply(reply);
+                    } else {
+                        self.record_deferred();
+                    }
+                }
                 _ => self.record_deferred(),
             }
+        }
+    }
+
+    fn set_mouse_reporting(&mut self, level: MouseReporting, enabled: bool) {
+        if enabled {
+            self.modes.mouse_reporting = level;
+        } else if self.modes.mouse_reporting == level {
+            self.modes.mouse_reporting = MouseReporting::Off;
+        }
+    }
+
+    fn reply_mouse_reporting(&mut self, mode: u16, level: MouseReporting) {
+        let status = if self.modes.mouse_reporting == level {
+            1
+        } else {
+            2
+        };
+        if let Some(reply) = encode_decrqm_private(mode, status) {
+            self.enqueue_protocol_reply(reply);
+        } else {
+            self.record_deferred();
         }
     }
 
@@ -1636,6 +1668,10 @@ impl Actions for TerminalCore {
                         2004 => {
                             self.modes.bracketed_paste = enabled;
                         }
+                        1000 => self.set_mouse_reporting(MouseReporting::Button, enabled),
+                        1002 => self.set_mouse_reporting(MouseReporting::ButtonDrag, enabled),
+                        1003 => self.set_mouse_reporting(MouseReporting::Any, enabled),
+                        1006 => self.modes.mouse_sgr = enabled,
                         _ => self.record_deferred(),
                     }
                 }

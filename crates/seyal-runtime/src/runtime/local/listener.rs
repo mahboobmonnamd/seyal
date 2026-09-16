@@ -160,6 +160,7 @@ impl Runtime {
                                         last_resize_request_id: 0,
                                         client_capabilities: 0,
                                         last_terminal_key_action_id: 0,
+                                        last_terminal_mouse_action_id: 0,
                                         close_after_flush: false,
                                     },
                                 );

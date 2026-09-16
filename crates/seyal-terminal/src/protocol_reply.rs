@@ -74,8 +74,8 @@ pub(crate) fn encode_decrqm_private(mode: u16, status: u16) -> Option<ProtocolRe
 
 /// Primary Device Attributes reply for the implemented VT subset.
 ///
-/// `CSI ? 1 ; 2 c` — VT100-level DA with AVO. Seyal does not advertise advanced
-/// feature codes for unimplemented mouse/graphics/keyboard protocols.
+/// `CSI ? 1 ; 2 c` — VT100-level DA with AVO. Mouse is advertised through
+/// terminfo `kmous`/`XM`, not extra DA feature codes.
 pub(crate) fn encode_primary_da() -> Option<ProtocolReply> {
     ProtocolReply::from_slice(b"\x1b[?1;2c")
 }

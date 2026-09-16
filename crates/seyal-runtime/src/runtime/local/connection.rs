@@ -11,6 +11,7 @@ pub(in crate::runtime) struct ConnectionMeta {
     pub(super) last_resize_request_id: u64,
     pub(super) client_capabilities: u32,
     pub(super) last_terminal_key_action_id: u32,
+    pub(super) last_terminal_mouse_action_id: u32,
     pub(super) close_after_flush: bool,
 }
 
@@ -107,6 +108,8 @@ impl Runtime {
         if let Some(execution_id) = execution_id {
             if let Some(entry) = self.entries.get_mut(&execution_id) {
                 entry.attachments.remove(&attachment_id);
+                entry.mouse_buttons = 0;
+                entry.mouse_host_anchor = None;
             }
             let no_viewers = self
                 .local_ipc

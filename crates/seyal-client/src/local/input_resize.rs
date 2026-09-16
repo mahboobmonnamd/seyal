@@ -209,6 +209,14 @@ pub(crate) fn classify_server_error(
     {
         return Ok(None);
     }
+    // Expected host outcomes: no search match, yank with no/stale selection.
+    // These must not tear down a healthy attachment.
+    if error.error_code == ErrorCode::InvalidState as u16
+        && (error.offending_message_type == MessageType::HostSearch as u16
+            || error.offending_message_type == MessageType::HostSelection as u16)
+    {
+        return Ok(None);
+    }
     Err(server_error(error.error_code))
 }
 
@@ -1059,6 +1067,22 @@ mod tests {
                 detail_code: 0,
             }),
             Err(ClientError::Server(ErrorCode::CapacityExceeded))
+        );
+        assert_eq!(
+            classify_server_error(ErrorMessage {
+                error_code: ErrorCode::InvalidState as u16,
+                offending_message_type: MessageType::HostSearch as u16,
+                detail_code: 0,
+            }),
+            Ok(None)
+        );
+        assert_eq!(
+            classify_server_error(ErrorMessage {
+                error_code: ErrorCode::InvalidState as u16,
+                offending_message_type: MessageType::HostSelection as u16,
+                detail_code: 0,
+            }),
+            Ok(None)
         );
     }
 

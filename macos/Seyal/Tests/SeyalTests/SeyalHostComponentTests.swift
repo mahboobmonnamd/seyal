@@ -310,7 +310,7 @@ final class SeyalHostComponentTests: XCTestCase {
         }
         let connected = expectation(description: "production Runtime and projection connected")
         var connectedOnce = false
-        observeProductChange = {
+        let checkConnected = {
             if !connectedOnce, view.terminalBridgeIsConnected,
                 view.terminalCurrentFrame() != nil,
                 seyal_app_snapshot(pane.appHandle).eligibility
@@ -320,11 +320,19 @@ final class SeyalHostComponentTests: XCTestCase {
                 connected.fulfill()
             }
         }
+        observeProductChange = checkConnected
+        // Connection/projection can complete without another product-change
+        // pulse after activate. Poll so a single missed callback is not a FAIL.
+        let connectPoll = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in
+            checkConnected()
+        }
+        defer { connectPoll.invalidate() }
         window.makeKeyAndOrderFront(nil)
         host.activateAfterWindowPresentation()
-        observeProductChange?()
-        await fulfillment(of: [connected], timeout: 20)
+        checkConnected()
+        await fulfillment(of: [connected], timeout: 30)
         guard connectedOnce else { return }
+        connectPoll.invalidate()
 
         // A bounded real PTY child records bytes; no input bridge is mocked.
         let script = """

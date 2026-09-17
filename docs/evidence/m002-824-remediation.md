@@ -34,4 +34,8 @@ Remediation on `issue/824`:
 - on new Block projection and on history-range body growth, re-pin to live end only while following;
 - wait for the submitted card to become hittable before the XCUI click so an off-clip ghost cannot pass existence and fail selection.
 
+CI at `d44662c`: Block-selection XCUI and all four workload XCUI cases PASS. Remaining CI FAIL was
+`testNativeIMELiveCallbacksDeliverOnlyCommittedUTF8AndTrackCursor` timing out on the
+"production Runtime and projection connected" wait; harden that wait with a connection poll.
+
 Acceptance: the Block-selection XCUI test must pass in the combined/full native suite, not only in isolation, and the final exact-head native gate must be green.

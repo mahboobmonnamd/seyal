@@ -15,7 +15,8 @@ Remediation on `issue/824`:
 
 - include the process id plus the process-local counter in test singleton/runtime-dir names;
 - perform controlled Runtime shutdown from the test Harness destructor;
-- leave production Runtime/TerminalExecution lifecycle semantics unchanged.
+- leave production Runtime/TerminalExecution lifecycle semantics unchanged;
+- rustfmt the `runtime_dir_override` assignment so Foundation Quality does not fail `cargo fmt --check`.
 
 Acceptance: isolated `pass7_local_ipc` plus the full exact-head `make check` gate must pass. A single green rerun is not sufficient evidence if the full gate regresses again.
 
@@ -26,5 +27,11 @@ Observed symptom: the final full native run passed 44/45; `testSelectingABlockRe
 The Rust selection action already validates the selected Block and a successful action bumps application generation. The remaining failure is therefore being treated as a native transcript/hit-testing/reconciliation defect until disproved, not as missing Rust product state.
 
 The transcript currently scrolls to live end when a new Block is first projected. History-range replies arrive asynchronously and can later grow existing Block bodies. In a persistent Runtime/full-suite run this can move the newly submitted Block out of the visible clip after the initial live-end scroll. The production fix must preserve live following only when the user was already at the live end; it must not yank a user who intentionally scrolled back through history.
+
+Remediation on `issue/824`:
+
+- track `followingLiveEnd` from user transcript scroll proximity;
+- on new Block projection and on history-range body growth, re-pin to live end only while following;
+- wait for the submitted card to become hittable before the XCUI click so an off-clip ghost cannot pass existence and fail selection.
 
 Acceptance: the Block-selection XCUI test must pass in the combined/full native suite, not only in isolation, and the final exact-head native gate must be green.

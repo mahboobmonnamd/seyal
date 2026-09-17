@@ -31,9 +31,7 @@ fn config() -> RuntimeConfig {
     let mut config = RuntimeConfig::m001().expect("config");
     config.singleton_path = std::env::temp_dir().join(format!("s7-{process}-{suffix:x}.lock"));
     config.local_ipc = LocalIpcMode::Enabled {
-        runtime_dir_override: Some(
-            std::env::temp_dir().join(format!("s7d-{process}-{suffix:x}")),
-        ),
+        runtime_dir_override: Some(std::env::temp_dir().join(format!("s7d-{process}-{suffix:x}"))),
     };
     config
 }

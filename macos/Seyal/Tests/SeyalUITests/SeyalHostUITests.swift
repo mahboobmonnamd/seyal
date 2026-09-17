@@ -267,19 +267,32 @@ final class SeyalHostUITests: XCTestCase {
             XCTAssertFalse(inspector.firstMatch.isHittable, "no Block, no Block details")
             return
         }
+        // Async history-range replies grow earlier cards after the initial
+        // live-end scroll. Wait until the submitted card is hittable so the
+        // click lands on the Block chrome rather than an off-clip ghost.
+        let hittable = expectation(
+            for: NSPredicate(format: "isHittable == true"),
+            evaluatedWith: card,
+            handler: nil
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [hittable], timeout: 8),
+            .completed,
+            "submitted Block must remain in the visible transcript clip"
+        )
         card.click()
         XCTAssertTrue(inspector.waitForExistence(timeout: 5))
         let revealed = expectation(for: NSPredicate(format: "isHittable == true"), evaluatedWith: inspector.firstMatch, handler: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [revealed], timeout: 5), .completed, "selecting a Block reveals the inspector")
-        let selected = expectation(for: NSPredicate(format: "value == 'selected'"), evaluatedWith: card.firstMatch, handler: nil)
+        let selected = expectation(for: NSPredicate(format: "value == 'selected'"), evaluatedWith: card, handler: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 5), .completed, "card reflects the Rust selected flag")
         let commandRow = inspector.descendants(matching: .staticText)["Block · Command"]
         XCTAssertTrue(commandRow.waitForExistence(timeout: 5), "inspector shows Rust Block rows")
         XCTAssertTrue(inspector.descendants(matching: .staticText)[submitted].waitForExistence(timeout: 5))
         XCTAssertFalse(inspector.descendants(matching: .staticText)["Block · Duration"].exists, "no fabricated telemetry")
 
-        card.firstMatch.click()
-        let deselected = expectation(for: NSPredicate(format: "value == nil OR value == ''"), evaluatedWith: card.firstMatch, handler: nil)
+        card.click()
+        let deselected = expectation(for: NSPredicate(format: "value == nil OR value == ''"), evaluatedWith: card, handler: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [deselected], timeout: 5), .completed, "clicking again clears the selection")
         XCTAssertFalse(commandRow.exists, "Block rows leave with the selection")
         XCTAssertEqual(app.state, .runningForeground)

@@ -90,6 +90,7 @@ Label every perf/presentation/fuzz claim: `CI` | `controlled-host` | `PLATFORM_L
 ## How to use for M002+
 
 1. Read `AGENTS.md` then the linked domain doc for the change class.
-2. Open/refine one Ready Issue; one worktree; one scoped PR.
-3. Prefer extending these authorities over adding competing “baseline” docs.
-4. When M001 evidence documents are historical, treat them as precedent for honesty rules — not as a license to skip M002 acceptance gates.
+2. For M002 remaining work, obey `docs/milestones/MILESTONE-002.md`: only #824 → #673 → #837 → freeze-SHA validation remain; do not attach new product slices.
+3. Open/refine one Ready Issue; one worktree; one scoped PR.
+4. Prefer extending these authorities over adding competing “baseline” docs.
+5. When M001 evidence documents are historical, treat them as precedent for honesty rules — not as a license to skip M002 acceptance gates.

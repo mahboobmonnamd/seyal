@@ -28,6 +28,8 @@ mod platform;
 #[cfg(feature = "benchmark-shared-projection")]
 pub mod projection;
 mod runtime;
+#[allow(unsafe_code)]
+mod shell_integration_policy;
 mod singleton;
 #[cfg(all(target_os = "macos", feature = "test-fault-injection"))]
 #[doc(hidden)]
@@ -42,3 +44,4 @@ pub use input::InputIngress;
 #[doc(hidden)]
 pub use runtime::BenchmarkRuntimeDiagnostics;
 pub use runtime::{ExecutionLifecycle, ExecutionSummary, LocalIpcMode, Runtime, RuntimeConfig};
+pub use shell_integration_policy::{ShellIntegrationPolicy, NONCE_FD_ENV, USER_ZDOTDIR_ENV};

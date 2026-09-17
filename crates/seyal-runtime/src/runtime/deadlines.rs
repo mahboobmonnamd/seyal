@@ -55,6 +55,7 @@ impl Runtime {
             deadline: Instant::now() + self.config.final_drain,
             exit,
         };
+        self.note_execution_ended(id);
         Ok(())
     }
 
@@ -128,6 +129,7 @@ impl Runtime {
                                 deadline: now + self.config.final_drain,
                                 exit,
                             };
+                            self.note_execution_ended(id);
                         }
                         SignalDisposition::Delivered | SignalDisposition::ProcessGone => {
                             entry.lifecycle = Lifecycle::TerminatingForced {
@@ -199,6 +201,7 @@ impl Runtime {
                                 deadline: now + self.config.final_drain,
                                 exit,
                             };
+                            self.note_execution_ended(id);
                         }
                         SignalDisposition::Delivered | SignalDisposition::ProcessGone => {
                             entry.lifecycle = entry.lifecycle.advance_termination_failed(now);

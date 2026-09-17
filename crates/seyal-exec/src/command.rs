@@ -1,8 +1,10 @@
 use std::{
     ffi::{OsStr, OsString},
     fmt,
+    os::fd::{AsRawFd, OwnedFd, RawFd},
     path::{Path, PathBuf},
     process::Command,
+    sync::Arc,
 };
 
 #[derive(Clone)]
@@ -12,6 +14,7 @@ pub struct CommandSpec {
     current_dir: Option<PathBuf>,
     clear_environment: bool,
     environment: Vec<(OsString, OsString)>,
+    inherited_fds: Vec<Arc<OwnedFd>>,
 }
 
 impl fmt::Debug for CommandSpec {
@@ -21,6 +24,7 @@ impl fmt::Debug for CommandSpec {
             .field("has_current_dir", &self.current_dir.is_some())
             .field("clear_environment", &self.clear_environment)
             .field("environment_override_count", &self.environment.len())
+            .field("inherited_fd_count", &self.inherited_fds.len())
             .finish_non_exhaustive()
     }
 }
@@ -33,6 +37,7 @@ impl CommandSpec {
             current_dir: None,
             clear_environment: false,
             environment: Vec::new(),
+            inherited_fds: Vec::new(),
         }
     }
 
@@ -65,8 +70,21 @@ impl CommandSpec {
         self
     }
 
+    /// Let the child inherit `fd` at its current number. The descriptor stays
+    /// close-on-exec in this process; only the child clears that flag after
+    /// fork, so no other concurrently spawned child can observe it. The parent
+    /// keeps no copy once every clone of this spec is dropped.
+    pub fn inherit_fd(mut self, fd: OwnedFd) -> Self {
+        self.inherited_fds.push(Arc::new(fd));
+        self
+    }
+
     pub fn program(&self) -> &OsStr {
         &self.program
+    }
+
+    pub(crate) fn inherited_raw_fds(&self) -> Vec<RawFd> {
+        self.inherited_fds.iter().map(|fd| fd.as_raw_fd()).collect()
     }
 
     pub fn current_dir_path(&self) -> Option<&Path> {

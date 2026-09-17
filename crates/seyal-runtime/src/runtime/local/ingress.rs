@@ -808,6 +808,18 @@ impl Runtime {
                     framing::encode_frame(MessageType::ComposerResult, &result.encode()),
                 );
             }
+            Ok(ComposerAdmission::Invalid) => {
+                let result = ComposerResult {
+                    attachment_id: request.attachment_id,
+                    code: ComposerResultCode::Invalid,
+                    block_id: 0,
+                    request_id: request.request_id,
+                };
+                let _ = self.send_mandatory_frame(
+                    token,
+                    framing::encode_frame(MessageType::ComposerResult, &result.encode()),
+                );
+            }
             Ok(ComposerAdmission::Busy) => {
                 let result = ComposerResult {
                     attachment_id: request.attachment_id,

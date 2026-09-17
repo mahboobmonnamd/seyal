@@ -44,7 +44,7 @@ impl TerminalEndpoint {
             .stdin(Stdio::from(stdin))
             .stdout(Stdio::from(stdout))
             .stderr(Stdio::from(stderr));
-        platform::configure_child(&mut command)?;
+        platform::configure_child(&mut command, command_spec.inherited_raw_fds())?;
 
         // The original slave is not part of the child's descriptor contract.
         // The three Stdio-owned clones above are sufficient for Command to wire

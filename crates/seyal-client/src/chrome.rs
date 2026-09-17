@@ -538,6 +538,7 @@ fn block_rows(
         BlockPresentationState::Running => "Running",
         BlockPresentationState::Completed => "Completed",
         BlockPresentationState::Failed => "Failed",
+        BlockPresentationState::Unknown => "Completed (status unknown)",
     };
     let mut rows = vec![
         row("block-command", "Block", "Command", block.command.clone()),
@@ -549,6 +550,13 @@ fn block_rows(
             "Block",
             "Exit code",
             exit_status.to_string(),
+        ));
+    } else if block.state == BlockPresentationState::Unknown {
+        rows.push(row(
+            "block-exit",
+            "Block",
+            "Exit code",
+            "unknown".to_owned(),
         ));
     }
     if let Some(end_line) = block.end_line

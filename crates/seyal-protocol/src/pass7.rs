@@ -179,7 +179,11 @@ impl<'a> ComposerCommandRef<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommandBlockState {
     Running,
-    Completed { exit_status: i32 },
+    /// `exit_status` is `None` when completion was observed without a
+    /// finishing marker; encoded as state tag 2 with a zero status field.
+    Completed {
+        exit_status: Option<i32>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -767,7 +771,10 @@ impl BlockTimeline {
             }
             let (state, exit_status) = match record.state {
                 CommandBlockState::Running => (0u8, 0i32),
-                CommandBlockState::Completed { exit_status } => (1u8, exit_status),
+                CommandBlockState::Completed {
+                    exit_status: Some(exit_status),
+                } => (1u8, exit_status),
+                CommandBlockState::Completed { exit_status: None } => (2u8, 0i32),
             };
             out.extend_from_slice(&record.id.to_le_bytes());
             out.extend_from_slice(&record.start_line.to_le_bytes());
@@ -846,9 +853,16 @@ impl BlockTimeline {
                 .to_owned();
             let (end_line, state) = match state_tag {
                 0 if end_raw == 0 && exit_status == 0 => (None, CommandBlockState::Running),
-                1 if end_raw >= start_line => {
-                    (Some(end_raw), CommandBlockState::Completed { exit_status })
-                }
+                1 if end_raw >= start_line => (
+                    Some(end_raw),
+                    CommandBlockState::Completed {
+                        exit_status: Some(exit_status),
+                    },
+                ),
+                2 if end_raw >= start_line && exit_status == 0 => (
+                    Some(end_raw),
+                    CommandBlockState::Completed { exit_status: None },
+                ),
                 _ => return Err(FramingError::MalformedPayload),
             };
             if id == 0 || start_line == 0 {
@@ -911,7 +925,9 @@ mod command_block_tests {
                     command: "false".into(),
                     start_line: 34,
                     end_line: Some(36),
-                    state: CommandBlockState::Completed { exit_status: 1 },
+                    state: CommandBlockState::Completed {
+                        exit_status: Some(1),
+                    },
                 },
             ],
         };
@@ -945,7 +961,9 @@ mod command_block_tests {
                     command: large.clone(),
                     start_line: id,
                     end_line: Some(id + 1),
-                    state: CommandBlockState::Completed { exit_status: 0 },
+                    state: CommandBlockState::Completed {
+                        exit_status: Some(0),
+                    },
                 })
                 .collect(),
         };

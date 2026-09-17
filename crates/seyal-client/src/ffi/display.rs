@@ -38,16 +38,24 @@ pub extern "C" fn seyal_bridge_block_record(index: u32) -> SeyalBlockRecord {
             id: record.id,
             start_line: record.start_line,
             end_line: record.end_line.unwrap_or(0),
+            // 0 running, 1 completed with a status, 2 completed with the
+            // status unknown. `exit_status` is meaningful only for state 1;
+            // presentation comes from the Rust chrome rows, never this field.
             state: match record.state {
                 seyal_runtime::local_ipc::framing::CommandBlockState::Running => 0,
-                seyal_runtime::local_ipc::framing::CommandBlockState::Completed { .. } => 1,
+                seyal_runtime::local_ipc::framing::CommandBlockState::Completed {
+                    exit_status: Some(_),
+                } => 1,
+                seyal_runtime::local_ipc::framing::CommandBlockState::Completed {
+                    exit_status: None,
+                } => 2,
             },
             reserved: [0; 3],
             exit_status: match record.state {
-                seyal_runtime::local_ipc::framing::CommandBlockState::Running => 0,
-                seyal_runtime::local_ipc::framing::CommandBlockState::Completed { exit_status } => {
-                    exit_status
-                }
+                seyal_runtime::local_ipc::framing::CommandBlockState::Completed {
+                    exit_status: Some(exit_status),
+                } => exit_status,
+                _ => 0,
             },
             command: command.as_ptr(),
             command_len: command.len() as u32,

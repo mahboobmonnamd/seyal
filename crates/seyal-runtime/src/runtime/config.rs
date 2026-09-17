@@ -6,7 +6,7 @@ use std::{
 #[cfg(feature = "benchmark-instrumentation")]
 use std::collections::HashMap;
 
-use crate::{CapabilityPolicy, RuntimeError};
+use crate::{CapabilityPolicy, RuntimeError, ShellIntegrationPolicy};
 use seyal_exec::HISTORY_RUNTIME_AGGREGATE_BYTE_CAP;
 use seyal_exec::HISTORY_RUNTIME_DERIVED_INDEX_CAP;
 
@@ -110,6 +110,8 @@ pub struct RuntimeConfig {
     pub forced_reap: Duration,
     pub final_drain: Duration,
     pub capability_policy: CapabilityPolicy,
+    /// `None` leaves every shell `Unsupported` for trusted integration.
+    pub shell_integration_policy: Option<ShellIntegrationPolicy>,
     pub local_ipc: LocalIpcMode,
 }
 
@@ -129,6 +131,7 @@ impl RuntimeConfig {
             forced_reap: Duration::from_secs(1),
             final_drain: Duration::from_millis(250),
             capability_policy: CapabilityPolicy::bundled()?,
+            shell_integration_policy: Some(ShellIntegrationPolicy::bundled()?),
             local_ipc: LocalIpcMode::Enabled {
                 runtime_dir_override: None,
             },

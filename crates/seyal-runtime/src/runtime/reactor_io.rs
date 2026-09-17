@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use seyal_exec::{ReadOutcome, WriteOutcome};
 
-use crate::input::ControlMessage;
+use crate::input::{ControlMessage, InputKind};
 use crate::{ExecutionId, RuntimeError};
 use std::sync::mpsc::TryRecvError;
 
@@ -18,10 +18,14 @@ impl Runtime {
             match self.control_rx.try_recv() {
                 Ok(ControlMessage::Input(input)) => {
                     let id = input.execution_id;
+                    let kind = input.kind;
                     if let Some(entry) = self.entries.get_mut(&id)
                         && entry.terminal_io_active()
                     {
                         entry.pending_input.push_back(input);
+                        if kind == InputKind::Direct {
+                            self.note_direct_input_admitted(id);
+                        }
                         self.service_writes(id)?;
                     }
                     handled += 1;
@@ -48,6 +52,7 @@ impl Runtime {
         };
         self.reactor.set_writable(token, false)?;
         self.reactor.set_readable(token, false)?;
+        self.note_execution_ended(id);
         Ok(())
     }
     pub(super) fn service_reads(&mut self, id: ExecutionId) -> Result<(), RuntimeError> {

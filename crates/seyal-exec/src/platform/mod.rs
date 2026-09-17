@@ -57,7 +57,10 @@ pub(crate) fn open_pty(_size: WindowSize) -> Result<PtyPair, ExecError> {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub(crate) fn configure_child(_command: &mut Command) -> Result<(), ExecError> {
+pub(crate) fn configure_child(
+    _command: &mut Command,
+    _inherited_fds: Vec<std::os::fd::RawFd>,
+) -> Result<(), ExecError> {
     Err(ExecError::UnsupportedPlatform(
         "local PTY execution is implemented for macOS only in M001",
     ))

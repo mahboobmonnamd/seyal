@@ -68,6 +68,9 @@ pub enum BlockPresentationState {
     Running,
     Completed,
     Failed,
+    /// Completed without an observed exit status (ADR-009 mechanism 5).
+    /// Never presented as success or failure.
+    Unknown,
 }
 
 impl BlockPresentationState {
@@ -77,6 +80,7 @@ impl BlockPresentationState {
             Self::Running => "/ running",
             Self::Completed => "",
             Self::Failed => "/ failed",
+            Self::Unknown => "/ status unknown",
         }
     }
 }
@@ -118,12 +122,11 @@ pub struct RuntimeBlockRecord {
 
 impl RuntimeBlockRecord {
     fn presentation_state(&self) -> BlockPresentationState {
-        if self.running {
-            BlockPresentationState::Running
-        } else if self.exit_status.unwrap_or(1) == 0 {
-            BlockPresentationState::Completed
-        } else {
-            BlockPresentationState::Failed
+        match (self.running, self.exit_status) {
+            (true, _) => BlockPresentationState::Running,
+            (false, Some(0)) => BlockPresentationState::Completed,
+            (false, Some(_)) => BlockPresentationState::Failed,
+            (false, None) => BlockPresentationState::Unknown,
         }
     }
 }

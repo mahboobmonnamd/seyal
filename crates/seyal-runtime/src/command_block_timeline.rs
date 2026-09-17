@@ -25,12 +25,21 @@ impl CommandBlockId {
     pub(crate) const fn raw(self) -> u64 {
         self.0
     }
+
+    #[cfg(test)]
+    pub(crate) const fn from_raw(raw: u64) -> Self {
+        Self(raw)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CommandBlockLifecycle {
     Running,
-    Completed { exit_status: i32 },
+    /// `exit_status` is `None` when the finishing marker was never observed
+    /// (ADR-009 mechanism 5); it is never reported as `0`.
+    Completed {
+        exit_status: Option<i32>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -92,7 +101,7 @@ impl CommandBlockTimeline {
         &mut self,
         id: CommandBlockId,
         end_line: u64,
-        exit_status: i32,
+        exit_status: Option<i32>,
     ) -> Result<(), CommandBlockTimelineError> {
         let record = self
             .records
@@ -179,15 +188,17 @@ mod tests {
         let id = timeline.allocate_id().unwrap();
         timeline.start(id, "false".into(), 5).unwrap();
         assert_eq!(
-            timeline.complete(id, 4, 1),
+            timeline.complete(id, 4, Some(1)),
             Err(CommandBlockTimelineError::InvalidCompletion)
         );
-        timeline.complete(id, 7, 1).unwrap();
+        timeline.complete(id, 7, Some(1)).unwrap();
         let record = timeline.records().next().unwrap();
         assert_eq!(record.end_line, Some(7));
         assert_eq!(
             record.lifecycle,
-            CommandBlockLifecycle::Completed { exit_status: 1 }
+            CommandBlockLifecycle::Completed {
+                exit_status: Some(1)
+            }
         );
     }
 
@@ -200,7 +211,7 @@ mod tests {
             timeline
                 .start(id, format!("printf {index}"), index as u64 + 1)
                 .unwrap();
-            timeline.complete(id, index as u64 + 2, 0).unwrap();
+            timeline.complete(id, index as u64 + 2, Some(0)).unwrap();
             first.get_or_insert(id);
         }
         let active = timeline.allocate_id().unwrap();
@@ -218,7 +229,7 @@ mod tests {
         for index in 0..16 {
             let id = timeline.allocate_id().unwrap();
             timeline.start(id, large.clone(), index as u64 + 1).unwrap();
-            timeline.complete(id, index as u64 + 2, 0).unwrap();
+            timeline.complete(id, index as u64 + 2, Some(0)).unwrap();
         }
         assert!(timeline.encoded_len() <= MAX_FRAME_PAYLOAD as usize);
         assert!(timeline.records().len() < 16);

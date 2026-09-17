@@ -19,6 +19,7 @@ pub enum RuntimeError {
     Exec(ExecError),
     Io(io::Error),
     Terminfo(String),
+    ShellIntegration(&'static str),
 }
 
 impl fmt::Display for RuntimeError {
@@ -46,6 +47,7 @@ impl fmt::Display for RuntimeError {
             Self::Exec(error) => write!(f, "execution error: {error}"),
             Self::Io(error) => write!(f, "Runtime I/O error: {error}"),
             Self::Terminfo(message) => write!(f, "terminfo error: {message}"),
+            Self::ShellIntegration(message) => write!(f, "shell integration error: {message}"),
         }
     }
 }

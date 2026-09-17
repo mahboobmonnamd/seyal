@@ -210,221 +210,317 @@ and where input is routed.
 
 Alternative E selected "trusted shell integration" without specifying how hook
 installation and command-boundary correlation reach the shell without becoming
-visible terminal content. The current zsh implementation (`zsh_composer_command` in
-`crates/seyal-runtime/src/runtime/shell_integration.rs`) injects an entire
+visible terminal content. The current zsh implementation (`zsh_composer_command`
+in `crates/seyal-runtime/src/runtime/shell_integration.rs`) injects an entire
 hook-install-and-marker script as literal interactive PTY input on every
-composer submission, prefixed to the user's command with a
-fresh random per-submission token typed into the line. Live-PTY evidence
-collected for #968 shows this is not a suppressible detail: zsh's line editor
-(ZLE) enables bracketed paste and explicitly redraws whatever is written to
-the PTY while it is reading interactively, independent of kernel TTY echo
-state. That redraw made Runtime's own instrumentation script visible inside
-Block output regions, violating invariant 9 below and the Flow output-region
-promise, and is exactly the condition named in this ADR's original reopen
-conditions ("if trusted shell integration cannot preserve required shell
-semantics"). The injected script is also recorded in the user's zsh history,
-a second defect independent of the visibility one.
+composer submission, prefixed to the user's command with a fresh random
+per-submission token typed into the line. Live-PTY evidence collected for #968
+shows this is not a suppressible detail: zsh's line editor (ZLE) enables
+bracketed paste and explicitly redraws whatever is written to the PTY while it
+is reading interactively, independent of kernel TTY echo state. That redraw
+made Runtime's own instrumentation script visible inside Block output regions,
+violating invariant 9 below and the Flow output-region promise, and is exactly
+the condition named in this ADR's original reopen conditions ("if trusted
+shell integration cannot preserve required shell semantics"). The injected
+script is also recorded in the user's zsh history, a second defect independent
+of the visibility one.
 
-An earlier draft of this amendment proposed correlating
-`CommandStarted`/`CommandFinished` events to pending composer submissions by
-strict FIFO submission order, reasoning that SPEC-004 §5 bounds `attachments
-per connection` and `controllers per execution` to one and therefore
-serializes input. Review for #968 rejected that half: SPEC-004's bound
-serializes input *bytes*, not shell readiness. Concrete failure: the user runs
-`python` interactively, then submits `pwd` from the composer; `python`
-consumes the `pwd\r` bytes as its own stdin; `preexec` never fires for it; the
-pending composer item is left outstanding; when `python` later exits and the
-user types `ls` directly, the stale pending `pwd` item is misattributed to
-`ls`'s `preexec`/`precmd` pair. Seyal's parser today recognizes only
-`133;C;<token>` and `133;D;<token>;<status>`
-(`crates/seyal-terminal/src/terminal.rs`, around line 2034); there is no
-"shell is at a prompt" signal to gate on, so FIFO order alone cannot
-distinguish a live prompt from a busy foreground program. The FIFO draft is
-rejected.
+Two earlier drafts of this amendment were rejected during #968 review and are
+recorded under "Rejected alternatives" below: correlating submissions to
+markers by arrival order (defeated by a foreground program consuming composer
+bytes as stdin), and carrying the command line inside the `C` marker
+(defeated by alias expansion and history-dependent `preexec` arguments, and
+contradicting the hot-path allocation invariant).
 
-**Accepted mechanism:**
+The mechanism below was validated on real interactive zsh under a PTY before
+acceptance: exactly one prompt-start marker precedes the first prompt and
+follows the user's `.zshrc`; every command yields `C`, then output, then
+`D;<status>`, then `A`; an empty line yields only `A`; an unmatched quote
+yields no marker until the line is completed or interrupted, after which `A`
+arrives; an aliased command behaves identically to a plain one; a nested `zsh`
+observes neither the secret nor the bundled startup directory.
 
-1. **Static bootstrap via `ZDOTDIR`; no runtime file writes, no logs.**
-   Runtime (product composition, in the spawn path owned by
-   `TerminalExecution`/`seyal-exec`; the PTY layer stays policy-neutral, the
-   same split as ADR-008) launches zsh with `ZDOTDIR` pointing at a directory
-   of integration scripts shipped statically inside the Seyal bundle. Nothing
-   is written to disk at spawn or per command. The user's original `ZDOTDIR`
-   (or its absence) is passed through the spawn environment so it can be
-   restored. This mirrors the `ZDOTDIR`-wrapper technique used by kitty and
-   VS Code shell integration and the temporary-`ZDOTDIR` bootstrap used by
-   Warp; Seyal's specifics are constrained by this ADR, not by those products.
+### Accepted mechanism
 
-   The bundled scripts must, at minimum:
+**1. Static bootstrap via `ZDOTDIR`; no runtime file writes, no logs.**
 
-   - source the user's own `.zshenv`, `.zprofile`, `.zshrc` and `.zlogin`,
-     from the user's real `ZDOTDIR`/`HOME`, in zsh's standard startup order;
-   - register hooks only for interactive shells (`[[ -o interactive ]]`), so a
-     script invoked as `zsh file.sh` pays zero cost;
-   - register hooks after the user's interactive rc runs, so user
-     configuration cannot silently remove them; if it does, no trusted
-     prompt-start marker ever arrives and the execution fails closed to
-     `Unsupported` (mechanism 5);
-   - restore `ZDOTDIR` to the user's value before the first prompt is drawn,
-     so nested `zsh`, `ssh` and other child processes inherit the user's real
-     configuration and are never re-bootstrapped;
-   - complete hook installation during ordinary shell startup, before any
-     prompt is drawn, so installation is never presented to ZLE as typed
-     input, is never redrawn, and never enters shell history.
+Runtime (product composition, in the spawn path owned by
+`TerminalExecution`/`seyal-exec`; the PTY layer stays policy-neutral, the same
+split as ADR-008) launches zsh with `ZDOTDIR` pointing at a directory shipped
+statically inside the Seyal bundle containing one file, `.zshenv`. Nothing is
+written to disk at spawn or per command. The user's original `ZDOTDIR` (or its
+absence) is passed through a non-secret spawn-environment variable so it can
+be restored. This is the single-file `.zshenv` technique used by kitty and
+Ghostty (and therefore by terminals embedding libghostty, such as cmux);
+Seyal's specifics are constrained by this ADR, not by those products.
 
-   File layout inside the bundle is an implementation detail for the
-   implementing Issue, not part of this decision.
+The bundled `.zshenv` executes, in this normative order, before any user-owned
+file runs:
 
-2. **Per-execution secret delivered invisibly.** Runtime generates one random
-   16-byte nonce per `TerminalExecution` (the same size as today's
-   `ShellIntegrationToken`) and passes it in the spawn environment. The
-   bundled startup script copies it into a non-exported shell parameter and
-   removes it from the exported environment, so child processes cannot read
-   it. The nonce is never typed, never drawn on screen, and never enters
-   shell history. Every marker in mechanism 3 carries this nonce; a marker
-   with a missing or mismatched nonce is untrusted and is ignored (accounted
-   through the existing deferred/malformed counters) and never affects Block
-   state. This preserves today's anti-spoofing property: a program cannot
-   forge a `D` to end its own Block early, and cannot forge an `A`/`C` to
-   trick the composer into sending input to a program it does not own.
+1. consume the per-execution secret from the inherited descriptor described
+   in mechanism 2 into a non-exported shell parameter, close that descriptor,
+   and unset the non-secret variable naming it;
+2. restore `ZDOTDIR` to the user's original value, or unset it when the user
+   had none, and unset the variable that carried it — from this point every
+   remaining startup file (`.zprofile`, `.zshrc`, `.zlogin`) is resolved by
+   zsh from the user's real location, and any process the user's configuration
+   spawns inherits only the user's real `ZDOTDIR`;
+3. source the user's own `.zshenv` when present;
+4. only when the shell is interactive (`[[ -o interactive ]]`), a secret was
+   received, and a non-secret installed sentinel is absent: register a
+   deferred-install function on the `precmd` hook list. That function runs
+   once, at the first `precmd`, which zsh invokes only after `.zprofile`,
+   `.zshrc` and `.zlogin` have all completed; it removes itself, sets the
+   sentinel, installs the `preexec`/`precmd` hook functions of mechanism 3
+   and emits the first `A` for the prompt about to be drawn.
 
-3. **Markers: OSC 133, BEL- or ST-terminated, bounded.**
+Consequences that follow from this order and are part of the decision:
 
-   - `A;<nonce>` — emitted by `precmd` immediately before the prompt is drawn:
-     prompt start. Runtime transitions the execution to `AtPrompt`.
-   - `C;<nonce>;<cmdline>` — emitted by `preexec` with the command line zsh is
-     about to execute (`$1`, the text as typed). `cmdline` is the final field
-     and is taken verbatim to the terminator; it is bounded to a fixed byte
-     cap not exceeding SPEC-004 §5's 65,536-byte per-`Input` bound and the
-     existing `MAX_COMMAND_BYTES`; trailing whitespace is trimmed; and
-     control characters — including any 7-bit or 8-bit byte that could
-     terminate or escape the OSC string — are replaced with a fixed
-     placeholder, using zsh parameter expansion only. Runtime applies the
-     identical bounding/sanitization to its own pending command text before
-     comparing.
-   - `D;<nonce>;<exit-status>` — emitted by `precmd` when a `C` is open:
-     command finished. When `precmd` has an open `C`, it emits `D` before `A`,
-     in that order, so Runtime always observes completion before the next
-     prompt start.
+- the user's `.zshenv`, `.zprofile`, `.zshrc` and `.zlogin` load in zsh's
+  standard order from the user's real location, unchanged;
+- non-interactive shells (`zsh file.sh`) register nothing and pay nothing;
+- hooks install after the user's interactive rc, so user configuration that
+  replaces `precmd_functions` wholesale removes the deferred installer; no
+  trusted `A` then ever arrives and the execution stays ineligible (mechanism
+  5), never half-installed;
+- re-sourcing `.zshrc` cannot double-install: the sentinel is checked before
+  registration;
+- nested `zsh` and `ssh` sessions, and any child process, cannot re-bootstrap:
+  the bundled directory is no longer referenced by `ZDOTDIR`, the descriptor
+  is closed, and the secret is a non-exported parameter;
+- hook installation is never presented to ZLE as typed input, is never
+  redrawn, and never enters shell history.
 
-   Hooks may use only zsh builtins (`print`/`printf`, parameter expansion,
-   `add-zsh-hook`). No forks, no external commands, no subshells, no file
-   reads or writes per command. This is a hard requirement, not a performance
-   preference.
+**2. Per-execution secret delivered over an inherited descriptor, never through
+the environment.**
 
-4. **Prompt-gated, single-in-flight, exact-match admission.**
+Runtime generates one random 16-byte nonce per `TerminalExecution` from
+`/dev/urandom` (the existing `ShellIntegrationToken` size, encoded as 32
+lowercase hexadecimal digits), writes it followed by a newline into a pipe,
+closes the write end, and lets the child inherit only the read end. Runtime
+must ensure that read end is the only descriptor beyond the PTY that the
+child inherits; its number is passed in a non-secret environment variable. The bundled `.zshenv` reads it
+with the builtin `read` and closes it as its first action (mechanism 1, step
+1). Runtime closes its own copy immediately after spawn. Every marker in
+mechanism 3 carries this nonce.
 
-   - Composer submissions write only the literal command bytes plus `\r` to
-     the PTY — never a wrapper, marker, token or hook text.
-   - Admission requires: execution state is `AtPrompt` (a trusted `A`
-     observed since the last `D`, or the first trusted `A` after spawn); no
-     pending composer command; no active Block; primary screen (not
-     alternate/TUI). Otherwise the result is the existing correlated
-     `Busy`/`Unsupported` admission result, never a transport error, and the
-     draft is kept (unchanged from current ADR-009 composer semantics).
-   - On send: state becomes `Pending{command}`; at most one composer command
-     is ever in flight.
-   - On trusted `C`: if `sanitize(cmdline) == sanitize(pending.command)`, the
-     pending item becomes the Running Block (existing `BlockTimeline.start`);
-     otherwise the pending item is dropped, no Block is created, and the
-     event is treated as untrusted. Matching is by secret plus exact text,
-     never by arrival order alone.
-   - Any trusted `C`, with or without a pending item, leaves `AtPrompt`; the
-     execution returns to `AtPrompt` only on the next trusted `A`. This keeps
-     the composer disabled while a directly typed (Raw) command is running
-     even if the user switches back to Flow.
-   - On trusted `D`: complete the active Block with the exit status (existing
-     `BlockTimeline.complete`).
-   - Invalidation makes stale pending items impossible by construction: a
-     trusted `A` arriving while `Pending` and before any `C` drops the
-     pending item (the bytes were consumed by something that was not the
-     shell prompt, or the command never ran); entering the alternate screen,
-     primary-child exit, or PTY EOF drops any pending item and sets state to
-     `NotAtPrompt`. A directly typed command (Raw presentation) that produces
-     a `C`/`D` pair with no pending item creates no Block — unchanged
-     behavior: no guessed Blocks.
-   - Nested interactive shells (`zsh`, `ssh`) run inside the outer command's
-     Running Block until they exit, because they carry no hooks and no
-     nonce; the composer stays disabled (invariant 7) until the outer shell's
-     next trusted `A`.
-   - If the shell process is replaced (`exec zsh`, `exec bash`), no further
-     trusted markers can arrive for that execution: the Running Block
-     completes only through Runtime lifecycle truth (invariant 15), the
-     execution never becomes composer-eligible again, and presentation
-     follows the existing Raw rules while trusted eligibility is absent.
-     This matches kitty/Ghostty behavior and is accepted.
+Threat model for trusted markers: the adversary is any program that runs inside
+the terminal session — anything that can write bytes to the terminal, such as
+a hostile file passed to `cat`, a hostile CLI, or a program on the far side of
+`ssh` — and any same-UID process that can inspect process metadata (argv,
+exec-time environment, open files). Such an adversary must not be able to emit
+a marker Runtime trusts, because a forged `A` would re-enable the composer
+while that program owns the terminal and route the next submission into its
+stdin, and a forged `D` would close a Block with a fabricated exit status. The
+secret therefore never appears in argv, in any process's exec-time environment
+block, in a file, on screen, or in shell history. Delivery through the spawn
+environment (the mechanism VS Code uses for its own nonce) is rejected even
+though this macOS release does not expose another process's environment block
+through `KERN_PROCARGS2`: that is an operating-system property outside Seyal's
+control, and Linux's `/proc/<pid>/environ` does expose the initial environment
+to same-UID processes regardless of later `unset`. A same-UID adversary with
+debugger-level access to the shell process is out of scope; it already owns
+the session. Same-UID authentication continues to grant no attachment or
+mutation authority (SPEC-004 §4).
 
-5. **Failure fails closed to `Unsupported`, never half-installed.** A missing
-   bundled script, inability to set `ZDOTDIR`/nonce in the spawn environment,
-   or no trusted `A` observed after spawn transitions the execution to
-   `ShellIntegrationMode::Unsupported`: composer disabled, raw terminal fully
-   usable. Non-zsh shells remain `Unsupported` (unchanged; out of scope).
-   Absence of a trusted `A` is not detected by a timer or retry loop: the
-   execution simply never becomes composer-eligible (invariant 7) and Raw
-   remains fully usable. Static program-path detection (`/bin/zsh`) remains
-   a precondition for attempting installation, never proof that it
-   succeeded.
+A marker with a missing, malformed, or mismatched nonce is untrusted: it is
+ignored and accounted through the existing deferred/malformed counters, and it
+never causes a state transition or Block mutation.
 
-6. **Performance invariants, non-negotiable for this amendment.**
+**3. Markers: three fixed OSC 133 shapes, BEL-terminated, builtins only.**
 
-   - Today's parser already handles two bounded OSC 133 sequences per command
-     (`C`, `D`) with bounded queue capacity; this amendment adds one bounded
-     sequence per prompt (`A`) and changes nothing else on the
-     PTY → VT → `TerminalState` hot path.
-   - Zero per-command file I/O, forks, subprocesses, synchronous IPC,
-     per-attachment loops, or new allocations on the hot path beyond the
-     existing bounded `shell_events` queue. Per-command byte cost decreases
-     versus today: roughly 130 bytes of markers plus the command text once,
-     instead of roughly 600 bytes of wrapper script written as input and
-     echoed back as output on every submission.
-   - Startup cost is one extra `source` of small static files during
-     interactive-shell initialization only; non-interactive shells pay
-     nothing.
-   - The implementing Issue must measure shell-start-to-first-prompt time and
-     per-command marker overhead with integration on versus off, and show no
-     regression against the M002 performance contract
-     (`scripts/check-m002-performance-contract.py`); `performance-gate`
-     applies. A measurable regression is a blocking finding.
+- `A;<nonce>` — emitted by `precmd` immediately before each prompt is drawn:
+  prompt start.
+- `C;<nonce>` — emitted by `preexec` immediately before a command line
+  executes: command start.
+- `D;<nonce>;<exit-status>` — emitted by `precmd` when a `C` is open, before
+  that prompt's `A`, in that order, so Runtime always observes completion
+  before the next prompt start. `<exit-status>` is the decimal `$?` captured
+  as the first statement of `precmd`.
 
-7. **Comparative performance gate.** Product authority requires this
-   mechanism's performance to be equal to or better than Warp, Ghostty, and
-   terminals embedding libghostty (cmux), not merely non-regressive against
-   Seyal's own prior baseline.
+The `C` marker carries no command text. Runtime already owns the submitted
+text of the pending composer command and uses it as the Block header; the
+shell is not asked to repeat it. The parser accepts exactly these three
+shapes — one 32-hex-digit field for `A` and `C`, a 32-hex-digit field and a
+decimal field for `D` — and treats anything else under `133;` as deferred,
+as today. Hooks emit BEL as the terminator; the parser continues to accept
+BEL or ST.
 
-   - Structural parity with kitty, Ghostty, and libghostty-based terminals
-     (cmux) — static bundled `ZDOTDIR` bootstrap, builtin-only hooks, and a
-     fixed number of bounded OSC markers per command — is asserted by
-     construction above. Parity by construction is not evidence; it must be
-     measured before #967 can close.
-   - Required comparative evidence for the implementing Issue, all on the
-     same physical Apple Silicon host, same zsh binary, same user dotfiles,
-     same workload, each terminal running its own current shell integration,
-     reported as nearest-rank p50/p95/p99 with sample counts, commit hash and
-     host description in the repository's existing evidence style under
-     `docs/evidence/`:
-     - (a) shell spawn to first trusted prompt (integration startup cost);
-     - (b) prompt-to-prompt latency for a trivial command (e.g. `true`) — the
-       per-command integration overhead;
-     - (c) throughput and CPU for a bulk-output command (e.g. tens of MB via
-       `cat`/`yes | head`) with integration active — proving markers add
-       nothing to the PTY → VT hot path;
-     - (d) Seyal with integration on versus off (own-baseline regression).
-   - Acceptance rule: Seyal must be equal to or better than each of Warp,
-     Ghostty, and cmux on (a) and (b) at p50 and p95, within stated
-     measurement noise, and show no regression on (c) and (d) beyond noise.
-     "Equal to" means within the reported noise band; anything worse is a
-     blocking finding for #967 and for merge, per `performance-gate`.
-     Measurements of third-party terminals are black-box (for example
-     shell-side `EPOCHREALTIME` timestamps in `precmd`/`preexec`, or an
-     external PTY harness) and must be reproducible from a documented
-     script.
-   - Result (c) is also reported for the same three terminals. A shortfall
-     on (c) alone is whole-terminal throughput owned by the milestone
-     performance contract, not by this amendment; it must be filed as a
-     performance Issue against that contract rather than ignored, and it
-     blocks #967 only if (d) shows the integration itself caused it.
-   - The comparative evidence is re-run whenever the bundled integration
-     scripts or the marker parser change.
+Hook functions use only zsh builtins: `builtin printf` with fixed format
+strings whose only arguments are the nonce parameter and `$?`, parameter
+expansion, and `add-zsh-hook`. No fork, no external command, no subshell, no
+file read or write occurs per command. No user-controlled text is ever part of
+a format string or a marker. This is a hard requirement, not a performance
+preference.
+
+**4. Composer submission byte contract.**
+
+The composer writes to the PTY exactly the bytes a person would produce at
+that prompt, and nothing else — never a wrapper, marker, token, or hook text.
+
+- A single-line command is written as its bytes followed by `\r`.
+- A command containing a line break is written only as a bracketed paste
+  (`ESC [ 200 ~`, the text, `ESC [ 201 ~`) followed by `\r`, and only when the
+  canonical `TerminalState` reports that the shell has enabled bracketed-paste
+  mode (DECSET 2004). ZLE then accepts the whole text as one line, so one
+  submission is one `preexec` and one Block (invariant 2), and an embedded
+  `\r` cannot act as an early Enter. When mode 2004 is not enabled, a
+  multi-line submission is refused with a correlated admission result and the
+  draft is kept; it is never sent as raw bytes.
+- An implementation may initially support only the single-line branch; it
+  must then refuse multi-line submissions rather than send them.
+
+**5. Prompt-gated, single-in-flight admission and the integration state
+machine.**
+
+Each execution carries one integration state:
+
+```text
+Unproven      spawned; no trusted A observed yet
+AtPrompt      a trusted A observed and no C since
+Pending       composer bytes written; no trusted C since
+Running(b)    a trusted C observed and the next prompt not yet announced;
+              b = the Block that C started, or none
+Terminated    primary child exited or PTY reached EOF
+```
+
+Composer eligibility (invariant 7) holds exactly when the state is `AtPrompt`,
+the presentation is Flow, and the canonical state is on the primary screen.
+Otherwise a submission receives the existing correlated `Busy`/`Unsupported`
+result, never a transport error, and the draft is kept.
+
+Transitions on trusted markers and Runtime events:
+
+- `Unproven`: `A` → `AtPrompt`. `C`, `D` → ignored.
+- `AtPrompt`: submission → bytes written per mechanism 4 → `Pending`.
+  `A` → `AtPrompt` (identity). `C` → `Running(none)` — a directly typed
+  command is running; the composer is now ineligible even if the user returns
+  to Flow. `D` → ignored (no open command).
+- `Pending`: `C` → `Running(b)` where `b` is started from the pending
+  submission (existing `BlockTimeline.start`) — the bytes Runtime wrote were
+  the next line ZLE accepted, because admission required `AtPrompt` and only
+  one submission is ever in flight. `A` → the pending item is dropped and the
+  state is `AtPrompt` — the line never executed: it was empty, a comment, or
+  interrupted, or the shell was not the reader after all. `D` → ignored; the
+  following `A` resolves the pending item.
+- `Running(b)`: `D;<s>` → `b` completes with exit status `s` (existing
+  `BlockTimeline.complete`); state `Running(none)` until the prompt's `A`.
+  `A` without a preceding `D` → `b` completes with exit status *unknown*;
+  state `AtPrompt`. `C` without a preceding `D` → `b` completes with exit
+  status *unknown*; state `Running(none)`.
+- `Running(none)`: `A` → `AtPrompt`. `C` → `Running(none)`. `D` → ignored.
+- Any state except `Terminated`: canonical entry into the alternate screen
+  while `AtPrompt` or `Pending` drops any pending item and sets
+  `Running(none)` — a program owns the terminal; leaving the alternate screen
+  changes nothing until the next trusted `A`. Primary-child exit or PTY EOF
+  completes any active Block through Runtime lifecycle truth (invariant 15)
+  and sets `Terminated`, where every marker is ignored.
+- Untrusted markers (mechanism 2) never transition any state. Markers
+  received while the alternate screen is active continue to be deferred by
+  the parser, unchanged; a prompt drawn inside a stale alternate screen after
+  a crashed full-screen program is therefore handled by the lost-marker rules
+  below once the primary screen returns.
+
+Rules that follow:
+
+- Blocks are matched by prompt gating, single in-flight admission and byte
+  ordering on the PTY, and are protected by the secret — never by arrival
+  order alone and never by comparing command text.
+- A marker lost to the bounded parser queue degrades to a Block with unknown
+  exit status or to no Block for that command; it never attributes one
+  command's start or status to another. Exit status *unknown* is a distinct
+  recorded value; an implementation must never substitute `0`.
+- The Flow → Raw transition is available in every state. A submission that
+  leaves zsh waiting for a continuation line (an unmatched quote, an
+  unterminated construct) keeps the state `Pending`; the user completes or
+  interrupts the line in Raw, and the resulting `C` or `A` resolves it under
+  the rules above.
+- A directly typed command produces `C`/`D` with no pending item and creates
+  no Block — unchanged: no guessed Blocks.
+- Nested interactive shells (`zsh`, `ssh`) run inside the outer command's
+  Running Block until they exit; they carry no hooks and no secret, so they
+  emit no trusted marker, and the composer stays ineligible until the outer
+  shell's next trusted `A`.
+- If the shell process is replaced (`exec zsh`, `exec bash`), no further
+  trusted marker can arrive for that execution: the Running Block completes
+  only through Runtime lifecycle truth (invariant 15), the execution never
+  becomes composer-eligible again, and presentation follows the existing Raw
+  rules while trusted eligibility is absent. This matches kitty and Ghostty
+  and is accepted.
+
+**6. Failure fails closed, without timers.**
+
+A missing bundled `.zshenv`, inability to create the descriptor or set the
+spawn environment, a shell that never reads the secret, or a configuration
+that removes the deferred installer all produce the same observable result:
+no trusted `A`, so the execution stays `Unproven`, the composer is never
+eligible, and the raw terminal is fully usable. Absence of a trusted `A` is
+not detected by a timer or retry loop. Static program-path detection
+(`/bin/zsh`) remains a precondition for attempting installation, never proof
+that it succeeded. Non-zsh shells remain `Unsupported` (unchanged; out of
+scope).
+
+**7. Performance invariants, non-negotiable for this amendment.**
+
+- Today's parser already handles two bounded OSC 133 sequences per command
+  (`C`, `D`) with bounded queue capacity and `Copy` payloads; this amendment
+  adds one bounded sequence per prompt (`A`), changes the accepted field
+  shapes, and changes nothing else on the PTY → VT → `TerminalState` hot
+  path. Marker payloads remain fixed-size; no per-command heap allocation is
+  introduced on that path.
+- Zero per-command file I/O, forks, subprocesses, synchronous IPC,
+  per-attachment loops, or new allocations on the hot path beyond the
+  existing bounded `shell_events` queue. Per-command byte cost decreases
+  versus today: roughly 130 bytes of markers plus the command text written
+  once, instead of roughly 600 bytes of wrapper script written as input and
+  echoed back as output on every submission.
+- Spawn cost is one pipe and one 33-byte write; startup cost is one extra
+  source of one small static file during interactive-shell initialization
+  only; non-interactive shells and nested shells pay nothing.
+- The implementing Issue must measure shell-start-to-first-prompt time and
+  per-command marker overhead with integration on versus off and show no
+  regression against the M002 performance contract
+  (`scripts/check-m002-performance-contract.py`); `performance-gate`
+  applies. A measurable regression is a blocking finding.
+
+**8. Comparative performance gate.**
+
+Product authority requires this mechanism's cost to be equal to or better than
+Warp, Ghostty and terminals embedding libghostty (cmux), not merely
+non-regressive against Seyal's own baseline. Structural parity by
+construction — single static `.zshenv`, builtin-only hooks, a fixed number of
+bounded markers per command — is asserted above; it is not evidence and must
+be measured. The comparison is split so that a correctness fix cannot be held
+hostage by costs outside this mechanism:
+
+- **Tier 1 — isolated hook cost (gating).** One headless PTY harness, owned by
+  this repository and reproducible from a documented script, launches the
+  same zsh binary with the same user dotfiles under each terminal's own
+  current zsh integration script: Seyal's bundled `.zshenv`; Ghostty's
+  (which also covers cmux), obtained at benchmark time from the installed
+  application or its upstream repository at a pinned revision; and Warp's,
+  obtained from the installed application on the controlled host. Integration
+  scripts are not vendored into this repository unless their license is
+  compatible with the ADR-003 boundary. The harness measures (a) shell spawn
+  to first prompt and (b) prompt-to-prompt latency for `true`, as nearest-rank
+  p50/p95/p99 over at least 200 samples per run and at least 5 runs, on the
+  same physical Apple Silicon host, with commit hash and host description in
+  the repository's existing evidence style under `docs/evidence/`. Seyal must
+  be equal to or better than each other script at p50 and p95, where "equal"
+  means within 2% or 100 µs, whichever is larger. A terminal whose script is
+  unavailable on the host is recorded as `ENVIRONMENT_UNSUPPORTED` for that
+  run; that is not a pass, and Ghostty and Warp must both be measured on the
+  controlled host before #967 can close.
+- **Tier 2 — whole-application comparison (reported).** Headed end-to-end
+  measurements of the same three terminals for (a), (b), and (c) bulk-output
+  throughput and CPU for a multi-megabyte `cat`, with the method documented,
+  plus (d) Seyal with integration on versus off. (d) must show no regression
+  beyond the Tier 1 noise band. A shortfall on Tier 2 that Tier 1 does not
+  explain is whole-terminal cost owned by the milestone performance contract;
+  it must be filed as a performance Issue against that contract rather than
+  ignored, and it blocks #967 only if (d) shows the integration caused it.
+- Tier 1 evidence is re-run whenever the bundled `.zshenv`, the marker
+  parser, or the integration state machine changes.
 
 ### Rejected alternatives
 
@@ -435,11 +531,23 @@ rejected.
 - **Per-command token typed into the command line** (the mechanism this
   amendment replaces). Rejected: visible on screen inside Block output and
   recorded in shell history.
-- **Blind FIFO/arrival-order correlation.** Rejected during #968 review for
-  the stdin-consumer race described above (the `python`/`pwd` example).
+- **Arrival-order (FIFO) correlation without prompt gating.** Rejected during
+  #968 review: a foreground program such as `python` consumes the composer's
+  bytes as its own stdin, `preexec` never fires, and the stale pending item is
+  later attributed to the user's next command.
+- **Command text carried in the `C` marker and matched exactly.** Rejected
+  during #968 review: `preexec`'s typed-text argument is empty when history is
+  inactive and its executed-text argument is alias-expanded, so exact matching
+  silently fails for every aliased command; a command containing `;` breaks
+  the existing field split; and copying up to `MAX_COMMAND_BYTES` into
+  `shell_events` per command — including for directly typed commands that
+  create no Block — is a new hot-path allocation.
+- **Secret delivered through the spawn environment.** Rejected (mechanism 2):
+  secrecy would rest on operating-system process-metadata policy that differs
+  across macOS releases and does not hold on Linux.
 - **Out-of-band per-command token via a file read in the hook.** Rejected:
   reintroduces per-command file I/O on the hot path, forbidden by
-  mechanism 6.
+  mechanism 7.
 - **Editing the user's `~/.zshrc` or other dotfiles directly.** Rejected:
   modifies user-owned files.
 
@@ -525,15 +633,19 @@ correctness contracts.
 - mode-aware accessibility and focus identities;
 - failure/quarantine path that transitions to Raw rather than exposing a hidden
   terminal input surface through Flow;
-- statically bundled zsh integration scripts as build artifacts, plus
-  spawn-environment composition of `ZDOTDIR`, the user's original `ZDOTDIR`
-  and the per-execution nonce (Runtime product composition; the PTY layer
-  stays policy-neutral);
-- `A` prompt-start marker parsing, an explicit per-execution
-  `AtPrompt`/`Pending`/`Running`/`NotAtPrompt` integration state, and bounded
-  sanitize-and-compare of `C` command text;
-- comparative and own-baseline shell-integration performance evidence per
-  amendment mechanisms 6–7;
+- the statically bundled zsh `.zshenv` as a build artifact, a policy-neutral
+  `seyal-exec` capability to pass one inherited read descriptor to the child,
+  and Runtime product composition of `ZDOTDIR`, the user's original `ZDOTDIR`,
+  the descriptor number and the per-execution nonce at spawn;
+- parser acceptance of exactly `A;<nonce>`, `C;<nonce>` and
+  `D;<nonce>;<status>`, a `PromptStarted` shell-integration event, an explicit
+  per-execution `Unproven`/`AtPrompt`/`Pending`/`Running`/`Terminated`
+  integration state, and a distinct *unknown* exit status in `BlockTimeline`;
+- composer submission that writes single-line text as raw bytes and
+  multi-line text only as a bracketed paste gated on canonical DECSET 2004
+  state, refusing it otherwise;
+- own-baseline and Tier 1 / Tier 2 comparative shell-integration performance
+  evidence per amendment mechanisms 7–8;
 - native UI, accessibility, conformance, security and performance evidence.
 
 ## Migration impact for the current macOS shell
@@ -559,8 +671,12 @@ Production presentation implementation follows in separate TDD Issues after the
 Rust/native host contract is frozen; this ADR does not restore a headed host.
 
 Issue #968 accepted the silent shell-integration injection mechanism above.
-Issue #967 (composer wrapper text visible in Block output regions) returns to
-Ready implementation against that accepted mechanism.
+Issue #967 (composer wrapper text visible in Block output regions) is
+implemented against that mechanism only after it is re-refined to it — its
+scope, the parser and `ShellIntegrationEvent` shape, the descriptor-based
+secret delivery, the integration state machine, and the required tests and
+performance evidence — and passes the Ready gate again. Acceptance of this
+amendment does not by itself make #967 Ready.
 
 ## Reopen conditions
 
@@ -571,10 +687,13 @@ virtualization/resource bounds, or if performance/security evidence shows that
 Flow projection or transition fencing blocks terminal progress. Reopen also if
 a supported shell cannot host the hooks using builtins only (no fork or
 external command), if the measured per-command or startup overhead is not
-negligible under the performance evidence required above, or if `ZDOTDIR`
-restoration is found to break user configuration or nested-shell behavior.
-Reopen also if the comparative evidence shows Seyal cannot meet equal-or-better
-against Warp, Ghostty, or cmux with this mechanism.
+negligible under the performance evidence required above, if `ZDOTDIR`
+restoration is found to break user configuration or nested-shell behavior, if
+the descriptor-based secret delivery cannot be preserved on a supported
+platform, or if Tier 1 comparative evidence shows this mechanism's isolated
+hook cost cannot meet equal-or-better against Ghostty's or Warp's integration
+scripts. A Tier 2 whole-application shortfall is not by itself a reopen
+condition for this amendment.
 
 Originally approved by product authority on 2026-08-28. Presentation-mode
 clarification requested by product authority on 2026-09-11 under #858 and

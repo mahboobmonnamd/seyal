@@ -1,0 +1,8 @@
+[seyal shell-integration benchmark] tier=1 commit=4da2354709e7 host="Apple M2 Pro macOS 26.6.2 zsh=5.9" runs=5 iterations=200 percentile_method=nearest-rank noise_band=max(2.0%,100.0us)
+[seyal shell-integration benchmark] variant=off status=measured startup_us p50=24057 p95=27551 p99=27551 samples=5 prompt_to_prompt_us p50=119 p95=207 p99=323 mean=132 samples=1000
+[seyal shell-integration benchmark] variant=seyal status=measured startup_us p50=20000 p95=25231 p99=25231 samples=5 prompt_to_prompt_us p50=146 p95=245 p99=390 mean=162 samples=1000
+[seyal shell-integration benchmark] variant=ghostty status=measured startup_us p50=19656 p95=40534 p99=40534 samples=5 prompt_to_prompt_us p50=254 p95=444 p99=704 mean=284 samples=1000 ghostty-rev=f9a3f24a56bf05f70894e1a084809d4fffadf420
+[seyal shell-integration benchmark] variant=warp status=measured startup_us p50=35587 p95=37678 p99=37678 samples=5 prompt_to_prompt_us p50=51777 p95=60815 p99=85537 mean=53861 samples=1000 warp-version=0.2026.08.18.02.52.00
+[seyal shell-integration benchmark] verdict vs ghostty: PASS startup_p50=ok(20000<=19656+393) startup_p95=ok(25231<=40534+811) p2p_p50=ok(146<=254+100) p2p_p95=ok(245<=444+100)
+[seyal shell-integration benchmark] verdict vs warp: PASS startup_p50=ok(20000<=35587+712) startup_p95=ok(25231<=37678+754) p2p_p50=ok(146<=51777+1036) p2p_p95=ok(245<=60815+1216)
+[seyal shell-integration benchmark] own_baseline prompt_to_prompt_p50 seyal-off=+27us startup_p50 seyal-off=-4056us

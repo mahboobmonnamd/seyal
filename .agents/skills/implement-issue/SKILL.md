@@ -37,6 +37,22 @@ Do not create the implementation worktree/branch, generate files, or start produ
 5. Flag uncertainty explicitly rather than resolving it silently. If two approaches are viable, state the tradeoff and ask.
 6. When iterating, make targeted corrections to the agreed plan. Do not rewrite the whole change unless the plan itself changed.
 
+## Failure remediation loop
+
+A reproducible failure discovered while implementing, validating, or closing the owning Issue is active engineering work. Recording or classifying the failure is not completion when the failure is fixable within the Issue's accepted scope.
+
+For every reproducible failure:
+
+1. Reproduce it with the narrowest deterministic test, fixture, workload, or native gate available.
+2. Diagnose whether the root cause is product code, test/harness lifecycle or isolation, environment/setup, or an external platform limitation. Do not guess from a single green rerun.
+3. If the root cause is within the owning Issue scope, implement the smallest production-grade fix immediately. Test/harness fixes are valid only when they make the test more truthful; never weaken, skip, retry-away, serialize-away, or relabel a valid failure merely to obtain green.
+4. Rerun the narrow failing gate until stable, then rerun the applicable exact-head repository gates (`make check`, `make test`, native/XCUI, fuzz/bench/security as required) and CI.
+5. Continue diagnose → fix → rerun until green. An isolated pass does not override a later combined/full-suite failure.
+6. Create a blocking child Issue and stop only when diagnosis establishes that the required fix materially exceeds the owning Issue scope, changes an accepted architecture/authority boundary, requires a new non-local module/redesign, or belongs to a separate ownership boundary. Link the blocker and keep the original Issue open.
+7. Hosted/cloud CI is the default development loop. A physical or dedicated platform machine is required only for gates that hosted CI cannot truthfully establish, such as hardware-specific interactive performance. Lack of a developer-owned physical machine is not itself a reason to stop normal implementation/debugging.
+
+A known reproducible failure may be explicitly classified only after diagnosis. `ENVIRONMENT_UNSUPPORTED` / `PLATFORM_LIMITED` must identify the unavailable external capability and must not be used for an in-repository defect or test-lifecycle leak.
+
 ## Production-grade merge invariant
 
 Anything that can reach `master` must be production-grade for its intended repository role. This applies to product code, developer tooling, scripts, fixtures, generated artifacts, and tests that are committed on a mergeable path.

@@ -2,16 +2,56 @@
 
 - **Issue:** #824
 - **Date:** 2026-09-17
-- **Validation base:** `f0e8c01b78dd8c342dbe75edf71785163bae4e6c` plus the PTY/IME/XCUI patch; runs preceded commit and final native source fingerprints are retained below
+- **Exact PR head (code + prior evidence commits):** `ad50bd193f7f840b34d45c9efa99b9ebfa78c6dc`
 - **Production path:** ADR-015 thin AppKit host over Rust snapshots; headed oracle is Flow/Blocks, not a raw terminal.
 - **Exclusive Runtime rule:** if another process owns `control.sock`, the headed run is INCONCLUSIVE.
+- **Relationship:** `Refs #824` only. Does not close #824 / #672.
 
-## Latest native verification (2026-09-17)
+## Current-head exact evidence (`ad50bd1`)
+
+Hosted Foundation Quality on `ad50bd1`
+([run 35242876394](https://github.com/seyal-org/seyal/actions/runs/35242876394)):
+
+| Gate | Result |
+| --- | --- |
+| `make check` (includes `pass7_local_ipc`) | **PASS** |
+| `make test` native component (`SeyalHostComponentTests`) | **26/26 PASS**, including live IME Runtime/PTY callback |
+| `make test` XCUI (`SeyalUITests`) | **19 executed, 0 failures, 1 skip** |
+| Block selection XCUI | **PASS** (`testSelectingABlockRevealsRustBlockDetailsInInspector`, 28.53s) |
+| Workload XCUI | **4/4 PASS** |
+| History XCUI | **2/2 PASS** |
+| System ABC dead-key XCUI | **SKIP** on hosted runner (`XCTSkip`: requires macOS ABC layout). Retained local PASS with bytes `c3 a9 78 1b` under [system results](m002-824-ime-system-results.json). |
+| Production fuzz workflows | **PASS** on the same head |
+
+Remediation that cleared the earlier blockers is recorded in
+[m002-824-remediation.md](m002-824-remediation.md): IPC harness PID isolation +
+Harness `Drop` shutdown (`0c49cef` / `d44662c`), Flow live-end follow after
+history growth (`d44662c`), IME connection poll (`ad50bd1`).
+
+Source fingerprints for the production/test sources at `ad50bd1` (docs-only
+follow-ups do not change these hashes):
+
+| Source | SHA-256 |
+| --- | --- |
+| `InteractiveMetalSurfaceView.swift` | `9f4b8191677d33c20a99b915d638eaee7dddfccd4dc6fd2c3d44687a67259e16` |
+| `ProductChromeHostView.swift` | `e492e3d212e13e2e7eaa4ba714b6a1cc81b120d9c4727c628754d96d64b77636` |
+| `SeyalHostComponentTests.swift` | `b6379cb70c8f189723228afa6500bcdba22442734b6cd129a9ff3ab25734aae0` |
+| `SeyalHostUITests.swift` | `7eb8b71091d8d479c6d04011f7fd375b4d45b43e3e23b0c9f6056bbe3263c8ed` |
+| `SeyalHostHistoryUITests.swift` | `e14a154bce535a317edb91dde28319318fee07309a338d35dd9d8bfd7ac93a9c` |
+| `SeyalHostWorkloadUITests.swift` | `d4e011fe197fdb1a043cff6cb3403916af7a06b456bf5e53631c051dbc7690e0` |
+| `pass7_local_ipc.rs` | `4da73af2632285064476d1cb88a5ea2bf402ea7b5c454b6af942a8c41244d918` |
+
+This is not #824 Done: ten interactive manual steps, #673 release performance,
+milestone-length fuzz, and independent close review remain open. Independent
+merge review must re-resolve the PR head after this evidence correction commit.
+
+## Historical local native verification (pre-remediation, 2026-09-17)
 
 The previous Runtime owner shut down PID 99338 before this run. The native test
 application then launched its own bundled Runtime, PID 23758; no foreign Runtime
 was terminated. Results below were captured before committing the `issue/824`
-patch on `f0e8c01`, not as a clean release freeze or final PR-head acceptance.
+patch on `f0e8c01` and **before** the Block-selection / IPC remediations landed.
+They are retained for honesty; they are **not** the current-head claim.
 
 - `target/m002-ime-red.xcresult`: direct native callback tests reproduced
   cancellation retaining preedit and candidate coordinates returning the whole
@@ -29,13 +69,11 @@ patch on `f0e8c01`, not as a clean release freeze or final PR-head acceptance.
 - Independent source review found the initial deferred-discard and failure-path
   cleanup concerns resolved after follow-up. This is not an independent closing
   review of every #824 acceptance criterion.
-- **Final full native run:** `target/m002-ime-final.xcresult` executed **45 tests:
-  44 passed, one failed, zero skipped**. All eight native IME callback cases and
-  the real ABC system-input-source case passed. The remaining failure is
-  `testSelectingABlockRevealsRustBlockDetailsInInspector`: after clicking the
-  newly submitted card, the inspector did not appear. The
-  [full result summary](m002-824-ime-full-results.json) retains that failure.
-  Earlier isolated Block-selection passes do not make this final gate green.
+- **Historical full native run (superseded):** `target/m002-ime-final.xcresult`
+  executed **45 tests: 44 passed, one failed, zero skipped**. The failure was
+  `testSelectingABlockRevealsRustBlockDetailsInInspector`. Retained in
+  [full result summary](m002-824-ime-full-results.json). Cleared on current head
+  by live-end follow + hittable wait; see Current-head table above.
 
 ### Real macOS input-source verification
 
@@ -107,21 +145,16 @@ Apple API evidence: installed macOS SDK `NSTextInputClient.h`
 `NSTextInputContext.h` (`discardMarkedText`: client clears its marked range).
 Host: Darwin arm64, macOS 26.5.2, Xcode 26.6 (17F113).
 
-Native source fingerprints for the final-v2 run:
+Historical source fingerprints for the final-v2 / pre-remediation 45-test local
+runs (superseded by the Current-head table above):
 
-| Source | SHA-256 |
+| Source | SHA-256 (historical) |
 | --- | --- |
-| `InteractiveMetalSurfaceView.swift` | `d03cd4ad6c640b709c7a97bf4e08b3ede0f75de9d148f8e773653a4963222c32` |
-| `ProductChromeHostView.swift` | `a0743a81faf5e81b65e19bd254a997ab4df3990f2517d47b09267a5e4d705de2` |
-| `SeyalHostComponentTests.swift` | `c8484732ead7191da6f97c2953cdce27cded167fbf2620b1e985686a776b6052` |
-
-Changed-source fingerprints for the final 45-test run (the component and
-ProductChrome hashes above are unchanged):
-
-| Source | SHA-256 |
-| --- | --- |
-| `InteractiveMetalSurfaceView.swift` | `9f4b8191677d33c20a99b915d638eaee7dddfccd4dc6fd2c3d44687a67259e16` |
-| `SeyalHostUITests.swift` | `142473b4f8b997c966fec984676127116b75ee755660bd91fda9e60934a94ef3` |
+| `InteractiveMetalSurfaceView.swift` (final-v2) | `d03cd4ad6c640b709c7a97bf4e08b3ede0f75de9d148f8e773653a4963222c32` |
+| `ProductChromeHostView.swift` (final-v2) | `a0743a81faf5e81b65e19bd254a997ab4df3990f2517d47b09267a5e4d705de2` |
+| `SeyalHostComponentTests.swift` (final-v2) | `c8484732ead7191da6f97c2953cdce27cded167fbf2620b1e985686a776b6052` |
+| `InteractiveMetalSurfaceView.swift` (45-test local) | `9f4b8191677d33c20a99b915d638eaee7dddfccd4dc6fd2c3d44687a67259e16` |
+| `SeyalHostUITests.swift` (45-test local, pre-hittable wait) | `142473b4f8b997c966fec984676127116b75ee755660bd91fda9e60934a94ef3` |
 | `SeyalHostHistoryUITests.swift` | `e14a154bce535a317edb91dde28319318fee07309a338d35dd9d8bfd7ac93a9c` |
 | `SeyalHostWorkloadUITests.swift` | `d4e011fe197fdb1a043cff6cb3403916af7a06b456bf5e53631c051dbc7690e0` |
 
@@ -129,12 +162,12 @@ The physical-hardware and multilingual-candidate limitations remain unclaimed; #
 pulled into M002. This verification does not automatically waive #824's other
 manual, benchmark, or independent closing-review requirements.
 
-The complete `make check` gate failed twice in `pass7_local_ipc` while spawning
-test executions (`Exec(Io(code: -6))`); the isolated suite passed on rerun.
-The full gate is not PASS, and its cause must be resolved rather than hidden
-by the passing native results. A read-only diagnosis suggested resource or
-test-isolation interference, but did not establish a reproducible root cause.
-No speculative test serialization or production workaround was applied.
+**Historical `make check` note (superseded):** before harness isolation, the
+complete local `make check` gate failed twice in `pass7_local_ipc` with
+`Exec(Io(code: -6))` while the isolated suite passed. Root cause and fix are
+in [m002-824-remediation.md](m002-824-remediation.md). Exact-head hosted
+`make check` on `ad50bd1` is PASS; do not treat the historical local failures
+as the current claim.
 
 ## Earlier session (2026-09-17, before the exclusive window)
 

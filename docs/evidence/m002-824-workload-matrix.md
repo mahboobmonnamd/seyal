@@ -4,9 +4,9 @@
 | --- | --- |
 | Owning Issue | #824 (parent #672) |
 | Classification | production validation / focused gap closure |
-| Validation base | `f0e8c01b78dd8c342dbe75edf71785163bae4e6c` (`issue/824` from `master` `4121c12`) plus the PTY/IME/XCUI patch; final native source fingerprints are in the headed ledger |
-| Prior automated pin | `dcbb90faaf870fdabbc543e6947adff2af48c8a3` remains the first retained matrix SHA; this session re-ran the same suites on `f0e8c01` plus live PTY expansions |
-| Host | Darwin arm64 / macOS 26.5.2 / Rust 1.98.0 |
+| Exact PR head | `ad50bd193f7f840b34d45c9efa99b9ebfa78c6dc` (code + remediation). Evidence ledger sync may land as a docs-only follow-up commit on `issue/824`. |
+| Prior automated pin | `dcbb90faaf870fdabbc543e6947adff2af48c8a3` remains the first retained matrix SHA; intermediate re-runs on `f0e8c01` plus live PTY expansions |
+| Host | Darwin arm64 / macOS 26.5.2 / Rust 1.98.0 (local matrix); hosted CI macOS-15 / Xcode 16.4 for exact-head gates |
 | Date (UTC) | 2026-09-17 |
 
 This is retained automated + classified native/manual evidence for the #672
@@ -15,15 +15,17 @@ performance remains #673 authority (`performance_claim=false` here). PTY
 smokes spawn with `TERM=seyal-m001` and a `tic`-compiled bundled terminfo
 directory, not `xterm-256color`.
 
-**Latest native update:** the exclusive macOS window is now available. The
-[headed ledger](m002-824-headed-manual.md) records eight native callback tests,
-26/26 component tests, real macOS ABC dead-key commit/cancel with exact PTY bytes,
-and the paired Flow receiver cleanup regression. Earlier rows below are historical workload observations, not claims that
-all ten interactive manual steps have now been executed. The full `make check`
-gate currently fails in Runtime IPC setup despite a passing isolated rerun.
-The final full native suite is **44/45 PASS**, not an overall PASS: Block
-selection did not reveal the inspector. Native IME and the shared
-alternate-screen/Flow lifecycle regressions passed in that run.
+**Current-head gates (`ad50bd1`):** hosted Foundation Quality
+([run 35242876394](https://github.com/seyal-org/seyal/actions/runs/35242876394))
+PASS — `make check` (including `pass7_local_ipc`), component 26/26, XCUI
+19 executed / 0 failures / 1 ABC-layout skip, Block selection PASS, workload
+4/4 PASS. See [headed ledger](m002-824-headed-manual.md). Historical local
+44/45 Block-selection FAIL and pre-isolation `make check` IPC FAIL are retained
+as superseded history, not the current claim.
+
+Earlier matrix rows below remain historical workload observations. They do
+**not** claim that all ten interactive manual steps have been executed in the
+Seyal GUI.
 
 ## Matrix
 
@@ -72,9 +74,11 @@ python3 scripts/fuzz-smoke.py
 # 10 active targets passed; campaign parity ok
 ```
 
-`scripts/test-macos-ui.sh` was **not** re-run this session: exclusive
-`seyal-runtime` pid 99338 (commercial `Seyal.app` helper) owns `control.sock`.
-Prior exclusive-Runtime session: 18/18 PASS.
+`scripts/test-macos-ui.sh` was **not** re-run in the pre-remediation local
+session when exclusive `seyal-runtime` pid 99338 owned `control.sock`. Exact-head
+hosted `make test` on `ad50bd1` later executed the full native XCUI suite
+(Block selection PASS; workload 4/4 PASS; one ABC layout skip). Prior exclusive-
+Runtime local session: 18/18 PASS.
 
 ## Gaps that are not buried
 
@@ -96,8 +100,9 @@ milestone qualification freeze:
 - `cargo test --locked -p seyal-exec --test m002_workload_pty --no-run`
   passed. This verifies compilation, not another execution of the live PTY rows.
 - The subsequent `make check` rerun executed this PTY suite: **10/10 passed**,
-  including live SSH/nested SSH, Vim/Neovim, tmux and htop/watch. The later Runtime
-  IPC failure still prevents claiming a passing overall gate.
+  including live SSH/nested SSH, Vim/Neovim, tmux and htop/watch. A later local
+  Runtime IPC failure existed at that time; it is **superseded** by harness
+  isolation on `ad50bd1` (hosted `make check` PASS).
 - ARM64 `xcodebuild build-for-testing` passed after the Block selection test
   was given a per-run unique command label. This verifies compilation, not
   execution of the corrected XCUI test.
@@ -110,11 +115,15 @@ milestone qualification freeze:
 
 No new module/ADR was required. Remaining Done gates are evidence, not architecture:
 
-1. Interactive SSH/nested SSH **in the Seyal GUI** (PTY live hop is retained; headed blocked by exclusive Runtime pid 99338).
+1. Interactive SSH/nested SSH **in the Seyal GUI** (PTY live hop is retained; many headed interactive rows remain ENVIRONMENT_UNSUPPORTED / not fully exercised as manual steps).
 2. Interactive Vim/Neovim/tmux-inside-tmux/htop/agent TUI on Flow → TUI takeover → Flow in the GUI (live PTY alt-screen restore is retained).
-3. SPEC-011 IME 37–41 now have native callback/PTY evidence in the headed ledger. Physical input-source/candidate-popup, mixed-display-scale and live-composition reconnect breadth remain unclaimed. #836 not pulled.
+3. SPEC-011 IME 37–41 have native callback/PTY evidence in the headed ledger. Hosted CI skips the ABC system-input-source case; local ABC PASS is retained. Physical input-source/candidate-popup, mixed-display-scale and live-composition reconnect breadth remain unclaimed. #836 not pulled.
 4. #673 PHYSICAL_ARM64 five-cohort / 20-warmup / 100-sample matrix — **not started**.
-5. Independent close review. This PR stays `Refs #824`.
+5. Independent close review after evidence/ledger honesty is current. This PR stays `Refs #824`.
+
+Active remediation for Block selection and `pass7_local_ipc` isolation is
+**complete on `ad50bd1`** (see [remediation](m002-824-remediation.md)); those
+are no longer open product failures on the exact head.
 
 ## What this PR did not change
 

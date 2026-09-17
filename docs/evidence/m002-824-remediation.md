@@ -18,7 +18,11 @@ Remediation on `issue/824`:
 - leave production Runtime/TerminalExecution lifecycle semantics unchanged;
 - rustfmt the `runtime_dir_override` assignment so Foundation Quality does not fail `cargo fmt --check`.
 
-Acceptance: isolated `pass7_local_ipc` plus the full exact-head `make check` gate must pass. A single green rerun is not sufficient evidence if the full gate regresses again.
+**Acceptance status (exact head `ad50bd1`):** hosted Foundation Quality
+`make check` PASS
+([run 35242876394](https://github.com/seyal-org/seyal/actions/runs/35242876394)),
+including `pass7_local_ipc`. The historical local double-fail is retained as
+diagnosis evidence only.
 
 ## Block selection full-suite failure
 
@@ -38,4 +42,8 @@ CI at `d44662c`: Block-selection XCUI and all four workload XCUI cases PASS. Rem
 `testNativeIMELiveCallbacksDeliverOnlyCommittedUTF8AndTrackCursor` timing out on the
 "production Runtime and projection connected" wait; harden that wait with a connection poll.
 
-Acceptance: the Block-selection XCUI test must pass in the combined/full native suite, not only in isolation, and the final exact-head native gate must be green.
+**Acceptance status (exact head `ad50bd1`):** hosted `make test` native suite
+PASS — Block selection XCUI PASS (28.53s), component live IME PASS (1.15s),
+XCUI 19 executed / 0 failures / 1 ABC-layout skip
+([run 35242876394](https://github.com/seyal-org/seyal/actions/runs/35242876394)).
+The historical local 44/45 FAIL is retained in the headed ledger as superseded.

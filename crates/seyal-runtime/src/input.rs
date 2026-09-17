@@ -18,6 +18,8 @@ pub(crate) enum ControlMessage {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InputKind {
     Direct,
+    /// Only the macOS composer route constructs this today.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Composer,
 }
 

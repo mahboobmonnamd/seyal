@@ -16,6 +16,7 @@ use super::entry::{Entry, ExecutionSummary};
 #[cfg(target_os = "macos")]
 use super::integration_state::IntegrationState;
 use super::lifecycle::{BlockCompletion, Lifecycle};
+#[cfg(target_os = "macos")]
 use super::shell_integration::{shell_integration_mode, ShellIntegrationMode};
 use super::Runtime;
 #[cfg(target_os = "macos")]

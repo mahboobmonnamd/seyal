@@ -995,9 +995,6 @@ private final class CommandBlockView: NSView {
         header.addSubview(status)
         header.wantsLayer = true
         header.layer?.cornerRadius = 6
-        header.addGestureRecognizer(
-            NSClickGestureRecognizer(target: self, action: #selector(headerClicked))
-        )
         addSubview(header)
         addSubview(body)
         addSubview(seam)
@@ -1037,7 +1034,14 @@ private final class CommandBlockView: NSView {
         bodyHeight.constant = max(cellHeight, 1) * CGFloat(max(lines, 1))
     }
 
-    @objc private func headerClicked() {
+    /// Flow's Metal surface returns `nil` from `hitTest`, so Block chrome must
+    /// own the click. XCUI (and a user) hit the card center, which is the body
+    /// once output exists — a header-only gesture never sees that click.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        super.hitTest(point) == nil ? nil : self
+    }
+
+    override func mouseDown(with event: NSEvent) {
         onSelect?(isSelected)
     }
 

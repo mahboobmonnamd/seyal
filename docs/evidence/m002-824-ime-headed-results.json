@@ -1,0 +1,49 @@
+{
+  "devicesAndConfigurations": [
+    {
+      "device": {
+        "architecture": "arm64",
+        "modelName": "MacBook Pro",
+        "osBuildNumber": "25F84",
+        "osVersion": "26.5.2",
+        "platform": "macOS"
+      },
+      "expectedFailures": 0,
+      "failedTests": 1,
+      "passedTests": 30,
+      "skippedTests": 0,
+      "testPlanConfiguration": {
+        "configurationId": "1",
+        "configurationName": "Test Scheme Action"
+      }
+    }
+  ],
+  "environmentDescription": "Seyal · Built with macOS 26.5.2",
+  "expectedFailures": 0,
+  "failedTests": 1,
+  "finishTime": 1789612356.01,
+  "passedTests": 30,
+  "result": "Failed",
+  "skippedTests": 0,
+  "startTime": 1789612211.404,
+  "statistics": [],
+  "testFailures": [
+    {
+      "failureText": "XCTAssertTrue failed",
+      "targetName": "SeyalUITests",
+      "testIdentifier": 27,
+      "testIdentifierString": "SeyalHostUITests/testSelectingABlockRevealsRustBlockDetailsInInspector()",
+      "testIdentifierURL": "test://com.apple.xcode/Seyal/SeyalUITests/SeyalHostUITests/testSelectingABlockRevealsRustBlockDetailsInInspector",
+      "testName": "testSelectingABlockRevealsRustBlockDetailsInInspector()"
+    }
+  ],
+  "title": "Test - Seyal",
+  "topInsights": [
+    {
+      "category": "Longest Test Runs",
+      "impact": "64% of duration",
+      "text": "1 longest test run with outlier durations exceeding 0.19s (three standard deviations)"
+    }
+  ],
+  "totalTestCount": 31
+}

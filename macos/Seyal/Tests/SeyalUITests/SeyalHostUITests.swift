@@ -1,6 +1,51 @@
 import XCTest
 
 @MainActor
+extension XCTestCase {
+    func exerciseBoundedAlternateScreen(
+        in app: XCUIApplication, submitCommand: (String) -> Void
+    ) throws {
+        let scriptURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("seyal-alternate-\(UUID().uuidString).sh")
+        try #"""
+        trap 'printf "\033[?1049l"' EXIT
+        printf '\033[?1049h'
+        read -r -t 20 answer
+        """#.write(to: scriptURL, atomically: true, encoding: .utf8)
+        let composer = app.descendants(matching: .any)["seyal-composer"].firstMatch
+        let terminal = app.descendants(matching: .any)["terminal-input"].firstMatch
+        defer {
+            if app.state == .runningForeground, composer.exists, !composer.isHittable {
+                if terminal.isHittable {
+                    terminal.click()
+                }
+                app.typeKey("\r", modifierFlags: [])
+                let stopped = expectation(
+                    for: NSPredicate(format: "isHittable == true"),
+                    evaluatedWith: composer, handler: nil)
+                XCTAssertEqual(XCTWaiter.wait(for: [stopped], timeout: 5), .completed)
+            }
+            do {
+                try FileManager.default.removeItem(at: scriptURL)
+            } catch {
+                XCTFail("Could not remove alternate-screen fixture: \(error)")
+            }
+        }
+        submitCommand("/bin/bash --noprofile --norc '\(scriptURL.path)'")
+        let entered = expectation(
+            for: NSPredicate(format: "isHittable == false"), evaluatedWith: composer, handler: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [entered], timeout: 12), .completed)
+        XCTAssertEqual(app.state, .runningForeground)
+        XCTAssertTrue(terminal.waitForExistence(timeout: 5))
+        terminal.click()
+        app.typeKey("\r", modifierFlags: [])
+        let returned = expectation(
+            for: NSPredicate(format: "isHittable == true"), evaluatedWith: composer, handler: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [returned], timeout: 12), .completed)
+    }
+}
+
+@MainActor
 final class SeyalHostUITests: XCTestCase {
     override func setUp() {
         continueAfterFailure = false
@@ -112,43 +157,10 @@ final class SeyalHostUITests: XCTestCase {
     func testAlternateScreenTakeoverDoesNotCrashTheHost() throws {
         let app = hostedApp()
         waitForUsablePty(in: app)
-        let composer = app.descendants(matching: .any)["seyal-composer"]
-        XCTAssertTrue(composer.waitForExistence(timeout: 12))
-        let composerReady = NSPredicate(format: "value == 'available'")
-        let becameReady = expectation(for: composerReady, evaluatedWith: composer, handler: nil)
-        XCTAssertEqual(
-            XCTWaiter.wait(for: [becameReady], timeout: 12),
-            .completed,
-            "composer never became available; value=\(composer.value ?? "nil")"
-        )
-        composer.firstMatch.click()
-        let editor = app.descendants(matching: .any)["seyal-composer-editor"]
-        if editor.waitForExistence(timeout: 2), editor.firstMatch.isHittable {
-            editor.firstMatch.click()
-            editor.firstMatch.typeText("printf '\\033[?1049h'")
-            editor.firstMatch.typeKey("\r", modifierFlags: [])
-        } else {
-            composer.firstMatch.typeText("printf '\\033[?1049h'")
-            app.typeKey("\r", modifierFlags: [])
+        try exerciseBoundedAlternateScreen(in: app) { command in
+            submitComposerCommand(app, command)
         }
-        RunLoop.current.run(until: Date().addingTimeInterval(2))
-        XCTAssertEqual(
-            app.state,
-            .runningForeground,
-            "Seyal.app crashed entering alternate-screen/TUI takeover"
-        )
-        XCTAssertTrue(app.descendants(matching: .any)["seyal-thin-pane"].exists)
-        // Leave Flow, not TUI. A surviving Runtime helper is reused by the next
-        // launch; leftover alternate-screen hides the composer and fails later tests.
-        let terminal = app.descendants(matching: .any)["terminal-input"]
-        XCTAssertTrue(terminal.waitForExistence(timeout: 5))
-        terminal.firstMatch.click()
-        app.typeText("printf '\\033[?1049l'")
-        app.typeKey("\r", modifierFlags: [])
-        XCTAssertTrue(
-            composer.waitForExistence(timeout: 12),
-            "composer did not return after leaving alternate-screen"
-        )
+        assertFlowBlocksOrFail(in: app)
     }
 
     /// Metal does not expose PTY bytes as AX text. The live connection token on
@@ -227,7 +239,8 @@ final class SeyalHostUITests: XCTestCase {
         let editor = app.descendants(matching: .any)["seyal-composer-editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
         editor.firstMatch.click()
-        editor.firstMatch.typeText("echo seyal-block-details")
+        let submitted = "echo seyal-block-details-\(UUID().uuidString)"
+        editor.firstMatch.typeText(submitted)
         editor.firstMatch.typeKey("\r", modifierFlags: [])
         let cleared = expectation(
             for: NSPredicate(format: "value == nil OR value == ''"),
@@ -240,12 +253,21 @@ final class SeyalHostUITests: XCTestCase {
         // Runtime publishes the revision. Without shell integration there is no
         // Block and therefore nothing to select: the test proves the host never
         // fabricates one.
-        let card = app.descendants(matching: .any)["seyal-block-0"]
+        //
+        // Do not click `seyal-block-0`: hostedApp reconnects to the exclusive
+        // Runtime, so index 0 is often an earlier tall card from this suite.
+        let card = app.descendants(matching: .any).matching(
+            NSPredicate(
+                format: "identifier MATCHES %@ AND label == %@",
+                "seyal-block-[0-9]+",
+                submitted
+            )
+        ).firstMatch
         guard card.waitForExistence(timeout: 10) else {
             XCTAssertFalse(inspector.firstMatch.isHittable, "no Block, no Block details")
             return
         }
-        card.firstMatch.click()
+        card.click()
         XCTAssertTrue(inspector.waitForExistence(timeout: 5))
         let revealed = expectation(for: NSPredicate(format: "isHittable == true"), evaluatedWith: inspector.firstMatch, handler: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [revealed], timeout: 5), .completed, "selecting a Block reveals the inspector")
@@ -253,7 +275,7 @@ final class SeyalHostUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 5), .completed, "card reflects the Rust selected flag")
         let commandRow = inspector.descendants(matching: .staticText)["Block · Command"]
         XCTAssertTrue(commandRow.waitForExistence(timeout: 5), "inspector shows Rust Block rows")
-        XCTAssertTrue(inspector.descendants(matching: .staticText)["echo seyal-block-details"].waitForExistence(timeout: 5))
+        XCTAssertTrue(inspector.descendants(matching: .staticText)[submitted].waitForExistence(timeout: 5))
         XCTAssertFalse(inspector.descendants(matching: .staticText)["Block · Duration"].exists, "no fabricated telemetry")
 
         card.firstMatch.click()
@@ -357,6 +379,82 @@ final class SeyalHostUITests: XCTestCase {
         )
     }
 
+    func testSystemABCDeadKeyCommitAndCancelReachRealPty() throws {
+        let sources = UserDefaults(suiteName: "com.apple.HIToolbox")?
+            .array(forKey: "AppleSelectedInputSources") as? [[String: Any]]
+        guard sources?.contains(where: { $0["KeyboardLayout Name"] as? String == "ABC" }) == true else {
+            throw XCTSkip("This system-input-source case requires the macOS ABC keyboard layout.")
+        }
+        let app = hostedApp()
+        waitForUsablePty(in: app)
+        assertFlowBlocksOrFail(in: app)
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("seyal-ime-system-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer {
+            do {
+                try FileManager.default.removeItem(at: directory)
+            } catch {
+                XCTFail("Could not remove system IME capture: \(error)")
+            }
+        }
+        let capture = directory.appendingPathComponent("committed.bin")
+        let script = """
+        import os, select, sys, termios, time, tty
+        fd = sys.stdin.fileno()
+        saved = termios.tcgetattr(fd)
+        data = bytearray()
+        try:
+            tty.setraw(fd)
+            os.write(1, b"\\x1b[?1049h\\x1b[3;5HIME")
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                if not select.select([fd], [], [], max(0, deadline - time.monotonic()))[0]:
+                    break
+                byte = os.read(fd, 1)
+                if not byte or byte == b"\\x04":
+                    break
+                data.extend(byte)
+        finally:
+            try:
+                with open(\(String(reflecting: capture.path)), "wb") as output:
+                    output.write(data)
+            finally:
+                termios.tcsetattr(fd, termios.TCSANOW, saved)
+                os.write(1, b"\\x1b[?1049l")
+        """
+        let scriptURL = directory.appendingPathComponent("receive.py")
+        try script.write(to: scriptURL, atomically: true, encoding: .utf8)
+        submitComposerCommand(app, "/usr/bin/python3 '\(scriptURL.path)'")
+        let composer = app.descendants(matching: .any)["seyal-composer"].firstMatch
+        let enteredTui = expectation(
+            for: NSPredicate(format: "isHittable == false"), evaluatedWith: composer, handler: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [enteredTui], timeout: 12), .completed)
+        let terminal = app.descendants(matching: .any)["terminal-input"].firstMatch
+        XCTAssertTrue(terminal.waitForExistence(timeout: 5))
+        terminal.click()
+        defer {
+            if app.state == .runningForeground, !composer.isHittable {
+                app.typeKey("d", modifierFlags: .control)
+            }
+        }
+        app.typeKey("e", modifierFlags: .option)
+        app.typeKey("e", modifierFlags: [])
+        app.typeKey("e", modifierFlags: .option)
+        app.typeKey(.escape, modifierFlags: [])
+        app.typeKey("x", modifierFlags: [])
+        app.typeKey(.escape, modifierFlags: [])
+        app.typeKey("d", modifierFlags: .control)
+        let returned = expectation(
+            for: NSPredicate(format: "isHittable == true"), evaluatedWith: composer, handler: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [returned], timeout: 12), .completed)
+        let captured = try Data(contentsOf: capture)
+        XCTAssertEqual(
+            captured, Data("éx\u{1b}".utf8),
+            "Unexpected PTY bytes: \(captured.map { String(format: "%02x", $0) }.joined(separator: " "))")
+        assertFlowBlocksOrFail(in: app)
+    }
+
     /// Flow eligibility routes keys to the composer, not the PTY. A headed
     /// byte oracle that enters Raw/TUI looks like a normal terminal and is
     /// withdrawn. This case proves ArrowUp / Cmd-C on Flow do not write PTY
@@ -367,8 +465,55 @@ final class SeyalHostUITests: XCTestCase {
         waitForUsablePty(in: app)
         assertFlowBlocksOrFail(in: app)
 
-        let capture = "/tmp/seyal-823-flow-\(UUID().uuidString).bin"
-        submitComposerCommand(app, "head -c 3 > \(capture)")
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("seyal-flow-input-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        let capture = directory.appendingPathComponent("captured.bin")
+        let active = directory.appendingPathComponent("active")
+        let ready = directory.appendingPathComponent("ready")
+        let done = directory.appendingPathComponent("done")
+        try Data().write(to: active)
+        // A waiting reader must not consume the next test's shell command.
+        defer {
+            do {
+                try FileManager.default.removeItem(at: active)
+                let stopped = expectation(
+                    for: NSPredicate { _, _ in
+                        FileManager.default.fileExists(atPath: done.path)
+                    }, evaluatedWith: nil, handler: nil)
+                XCTAssertEqual(XCTWaiter.wait(for: [stopped], timeout: 5), .completed)
+                try FileManager.default.removeItem(at: directory)
+            } catch {
+                XCTFail("Could not clean up Flow input capture: \(error)")
+            }
+        }
+        let script = """
+        import os, select, sys, termios, time, tty
+        fd = sys.stdin.fileno()
+        saved = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            with open(\(String(reflecting: capture.path)), "wb", buffering=0) as output:
+                open(\(String(reflecting: ready.path)), "wb").close()
+                deadline = time.monotonic() + 30
+                while os.path.exists(\(String(reflecting: active.path))) and time.monotonic() < deadline:
+                    if select.select([fd], [], [], 0.1)[0]:
+                        data = os.read(fd, 4096)
+                        if not data:
+                            break
+                        output.write(data)
+        finally:
+            termios.tcsetattr(fd, termios.TCSANOW, saved)
+            open(\(String(reflecting: done.path)), "wb").close()
+        """
+        let scriptURL = directory.appendingPathComponent("receive.py")
+        try script.write(to: scriptURL, atomically: true, encoding: .utf8)
+        submitComposerCommand(app, "/usr/bin/python3 '\(scriptURL.path)'")
+        let receiving = expectation(
+            for: NSPredicate { _, _ in
+                FileManager.default.fileExists(atPath: ready.path)
+            }, evaluatedWith: nil, handler: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [receiving], timeout: 10), .completed)
         XCTAssertEqual(app.state, .runningForeground)
         assertFlowBlocksOrFail(in: app)
 
@@ -383,12 +528,11 @@ final class SeyalHostUITests: XCTestCase {
         XCTAssertEqual(app.state, .runningForeground, "Seyal.app crashed while Flow rejected PTY keys")
         assertFlowBlocksOrFail(in: app)
 
-        let data = try? Data(contentsOf: URL(fileURLWithPath: capture))
+        let data = try Data(contentsOf: capture)
         XCTAssertTrue(
-            data == nil || data?.isEmpty == true,
-            "Flow must not forward ArrowUp/Cmd-C into a waiting PTY; captured \(data?.count ?? 0) bytes"
+            data.isEmpty,
+            "Flow must not forward ArrowUp/Cmd-C into a waiting PTY; captured \(data.count) bytes"
         )
-        try? FileManager.default.removeItem(atPath: capture)
     }
 
     func testCopyPasteAndQuitMenusAreWired() throws {

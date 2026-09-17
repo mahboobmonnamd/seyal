@@ -140,6 +140,302 @@ final class SeyalHostComponentTests: XCTestCase {
     }
 
     @MainActor
+    private func withNativeIMEView(
+        _ body: (InteractiveMetalSurfaceView, NSWindow) throws -> Void
+    ) rethrows {
+        let handle = seyal_app_create()
+        defer { XCTAssertEqual(seyal_app_destroy(handle), 0) }
+        let view = InteractiveMetalSurfaceView(
+            frame: NSRect(x: 0, y: 0, width: 640, height: 400), appHandle: handle)
+        view.suppressesAutomaticBridgeRecovery = true
+        let window = NSWindow(
+            contentRect: NSRect(x: 120, y: 160, width: 640, height: 400),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = view
+        defer {
+            view.removeFromSuperview()
+            window.close()
+        }
+        try body(view, window)
+    }
+
+    @MainActor
+    func testNativeIMEMarkedTextInsertClearsPreedit() {
+        withNativeIMEView { view, _ in
+            view.setMarkedText(
+                "ni", selectedRange: NSRange(location: 2, length: 0),
+                replacementRange: NSRange(location: NSNotFound, length: 0))
+            XCTAssertTrue(view.hasMarkedText())
+            XCTAssertEqual(view.markedRange(), NSRange(location: 0, length: 2))
+            view.insertText(
+                NSAttributedString(string: "你e\u{301}"),
+                replacementRange: NSRange(location: NSNotFound, length: 0))
+            XCTAssertFalse(view.hasMarkedText())
+            XCTAssertEqual(view.markedRange().location, NSNotFound)
+            // This unbound host checks native callbacks, not Runtime delivery.
+            XCTAssertFalse(view.terminalBridgeIsConnected)
+        }
+    }
+
+    @MainActor
+    func testNativeIMEUnmarkClearsPreeditAndIsIdempotent() {
+        withNativeIMEView { view, _ in
+            view.setMarkedText(
+                "かな", selectedRange: NSRange(location: 2, length: 0),
+                replacementRange: NSRange(location: NSNotFound, length: 0))
+            view.unmarkText()
+            XCTAssertFalse(view.hasMarkedText())
+            view.unmarkText()
+            XCTAssertFalse(view.hasMarkedText())
+            XCTAssertEqual(view.selectedRange(), NSRange(location: 0, length: 0))
+        }
+    }
+
+    @MainActor
+    func testNativeIMECancelCommandDiscardsPreedit() {
+        withNativeIMEView { view, _ in
+            view.setMarkedText(
+                "preedit", selectedRange: NSRange(location: 7, length: 0),
+                replacementRange: NSRange(location: NSNotFound, length: 0))
+            view.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
+            XCTAssertFalse(view.hasMarkedText())
+            XCTAssertEqual(view.markedRange().location, NSNotFound)
+            view.unmarkText()
+            XCTAssertFalse(view.hasMarkedText())
+        }
+    }
+
+    @MainActor
+    func testNativeIMEReplacementStaysInMarkedDocument() {
+        withNativeIMEView { view, _ in
+            view.setMarkedText(
+                "abc", selectedRange: NSRange(location: 3, length: 0),
+                replacementRange: NSRange(location: NSNotFound, length: 0))
+            view.setMarkedText(
+                NSAttributedString(string: "XYZ"),
+                selectedRange: NSRange(location: 3, length: 0),
+                replacementRange: NSRange(location: 1, length: 1))
+            var actual = NSRange(location: NSNotFound, length: 0)
+            XCTAssertEqual(
+                view.attributedSubstring(
+                    forProposedRange: NSRange(location: 0, length: 5),
+                    actualRange: &actual)?.string, "aXYZc")
+            XCTAssertEqual(actual, NSRange(location: 0, length: 5))
+            view.insertText("aXYZc", replacementRange: NSRange(location: 0, length: 5))
+            XCTAssertFalse(view.hasMarkedText())
+        }
+    }
+
+    @MainActor
+    func testNativeIMECandidateRectRejectsMissingProjection() {
+        withNativeIMEView { view, window in
+            view.setMarkedText(
+                "ni", selectedRange: NSRange(location: 2, length: 0),
+                replacementRange: NSRange(location: NSNotFound, length: 0))
+            XCTAssertNil(view.terminalCurrentFrame())
+            var actual = NSRange(location: 0, length: 0)
+            XCTAssertEqual(
+                view.firstRect(
+                    forCharacterRange: NSRange(location: 0, length: 2),
+                    actualRange: &actual), .zero)
+            XCTAssertEqual(actual.location, NSNotFound)
+            window.setFrameOrigin(NSPoint(x: 250, y: 300))
+            XCTAssertEqual(
+                view.firstRect(
+                    forCharacterRange: NSRange(location: 99, length: 1),
+                    actualRange: &actual), .zero)
+            XCTAssertEqual(actual.location, NSNotFound)
+        }
+    }
+
+    @MainActor
+    func testNativeIMERemovingAndReattachingViewDiscardsPreedit() {
+        withNativeIMEView { view, window in
+            view.setMarkedText(
+                "preedit", selectedRange: NSRange(location: 7, length: 0),
+                replacementRange: NSRange(location: NSNotFound, length: 0))
+            view.removeFromSuperview()
+            XCTAssertNil(view.window)
+            XCTAssertFalse(view.hasMarkedText())
+            window.contentView = view
+            XCTAssertNotNil(view.window)
+            XCTAssertFalse(view.hasMarkedText())
+            XCTAssertEqual(view.selectedRange(), NSRange(location: 0, length: 0))
+        }
+    }
+
+    @MainActor
+    func testNativeIMEDisconnectedBridgeDiscardsPreedit() {
+        withNativeIMEView { view, _ in
+            view.setMarkedText(
+                "preedit", selectedRange: NSRange(location: 7, length: 0),
+                replacementRange: NSRange(location: NSNotFound, length: 0))
+            XCTAssertFalse(view.terminalBridgeIsConnected)
+            view.terminalBridgeStatusDidChange()
+            XCTAssertFalse(view.hasMarkedText())
+        }
+    }
+
+    @MainActor
+    func testNativeIMELiveCallbacksDeliverOnlyCommittedUTF8AndTrackCursor() async throws {
+        let captureDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("seyal-ime-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: captureDirectory, withIntermediateDirectories: false)
+        defer {
+            do {
+                try FileManager.default.removeItem(at: captureDirectory)
+            } catch {
+                XCTFail("Could not remove IME capture directory: \(error)")
+            }
+        }
+        let capture = captureDirectory.appendingPathComponent("committed.bin")
+        let window = try XCTUnwrap(NSApp.windows.first {
+            $0.contentView is ProductChromeHostView
+        })
+        let host = try XCTUnwrap(window.contentView as? ProductChromeHostView)
+        let pane = host.pane
+        let view = pane.inputSurface
+        let originalFrame = window.frame
+        let originalProductChanged = pane.onProductChanged
+        var observeProductChange: (() -> Void)?
+        pane.onProductChanged = {
+            originalProductChanged?()
+            observeProductChange?()
+        }
+        defer {
+            pane.onProductChanged = originalProductChanged
+            window.setFrame(originalFrame, display: true)
+        }
+        let connected = expectation(description: "production Runtime and projection connected")
+        var connectedOnce = false
+        observeProductChange = {
+            if !connectedOnce, view.terminalBridgeIsConnected,
+                view.terminalCurrentFrame() != nil,
+                seyal_app_snapshot(pane.appHandle).eligibility
+                    == UInt16(SEYAL_APP_ELIGIBILITY_FLOW.rawValue)
+            {
+                connectedOnce = true
+                connected.fulfill()
+            }
+        }
+        window.makeKeyAndOrderFront(nil)
+        host.activateAfterWindowPresentation()
+        observeProductChange?()
+        await fulfillment(of: [connected], timeout: 20)
+        guard connectedOnce else { return }
+
+        // A bounded real PTY child records bytes; no input bridge is mocked.
+        let script = """
+        import os, select, sys, termios, time, tty
+        fd = sys.stdin.fileno()
+        saved = termios.tcgetattr(fd)
+        data = bytearray()
+        try:
+            tty.setraw(fd)
+            os.write(1, b"\\x1b[?1049h\\x1b[3;5HIME")
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                if not select.select([fd], [], [], max(0, deadline - time.monotonic()))[0]:
+                    break
+                byte = os.read(fd, 1)
+                if not byte or byte == b"\\x04":
+                    break
+                data.extend(byte)
+        finally:
+            try:
+                with open(\(String(reflecting: capture.path)), "wb") as output:
+                    output.write(data)
+            finally:
+                termios.tcsetattr(fd, termios.TCSANOW, saved)
+                os.write(1, b"\\x1b[?1049l")
+        """
+        let command = "/usr/bin/python3 -c '"
+            + script.replacingOccurrences(of: "'", with: "'\\''") + "'\n"
+        let tui = expectation(description: "real child enters alternate screen")
+        var tuiOnce = false
+        observeProductChange = {
+            if !tuiOnce, view.terminalCurrentFrame()?.alternate_screen == 1,
+                seyal_app_snapshot(pane.appHandle).eligibility
+                    == UInt16(SEYAL_APP_ELIGIBILITY_TUI.rawValue)
+            {
+                tuiOnce = true
+                tui.fulfill()
+            }
+        }
+        XCTAssertEqual(view.terminalSubmitCommittedText(command), 0)
+        defer {
+            if view.terminalCurrentFrame()?.alternate_screen == 1 {
+                XCTAssertEqual(view.terminalSubmitCommittedText("\u{04}"), 0)
+            }
+        }
+        await fulfillment(of: [tui], timeout: 12)
+        guard tuiOnce else { return }
+
+        view.setMarkedText(
+            "ni", selectedRange: NSRange(location: 2, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0))
+        let frame = try XCTUnwrap(view.terminalCurrentFrame())
+        let cell = view.terminalPresentationCellSize()
+        var actual = NSRange(location: NSNotFound, length: 0)
+        let rect = view.firstRect(
+            forCharacterRange: NSRange(location: 0, length: 2), actualRange: &actual)
+        XCTAssertEqual(actual, NSRange(location: 0, length: 2))
+        let expected = window.convertToScreen(view.convert(NSRect(
+            x: view.bounds.minX + CGFloat(frame.cursor_column) * cell.width,
+            y: view.bounds.maxY - CGFloat(frame.cursor_row + 1) * cell.height,
+            width: cell.width, height: cell.height), to: nil))
+        XCTAssertEqual(rect.origin.x, expected.origin.x, accuracy: 1)
+        XCTAssertEqual(rect.origin.y, expected.origin.y, accuracy: 1)
+        XCTAssertEqual(rect.width, cell.width, accuracy: 1)
+        XCTAssertEqual(rect.height, cell.height, accuracy: 1)
+        let previousWindowOrigin = window.frame.origin
+        window.setFrameOrigin(previousWindowOrigin.applying(
+            CGAffineTransform(translationX: 37, y: 29)))
+        let moved = view.firstRect(
+            forCharacterRange: NSRange(location: 0, length: 2), actualRange: &actual)
+        XCTAssertNotEqual(window.frame.origin, previousWindowOrigin)
+        XCTAssertEqual(
+            moved.origin.x - rect.origin.x,
+            window.frame.origin.x - previousWindowOrigin.x, accuracy: 1)
+        XCTAssertEqual(
+            moved.origin.y - rect.origin.y,
+            window.frame.origin.y - previousWindowOrigin.y, accuracy: 1)
+        view.insertText("你e\u{301}", replacementRange: NSRange(location: NSNotFound, length: 0))
+        view.setMarkedText(
+            "must-not-leak", selectedRange: NSRange(location: 13, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0))
+        view.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
+        view.unmarkText()
+        view.setMarkedText(
+            "abc", selectedRange: NSRange(location: 3, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0))
+        view.setMarkedText(
+            "替換", selectedRange: NSRange(location: 2, length: 0),
+            replacementRange: NSRange(location: 0, length: 3))
+        view.insertText("替換", replacementRange: NSRange(location: 0, length: 2))
+        view.setMarkedText(
+            "unmark", selectedRange: NSRange(location: 6, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0))
+        view.unmarkText()
+        view.unmarkText()
+        let returned = expectation(description: "capture completes and child restores primary screen")
+        var returnedOnce = false
+        observeProductChange = {
+            if !returnedOnce, view.terminalCurrentFrame()?.alternate_screen == 0,
+                FileManager.default.fileExists(atPath: capture.path)
+            {
+                returnedOnce = true
+                returned.fulfill()
+            }
+        }
+        view.insertText("\u{04}", replacementRange: NSRange(location: NSNotFound, length: 0))
+        await fulfillment(of: [returned], timeout: 20)
+        XCTAssertEqual(try Data(contentsOf: capture), Data("你e\u{301}替換unmark".utf8))
+    }
+
+    @MainActor
     func testHostPasteAdmissionRejectsEmptyAndOversizedUTF8() {
         XCTAssertTrue(RustDisplayBridge.pasteAdmissionSelfTest())
     }

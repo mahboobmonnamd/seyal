@@ -2,7 +2,7 @@
 
 - **Issue:** #824
 - **Authority:** `.agents/skills/security-review/SKILL.md`, `docs/engineering/SECURITY.md`
-- **Reviewed production code:** current `issue/824` head (no production VT/runtime change in this PR; tests/docs only plus XCUI host cases)
+- **Reviewed production code:** prior `issue/824` head `f0e8c01` (the original tests/docs and XCUI evidence). Subsequent native IME and Block hit-testing fixes are not covered by this historical review; their tests and independent source-review limits are recorded in `m002-824-headed-manual.md`.
 - **Date (UTC):** 2026-09-16
 - **Trust model:** Pass 5 same-effective-UID local UDS. Child PTY bytes are untrusted. OSC payloads are untrusted presentation. Mouse/keyboard modes cannot grant host Command authority.
 

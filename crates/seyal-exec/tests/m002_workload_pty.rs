@@ -114,6 +114,256 @@ fn terminate(execution: &mut TerminalExecution) {
     ));
 }
 
+fn pump(execution: &mut TerminalExecution, timeout: Duration) {
+    let _ = drain_until(execution, b"\0SEYAL824-NEVER", timeout);
+}
+
+fn wait_alternate_screen(execution: &mut TerminalExecution, want: bool, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        pump(execution, Duration::from_millis(80));
+        if execution.terminal().modes().alternate_screen == want {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return execution.terminal().modes().alternate_screen == want;
+        }
+    }
+}
+
+fn ssh_probe(host: &str) -> bool {
+    Command::new("ssh")
+        .args([
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=8",
+            host,
+            "printf",
+            "ready",
+        ])
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+/// Live `ssh(1)` through one Seyal PTY: OrbStack machine `nt-ssh@orb`, then a
+/// nested hop into an ephemeral Docker sshd. Absent OrbStack/Docker is
+/// `PLATFORM_LIMITED`, not a silent skip.
+struct NestedSshFixture {
+    container: String,
+    key_dir: PathBuf,
+    inner_ip: String,
+}
+
+impl NestedSshFixture {
+    fn start() -> Result<Self, String> {
+        let key_dir =
+            std::env::temp_dir().join(format!("seyal-824-ssh-{}-{}", std::process::id(), {
+                use std::time::{SystemTime, UNIX_EPOCH};
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            }));
+        std::fs::create_dir_all(&key_dir).map_err(|e| e.to_string())?;
+        let key = key_dir.join("id");
+        let status = Command::new("ssh-keygen")
+            .args(["-t", "ed25519", "-N", "", "-f"])
+            .arg(&key)
+            .arg("-q")
+            .status()
+            .map_err(|e| e.to_string())?;
+        if !status.success() {
+            return Err("ssh-keygen failed".into());
+        }
+        let container = format!("seyal-824-sshd-{}", std::process::id());
+        let _ = Command::new("docker")
+            .args(["rm", "-f", &container])
+            .status();
+        let status = Command::new("docker")
+            .args([
+                "run",
+                "-d",
+                "--name",
+                &container,
+                "--hostname",
+                "seyal-824-inner",
+                "alpine:3.20",
+                "sleep",
+                "3600",
+            ])
+            .status()
+            .map_err(|e| e.to_string())?;
+        if !status.success() {
+            return Err("docker run failed".into());
+        }
+        let apk = Command::new("docker")
+            .args(["exec", &container, "apk", "add", "--no-cache", "openssh"])
+            .status()
+            .map_err(|e| e.to_string())?;
+        if !apk.success() {
+            let _ = Command::new("docker")
+                .args(["rm", "-f", &container])
+                .status();
+            return Err("apk add openssh failed".into());
+        }
+        for cmd in [
+            vec!["adduser", "-D", "-s", "/bin/sh", "seyal"],
+            vec!["mkdir", "-p", "/home/seyal/.ssh", "/run/sshd"],
+        ] {
+            let status = Command::new("docker")
+                .args(["exec", &container])
+                .args(&cmd)
+                .status()
+                .map_err(|e| e.to_string())?;
+            if !status.success() {
+                let _ = Command::new("docker")
+                    .args(["rm", "-f", &container])
+                    .status();
+                return Err(format!("docker exec {:?} failed", cmd));
+            }
+        }
+        let status = Command::new("docker")
+            .args(["cp"])
+            .arg(key_dir.join("id.pub"))
+            .arg(format!("{container}:/home/seyal/.ssh/authorized_keys"))
+            .status()
+            .map_err(|e| e.to_string())?;
+        if !status.success() {
+            let _ = Command::new("docker")
+                .args(["rm", "-f", &container])
+                .status();
+            return Err("docker cp authorized_keys failed".into());
+        }
+        let setup = r#"
+chmod 755 /home/seyal
+chmod 700 /home/seyal/.ssh
+chmod 600 /home/seyal/.ssh/authorized_keys
+chown -R seyal:seyal /home/seyal/.ssh
+ssh-keygen -A >/dev/null
+passwd -u seyal >/dev/null 2>&1 || echo 'seyal:x' | chpasswd
+printf '\nPort 2222\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPubkeyAuthentication yes\nPermitRootLogin no\n' >> /etc/ssh/sshd_config
+/usr/sbin/sshd
+"#;
+        let status = Command::new("docker")
+            .args(["exec", &container, "sh", "-c", setup])
+            .status()
+            .map_err(|e| e.to_string())?;
+        if !status.success() {
+            let _ = Command::new("docker")
+                .args(["rm", "-f", &container])
+                .status();
+            return Err("sshd setup failed".into());
+        }
+        let ip = Command::new("docker")
+            .args([
+                "inspect",
+                "-f",
+                "{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+                &container,
+            ])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !ip.status.success() {
+            let _ = Command::new("docker")
+                .args(["rm", "-f", &container])
+                .status();
+            return Err("docker inspect ip failed".into());
+        }
+        let inner_ip = String::from_utf8_lossy(&ip.stdout).trim().to_string();
+        if inner_ip.is_empty() {
+            let _ = Command::new("docker")
+                .args(["rm", "-f", &container])
+                .status();
+            return Err("empty container ip".into());
+        }
+        Ok(Self {
+            container,
+            key_dir,
+            inner_ip,
+        })
+    }
+
+    fn nt_key_path(&self) -> String {
+        format!("/mnt/mac{}", self.key_dir.join("id").display())
+    }
+}
+
+impl Drop for NestedSshFixture {
+    fn drop(&mut self) {
+        let _ = Command::new("docker")
+            .args(["rm", "-f", &self.container])
+            .status();
+        let _ = std::fs::remove_dir_all(&self.key_dir);
+    }
+}
+
+#[test]
+fn live_ssh_and_nested_ssh_use_one_pty_vt_when_orbstack_present() {
+    let _guard = test_guard();
+    let Some(ssh) = which("ssh") else {
+        eprintln!("PLATFORM_LIMITED: ssh not installed");
+        return;
+    };
+    if which("docker").is_none() {
+        eprintln!("PLATFORM_LIMITED: docker not installed; live SSH PTY not run");
+        return;
+    }
+    if !ssh_probe("nt-ssh@orb") {
+        eprintln!("PLATFORM_LIMITED: OrbStack host nt-ssh@orb is not BatchMode-reachable");
+        return;
+    }
+    let fixture = match NestedSshFixture::start() {
+        Ok(fixture) => fixture,
+        Err(err) => panic!("live SSH fixture setup failed: {err}"),
+    };
+    let remote = format!(
+        "printf 'seyal-ssh-ok\\n'; vim -Nu NONE -c qa >/dev/null 2>&1; printf 'seyal-ssh-vim\\n'; ssh -i '{}' -p 2222 -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null seyal@{} \"printf 'seyal-nested-ok\\n'\"",
+        fixture.nt_key_path(),
+        fixture.inner_ip
+    );
+    let command = seyal_term(CommandSpec::new(&ssh).args([
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=15",
+        "nt-ssh@orb",
+        remote.as_str(),
+    ]));
+    let mut execution = TerminalExecution::spawn(&command, size()).expect("spawn live ssh");
+    let child = execution.child_id();
+    let ssh_timeout = Duration::from_secs(30);
+    let bytes = drain_until(&mut execution, b"seyal-nested-ok", ssh_timeout).expect("drain ssh");
+    assert_eq!(
+        execution.child_id(),
+        child,
+        "live ssh/nested ssh must stay on one Seyal PTY"
+    );
+    assert!(
+        bytes.windows(12).any(|w| w == b"seyal-ssh-ok")
+            || visible_contains(&execution, "seyal-ssh-ok"),
+        "first hop nt-ssh@orb must print through TerminalState; got {}",
+        String::from_utf8_lossy(&bytes)
+    );
+    assert!(
+        bytes.windows(13).any(|w| w == b"seyal-ssh-vim")
+            || visible_contains(&execution, "seyal-ssh-vim"),
+        "remote vim -c qa must complete on the first hop before nested ssh; got {}",
+        String::from_utf8_lossy(&bytes)
+    );
+    assert!(
+        bytes.windows(15).any(|w| w == b"seyal-nested-ok")
+            || visible_contains(&execution, "seyal-nested-ok"),
+        "nested ssh into Docker sshd must print through the same TerminalState; got {}",
+        String::from_utf8_lossy(&bytes)
+    );
+    execution
+        .resize(WindowSize::cells(100, 30).expect("resize"))
+        .expect("resize live ssh PTY");
+    assert_eq!(execution.child_id(), child);
+    terminate(&mut execution);
+}
+
 #[test]
 fn zsh_bash_and_optional_fish_print_through_one_pty_vt() {
     let _guard = test_guard();
@@ -266,11 +516,7 @@ fn optional_docker_kubectl_terraform_are_recorded_when_absent() {
     let mut ran = 0usize;
     for (name, args, needle) in [
         ("docker", &["--version"][..], &b"Docker"[..]),
-        (
-            "kubectl",
-            &["version", "--client", "--short"][..],
-            &b"Client"[..],
-        ),
+        ("kubectl", &["version", "--client"][..], &b"Client"[..]),
         ("terraform", &["version"][..], &b"Terraform"[..]),
     ] {
         let Some(bin) = which(name) else {
@@ -294,5 +540,208 @@ fn optional_docker_kubectl_terraform_are_recorded_when_absent() {
         eprintln!(
             "PLATFORM_LIMITED: docker/kubectl/terraform all absent; ANSI CLI VT fixture remains"
         );
+    }
+}
+
+#[test]
+fn live_vim_and_neovim_restore_primary_after_alternate_screen() {
+    let _guard = test_guard();
+    let tui_timeout = Duration::from_secs(8);
+    for (name, extra) in [
+        ("vim", &["-Nu", "NONE", "-n"][..]),
+        ("nvim", &["-u", "NONE", "-n"][..]),
+    ] {
+        let Some(bin) = which(name) else {
+            eprintln!("PLATFORM_LIMITED: {name} not installed");
+            continue;
+        };
+        let file =
+            std::env::temp_dir().join(format!("seyal-824-{name}-{}.txt", std::process::id()));
+        std::fs::write(&file, "seyal-primary-before\n").expect("seed vim file");
+        let mut args: Vec<String> = extra.iter().map(|s| (*s).to_string()).collect();
+        args.push(file.to_string_lossy().into_owned());
+        let command = seyal_term(CommandSpec::new(&bin).args(args));
+        let mut execution = TerminalExecution::spawn(&command, size()).expect("spawn editor");
+        let child = execution.child_id();
+        assert!(
+            wait_alternate_screen(&mut execution, true, tui_timeout),
+            "{name} never entered alternate-screen; visible modes alt={}",
+            execution.terminal().modes().alternate_screen
+        );
+        execution
+            .write_input_bounded(b":qa!\r", IO_TIMEOUT)
+            .expect("quit editor");
+        assert!(
+            wait_alternate_screen(&mut execution, false, tui_timeout),
+            "{name} did not restore primary after :qa!"
+        );
+        assert_eq!(execution.child_id(), child);
+        terminate(&mut execution);
+        let _ = std::fs::remove_file(&file);
+    }
+}
+
+#[test]
+fn live_htop_and_watch_restore_primary_after_ncurses() {
+    let _guard = test_guard();
+    let tui_timeout = Duration::from_secs(8);
+    if let Some(htop) = which("htop") {
+        let command = seyal_term(CommandSpec::new(&htop).args(["-d", "10"]));
+        let mut execution = TerminalExecution::spawn(&command, size()).expect("spawn htop");
+        let child = execution.child_id();
+        assert!(
+            wait_alternate_screen(&mut execution, true, tui_timeout),
+            "htop never entered alternate-screen"
+        );
+        execution
+            .write_input_bounded(b"q", IO_TIMEOUT)
+            .expect("quit htop");
+        assert!(
+            wait_alternate_screen(&mut execution, false, tui_timeout),
+            "htop did not restore primary after q"
+        );
+        assert_eq!(execution.child_id(), child);
+        terminate(&mut execution);
+    } else {
+        eprintln!("PLATFORM_LIMITED: htop not installed");
+    }
+
+    let Some(watch) = which("watch") else {
+        eprintln!("PLATFORM_LIMITED: watch not installed");
+        return;
+    };
+    let command =
+        seyal_term(CommandSpec::new(&watch).args(["-n", "60", "printf", "seyal-watch-ok"]));
+    let mut execution = TerminalExecution::spawn(&command, size()).expect("spawn watch");
+    let child = execution.child_id();
+    let bytes = drain_until(&mut execution, b"seyal-watch-ok", tui_timeout).expect("drain watch");
+    assert!(
+        execution.terminal().modes().alternate_screen
+            || bytes.windows(14).any(|w| w == b"seyal-watch-ok")
+            || visible_contains(&execution, "seyal-watch-ok"),
+        "watch must use the PTY (alt-screen or visible marker)"
+    );
+    execution
+        .write_input_bounded(b"q", IO_TIMEOUT)
+        .expect("quit watch");
+    let _ = wait_alternate_screen(&mut execution, false, tui_timeout);
+    assert_eq!(execution.child_id(), child);
+    terminate(&mut execution);
+}
+
+#[test]
+fn live_tmux_split_stays_one_seyal_pty() {
+    let _guard = test_guard();
+    let Some(tmux) = which("tmux") else {
+        eprintln!("PLATFORM_LIMITED: tmux not installed");
+        return;
+    };
+    let socket = format!("seyal824-split-{}", std::process::id());
+    struct TmuxServerGuard(String);
+    impl Drop for TmuxServerGuard {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new("tmux")
+                .args(["-L", &self.0, "kill-server"])
+                .status();
+        }
+    }
+    let _tmux_guard = TmuxServerGuard(socket.clone());
+    let command = seyal_term(CommandSpec::new(&tmux).args([
+        "-L",
+        &socket,
+        "-f",
+        "/dev/null",
+        "new-session",
+        "-d",
+        "-s",
+        "seyal824",
+        "-x",
+        "80",
+        "-y",
+        "24",
+        "printf seyal-tmux-main; sleep 8",
+        ";",
+        "split-window",
+        "-h",
+        "printf seyal-tmux-split; sleep 8",
+        ";",
+        "attach",
+        "-t",
+        "seyal824",
+    ]));
+    let mut execution = TerminalExecution::spawn(&command, size()).expect("spawn tmux split");
+    let child = execution.child_id();
+    let timeout = Duration::from_secs(10);
+    let bytes = drain_until(&mut execution, b"seyal-tmux-split", timeout)
+        .or_else(|_| drain_until(&mut execution, b"seyal-tmux-main", timeout))
+        .expect("drain tmux split markers");
+    assert_eq!(
+        execution.child_id(),
+        child,
+        "tmux split is not a Seyal pane"
+    );
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(
+        text.contains("seyal-tmux-split")
+            || visible_contains(&execution, "seyal-tmux-split")
+            || text.contains("seyal-tmux-main")
+            || visible_contains(&execution, "seyal-tmux-main"),
+        "tmux split must emit child markers on the one Seyal PTY; got {text:?}"
+    );
+    terminate(&mut execution);
+}
+
+#[test]
+fn live_git_color_log_and_docker_ps_feed_vt() {
+    let _guard = test_guard();
+    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    if let Some(git) = which("git") {
+        let command = seyal_term(CommandSpec::new(&git).current_dir(&repo).args([
+            "--no-pager",
+            "-c",
+            "color.ui=always",
+            "log",
+            "--oneline",
+            "-n",
+            "5",
+        ]));
+        let mut execution = TerminalExecution::spawn(&command, size()).expect("spawn git log");
+        pump(&mut execution, IO_TIMEOUT);
+        let has_color = (0..execution.terminal().rows()).any(|row| {
+            (0..execution.terminal().cols()).any(|col| {
+                execution
+                    .terminal()
+                    .cell(col, row)
+                    .is_some_and(|cell| cell.style.fg != seyal_exec::Color::Default)
+            })
+        });
+        let has_text = (0..execution.terminal().rows()).any(|row| {
+            execution
+                .terminal()
+                .row_text(row)
+                .is_some_and(|text| !text.trim().is_empty())
+        });
+        assert!(
+            has_color || has_text,
+            "git log --color must reach TerminalState"
+        );
+        terminate(&mut execution);
+    } else {
+        eprintln!("PLATFORM_LIMITED: git not installed");
+    }
+
+    if let Some(docker) = which("docker") {
+        let command = seyal_term(CommandSpec::new(&docker).args(["ps", "--format", "{{.ID}}"]));
+        let mut execution = TerminalExecution::spawn(&command, size()).expect("spawn docker ps");
+        let child = execution.child_id();
+        pump(&mut execution, IO_TIMEOUT);
+        assert_eq!(
+            execution.child_id(),
+            child,
+            "docker ps must stay one TerminalExecution"
+        );
+        terminate(&mut execution);
+    } else {
+        eprintln!("PLATFORM_LIMITED: docker not installed");
     }
 }

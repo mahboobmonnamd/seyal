@@ -106,4 +106,51 @@ mod tests {
         assert!(extends_active_grapheme("e", '\u{0301}'));
         assert!(!extends_active_grapheme("e", 'x'));
     }
+
+    #[test]
+    fn empty_string_width_zero() {
+        assert_eq!(
+            grapheme_terminal_width("", AmbiguousWidthPolicy::Narrow),
+            0
+        );
+    }
+
+    #[test]
+    fn space_width_one() {
+        assert_eq!(
+            grapheme_terminal_width(" ", AmbiguousWidthPolicy::Narrow),
+            1
+        );
+    }
+
+    #[test]
+    fn digit_width_one() {
+        assert_eq!(
+            grapheme_terminal_width("5", AmbiguousWidthPolicy::Narrow),
+            1
+        );
+    }
+
+    #[test]
+    fn extends_empty_base_returns_false() {
+        assert!(!extends_active_grapheme("", '\u{0301}'));
+    }
+
+    #[test]
+    fn ambiguous_narrow_policy() {
+        // ° U+00B0 is East Asian Ambiguous — narrow policy gives width 1
+        assert_eq!(
+            grapheme_terminal_width("°", AmbiguousWidthPolicy::Narrow),
+            1
+        );
+    }
+
+    #[test]
+    fn ambiguous_wide_policy() {
+        // ° U+00B0 is East Asian Ambiguous — wide policy gives width 2
+        assert_eq!(
+            grapheme_terminal_width("°", AmbiguousWidthPolicy::Wide),
+            2
+        );
+    }
 }

@@ -318,9 +318,13 @@ environment (the mechanism VS Code uses for its own nonce) is rejected even
 though this macOS release does not expose another process's environment block
 through `KERN_PROCARGS2`: that is an operating-system property outside Seyal's
 control, and Linux's `/proc/<pid>/environ` does expose the initial environment
-to same-UID processes regardless of later `unset`. A same-UID adversary with
-debugger-level access to the shell process is out of scope; it already owns
-the session. Same-UID authentication continues to grant no attachment or
+to same-UID processes regardless of later `unset`. On Linux, `/proc/<pid>/fd`
+lets a same-UID process observe the pipe only during the interval before
+`.zshenv` reads and closes it — a bounded startup window before any user or
+child code runs, not persistent exposure; it must not be mistaken for
+environment-equivalent secrecy when Linux support is specified. A same-UID
+adversary with debugger-level access to the shell process is out of scope; it
+already owns the session. Same-UID authentication continues to grant no attachment or
 mutation authority (SPEC-004 §4).
 
 A marker with a missing, malformed, or mismatched nonce is untrusted: it is
@@ -347,9 +351,10 @@ as today. Hooks emit BEL as the terminator; the parser continues to accept
 BEL or ST.
 
 Hook functions use only zsh builtins: `builtin printf` with fixed format
-strings whose only arguments are the nonce parameter and `$?`, parameter
-expansion, and `add-zsh-hook`. No fork, no external command, no subshell, no
-file read or write occurs per command. No user-controlled text is ever part of
+strings whose only arguments are the nonce parameter and `$?`, and parameter
+expansion. Installation, which runs once, may `autoload -Uz add-zsh-hook` or
+append to `precmd_functions`/`preexec_functions` directly. No fork, no
+external command, no subshell, no file read or write occurs per command. No user-controlled text is ever part of
 a format string or a marker. This is a hard requirement, not a performance
 preference.
 
@@ -377,10 +382,11 @@ Each execution carries one integration state:
 
 ```text
 Unproven      spawned; no trusted A observed yet
-AtPrompt      a trusted A observed and no C since
+AtPrompt      a trusted A observed, and neither a C nor any direct input
+              admitted since
 Pending       composer bytes written; no trusted C since
-Running(b)    a trusted C observed and the next prompt not yet announced;
-              b = the Block that C started, or none
+Running(b)    a C observed or direct input admitted, and the next prompt
+              not yet announced; b = the Block that C started, or none
 Terminated    primary child exited or PTY reached EOF
 ```
 
@@ -389,26 +395,46 @@ the presentation is Flow, and the canonical state is on the primary screen.
 Otherwise a submission receives the existing correlated `Busy`/`Unsupported`
 result, never a transport error, and the draft is kept.
 
+Prompt gating moves when Runtime *admits* bytes to the PTY, not when the shell
+echoes them or a marker is parsed. *Direct input* below means any bytes
+Runtime admits to the execution's input ingress from a route other than the
+composer submission itself: direct-terminal keyboard and IME commits,
+Runtime-encoded semantic keys (SPEC-006), mouse reports, and client pastes.
+Replies the canonical VT itself writes in answer to a program's query (DSR,
+DA, DECRQM and similar) are not input and never transition the state; a
+prompt theme that queries the terminal while the prompt is drawn must not
+strand the execution outside `AtPrompt`.
+
 Transitions on trusted markers and Runtime events:
 
-- `Unproven`: `A` → `AtPrompt`. `C`, `D` → ignored.
+- `Unproven`: `A` → `AtPrompt`. `C`, `D`, direct input → ignored.
 - `AtPrompt`: submission → bytes written per mechanism 4 → `Pending`.
-  `A` → `AtPrompt` (identity). `C` → `Running(none)` — a directly typed
-  command is running; the composer is now ineligible even if the user returns
-  to Flow. `D` → ignored (no open command).
+  Direct input admitted → `Running(none)` immediately — the prompt line is
+  no longer known to be empty, whether or not those bytes end with Enter, and
+  whether or not a marker has yet been parsed; the composer is ineligible
+  until the shell announces a fresh prompt, even if the user returns to Flow
+  with an uncommitted line editor buffer. `A` → `AtPrompt` (identity).
+  `C` → `Running(none)` (defensive: a command started without any admitted
+  direct input, which the ingress classification is meant to make
+  impossible). `D` → ignored (no open command).
 - `Pending`: `C` → `Running(b)` where `b` is started from the pending
   submission (existing `BlockTimeline.start`) — the bytes Runtime wrote were
   the next line ZLE accepted, because admission required `AtPrompt` and only
   one submission is ever in flight. `A` → the pending item is dropped and the
   state is `AtPrompt` — the line never executed: it was empty, a comment, or
   interrupted, or the shell was not the reader after all. `D` → ignored; the
-  following `A` resolves the pending item.
+  following `A` resolves the pending item. Direct input admitted → `Pending`
+  (unchanged) — this is the Raw escape for a submission the shell is holding
+  for a continuation line.
 - `Running(b)`: `D;<s>` → `b` completes with exit status `s` (existing
   `BlockTimeline.complete`); state `Running(none)` until the prompt's `A`.
   `A` without a preceding `D` → `b` completes with exit status *unknown*;
   state `AtPrompt`. `C` without a preceding `D` → `b` completes with exit
   status *unknown*; state `Running(none)`.
 - `Running(none)`: `A` → `AtPrompt`. `C` → `Running(none)`. `D` → ignored.
+  Direct input → `Running(none)`.
+- `Running(b)`: direct input → `Running(b)` (typing into the running
+  command's stdin).
 - Any state except `Terminated`: canonical entry into the alternate screen
   while `AtPrompt` or `Pending` drops any pending item and sets
   `Running(none)` — a program owns the terminal; leaving the alternate screen
@@ -423,9 +449,12 @@ Transitions on trusted markers and Runtime events:
 
 Rules that follow:
 
-- Blocks are matched by prompt gating, single in-flight admission and byte
-  ordering on the PTY, and are protected by the secret — never by arrival
-  order alone and never by comparing command text.
+- Blocks are matched by admission-time prompt gating, single in-flight
+  admission and byte ordering on the PTY, and are protected by the secret —
+  never by arrival order alone and never by comparing command text. Because
+  the gate closes when direct input is admitted rather than when its `C` is
+  parsed, Flow can never inherit a stale `AtPrompt` from Raw input, and a
+  composer line can never be appended to an uncommitted Raw buffer.
 - A marker lost to the bounded parser queue degrades to a Block with unknown
   exit status or to no Block for that command; it never attributes one
   command's start or status to another. Exit status *unknown* is a distinct
@@ -640,7 +669,10 @@ correctness contracts.
 - parser acceptance of exactly `A;<nonce>`, `C;<nonce>` and
   `D;<nonce>;<status>`, a `PromptStarted` shell-integration event, an explicit
   per-execution `Unproven`/`AtPrompt`/`Pending`/`Running`/`Terminated`
-  integration state, and a distinct *unknown* exit status in `BlockTimeline`;
+  integration state driven by both parsed markers and admission-time input
+  events (the input ingress distinguishes composer submissions from direct
+  input and from VT-generated protocol replies), and a distinct *unknown*
+  exit status in `BlockTimeline`;
 - composer submission that writes single-line text as raw bytes and
   multi-line text only as a bracketed paste gated on canonical DECSET 2004
   state, refusing it otherwise;

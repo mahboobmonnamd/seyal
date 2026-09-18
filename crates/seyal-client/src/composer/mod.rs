@@ -883,6 +883,10 @@ mod tests {
             "/ failed"
         );
         assert_eq!(
+            BlockPresentationState::Unknown.transcript_status(),
+            "/ status unknown"
+        );
+        assert_eq!(
             ComposerMode::Available.editor_placeholder(),
             "Type a command..."
         );
@@ -923,6 +927,37 @@ mod tests {
         let snap = state.snapshot(pane).unwrap();
         assert_eq!(snap.blocks[0].state, BlockPresentationState::Failed);
         assert_eq!(snap.blocks[1].state, BlockPresentationState::Running);
+    }
+
+    #[test]
+    fn completed_without_exit_status_projects_unknown_never_zero_or_failed() {
+        let pane = pane();
+        let mut state = ComposerState::new();
+        ready(&mut state, pane);
+        let id = block(5);
+        state
+            .apply(ComposerAction::ApplyRuntimeBlocks {
+                pane,
+                records: vec![RuntimeBlockRecord {
+                    id,
+                    command: "sleep 1".into(),
+                    start_line: 10,
+                    end_line: Some(12),
+                    running: false,
+                    exit_status: None,
+                }],
+            })
+            .unwrap();
+        let snap = state.snapshot(pane).unwrap();
+        assert_eq!(snap.blocks.len(), 1);
+        assert_eq!(snap.blocks[0].state, BlockPresentationState::Unknown);
+        assert_eq!(snap.blocks[0].exit_status, None);
+        assert_ne!(snap.blocks[0].state, BlockPresentationState::Completed);
+        assert_ne!(snap.blocks[0].state, BlockPresentationState::Failed);
+        assert_eq!(
+            snap.blocks[0].state.transcript_status(),
+            "/ status unknown"
+        );
     }
 
     fn submit_accepted(state: &mut ComposerState, pane: PaneId, command: &str) {

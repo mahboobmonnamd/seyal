@@ -935,6 +935,65 @@ mod command_block_tests {
     }
 
     #[test]
+    fn timeline_state_tag_2_round_trips_completed_without_exit_status() {
+        let timeline = BlockTimeline {
+            revision: 11,
+            records: vec![CommandBlock {
+                id: 3,
+                command: "sleep 1".into(),
+                start_line: 40,
+                end_line: Some(42),
+                state: CommandBlockState::Completed { exit_status: None },
+            }],
+        };
+        let encoded = timeline.encode();
+        // Fixed record header: id(8)+start(8)+end(8)+tag(1)+pad(3)+exit(4)+cmd_len(2)+rsv(2).
+        let record = &encoded[16..];
+        assert_eq!(record[24], 2, "Completed {{ exit_status: None }} encodes as tag 2");
+        assert_eq!(
+            i32::from_le_bytes(record[28..32].try_into().unwrap()),
+            0,
+            "tag-2 wire exit field stays zero"
+        );
+        assert_eq!(BlockTimeline::decode(&encoded), Ok(timeline));
+    }
+
+    #[test]
+    fn timeline_state_tag_2_rejects_nonzero_exit_status_and_inverted_end_line() {
+        let timeline = BlockTimeline {
+            revision: 12,
+            records: vec![CommandBlock {
+                id: 4,
+                command: "echo".into(),
+                start_line: 50,
+                end_line: Some(52),
+                state: CommandBlockState::Completed { exit_status: None },
+            }],
+        };
+        let good = timeline.encode();
+        let record_offset = 16;
+
+        let mut nonzero_exit = good.clone();
+        nonzero_exit[record_offset + 28..record_offset + 32]
+            .copy_from_slice(&1i32.to_le_bytes());
+        assert_eq!(
+            BlockTimeline::decode(&nonzero_exit),
+            Err(FramingError::MalformedPayload),
+            "tag-2 with non-zero exit_status is malformed"
+        );
+
+        let mut inverted_end = good;
+        // end_raw at record+16; start_line is 50, so end 49 is inverted.
+        inverted_end[record_offset + 16..record_offset + 24]
+            .copy_from_slice(&49u64.to_le_bytes());
+        assert_eq!(
+            BlockTimeline::decode(&inverted_end),
+            Err(FramingError::MalformedPayload),
+            "tag-2 with end_raw < start_line is malformed"
+        );
+    }
+
+    #[test]
     fn timeline_try_encode_rejects_unbounded_record_count() {
         let record = CommandBlock {
             id: 1,

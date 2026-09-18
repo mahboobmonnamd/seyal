@@ -6,7 +6,9 @@ Authority: `docs/architecture/ADR-009-COMMAND-BLOCKS-COMPOSER-AND-TUI.md`,
 
 | Field | Value |
 |---|---|
-| Source head | `4da2354709e7` (branch `issue/967`) |
+| Measured source head | `4da2354709e7` (branch `issue/967` at bench time) |
+| Merge / PR head at evidence retention | `9565578d745a` (and later review-fix commits on `issue/967`) |
+| Delta since measured head | cfg-only: macOS-gated shell-integration imports (`9565578`); plus this honesty label and DoD unit tests — **no hook-path / `.zshenv` / bench-harness behavioral change**. Tier-1 numbers were **not** re-benched at `9565578`. |
 | Host | Apple M2 Pro, macOS 26.6.2, `/bin/zsh` 5.9 (controlled physical Apple Silicon) |
 | Harness | `scripts/bench-shell-integration.py --runs 5 --iterations 200 --ghostty-rev f9a3f24a56bf05f70894e1a084809d4fffadf420` |
 | Method | one headless PTY per run; same zsh binary, same isolated `HOME` and `.zshrc` (`PROMPT='PS% '`, one alias), each variant under its own current zsh integration script; nearest-rank percentiles |

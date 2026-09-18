@@ -48,23 +48,9 @@ final class SeyalHostHistoryUITests: XCTestCase {
         submitComposerCommand(app, "printf 'seyal-842-primary\\n'")
         assertFlowBlocksOrFail(in: app)
 
-        submitComposerCommand(app, "printf '\\033[?1049h'")
-        waitBriefly(0.8)
-        XCTAssertEqual(app.state, .runningForeground, "Seyal.app crashed entering alternate-screen")
-
-        let terminal = app.descendants(matching: .any)["terminal-input"]
-        XCTAssertTrue(terminal.waitForExistence(timeout: 5))
-        if terminal.firstMatch.isHittable {
-            terminal.firstMatch.click()
+        try exerciseBoundedAlternateScreen(in: app) { command in
+            submitComposerCommand(app, command)
         }
-        app.typeText("printf '\\033[?1049l'")
-        app.typeKey("\r", modifierFlags: [])
-
-        let composer = app.descendants(matching: .any)["seyal-composer"]
-        XCTAssertTrue(
-            composer.waitForExistence(timeout: 12),
-            "composer did not return after leaving alternate-screen; TUI frames must not replace Flow history"
-        )
         assertFlowBlocksOrFail(in: app)
         attachScreenshot(app, name: "842-history-after-altscreen")
     }

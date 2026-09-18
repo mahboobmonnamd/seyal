@@ -36,6 +36,7 @@
 		C10000000000000000000001 /* SeyalHostComponentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000003 /* SeyalHostComponentTests.swift */; };
 		C10000000000000000000002 /* SeyalHostUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000004 /* SeyalHostUITests.swift */; };
 		C10000000000000000000005 /* SeyalHostHistoryUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000005 /* SeyalHostHistoryUITests.swift */; };
+		C10000000000000000000006 /* SeyalHostWorkloadUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000006 /* SeyalHostWorkloadUITests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -70,6 +71,7 @@
 		C20000000000000000000003 /* SeyalHostComponentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeyalHostComponentTests.swift; sourceTree = "<group>"; };
 		C20000000000000000000004 /* SeyalHostUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeyalHostUITests.swift; sourceTree = "<group>"; };
 		C20000000000000000000005 /* SeyalHostHistoryUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeyalHostHistoryUITests.swift; sourceTree = "<group>"; };
+		C20000000000000000000006 /* SeyalHostWorkloadUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeyalHostWorkloadUITests.swift; sourceTree = "<group>"; };
 		A20000000000000000000010 /* RustDisplayBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustDisplayBridge.swift; sourceTree = "<group>"; };
 		A20000000000000000000011 /* GlyphAtlas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlyphAtlas.swift; sourceTree = "<group>"; };
 		A20000000000000000000012 /* MetalTerminalRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalTerminalRenderer.swift; sourceTree = "<group>"; };
@@ -209,6 +211,7 @@
 			children = (
 				C20000000000000000000004 /* SeyalHostUITests.swift */,
 				C20000000000000000000005 /* SeyalHostHistoryUITests.swift */,
+				C20000000000000000000006 /* SeyalHostWorkloadUITests.swift */,
 			);
 			path = SeyalUITests;
 			sourceTree = "<group>";
@@ -380,6 +383,7 @@
 			files = (
 				C10000000000000000000002 /* SeyalHostUITests.swift in Sources */,
 				C10000000000000000000005 /* SeyalHostHistoryUITests.swift in Sources */,
+				C10000000000000000000006 /* SeyalHostWorkloadUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

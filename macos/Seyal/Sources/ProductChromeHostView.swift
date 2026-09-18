@@ -28,7 +28,14 @@ final class ProductChromeHostView: NSView {
     private var lastEligibility: UInt16 = .max
     private var lastProjectedExecution = (lo: UInt64(0), hi: UInt64(0))
     private var lastBlockCount: Int = 0
+    /// Live-end follow for Flow transcript. New Blocks and async history-body
+    /// growth keep the viewport pinned only while the user was already at the
+    /// live end; intentional history scroll must not be yanked forward.
+    private var followingLiveEnd = true
+    private var isProgrammaticTranscriptScroll = false
     private var isReconcilingChrome = false
+    /// Nested product/timeline pulses during a rebuild must not drop TUI.
+    private var chromeNeedsReconcile = false
     private var blockCards: [UInt64: CommandBlockView] = [:]
     private var transcriptFrameRevision: UInt64 = 0
     private var paneFollowsTranscript: [NSLayoutConstraint] = []
@@ -291,6 +298,9 @@ final class ProductChromeHostView: NSView {
     }
 
     @objc private func transcriptDidScroll() {
+        if !isProgrammaticTranscriptScroll {
+            followingLiveEnd = isNearLiveEnd()
+        }
         publishBlockOutputFrame()
     }
 
@@ -313,9 +323,21 @@ final class ProductChromeHostView: NSView {
     func detachForTermination() { pane.detachForTermination() }
 
     func reconcileChrome() {
-        guard !isReconcilingChrome else { return }
+        if isReconcilingChrome {
+            chromeNeedsReconcile = true
+            return
+        }
         isReconcilingChrome = true
         defer { isReconcilingChrome = false }
+        var turns = 0
+        repeat {
+            chromeNeedsReconcile = false
+            performChromeReconcile()
+            turns += 1
+        } while chromeNeedsReconcile && turns < 8
+    }
+
+    private func performChromeReconcile() {
         var snapshot = seyal_app_snapshot(pane.appHandle)
         let bound = (lo: snapshot.execution_lo, hi: snapshot.execution_hi)
         if snapshot.flags & UInt16(SEYAL_APP_SNAP_HAS_EXECUTION) != 0,
@@ -576,7 +598,7 @@ final class ProductChromeHostView: NSView {
         pane.inputSurface.discardHistoryRequests(except: retained)
         layoutSubtreeIfNeeded()
         publishBlockOutputFrame()
-        if count > lastBlockCount {
+        if count > lastBlockCount, followingLiveEnd {
             scrollTranscriptToLiveEnd()
         }
         lastBlockCount = count
@@ -626,6 +648,12 @@ final class ProductChromeHostView: NSView {
         }
         layoutSubtreeIfNeeded()
         publishBlockOutputFrame()
+        // History replies arrive after the initial live-end scroll and can grow
+        // earlier cards. Keep following only when the user was already at the
+        // live end so the newly submitted Block stays hittable.
+        if followingLiveEnd {
+            scrollTranscriptToLiveEnd()
+        }
     }
 
     private func publishBlockOutputFrame() {
@@ -651,13 +679,24 @@ final class ProductChromeHostView: NSView {
         )
     }
 
+    private func isNearLiveEnd(tolerance: CGFloat = 24) -> Bool {
+        let document = transcript.documentView ?? blocks
+        let visible = transcript.contentView.bounds
+        let height = document.fittingSize.height
+        let maxY = max(height - visible.height, 0)
+        return visible.origin.y >= maxY - tolerance
+    }
+
     private func scrollTranscriptToLiveEnd() {
+        isProgrammaticTranscriptScroll = true
+        defer { isProgrammaticTranscriptScroll = false }
         let document = transcript.documentView ?? blocks
         let visible = transcript.contentView.bounds.height
         let height = document.fittingSize.height
         let y = max(height - visible, 0)
         transcript.contentView.scroll(to: NSPoint(x: 0, y: y))
         transcript.reflectScrolledClipView(transcript.contentView)
+        followingLiveEnd = true
     }
 
     private func applyTheme() {
@@ -995,9 +1034,6 @@ private final class CommandBlockView: NSView {
         header.addSubview(status)
         header.wantsLayer = true
         header.layer?.cornerRadius = 6
-        header.addGestureRecognizer(
-            NSClickGestureRecognizer(target: self, action: #selector(headerClicked))
-        )
         addSubview(header)
         addSubview(body)
         addSubview(seam)
@@ -1037,7 +1073,14 @@ private final class CommandBlockView: NSView {
         bodyHeight.constant = max(cellHeight, 1) * CGFloat(max(lines, 1))
     }
 
-    @objc private func headerClicked() {
+    /// Flow's Metal surface returns `nil` from `hitTest`, so Block chrome must
+    /// own the click. XCUI (and a user) hit the card center, which is the body
+    /// once output exists — a header-only gesture never sees that click.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        super.hitTest(point) == nil ? nil : self
+    }
+
+    override func mouseDown(with event: NSEvent) {
         onSelect?(isSelected)
     }
 

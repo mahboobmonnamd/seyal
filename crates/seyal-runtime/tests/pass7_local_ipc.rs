@@ -27,10 +27,11 @@ use seyal_runtime::{
 fn config() -> RuntimeConfig {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let suffix = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let process = std::process::id();
     let mut config = RuntimeConfig::m001().expect("config");
-    config.singleton_path = std::env::temp_dir().join(format!("s7-{suffix:x}.lock"));
+    config.singleton_path = std::env::temp_dir().join(format!("s7-{process}-{suffix:x}.lock"));
     config.local_ipc = LocalIpcMode::Enabled {
-        runtime_dir_override: Some(std::env::temp_dir().join(format!("s7d-{suffix:x}"))),
+        runtime_dir_override: Some(std::env::temp_dir().join(format!("s7d-{process}-{suffix:x}"))),
     };
     config
 }
@@ -39,6 +40,20 @@ struct Harness {
     runtime: Runtime,
     stream: UnixStream,
     buffered: Vec<u8>,
+}
+
+impl Drop for Harness {
+    fn drop(&mut self) {
+        // This harness owns disposable test executions. Production Runtime
+        // deliberately does not terminate TerminalExecution on ordinary Drop,
+        // so tests must close their own children explicitly or a full cargo
+        // suite can accumulate PTYs/processes and fail later spawns.
+        if self.runtime.begin_shutdown().is_ok() {
+            let _ = self
+                .runtime
+                .run_until_empty(Instant::now() + Duration::from_secs(3));
+        }
+    }
 }
 
 impl Harness {

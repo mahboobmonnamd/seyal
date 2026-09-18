@@ -336,6 +336,8 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
     private let appHandle: UInt64
     private let optionAsAlt: Bool
     private var composition = CompositionDocument()
+    private var interpretingEscape = false
+    private var escapeNeedsTerminalEncoding = false
     private var nextKeyboardActionID: UInt32 = 1
     private var nextMouseActionID: UInt32 = 1
     private var heldKeyboardKinds: [UInt16: TerminalNativeKeyV2] = [:]
@@ -470,6 +472,23 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
         guard allowsDirectTerminalInput else { return }
 
         if composition.hasMarkedText, inputContext?.handleEvent(event) == true {
+            return
+        }
+
+        // The input context can own a dead key even without a marked document.
+        if event.charactersIgnoringModifiers == "\u{1b}",
+            flags.subtracting(.capsLock).isEmpty
+        {
+            interpretingEscape = true
+            escapeNeedsTerminalEncoding = false
+            let handled = inputContext?.handleEvent(event) == true
+            interpretingEscape = false
+            if handled && !escapeNeedsTerminalEncoding {
+                return
+            }
+        }
+        if hasMarkedText() {
+            interpretKeyEvents([event])
             return
         }
 
@@ -639,12 +658,44 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
         } else {
             valid = nil
         }
-        actualRange?.pointee = valid ?? NSRange(location: NSNotFound, length: 0)
-        return window?.convertToScreen(convert(bounds, to: nil)) ?? .zero
+        guard let valid, let window, let frame = terminalCurrentFrame(),
+            frame.cursor_row < frame.rows, frame.cursor_column < frame.columns
+        else {
+            actualRange?.pointee = NSRange(location: NSNotFound, length: 0)
+            return .zero
+        }
+        let cell = terminalPresentationCellSize()
+        let rect = NSRect(
+            x: bounds.minX + CGFloat(frame.cursor_column) * cell.width,
+            y: isFlipped
+                ? bounds.minY + CGFloat(frame.cursor_row) * cell.height
+                : bounds.maxY - CGFloat(frame.cursor_row + 1) * cell.height,
+            width: cell.width,
+            height: cell.height
+        ).intersection(bounds)
+        guard !rect.isEmpty else {
+            actualRange?.pointee = NSRange(location: NSNotFound, length: 0)
+            return .zero
+        }
+        actualRange?.pointee = valid
+        return window.convertToScreen(convert(rect, to: nil))
     }
 
     override func doCommand(by selector: Selector) {
-        _ = selector
+        if selector == #selector(NSResponder.cancelOperation(_:)) {
+            if interpretingEscape && !hasMarkedText() {
+                escapeNeedsTerminalEncoding = true
+            } else {
+                cancelOperation(nil)
+            }
+        }
+    }
+
+    override func cancelOperation(_ sender: Any?) {
+        guard composition.hasMarkedText else { return }
+        composition.clear()
+        inputContext?.discardMarkedText()
+        inputContext?.invalidateCharacterCoordinates()
     }
 
     func copy(_ sender: Any?) {
@@ -819,6 +870,11 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
             && compositionUTF16SelfTest()
             && compositionBoundsSelfTest()
             && composedSubstringSelfTest()
+            && compositionMarkedCommitSelfTest()
+            && compositionCancelAbandonSelfTest()
+            && compositionReplacementCommitSelfTest()
+            && compositionCandidateCoordinateSelfTest()
+            && compositionDetachDiscardsPreeditSelfTest()
             && semanticKeyMatrixSelfTest()
             && keyReleaseMetadataSelfTest()
             && heldKeyboardCapacitySelfTest()
@@ -942,6 +998,103 @@ final class InteractiveMetalSurfaceView: MetalSurfaceView, @preconcurrency NSTex
         return substring.string == "e\u{301}"
             && range == NSRange(location: 0, length: 2)
             && document.attributedSubstring(for: NSRange(location: 3, length: 1)) == nil
+    }
+
+    // Document-model invariants only; these do not exercise NSTextInputClient
+    // callbacks or establish SPEC-011 headed IME fixtures 37-41.
+    private static func compositionMarkedCommitSelfTest() -> Bool {
+        var document = CompositionDocument()
+        do {
+            try document.setMarkedText(
+                "ni",
+                selectedRange: NSRange(location: 2, length: 0),
+                replacementRange: NSRange(location: NSNotFound, length: 0)
+            )
+        } catch {
+            return false
+        }
+        guard document.hasMarkedText, document.text == "ni" else { return false }
+        let committed = document.text
+        document.clear()
+        return !document.hasMarkedText && committed == "ni" && document.text.isEmpty
+    }
+
+    private static func compositionCancelAbandonSelfTest() -> Bool {
+        var document = CompositionDocument()
+        do {
+            try document.setMarkedText(
+                "´",
+                selectedRange: NSRange(location: 1, length: 0),
+                replacementRange: NSRange(location: NSNotFound, length: 0)
+            )
+        } catch {
+            return false
+        }
+        guard document.hasMarkedText else { return false }
+        document.clear()
+        return !document.hasMarkedText && document.text.isEmpty
+            && document.markedRange.location == NSNotFound
+    }
+
+    private static func compositionReplacementCommitSelfTest() -> Bool {
+        var document = CompositionDocument()
+        do {
+            try document.setMarkedText(
+                "abc",
+                selectedRange: NSRange(location: 3, length: 0),
+                replacementRange: NSRange(location: NSNotFound, length: 0)
+            )
+            try document.setMarkedText(
+                "XYZ",
+                selectedRange: NSRange(location: 3, length: 0),
+                replacementRange: NSRange(location: 1, length: 1)
+            )
+        } catch {
+            return false
+        }
+        guard document.text == "aXYZc" else { return false }
+        document.clear()
+        return !document.hasMarkedText
+    }
+
+    private static func compositionCandidateCoordinateSelfTest() -> Bool {
+        var document = CompositionDocument()
+        do {
+            try document.setMarkedText(
+                "😀x",
+                selectedRange: NSRange(location: 2, length: 0),
+                replacementRange: NSRange(location: NSNotFound, length: 0)
+            )
+        } catch {
+            return false
+        }
+        guard document.validatesReplacementRange(NSRange(location: 0, length: 3)) else {
+            return false
+        }
+        guard document.validatedCoordinateRange(NSRange(location: 0, length: 2)) != nil else {
+            return false
+        }
+        guard document.validatedCoordinateRange(NSRange(location: NSNotFound, length: 0)) == nil
+        else {
+            return false
+        }
+        return document.validatedCoordinateRange(NSRange(location: 3, length: 1)) == nil
+    }
+
+    private static func compositionDetachDiscardsPreeditSelfTest() -> Bool {
+        var document = CompositionDocument()
+        do {
+            try document.setMarkedText(
+                "preedit",
+                selectedRange: NSRange(location: 7, length: 0),
+                replacementRange: NSRange(location: NSNotFound, length: 0)
+            )
+        } catch {
+            return false
+        }
+        document.clear()
+        return !document.hasMarkedText && document.text.isEmpty
+            && document.selectedRange == NSRange(location: 0, length: 0)
     }
 
     private static func semanticKeyMatrixSelfTest() -> Bool {

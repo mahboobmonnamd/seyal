@@ -3,9 +3,10 @@ import Foundation
 /// Explicit isolated Runtime namespace for this process.
 ///
 /// Production Seyal.app without `--runtime-dir` keeps the canonical per-user
-/// endpoint. XCTest hosts synthesize a unique directory so `make check` can
-/// run while a user Runtime is already active. Environment variables never
-/// select that endpoint.
+/// endpoint. XCTest hosts synthesize a unique directory so headed
+/// `make ui-test` / `native-macos-smoke` can run while a user Runtime is
+/// already active. `make check` does not launch Seyal.app. Environment
+/// variables never select that endpoint.
 enum IsolatedRuntimeDirectory {
   static let flag = "--runtime-dir"
 

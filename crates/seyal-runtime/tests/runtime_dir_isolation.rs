@@ -6,7 +6,7 @@ use std::{
 };
 
 use seyal_exec::{CommandSpec, WindowSize};
-use seyal_runtime::{LocalIpcMode, Runtime, RuntimeConfig};
+use seyal_runtime::{LocalIpcMode, Runtime, RuntimeConfig, RuntimeError};
 
 fn unique_dir(tag: &str) -> PathBuf {
     PathBuf::from(format!(
@@ -76,6 +76,59 @@ fn two_isolated_runtimes_coexist_and_do_not_bind_the_canonical_socket() {
 
     shutdown(&mut first);
     shutdown(&mut second);
+}
+
+#[test]
+fn isolated_runtime_starts_while_the_production_m001_singleton_is_held() {
+    let canonical = seyal_runtime::local_ipc::discovery::darwin_user_runtime_dir()
+        .expect("canonical runtime dir")
+        .join("control.sock");
+    let production_lock = RuntimeConfig::m001()
+        .expect("M001 Runtime config")
+        .singleton_path;
+
+    let mut production = match Runtime::new(RuntimeConfig::m001().expect("M001 Runtime config")) {
+        Ok(runtime) => Some(runtime),
+        Err(RuntimeError::AlreadyRunning) => None,
+        Err(error) => panic!("unexpected production Runtime start error: {error}"),
+    };
+    let production_held_in_process = production.is_some();
+    if let Some(runtime) = production.as_ref() {
+        assert_eq!(
+            runtime.local_ipc_socket_path().map(PathBuf::from),
+            Some(canonical.clone()),
+            "in-process stand-in must occupy the canonical user endpoint"
+        );
+        assert!(
+            canonical.exists(),
+            "held production Runtime must bind the canonical control socket"
+        );
+    }
+
+    let mut isolated = Runtime::new(isolated_config("held"))
+        .expect("isolated Runtime must start while the production singleton is held");
+    let isolated_socket = isolated
+        .local_ipc_socket_path()
+        .expect("isolated socket")
+        .to_path_buf();
+    assert_ne!(isolated_socket, canonical);
+    assert!(isolated_socket.ends_with("control.sock"));
+    if production_held_in_process {
+        assert!(
+            canonical.exists(),
+            "isolated fixture must not steal or unlink the held production socket"
+        );
+    }
+    let isolated_lock = isolated_socket
+        .parent()
+        .expect("isolated runtime dir")
+        .join("runtime.lock");
+    assert_ne!(isolated_lock, production_lock);
+
+    shutdown(&mut isolated);
+    if let Some(runtime) = production.as_mut() {
+        shutdown(runtime);
+    }
 }
 
 #[test]

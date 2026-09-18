@@ -213,6 +213,34 @@ mod tests {
     use super::*;
     use std::os::{fd::AsRawFd, unix::fs::PermissionsExt};
 
+    struct EnvRestore {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvRestore {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var_os(key);
+            // SAFETY: discovery tests that mutate this unused selector are
+            // serialized by `override_test_lock`. Production discovery never
+            // reads `SEYAL_RUNTIME_DIR`.
+            unsafe { std::env::set_var(key, value) };
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            // SAFETY: paired with `set`; same serialized test mutex.
+            unsafe {
+                match &self.previous {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+    }
+
     fn temp_scope(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
             "seyal-discovery-test-{name}-{}-{}",
@@ -254,6 +282,12 @@ mod tests {
     fn resolved_runtime_dir_honors_an_explicit_override_not_the_environment() {
         let _lock = crate::runtime_dir::override_test_lock();
         crate::runtime_dir::reset_explicit_runtime_dir();
+        let _env = EnvRestore::set("SEYAL_RUNTIME_DIR", "/tmp/seyal-env-must-be-ignored");
+        assert_eq!(
+            resolved_runtime_dir().unwrap(),
+            darwin_user_runtime_dir().unwrap(),
+            "SEYAL_RUNTIME_DIR must not relocate production discovery"
+        );
         let isolated = temp_scope("explicit-override");
         crate::runtime_dir::set_explicit_runtime_dir(isolated.clone()).unwrap();
         assert_eq!(resolved_runtime_dir().unwrap(), isolated);

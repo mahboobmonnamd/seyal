@@ -198,9 +198,10 @@ mod tests {
     }
 
     #[test]
-    fn environment_variables_are_not_parsed_as_runtime_dir() {
+    fn argv_without_runtime_dir_flag_does_not_infer_a_directory() {
         let parsed = parse_process_runtime_args(["seyal-runtime"]).unwrap();
         assert_eq!(parsed.runtime_dir, None);
+        assert!(parsed.command.is_empty());
     }
 
     #[test]

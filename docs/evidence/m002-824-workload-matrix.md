@@ -4,7 +4,7 @@
 | --- | --- |
 | Owning Issue | #824 (parent #672) |
 | Classification | production validation / focused gap closure |
-| Exact PR head | `ad50bd193f7f840b34d45c9efa99b9ebfa78c6dc` (code + remediation). Evidence ledger sync may land as a docs-only follow-up commit on `issue/824`. |
+| Exact PR head | `204d14c2b3e155a6c67c272963312bb7d71387ba` (code + remediation = `ad50bd1`; later commits are evidence/docs). |
 | Prior automated pin | `dcbb90faaf870fdabbc543e6947adff2af48c8a3` remains the first retained matrix SHA; intermediate re-runs on `f0e8c01` plus live PTY expansions |
 | Host | Darwin arm64 / macOS 26.5.2 / Rust 1.98.0 (local matrix); hosted CI macOS-15 / Xcode 16.4 for exact-head gates |
 | Date (UTC) | 2026-09-17 |
@@ -34,7 +34,7 @@ Seyal GUI.
 | zsh | VT fixture `zsh_bash_fish_prompt_color_clear_and_multiline_stay_one_authority`; PTY `zsh_bash_and_optional_fish_print_through_one_pty_vt` | `/bin/zsh` present | Interactive editing/history/resize: headed ledger | Automated PASS |
 | bash | same VT + PTY | `/bin/bash` present | same | Automated PASS |
 | fish | same VT; PTY when `fish` exists | `fish` present | same | Automated PASS |
-| SSH / nested SSH | VT `ssh_and_nested_ssh_keep_a_single_terminal_state`. Live PTY `live_ssh_and_nested_ssh_use_one_pty_vt_when_orbstack_present`: `ssh(1)` to OrbStack `nt-ssh@orb`, remote `vim -c qa`, nested hop into ephemeral Docker sshd | `ssh` present; OrbStack `nt-ssh@orb` reachable; remote `/usr/bin/vim` present | Interactive remote + nested SSH in the Seyal GUI | Automated PASS for live `ssh(1)` + remote vim + nested hop on one Seyal PTY; headed GUI still blocked (exclusive Runtime occupied) |
+| SSH / nested SSH | VT `ssh_and_nested_ssh_keep_a_single_terminal_state`. Live PTY `live_ssh_and_nested_ssh_use_one_pty_vt_when_orbstack_present`: `ssh(1)` to OrbStack `nt-ssh@orb`, remote `vim -c qa`, nested hop into ephemeral Docker sshd | `ssh` present; OrbStack `nt-ssh@orb` reachable; remote `/usr/bin/vim` present | Interactive remote + nested SSH in the Seyal GUI | Automated PASS for live `ssh(1)` + remote vim + nested hop on one Seyal PTY; headed GUI ENVIRONMENT_UNSUPPORTED (2026-09-18 local XCUI automation-mode timeout) |
 | Vim / Neovim | VT `vim_neovim_alternate_screen_unicode_mouse_and_keys_restore_primary`; live PTY `live_vim_and_neovim_restore_primary_after_alternate_screen` (`:qa!` restores primary) | `vim` and `nvim` present | Insert/search/splits/mouse/keys in GUI | Automated PASS for live alt-screen enter/restore on one PTY; interactive TUI headed/manual still blocked |
 | tmux-as-child | VT `tmux_as_child_is_vt_bytes_not_seyal_panes`; PTY `tmux_as_child_owns_one_pty_when_present`; live split `live_tmux_split_stays_one_seyal_pty` | `tmux` present | windows/panes/copy-mode/detach inside tmux in GUI | Automated PASS: one Seyal PTY/child including split-window; tmux hierarchy is not Seyal panes |
 | htop / watch / ncurses | VT `htop_watch_ncurses_restore_primary_after_alt_screen`; live PTY `live_htop_and_watch_restore_primary_after_ncurses` | `watch` and `htop` 3.5.3 present | keyboard+mouse+alt-screen return in GUI | Automated PASS for live htop/watch alt-screen restore |
@@ -108,8 +108,11 @@ milestone qualification freeze:
   execution of the corrected XCUI test.
 - The native IME evidence descriptions now explicitly distinguish document
   invariants from the still-INCONCLUSIVE native fixture outcomes.
-- Runtime PID 99338 still owned `control.sock` at the safety check. No headed
-  test was launched and no existing Runtime was stopped by this follow-up.
+- Runtime PID 99338 still owned `control.sock` at that 2026-09-17 safety
+  check. **Superseded:** later exclusive-Runtime hosted XCUI on `ad50bd1` /
+  `204d14c` is the current headed record; the 2026-09-18 local XCUI rerun is
+  ENVIRONMENT_UNSUPPORTED (automation-mode timeout), not INCONCLUSIVE from a
+  foreign Runtime.
 
 ### Remaining acceptance
 
@@ -117,7 +120,7 @@ No new module/ADR was required. Remaining Done gates are evidence, not architect
 
 1. Interactive SSH/nested SSH **in the Seyal GUI** (PTY live hop is retained; many headed interactive rows remain ENVIRONMENT_UNSUPPORTED / not fully exercised as manual steps).
 2. Interactive Vim/Neovim/tmux-inside-tmux/htop/agent TUI on Flow → TUI takeover → Flow in the GUI (live PTY alt-screen restore is retained).
-3. SPEC-011 IME 37–41 have native callback/PTY evidence in the headed ledger. Hosted CI skips the ABC system-input-source case; local ABC PASS is retained. Physical input-source/candidate-popup, mixed-display-scale and live-composition reconnect breadth remain unclaimed. #836 not pulled.
+3. SPEC-011 IME 37–41 **close classification: covered** by existing native `NSTextInputClient` + local ABC XCUI (see headed ledger). Hosted CI skips the ABC case (`XCTSkip`). Physical input-source/candidate-popup, mixed-display-scale and live-composition reconnect remain unclaimed and are **not required** for M002 technical preview. #836 not pulled.
 4. #673 PHYSICAL_ARM64 five-cohort / 20-warmup / 100-sample matrix — **not started**.
 5. Independent close review after evidence/ledger honesty is current. This PR stays `Refs #824`.
 

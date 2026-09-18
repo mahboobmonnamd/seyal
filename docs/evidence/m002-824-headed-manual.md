@@ -2,10 +2,11 @@
 
 - **Issue:** #824
 - **Date:** 2026-09-17
-- **Exact PR head (code + prior evidence commits):** `ad50bd193f7f840b34d45c9efa99b9ebfa78c6dc`
+- **Exact PR head (code + prior evidence commits):** `204d14c2b3e155a6c67c272963312bb7d71387ba` (production sources unchanged from `ad50bd1`; later commits are evidence/docs)
 - **Production path:** ADR-015 thin AppKit host over Rust snapshots; headed oracle is Flow/Blocks, not a raw terminal.
 - **Exclusive Runtime rule:** if another process owns `control.sock`, the headed run is INCONCLUSIVE.
 - **Relationship:** `Refs #824` only. Does not close #824 / #672.
+- **IME 37–41 close classification:** **covered** by existing native `NSTextInputClient` + local ABC XCUI. Not a new #824 row. Do not pull #836.
 
 ## Current-head exact evidence (`ad50bd1`)
 
@@ -43,7 +44,38 @@ follow-ups do not change these hashes):
 
 This is not #824 Done: ten interactive manual steps, #673 release performance,
 milestone-length fuzz, and independent close review remain open. Independent
-merge review must re-resolve the PR head after this evidence correction commit.
+merge review of `204d14c` is GO for `Refs #824` only; GitHub remains BLOCKED by
+stale `CHANGES_REQUESTED` on `ad50bd1`.
+
+## SPEC-011 IME 37–41 close classification (2026-09-18)
+
+**Pick: covered by existing native / ABC evidence.**
+
+| Fixture | Close classification | Evidence | Explicit limit |
+| --- | --- | --- | --- |
+| 37 marked text → commit | **covered** | Native `setMarkedText` / `insertText` / `unmarkText` component cases + local ABC dead-key XCUI bytes `c3 a9 78 1b` | Hosted CI `XCTSkip` without ABC layout |
+| 38 cancel / abandon | **covered** | Native cancel/abandon callback + local ABC Escape-unmark | Physical non-ABC input sources not exercised |
+| 39 replacement commit | **covered** | Native replacement-commit callback | Not a multilingual candidate-list replacement |
+| 40 candidate coordinates | **covered** | Native `firstRectForCharacterRange` from the Rust cursor frame | Candidate popup on other displays / mixed scale unclaimed |
+| 41 detach discards stale preedit | **covered** | Native `viewWillMove(toWindow:)` / `discardMarkedText` path | Live-composition reconnect across a real GUI crash not claimed |
+
+`CompositionDocument` self-tests remain document invariants only; they are not
+this classification. Language-specific input-source breadth stays post-M004
+#836 and is **not required** for M002 technical preview. This classification
+does not waive headed steps 1–7 or `#824` Done.
+
+## Local native session (2026-09-18, `204d14c`)
+
+Exclusive Runtime was free at launch. `scripts/test-macos-ui.sh`:
+
+| Gate | Result |
+| --- | --- |
+| `SeyalHostComponentTests` | **26/26 PASS** |
+| `SeyalUITests` XCUI runner | **ENVIRONMENT_UNSUPPORTED** — `Timed out while enabling automation mode` (host TCC / automation-mode), not a product assertion |
+| Leftover `seyal-runtime` from the failed runner | SIGTERM; socket free afterward |
+
+Do not treat the component PASS as a new headed 1–7 result. Hosted
+`native-macos-smoke` on this head remains the green XCUI record.
 
 ## Historical local native verification (pre-remediation, 2026-09-17)
 
@@ -207,13 +239,13 @@ Record PASS / FAIL / ENVIRONMENT_UNSUPPORTED / PLATFORM_LIMITED per case. Never 
 
 | Step | Result this session |
 | --- | --- |
-| 1. zsh/bash/fish interactive | Live PTY `zsh_bash_and_optional_fish_print_through_one_pty_vt` PASS. Headed interactive GUI ENVIRONMENT_UNSUPPORTED (exclusive Runtime occupied) |
-| 2. SSH then nested SSH | PTY `live_ssh_and_nested_ssh_use_one_pty_vt_when_orbstack_present` PASS (`nt-ssh@orb`, remote `vim -c qa`, Docker sshd nested hop, one `TerminalExecution`). Headed GUI interactive SSH ENVIRONMENT_UNSUPPORTED (exclusive Runtime occupied) |
-| 3. Vim/Neovim interactive | Live PTY `live_vim_and_neovim_restore_primary_after_alternate_screen` PASS (`:qa!` restores primary). Headed GUI ENVIRONMENT_UNSUPPORTED |
-| 4. tmux child windows/panes/copy-mode | Live PTY `tmux_as_child_owns_one_pty_when_present` + `live_tmux_split_stays_one_seyal_pty` PASS (child markers on one Seyal PTY). Headed GUI ENVIRONMENT_UNSUPPORTED |
-| 5. htop/watch/ncurses | Live PTY `live_htop_and_watch_restore_primary_after_ncurses` PASS (`htop` 3.5.3 installed this session). Headed GUI ENVIRONMENT_UNSUPPORTED |
-| 6. git/docker/kubectl/terraform TTY | Live PTY git color log, `docker ps`, `kubectl version --client`, `terraform version` PASS (`terraform` v1.9.8 installed this session). Headed GUI ENVIRONMENT_UNSUPPORTED |
-| 7. CLI-agent TUI | VT equivalent retained PASS. Live agent TUI headed ENVIRONMENT_UNSUPPORTED |
+| 1. zsh/bash/fish interactive | Live PTY `zsh_bash_and_optional_fish_print_through_one_pty_vt` PASS. Headed interactive GUI ENVIRONMENT_UNSUPPORTED (2026-09-18: exclusive Runtime free; local XCUI runner timed out enabling automation mode) |
+| 2. SSH then nested SSH | PTY `live_ssh_and_nested_ssh_use_one_pty_vt_when_orbstack_present` PASS (`nt-ssh@orb`, remote `vim -c qa`, Docker sshd nested hop, one `TerminalExecution`). Headed GUI interactive SSH ENVIRONMENT_UNSUPPORTED (same automation-mode timeout) |
+| 3. Vim/Neovim interactive | Live PTY `live_vim_and_neovim_restore_primary_after_alternate_screen` PASS (`:qa!` restores primary). Headed GUI ENVIRONMENT_UNSUPPORTED (automation-mode timeout) |
+| 4. tmux child windows/panes/copy-mode | Live PTY `tmux_as_child_owns_one_pty_when_present` + `live_tmux_split_stays_one_seyal_pty` PASS (child markers on one Seyal PTY). Headed GUI ENVIRONMENT_UNSUPPORTED (automation-mode timeout) |
+| 5. htop/watch/ncurses | Live PTY `live_htop_and_watch_restore_primary_after_ncurses` PASS (`htop` 3.5.3 installed this session). Headed GUI ENVIRONMENT_UNSUPPORTED (automation-mode timeout) |
+| 6. git/docker/kubectl/terraform TTY | Live PTY git color log, `docker ps`, `kubectl version --client`, `terraform version` PASS (`terraform` v1.9.8 installed this session). Headed GUI ENVIRONMENT_UNSUPPORTED (automation-mode timeout) |
+| 7. CLI-agent TUI | VT equivalent retained PASS. Live agent TUI headed ENVIRONMENT_UNSUPPORTED (automation-mode timeout) |
 | 8. high-volume while typing/scrolling | headed Flow/Blocks XCUI PASS retained (`testHighVolumeComposerOutputStaysOnFlowBlocks`); not a type-while-flood interactive session. VT/PTY automated PASS |
 | 9. search/copy Unicode after resize | headed Flow/Blocks XCUI PASS retained for composer Unicode submit + resize; not search/copy from retained history. VT coherent fixture PASS |
 | 10. GUI close/reopen M001 reconnect | headed XCUI PASS retained (`testGuiRelaunchReconnectsWithoutKillingExecution`); Runtime unit `pass8_resync_reattach` + `macos_runtime` 12 PASS this session |

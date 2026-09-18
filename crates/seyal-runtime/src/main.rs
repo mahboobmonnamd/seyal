@@ -1,11 +1,17 @@
 use std::time::{Duration, Instant};
 
 use seyal_exec::{CommandSpec, WindowSize};
+use seyal_protocol::runtime_dir::parse_process_runtime_args;
 use seyal_runtime::{Runtime, RuntimeConfig};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut runtime = Runtime::new(RuntimeConfig::m001()?)?;
-    let mut args = std::env::args_os().skip(1);
+    let parsed = parse_process_runtime_args(std::env::args_os())?;
+    let mut config = RuntimeConfig::m001()?;
+    if let Some(runtime_dir) = parsed.runtime_dir {
+        config = config.isolated_to(runtime_dir);
+    }
+    let mut runtime = Runtime::new(config)?;
+    let mut args = parsed.command.into_iter();
     let program = args
         .next()
         .or_else(|| std::env::var_os("SHELL"))

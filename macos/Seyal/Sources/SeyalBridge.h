@@ -156,6 +156,10 @@ enum SeyalTerminalKeyKind {
 };
 
 int32_t seyal_bridge_connect_first(void);
+/// Optional isolated Runtime directory for this process. Must be an absolute
+/// path. Production Seyal.app never calls this unless `--runtime-dir` or a
+/// test host selected the directory; environment variables are ignored.
+int32_t seyal_bridge_set_runtime_dir(const char *path);
 uint64_t seyal_bridge_open_first(void);
 uint64_t seyal_bridge_open_first_until(uint64_t budget_micros);
 uint64_t seyal_bridge_open_first_observer_until(uint64_t budget_micros);

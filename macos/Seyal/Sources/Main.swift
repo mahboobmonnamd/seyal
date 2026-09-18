@@ -4,6 +4,7 @@ import Darwin
 @main
 enum SeyalMain {
     static func main() {
+        IsolatedRuntimeDirectory.installIfNeeded()
         if CommandLine.arguments.contains("--renderer-benchmark") {
             let passed = RendererValidation.runBenchmark()
             Darwin.exit(passed ? 0 : 1)

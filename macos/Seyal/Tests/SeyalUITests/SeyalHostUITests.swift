@@ -73,8 +73,7 @@ final class SeyalHostUITests: XCTestCase {
     /// Must run on the test's MainActor isolation, not XCTest's sync tearDown.
     private func hostedApp() -> XCUIApplication {
         let app = XCUIApplication()
-        app.terminate()
-        app.launch()
+        app.launchIsolatedHost()
         return app
     }
 

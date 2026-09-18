@@ -59,5 +59,5 @@ pub use ffi::{
     seyal_app_palette_row, seyal_app_recovery_param, seyal_app_shell, seyal_app_shell_row,
     seyal_app_snapshot, seyal_app_theme, seyal_bridge_adopt_handle, seyal_bridge_disconnect_handle,
     seyal_bridge_ensure_prepared, seyal_bridge_frame, seyal_bridge_poll, seyal_bridge_select,
-    test_register_pending_client,
+    seyal_bridge_set_runtime_dir, test_register_pending_client,
 };

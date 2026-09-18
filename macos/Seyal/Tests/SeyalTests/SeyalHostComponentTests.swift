@@ -176,6 +176,36 @@ final class SeyalHostComponentTests: XCTestCase {
         XCTAssertEqual(BundledRuntimeLauncher.helperIdentifier, "dev.seyal.Seyal.runtime")
     }
 
+    func testIsolatedRuntimeDirectoryDoesNotWeakenProductionDiscovery() {
+        XCTAssertEqual(
+            IsolatedRuntimeDirectory.helperArguments(from: ["Seyal"], testHostLoaded: false),
+            []
+        )
+        XCTAssertEqual(
+            IsolatedRuntimeDirectory.helperArguments(
+                from: ["Seyal", "--runtime-dir", "/tmp/seyal-iso"],
+                testHostLoaded: false
+            ),
+            ["--runtime-dir", "/tmp/seyal-iso"]
+        )
+        XCTAssertEqual(
+            BundledRuntimeLauncher.helperArgv(
+                executable: "/tmp/seyal-runtime",
+                processArguments: ["Seyal"],
+                testHostLoaded: false
+            ),
+            ["/tmp/seyal-runtime"]
+        )
+        XCTAssertEqual(
+            BundledRuntimeLauncher.helperArgv(
+                executable: "/tmp/seyal-runtime",
+                processArguments: ["Seyal", "--runtime-dir", "/tmp/seyal-iso"],
+                testHostLoaded: false
+            ),
+            ["/tmp/seyal-runtime", "--runtime-dir", "/tmp/seyal-iso"]
+        )
+    }
+
     @MainActor
     func testNativeKeyClassifierAndActionIDs() {
         XCTAssertTrue(InteractiveMetalSurfaceView.pass7InputSelfTest())

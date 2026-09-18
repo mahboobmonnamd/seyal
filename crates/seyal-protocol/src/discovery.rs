@@ -20,6 +20,7 @@ pub enum DiscoveryError {
     ActiveEndpoint,
     Io(io::Error),
     PathTooLongForSocket,
+    InvalidExplicitRuntimeDir,
 }
 
 impl From<io::Error> for DiscoveryError {
@@ -30,6 +31,21 @@ impl From<io::Error> for DiscoveryError {
 
 const SUN_PATH_MAX: usize = 104;
 pub const CONTROL_SOCKET_NAME: &str = "control.sock";
+
+/// Process Runtime directory: an explicit FFI/argv override if present,
+/// otherwise the canonical per-user directory. Environment variables never
+/// participate.
+pub fn resolved_runtime_dir() -> Result<PathBuf, DiscoveryError> {
+    if let Some(dir) = crate::runtime_dir::explicit_runtime_dir() {
+        return Ok(dir);
+    }
+    let parsed = crate::runtime_dir::parse_process_runtime_args(std::env::args_os())
+        .map_err(|_| DiscoveryError::InvalidExplicitRuntimeDir)?;
+    match parsed.runtime_dir {
+        Some(dir) => Ok(dir),
+        None => darwin_user_runtime_dir(),
+    }
+}
 
 pub fn darwin_user_runtime_dir() -> Result<PathBuf, DiscoveryError> {
     // SAFETY: standard two-call `confstr` pattern with owned storage.
@@ -223,6 +239,29 @@ mod tests {
     fn darwin_user_runtime_dir_resolves_a_nonempty_path() {
         let dir = darwin_user_runtime_dir().unwrap();
         assert!(dir.ends_with("seyal-runtime"));
+    }
+
+    #[test]
+    fn resolved_runtime_dir_defaults_to_the_canonical_user_endpoint() {
+        let _lock = crate::runtime_dir::override_test_lock();
+        crate::runtime_dir::reset_explicit_runtime_dir();
+        let resolved = resolved_runtime_dir().unwrap();
+        assert_eq!(resolved, darwin_user_runtime_dir().unwrap());
+        assert!(resolved.ends_with("seyal-runtime"));
+    }
+
+    #[test]
+    fn resolved_runtime_dir_honors_an_explicit_override_not_the_environment() {
+        let _lock = crate::runtime_dir::override_test_lock();
+        crate::runtime_dir::reset_explicit_runtime_dir();
+        let isolated = temp_scope("explicit-override");
+        crate::runtime_dir::set_explicit_runtime_dir(isolated.clone()).unwrap();
+        assert_eq!(resolved_runtime_dir().unwrap(), isolated);
+        crate::runtime_dir::reset_explicit_runtime_dir();
+        assert_eq!(
+            resolved_runtime_dir().unwrap(),
+            darwin_user_runtime_dir().unwrap()
+        );
     }
 
     #[test]

@@ -253,7 +253,22 @@ final class BundledRuntimeLauncher {
     else { throw BundledRuntimeLaunchError.helperTrustInvalid }
   }
 
-  private static func spawn(helperURL: URL, environment: [String: String]) throws -> pid_t {
+    static func helperArgv(
+      executable: String,
+      processArguments: [String] = ProcessInfo.processInfo.arguments,
+      testHostLoaded: Bool = NSClassFromString("XCTestCase") != nil
+    ) -> [String] {
+      var argv = [executable]
+      argv.append(
+        contentsOf: IsolatedRuntimeDirectory.helperArguments(
+          from: processArguments,
+          testHostLoaded: testHostLoaded
+        )
+      )
+      return argv
+    }
+
+    private static func spawn(helperURL: URL, environment: [String: String]) throws -> pid_t {
     let nullFD = open("/dev/null", O_RDWR | O_CLOEXEC)
     guard nullFD >= 0 else { throw BundledRuntimeLaunchError.launchDenied }
     defer { close(nullFD) }
@@ -285,7 +300,9 @@ final class BundledRuntimeLauncher {
     else { throw BundledRuntimeLaunchError.launchDenied }
 
     let executable = helperURL.path
-    var arguments: [UnsafeMutablePointer<CChar>?] = [strdup(executable), nil]
+    var arguments: [UnsafeMutablePointer<CChar>?] = helperArgv(executable: executable)
+      .map { strdup($0) as UnsafeMutablePointer<CChar>? }
+    arguments.append(nil)
     var environmentPointers = environment
       .sorted { $0.key < $1.key }
       .map { strdup("\($0.key)=\($0.value)") as UnsafeMutablePointer<CChar>? }

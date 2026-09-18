@@ -12,8 +12,7 @@ final class SeyalHostHistoryUITests: XCTestCase {
 
     private func hostedApp() -> XCUIApplication {
         let app = XCUIApplication()
-        app.terminate()
-        app.launch()
+        app.launchIsolatedHost()
         return app
     }
 

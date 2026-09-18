@@ -134,4 +134,14 @@ impl RuntimeConfig {
             },
         })
     }
+
+    /// Isolate both the control socket directory and the singleton lock so a
+    /// fixture Runtime cannot collide with the user-scoped production instance.
+    pub fn isolated_to(mut self, runtime_dir: PathBuf) -> Self {
+        self.singleton_path = seyal_protocol::runtime_dir::singleton_lock_path(&runtime_dir);
+        self.local_ipc = LocalIpcMode::Enabled {
+            runtime_dir_override: Some(runtime_dir),
+        };
+        self
+    }
 }

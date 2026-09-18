@@ -13,6 +13,7 @@ pub mod display;
 pub mod framing;
 mod pass7;
 pub mod pass8;
+pub mod runtime_dir;
 
 /// Compatibility namespace matching the protocol modules' historical Runtime
 /// location while Runtime and clients migrate to the physical protocol crate.

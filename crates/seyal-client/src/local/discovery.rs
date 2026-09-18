@@ -8,8 +8,7 @@ use std::{
 use seyal_runtime::{
     local_ipc::{
         discovery::{
-            control_socket_path, darwin_user_runtime_dir, ensure_verified_runtime_dir,
-            DiscoveryError,
+            control_socket_path, ensure_verified_runtime_dir, resolved_runtime_dir, DiscoveryError,
         },
         framing::{
             encode_frame, ClientHello, ErrorCode, ErrorMessage, MessageType, ServerHello,
@@ -179,7 +178,7 @@ pub(crate) fn read_exact_until(
 }
 
 pub(crate) fn canonical_control_socket_path() -> Result<std::path::PathBuf, ClientError> {
-    let runtime_dir = darwin_user_runtime_dir().map_err(classify_discovery_error)?;
+    let runtime_dir = resolved_runtime_dir().map_err(classify_discovery_error)?;
     ensure_verified_runtime_dir(&runtime_dir).map_err(classify_discovery_error)?;
     control_socket_path(&runtime_dir).map_err(classify_discovery_error)
 }
@@ -196,6 +195,7 @@ pub(crate) fn classify_discovery_error(error: DiscoveryError) -> ClientError {
         | DiscoveryError::ActiveEndpoint => DiscoveryFailure::UntrustedEndpoint,
         DiscoveryError::ConfstrFailed
         | DiscoveryError::PathTooLongForSocket
+        | DiscoveryError::InvalidExplicitRuntimeDir
         | DiscoveryError::Io(_) => DiscoveryFailure::InvalidPath,
     };
     ClientError::Discovery(failure)
@@ -328,14 +328,15 @@ pub(crate) fn send_control_until(
 #[cfg(test)]
 mod connect_error_tests {
     use super::{
-        classify_connect_error, classify_discovery_error, extended_terminal_key_supported,
-        hello_until, hello_until_with_legacy_key_fallback, requested_capabilities, ClientError,
-        DiscoveryFailure,
+        canonical_control_socket_path, classify_connect_error, classify_discovery_error,
+        extended_terminal_key_supported, hello_until, hello_until_with_legacy_key_fallback,
+        requested_capabilities, ClientError, DiscoveryFailure,
     };
     use seyal_runtime::local_ipc::{discovery::DiscoveryError, framing::*};
     use std::{
         io::{self, Read, Write},
         os::unix::net::UnixStream,
+        path::PathBuf,
         time::{Duration, Instant},
     };
 
@@ -504,6 +505,7 @@ mod connect_error_tests {
         for error in [
             DiscoveryError::ConfstrFailed,
             DiscoveryError::PathTooLongForSocket,
+            DiscoveryError::InvalidExplicitRuntimeDir,
         ] {
             assert_eq!(
                 classify_discovery_error(error),
@@ -520,5 +522,30 @@ mod connect_error_tests {
                 ClientError::Io
             );
         }
+    }
+
+    #[test]
+    fn explicit_runtime_dir_redirects_canonical_socket_without_touching_production() {
+        let _lock = seyal_runtime::runtime_dir::override_test_lock();
+        seyal_runtime::runtime_dir::reset_explicit_runtime_dir();
+        let isolated = PathBuf::from(format!(
+            "/tmp/s860c-{}-{:x}",
+            std::process::id() % 100_000,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+                % 0xFFFF
+        ));
+        seyal_runtime::runtime_dir::set_explicit_runtime_dir(isolated.clone()).unwrap();
+        let path = canonical_control_socket_path().expect("isolated socket path");
+        assert_eq!(
+            path,
+            seyal_runtime::runtime_dir::control_socket_leaf(&isolated)
+        );
+        seyal_runtime::runtime_dir::reset_explicit_runtime_dir();
+        let restored = canonical_control_socket_path().expect("canonical socket path");
+        assert!(restored.ends_with("seyal-runtime/control.sock"));
+        assert_ne!(restored, path);
     }
 }

@@ -1,4 +1,6 @@
 use std::{
+    ffi::{c_char, CStr, OsString},
+    os::unix::ffi::OsStringExt,
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -6,7 +8,7 @@ use std::{
 use seyal_runtime::{
     local_ipc::{
         discovery::{
-            control_socket_path, darwin_user_runtime_dir, verify_connected_peer_fd,
+            control_socket_path, resolved_runtime_dir, verify_connected_peer_fd,
             verify_control_socket_leaf, verify_runtime_dir, DiscoveryError,
         },
         framing::{ErrorCode, Role},
@@ -87,6 +89,27 @@ pub(crate) fn set_recovery_success(client: &LocalDisplayClient, handle: u64, ori
     });
 }
 
+/// Install an isolated Runtime directory for this process. Production Seyal.app
+/// never calls this unless `--runtime-dir` or a test host selected one.
+///
+/// # Safety
+/// - `path` must be null or a valid NUL-terminated C string for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn seyal_bridge_set_runtime_dir(path: *const c_char) -> i32 {
+    if path.is_null() {
+        return -2;
+    }
+    // SAFETY: the Swift caller passes a NUL-terminated C string that remains
+    // valid for this call only.
+    let c_str = unsafe { CStr::from_ptr(path) };
+    match seyal_runtime::runtime_dir::set_explicit_runtime_dir(PathBuf::from(OsString::from_vec(
+        c_str.to_bytes().to_vec(),
+    ))) {
+        Ok(()) => 0,
+        Err(_) => -2,
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn seyal_bridge_runtime_id_low() -> u64 {
     with_active_client(|client| identity_words(client.runtime_id()).0).unwrap_or(0)
@@ -143,12 +166,13 @@ pub(crate) fn classify_bridge_discovery_error(error: DiscoveryError) -> ClientEr
         }
         DiscoveryError::ConfstrFailed
         | DiscoveryError::PathTooLongForSocket
+        | DiscoveryError::InvalidExplicitRuntimeDir
         | DiscoveryError::Io(_) => ClientError::Discovery(DiscoveryFailure::InvalidPath),
     }
 }
 
 fn verified_recovery_socket_path() -> Result<PathBuf, ClientError> {
-    let runtime_dir = darwin_user_runtime_dir().map_err(classify_bridge_discovery_error)?;
+    let runtime_dir = resolved_runtime_dir().map_err(classify_bridge_discovery_error)?;
     verify_runtime_dir(&runtime_dir).map_err(classify_bridge_discovery_error)?;
     let socket_path = control_socket_path(&runtime_dir).map_err(classify_bridge_discovery_error)?;
     verify_control_socket_leaf(&socket_path).map_err(classify_bridge_discovery_error)?;

@@ -391,18 +391,4 @@ impl Runtime {
             }
         })
     }
-
-    #[allow(dead_code)]
-    pub(super) fn encode_projection_delta(
-        &self,
-        update: &seyal_exec::TerminalProjectionUpdate,
-        base_generation: u64,
-    ) -> Result<EncodedDisplayBatch, display::DisplayError> {
-        #[cfg(feature = "test-fault-injection")]
-        if test_fault::take(FaultPoint::DisplayEncode) {
-            return Err(display::DisplayError::InvalidDamage);
-        }
-        display::encode_delta_v2(update, base_generation)
-            .or_else(|_| display::encode_delta(update, base_generation))
-    }
 }

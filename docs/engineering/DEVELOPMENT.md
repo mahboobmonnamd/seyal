@@ -130,7 +130,7 @@ make docs-check    # run Starlight/Astro documentation validation
 
 `make docs` requires Node.js 22.12 or later. Do not create competing undocumented command paths.
 
-Current behavior after Passes 1–10 (M001 Pass 10 closeout in progress; #727/#5 open until final freeze + Phase 2 PASS):
+Current behavior after Passes 1–10 (M001 **Done / closed**; Pass 10 #727 and parent #5 closed on freeze `c536c54`):
 
 - `make bootstrap` provisions/verifies the pinned Rust toolchain and, on macOS, validates full Xcode + Swift + macOS SDK + Metal tooling when that host tree exists;
 - `make build` builds the Rust workspace and, on macOS, the thin `Seyal.app` host over Rust snapshots (`#883` one-pane slice);
@@ -148,7 +148,7 @@ The physical Rust workspace is the Passes 1–10 / M001 production surface docum
 
 The native host under `macos/Seyal` is a thin AppKit/Metal adapter over Rust `seyal_app_*` snapshots and Candidate-D `seyal_bridge_*` frames. It does not own Workspace/Tab/Pane/composer/chrome product state.
 
-Harness locations under `tests/`, `fuzz/` and `benches/` hold real M001 fixtures, fuzz adapters and pass benchmarks. Pass 10 evidence/protocol docs live under `docs/engineering/M001-PASS10-EVIDENCE.md` and `docs/evidence/`; #727 remains open until final freeze + Phase 2 PASS.
+Harness locations under `tests/`, `fuzz/` and `benches/` hold real M001 fixtures, fuzz adapters and pass benchmarks. Pass 10 evidence/protocol docs live under `docs/engineering/M001-PASS10-EVIDENCE.md` and `docs/evidence/`; #727 and #5 are closed on the M001 freeze.
 
 Issue #12 made the Pass-1 CI gates production-shaped: external workflow actions are pinned by reviewed commit SHA, workflow permissions remain minimal, repository validators are negative-fixture tested, and architecture layering is enforced in the public PR path. Later passes extended those gates without replacing the canonical root `make` interface.
 

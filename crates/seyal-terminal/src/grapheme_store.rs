@@ -1,10 +1,5 @@
 //! Bounded reclaimable variable grapheme payload storage for `TerminalState`.
 
-#![allow(dead_code)]
-
-#[cfg(test)]
-use std::collections::HashSet;
-
 /// Maximum UTF-8 bytes retained for one active canonical grapheme (SPEC-011).
 pub const MAX_ACTIVE_GRAPHEME_BYTES: usize = 8_192;
 
@@ -86,21 +81,6 @@ impl GraphemeStore {
         };
         self.live_bytes = self.live_bytes.saturating_add(payload.len());
         StoreAdmit::Stored(id)
-    }
-
-    /// Compacts dead slots already released; no-op placeholder for future arena
-    /// densification. Visible live payload is never evicted.
-    pub(crate) fn reclaim_dead(&mut self) {
-        let _ = self.free.len();
-    }
-
-    #[cfg(test)]
-    pub(crate) fn occupied_ids(&self) -> HashSet<u32> {
-        self.entries
-            .iter()
-            .enumerate()
-            .filter_map(|(index, entry)| entry.as_ref().map(|_| index as u32))
-            .collect()
     }
 }
 

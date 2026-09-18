@@ -22,7 +22,7 @@ Claiming the Issue is a coordination preflight, not implementation permission. P
    - **Exactly another implementer:** stop before planning or edits and report `Issue #N is already taken by @login` with the Issue URL.
    - **Multiple assignees:** stop as an ownership collision. Seyal implementation Issues have exactly one active implementer.
 5. After any assignment write, re-fetch the Issue and require the current implementer to be the **sole** assignee. A failed write, overwritten assignment, multiple assignees, or ambiguous result is `BLOCKED`; never overwrite another valid claim to win a race.
-6. If the work item is a GitHub sub-issue, fetch its parent immediately before claiming or editing the child. If the parent is assigned to another implementer, stop with `BLOCKED` unless an explicit parent/slice handoff has already released that parent claim. After a valid child claim, do not leave parent and child assigned to different implementers for the same slice.
+6. If the work item is a GitHub sub-issue, fetch its parent immediately before claiming or editing the child. If the parent is assigned to another implementer, stop with `BLOCKED` unless an explicit parent/slice handoff has already released that parent claim. After the child claim write and again after creating `issue/<number>`, re-fetch both parent and child. If they are assigned to different implementers, stop with `BLOCKED` and do not edit.
 7. Do not clear, replace, or steal another implementer's assignment. Ownership transfer requires an explicit handoff/reassignment under `ISSUE-PROTOCOL.md`.
 
 The GitHub assignee is the human-visible ownership claim. Project status such as `In Progress` is lifecycle metadata and must never substitute for the assignee check.

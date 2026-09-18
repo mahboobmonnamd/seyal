@@ -72,6 +72,7 @@ grep -Fq 'exact remote branch name `issue/<number>`' "$claim_skill" || fail "imp
 grep -Fq 'never overwrite another valid claim to win a race' "$claim_skill" || fail "implement-issue must not steal a concurrent claim"
 grep -Fq 'If the work item is a GitHub sub-issue, fetch its parent immediately' "$claim_skill" || fail "implement-issue must inspect the parent claim before a child slice"
 grep -Fq 'stop with `BLOCKED` unless an explicit parent/slice handoff' "$claim_skill" || fail "implement-issue must fail closed when another implementer owns the parent"
+grep -Fq 're-fetch both parent and child' "$claim_skill" || fail "implement-issue must re-fetch parent and child after claim and branch creation"
 grep -Fq 'claim and branch that sub-issue only after the parent/slice handoff check' "$claim_skill" || fail "implement-issue must claim/branch the child Issue only after parent handoff"
 grep -Fq 'do not steal the parent' "$claim_skill" || fail "implement-issue must not steal a parent claim"
 refine_skill=.agents/skills/issue-refinement/SKILL.md

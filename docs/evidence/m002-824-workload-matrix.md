@@ -15,13 +15,16 @@ performance remains #673 authority (`performance_claim=false` here). PTY
 smokes spawn with `TERM=seyal-m001` and a `tic`-compiled bundled terminfo
 directory, not `xterm-256color`.
 
-**Current-head gates (`ad50bd1`):** hosted Foundation Quality
+**Current-head gates (`ad50bd1` code / `cfbc848` docs):** hosted Foundation Quality
+on `ad50bd1`
 ([run 35242876394](https://github.com/seyal-org/seyal/actions/runs/35242876394))
 PASS — `make check` (including `pass7_local_ipc`), component 26/26, XCUI
 19 executed / 0 failures / 1 ABC-layout skip, Block selection PASS, workload
-4/4 PASS. See [headed ledger](m002-824-headed-manual.md). Historical local
-44/45 Block-selection FAIL and pre-isolation `make check` IPC FAIL are retained
-as superseded history, not the current claim.
+4/4 PASS. Local `CARGO_TEST_THREADS=1 make check` on `cfbc848` PASS; local
+`scripts/fuzz-smoke.py` 10/10 PASS. Parallel local `pass7_local_ipc` can still
+hit harness `Exec(Io -6)` and is not the current claim. See
+[headed ledger](m002-824-headed-manual.md). Historical local 44/45
+Block-selection FAIL and pre-isolation `make check` IPC FAIL remain superseded.
 
 Earlier matrix rows below remain historical workload observations. They do
 **not** claim that all ten interactive manual steps have been executed in the

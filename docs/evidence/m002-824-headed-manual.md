@@ -77,6 +77,20 @@ Exclusive Runtime was free at launch. `scripts/test-macos-ui.sh`:
 Do not treat the component PASS as a new headed 1–7 result. Hosted
 `native-macos-smoke` on this head remains the green XCUI record.
 
+Local exact-head gates on `cfbc848` (docs-only after `204d14c`; exclusive
+Runtime free):
+
+| Gate | Result |
+| --- | --- |
+| `python3 scripts/fuzz-smoke.py` | **PASS** — 10 active targets, campaign parity ok |
+| First `make check` | **ENVIRONMENT_UNSUPPORTED** — leftover `site/node_modules` Markdown links (gitignored; not present on hosted CI). Moved aside; not a product FAIL. |
+| Parallel `pass7_local_ipc` inside `make check` | **INCONCLUSIVE / harness** — `Exec(Io(code: -6))` on `history_range_combining_grapheme_round_trips_over_runtime_wire` (same class as the pre-isolation local flake). Isolated `--test-threads=1` suite **16/16 PASS**. |
+| `CARGO_TEST_THREADS=1 make check` | **PASS** including `pass7_local_ipc` 16/16 |
+
+Hosted `rust-and-harness-quality` on the docs push is green. Do not treat the
+parallel local IPC flake as a current product FAIL; hosted Foundation Quality
+on `ad50bd1` remains the first full-suite PASS.
+
 ## Historical local native verification (pre-remediation, 2026-09-17)
 
 The previous Runtime owner shut down PID 99338 before this run. The native test

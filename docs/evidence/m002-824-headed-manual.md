@@ -1,51 +1,62 @@
 # M002 #824 headed / manual ledger
 
 - **Issue:** #824
-- **Date:** 2026-09-17
-- **Exact PR head (code + prior evidence commits):** `204d14c2b3e155a6c67c272963312bb7d71387ba` (production sources unchanged from `ad50bd1`; later commits are evidence/docs)
+- **Date:** 2026-09-18
+- **Exact PR head:** `2ef83322a382a142d17ae1e4cc6ec0600116af41`
 - **Production path:** ADR-015 thin AppKit host over Rust snapshots; headed oracle is Flow/Blocks, not a raw terminal.
 - **Exclusive Runtime rule:** if another process owns `control.sock`, the headed run is INCONCLUSIVE.
 - **Relationship:** `Refs #824` only. Does not close #824 / #672.
 - **IME 37–41 close classification:** **covered** by existing native `NSTextInputClient` + local ABC XCUI. Not a new #824 row. Do not pull #836.
 
-## Current-head exact evidence (`ad50bd1`)
+## Current-head exact evidence (`2ef8332`)
 
-Hosted Foundation Quality on `ad50bd1`
-([run 35242876394](https://github.com/seyal-org/seyal/actions/runs/35242876394)):
+Executable Swift moved after `ad50bd1` / `204d14c`: Flow Block hit-test
+fallthrough (`7cb7853`, `ThinPaneHostView`) and TUI chrome coalesce
+(`7f77a6f`, `ProductChromeHostView` + nested-reconcile component test +
+`/tmp` alt-screen XCUI fixture). `2ef8332` is docs-only headed-GUI ledger
+on top of that production head. Do not claim production sources are
+unchanged from `ad50bd1`.
+
+Hosted Foundation Quality + production fuzz on `2ef8332`
+([run 35305544844](https://github.com/seyal-org/seyal/actions/runs/35305544844)):
 
 | Gate | Result |
 | --- | --- |
-| `make check` (includes `pass7_local_ipc`) | **PASS** |
-| `make test` native component (`SeyalHostComponentTests`) | **26/26 PASS**, including live IME Runtime/PTY callback |
-| `make test` XCUI (`SeyalUITests`) | **19 executed, 0 failures, 1 skip** |
-| Block selection XCUI | **PASS** (`testSelectingABlockRevealsRustBlockDetailsInInspector`, 28.53s) |
-| Workload XCUI | **4/4 PASS** |
-| History XCUI | **2/2 PASS** |
-| System ABC dead-key XCUI | **SKIP** on hosted runner (`XCTSkip`: requires macOS ABC layout). Retained local PASS with bytes `c3 a9 78 1b` under [system results](m002-824-ime-system-results.json). |
-| Production fuzz workflows | **PASS** on the same head |
+| `repository-policy` | **SUCCESS** |
+| `rust-and-harness-quality` (`make check`, includes `pass7_local_ipc`) | **SUCCESS** |
+| `native-macos-smoke` | **SUCCESS** |
+| `production-libfuzzer` | **SUCCESS** |
+| `production-macos-state-fuzz` | **SUCCESS** |
 
-Remediation that cleared the earlier blockers is recorded in
+Local exclusive-Runtime native + XCUI on the production commits under this
+head (`7f77a6f`, recorded at `2ef8332`): **27/27** component + **19/19** XCUI
+**PASS**, including inspector in the full suite and
+`testAlternateScreenReturnRestoresFlowNotRawTerminal` (35.6s). Hosted ABC
+dead-key remains `XCTSkip` without that layout. Retained local ABC bytes
+`c3 a9 78 1b` under [system results](m002-824-ime-system-results.json).
+
+Remediation that cleared earlier blockers is recorded in
 [m002-824-remediation.md](m002-824-remediation.md): IPC harness PID isolation +
 Harness `Drop` shutdown (`0c49cef` / `d44662c`), Flow live-end follow after
-history growth (`d44662c`), IME connection poll (`ad50bd1`).
+history growth (`d44662c`), IME connection poll (`ad50bd1`), Flow pane
+hit-test fallthrough (`7cb7853`), TUI reconcile coalesce (`7f77a6f`).
 
-Source fingerprints for the production/test sources at `ad50bd1` (docs-only
-follow-ups do not change these hashes):
+Source fingerprints for the production/test sources at `2ef8332`:
 
 | Source | SHA-256 |
 | --- | --- |
 | `InteractiveMetalSurfaceView.swift` | `9f4b8191677d33c20a99b915d638eaee7dddfccd4dc6fd2c3d44687a67259e16` |
-| `ProductChromeHostView.swift` | `e492e3d212e13e2e7eaa4ba714b6a1cc81b120d9c4727c628754d96d64b77636` |
-| `SeyalHostComponentTests.swift` | `b6379cb70c8f189723228afa6500bcdba22442734b6cd129a9ff3ab25734aae0` |
-| `SeyalHostUITests.swift` | `7eb8b71091d8d479c6d04011f7fd375b4d45b43e3e23b0c9f6056bbe3263c8ed` |
+| `ProductChromeHostView.swift` | `97df225ab9ea7b60c45f36ec58d486e3881d61cd716b2f64e8adea3cc66bea7f` |
+| `ThinPaneHostView.swift` | `4241803afda53c17497e9c9ce7edcaec4500ae1026af8db73135e9ad974a5b4a` |
+| `SeyalHostComponentTests.swift` | `1593f93cdcbc1477fdbca1e78e2e142091b25ecb82641ecaa097bced077e9f6d` |
+| `SeyalHostUITests.swift` | `a81f851e843b225a7cd249c1f05a0f1be2b8b173cf9a73b4b6792e1dbaa00c12` |
 | `SeyalHostHistoryUITests.swift` | `e14a154bce535a317edb91dde28319318fee07309a338d35dd9d8bfd7ac93a9c` |
 | `SeyalHostWorkloadUITests.swift` | `d4e011fe197fdb1a043cff6cb3403916af7a06b456bf5e53631c051dbc7690e0` |
 | `pass7_local_ipc.rs` | `4da73af2632285064476d1cb88a5ea2bf402ea7b5c454b6af942a8c41244d918` |
 
-This is not #824 Done: ten interactive manual steps, #673 release performance,
-milestone-length fuzz, and independent close review remain open. Independent
-merge review of `204d14c` is GO for `Refs #824` only; GitHub remains BLOCKED by
-stale `CHANGES_REQUESTED` on `ad50bd1`.
+This is not #824 Done: classified headed-step limits, #673 release performance,
+milestone-length fuzz, and independent close review remain open. This ledger
+sync is docs-only; do not treat it as further executable delta after `7f77a6f`.
 
 ## SPEC-011 IME 37–41 close classification (2026-09-18)
 
@@ -119,9 +130,10 @@ Runtime free):
 | Parallel `pass7_local_ipc` inside `make check` | **INCONCLUSIVE / harness** — `Exec(Io(code: -6))` on `history_range_combining_grapheme_round_trips_over_runtime_wire` (same class as the pre-isolation local flake). Isolated `--test-threads=1` suite **16/16 PASS**. |
 | `CARGO_TEST_THREADS=1 make check` | **PASS** including `pass7_local_ipc` 16/16 |
 
-Hosted `rust-and-harness-quality` on the docs push is green. Do not treat the
+Hosted `rust-and-harness-quality` on later docs pushes is green. Do not treat the
 parallel local IPC flake as a current product FAIL; hosted Foundation Quality
-on `ad50bd1` remains the first full-suite PASS.
+on `2ef8332` (run 35305544844) is the current full-suite PASS. `ad50bd1` remains
+the first isolation-fix hosted PASS.
 
 ## Historical local native verification (pre-remediation, 2026-09-17)
 

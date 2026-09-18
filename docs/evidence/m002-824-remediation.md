@@ -18,11 +18,13 @@ Remediation on `issue/824`:
 - leave production Runtime/TerminalExecution lifecycle semantics unchanged;
 - rustfmt the `runtime_dir_override` assignment so Foundation Quality does not fail `cargo fmt --check`.
 
-**Acceptance status (exact head `ad50bd1`):** hosted Foundation Quality
+**Acceptance status (exact head `2ef8332`):** hosted Foundation Quality
 `make check` PASS
-([run 35242876394](https://github.com/seyal-org/seyal/actions/runs/35242876394)),
-including `pass7_local_ipc`. The historical local double-fail is retained as
-diagnosis evidence only.
+([run 35305544844](https://github.com/seyal-org/seyal/actions/runs/35305544844)),
+including `pass7_local_ipc`. Earlier hosted PASS on `ad50bd1`
+([run 35242876394](https://github.com/seyal-org/seyal/actions/runs/35242876394))
+is retained as the first isolation-fix record. The historical local double-fail
+is diagnosis evidence only.
 
 ## Block selection full-suite failure
 
@@ -97,8 +99,12 @@ Local evidence after the fix (exclusive Runtime free):
 - full native + XCUI `test-without-building` **27/27** component and **19/19**
   XCUI **PASS** (alt-screen in-suite 35.6s)
 
-**Acceptance status (exact head `ad50bd1`):** hosted `make test` native suite
-PASS — Block selection XCUI PASS (28.53s), component live IME PASS (1.15s),
-XCUI 19 executed / 0 failures / 1 ABC-layout skip
-([run 35242876394](https://github.com/seyal-org/seyal/actions/runs/35242876394)).
-The historical local 44/45 FAIL is retained in the headed ledger as superseded.
+**Acceptance status (exact head `2ef8332`):** hosted `native-macos-smoke`
+SUCCESS
+([run 35305544844](https://github.com/seyal-org/seyal/actions/runs/35305544844)).
+Local exclusive-Runtime on `7f77a6f`: **27/27** component + **19/19** XCUI
+**PASS** (inspector in-suite; alt-screen in-suite 35.6s). Earlier hosted PASS
+on `ad50bd1` (run 35242876394: Block selection 28.53s, live IME 1.15s, XCUI
+19 executed / 0 failures / 1 ABC skip) is superseded as the current-head
+native record. The historical local 44/45 FAIL remains in the headed ledger
+as superseded.

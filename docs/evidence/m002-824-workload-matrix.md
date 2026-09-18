@@ -4,7 +4,7 @@
 | --- | --- |
 | Owning Issue | #824 (parent #672) |
 | Classification | production validation / focused gap closure |
-| Exact PR head | `204d14c2b3e155a6c67c272963312bb7d71387ba` (code + remediation = `ad50bd1`; later commits are evidence/docs). |
+| Exact PR head | `2ef83322a382a142d17ae1e4cc6ec0600116af41` (production Swift after `ad50bd1`: `7cb7853` / `7f77a6f`; this SHA is the headed-GUI ledger commit). |
 | Prior automated pin | `dcbb90faaf870fdabbc543e6947adff2af48c8a3` remains the first retained matrix SHA; intermediate re-runs on `f0e8c01` plus live PTY expansions |
 | Host | Darwin arm64 / macOS 26.5.2 / Rust 1.98.0 (local matrix); hosted CI macOS-15 / Xcode 16.4 for exact-head gates |
 | Date (UTC) | 2026-09-17 |
@@ -15,16 +15,16 @@ performance remains #673 authority (`performance_claim=false` here). PTY
 smokes spawn with `TERM=seyal-m001` and a `tic`-compiled bundled terminfo
 directory, not `xterm-256color`.
 
-**Current-head gates (`ad50bd1` code / `cfbc848` docs):** hosted Foundation Quality
-on `ad50bd1`
-([run 35242876394](https://github.com/seyal-org/seyal/actions/runs/35242876394))
-PASS — `make check` (including `pass7_local_ipc`), component 26/26, XCUI
-19 executed / 0 failures / 1 ABC-layout skip, Block selection PASS, workload
-4/4 PASS. Local `CARGO_TEST_THREADS=1 make check` on `cfbc848` PASS; local
-`scripts/fuzz-smoke.py` 10/10 PASS. Parallel local `pass7_local_ipc` can still
-hit harness `Exec(Io -6)` and is not the current claim. See
-[headed ledger](m002-824-headed-manual.md). Historical local 44/45
-Block-selection FAIL and pre-isolation `make check` IPC FAIL remain superseded.
+**Current-head gates (`2ef8332`):** hosted Foundation Quality + production fuzz
+([run 35305544844](https://github.com/seyal-org/seyal/actions/runs/35305544844))
+SUCCESS — `repository-policy`, `rust-and-harness-quality`, `native-macos-smoke`,
+`production-libfuzzer`, `production-macos-state-fuzz`. Local exclusive-Runtime
+native + XCUI on `7f77a6f` (recorded at this head): **27/27** component +
+**19/19** XCUI **PASS**. Parallel local `pass7_local_ipc` can still hit harness
+`Exec(Io -6)` and is not the current claim. See
+[headed ledger](m002-824-headed-manual.md). Historical `ad50bd1` 26/26 + hosted
+run 35242876394, local 44/45 Block-selection FAIL, and pre-isolation IPC FAIL
+remain superseded.
 
 Earlier matrix rows below remain historical workload observations. They do
 **not** claim that all ten interactive manual steps have been executed in the
@@ -79,9 +79,10 @@ python3 scripts/fuzz-smoke.py
 
 `scripts/test-macos-ui.sh` was **not** re-run in the pre-remediation local
 session when exclusive `seyal-runtime` pid 99338 owned `control.sock`. Exact-head
-hosted `make test` on `ad50bd1` later executed the full native XCUI suite
-(Block selection PASS; workload 4/4 PASS; one ABC layout skip). Prior exclusive-
-Runtime local session: 18/18 PASS.
+hosted `native-macos-smoke` on `2ef8332` later executed the full native XCUI
+suite (run 35305544844 SUCCESS). Local exclusive-Runtime on `7f77a6f`:
+**27/27** component + **19/19** XCUI **PASS**. Prior exclusive-Runtime local
+session: 18/18 PASS (superseded).
 
 ## Gaps that are not buried
 
@@ -112,10 +113,9 @@ milestone qualification freeze:
 - The native IME evidence descriptions now explicitly distinguish document
   invariants from the still-INCONCLUSIVE native fixture outcomes.
 - Runtime PID 99338 still owned `control.sock` at that 2026-09-17 safety
-  check. **Superseded:** later exclusive-Runtime hosted XCUI on `ad50bd1` /
-  `204d14c` is the current headed record; the 2026-09-18 local XCUI rerun is
-  ENVIRONMENT_UNSUPPORTED (automation-mode timeout), not INCONCLUSIVE from a
-  foreign Runtime.
+  check. **Superseded:** later exclusive-Runtime hosted XCUI on `2ef8332`
+  (run 35305544844) plus local 27/27 + 19/19 on `7f77a6f` is the current headed
+  record. The 2026-09-18 automation-mode timeout is not the current XCUI claim.
 
 ### Remaining acceptance
 
@@ -127,9 +127,10 @@ No new module/ADR was required. Remaining Done gates are evidence, not architect
 4. #673 PHYSICAL_ARM64 five-cohort / 20-warmup / 100-sample matrix — **not started**.
 5. Independent close review after evidence/ledger honesty is current. This PR stays `Refs #824`.
 
-Active remediation for Block selection and `pass7_local_ipc` isolation is
-**complete on `ad50bd1`** (see [remediation](m002-824-remediation.md)); those
-are no longer open product failures on the exact head.
+Active remediation for Block selection, `pass7_local_ipc` isolation, Flow
+hit-test fallthrough, and TUI reconcile coalesce is **complete on `2ef8332`**
+(see [remediation](m002-824-remediation.md)); those are no longer open product
+failures on the exact head.
 
 ## What this PR did not change
 

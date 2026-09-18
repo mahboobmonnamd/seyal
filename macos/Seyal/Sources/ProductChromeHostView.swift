@@ -34,6 +34,8 @@ final class ProductChromeHostView: NSView {
     private var followingLiveEnd = true
     private var isProgrammaticTranscriptScroll = false
     private var isReconcilingChrome = false
+    /// Nested product/timeline pulses during a rebuild must not drop TUI.
+    private var chromeNeedsReconcile = false
     private var blockCards: [UInt64: CommandBlockView] = [:]
     private var transcriptFrameRevision: UInt64 = 0
     private var paneFollowsTranscript: [NSLayoutConstraint] = []
@@ -321,9 +323,21 @@ final class ProductChromeHostView: NSView {
     func detachForTermination() { pane.detachForTermination() }
 
     func reconcileChrome() {
-        guard !isReconcilingChrome else { return }
+        if isReconcilingChrome {
+            chromeNeedsReconcile = true
+            return
+        }
         isReconcilingChrome = true
         defer { isReconcilingChrome = false }
+        var turns = 0
+        repeat {
+            chromeNeedsReconcile = false
+            performChromeReconcile()
+            turns += 1
+        } while chromeNeedsReconcile && turns < 8
+    }
+
+    private func performChromeReconcile() {
         var snapshot = seyal_app_snapshot(pane.appHandle)
         let bound = (lo: snapshot.execution_lo, hi: snapshot.execution_hi)
         if snapshot.flags & UInt16(SEYAL_APP_SNAP_HAS_EXECUTION) != 0,

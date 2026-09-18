@@ -5,13 +5,17 @@ extension XCTestCase {
     func exerciseBoundedAlternateScreen(
         in app: XCUIApplication, submitCommand: (String) -> Void
     ) throws {
-        let scriptURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("seyal-alternate-\(UUID().uuidString).sh")
-        try #"""
-        trap 'printf "\033[?1049l"' EXIT
-        printf '\033[?1049h'
+        let token = String(UUID().uuidString.prefix(8))
+        let scriptURL = URL(fileURLWithPath: "/tmp/s1049-\(token).sh")
+        let startedURL = URL(fileURLWithPath: "/tmp/s1049-\(token).ran")
+        try """
+        trap 'printf "\\033[?1049l"' EXIT
+        : > \(startedURL.path)
+        printf '\\033[?1049h'
         read -r -t 20 answer
-        """#.write(to: scriptURL, atomically: true, encoding: .utf8)
+        """.write(to: scriptURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700], ofItemAtPath: scriptURL.path)
         let composer = app.descendants(matching: .any)["seyal-composer"].firstMatch
         let terminal = app.descendants(matching: .any)["terminal-input"].firstMatch
         defer {
@@ -27,14 +31,28 @@ extension XCTestCase {
             }
             do {
                 try FileManager.default.removeItem(at: scriptURL)
+                if FileManager.default.fileExists(atPath: startedURL.path) {
+                    try FileManager.default.removeItem(at: startedURL)
+                }
             } catch {
                 XCTFail("Could not remove alternate-screen fixture: \(error)")
             }
         }
-        submitCommand("/bin/bash --noprofile --norc '\(scriptURL.path)'")
+        submitCommand("/bin/bash --noprofile --norc \(scriptURL.path)")
+        let startedDeadline = Date().addingTimeInterval(8)
+        while Date() < startedDeadline,
+            !FileManager.default.fileExists(atPath: startedURL.path)
+        {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        let started = FileManager.default.fileExists(atPath: startedURL.path)
         let entered = expectation(
             for: NSPredicate(format: "isHittable == false"), evaluatedWith: composer, handler: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [entered], timeout: 12), .completed)
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [entered], timeout: 12),
+            .completed,
+            "alt-screen must hide composer; started=\(started) composer=\(composer.value ?? "nil") terminal=\(terminal.value ?? "nil") hittable=\(composer.isHittable)"
+        )
         XCTAssertEqual(app.state, .runningForeground)
         XCTAssertTrue(terminal.waitForExistence(timeout: 5))
         terminal.click()

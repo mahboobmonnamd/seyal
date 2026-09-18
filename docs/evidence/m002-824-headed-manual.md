@@ -85,7 +85,7 @@ Exclusive Runtime free. After Flow pane stopped swallowing Block clicks:
 | `testSelectingABlockRevealsRustBlockDetailsInInspector` isolated | **PASS** (26.2s) |
 | Same case in full 19-test suite | **PASS** (26.7s / 26.9s) — previously FAIL |
 | Workload 4/4 cluster + inspector + history alt-screen | **7/7 PASS** |
-| Full `scripts/test-macos-ui.sh` | **18/19** — `testAlternateScreenReturnRestoresFlowNotRawTerminal` FAIL (composer stayed hittable after alt-screen submit). Isolated and cluster PASS. |
+| Full native + XCUI (`test-without-building` on this head) | **27/27** component + **19/19** XCUI **PASS**. `testAlternateScreenReturnRestoresFlowNotRawTerminal` **PASS** in the full 19-test sequence (35.6s). See [m002-824-remediation.md](m002-824-remediation.md). |
 | Steps 8–10 XCUI | **PASS** (high-volume, Unicode resize, GUI relaunch) |
 | Steps 1–7 interactive GUI | still not a headed Vim/htop/tmux/ssh oracle |
 

@@ -129,6 +129,48 @@ final class SeyalHostComponentTests: XCTestCase {
         view.reconcileChrome()
     }
 
+    @MainActor
+    func testNestedProductChangeDuringReconcileStillHidesComposerForTui() throws {
+        let view = ProductChromeHostView(frame: NSRect(x: 0, y: 0, width: 800, height: 560))
+        let handle = view.pane.appHandle
+        var snap = seyal_app_snapshot(handle)
+        var bind = SeyalAppAction()
+        bind.version = UInt16(SEYAL_APP_ABI_VERSION)
+        bind.size = UInt16(MemoryLayout<SeyalAppAction>.size)
+        bind.kind = UInt16(SEYAL_APP_ACTION_BIND.rawValue)
+        bind.flags = UInt16(SEYAL_APP_FLAG_TARGET_CONTROLLER)
+        bind.fence_pane_lo = snap.pane_lo
+        bind.fence_pane_hi = snap.pane_hi
+        bind.fence_epoch = snap.epoch
+        bind.target_execution_lo = 1
+        bind.target_attachment_lo = 2
+        bind.target_pty_generation = 1
+        XCTAssertEqual(seyal_app_apply(handle, &bind), 0)
+        view.reconcileChrome()
+        let composer = try XCTUnwrap(accessibilityChild(view, identifier: "seyal-composer"))
+        XCTAssertFalse(composer.isHidden, "Flow bind must show composer")
+
+        let chained = view.pane.onProductChanged
+        view.pane.onProductChanged = {
+            var current = seyal_app_snapshot(handle)
+            var refresh = SeyalAppAction()
+            refresh.version = bind.version
+            refresh.size = bind.size
+            refresh.kind = UInt16(SEYAL_APP_ACTION_REFRESH.rawValue)
+            refresh.applySnapshotFence(current)
+            refresh.flags |= UInt16(SEYAL_APP_FLAG_ALTERNATE_SCREEN)
+            XCTAssertEqual(seyal_app_apply(handle, &refresh), 0)
+            chained?()
+            view.reconcileChrome()
+        }
+        view.pane.onProductChanged?()
+        XCTAssertEqual(
+            seyal_app_snapshot(handle).eligibility,
+            UInt16(SEYAL_APP_ELIGIBILITY_TUI.rawValue)
+        )
+        XCTAssertTrue(composer.isHidden, "nested TUI refresh must hide composer")
+    }
+
     func testBundledRuntimeLauncherUsesFixedHelperPath() {
         XCTAssertEqual(BundledRuntimeLauncher.helperRelativePath, "Contents/Helpers/seyal-runtime")
         XCTAssertEqual(BundledRuntimeLauncher.helperIdentifier, "dev.seyal.Seyal.runtime")
@@ -728,4 +770,17 @@ final class SeyalHostComponentTests: XCTestCase {
 private func utf8(_ row: SeyalAppRow) -> String {
     guard row.title_len > 0, let title = row.title else { return "" }
     return String(decoding: UnsafeBufferPointer(start: title, count: Int(row.title_len)), as: UTF8.self)
+}
+
+@MainActor
+private func accessibilityChild(_ root: NSView, identifier: String) -> NSView? {
+    if root.accessibilityIdentifier() == identifier {
+        return root
+    }
+    for child in root.subviews {
+        if let found = accessibilityChild(child, identifier: identifier) {
+            return found
+        }
+    }
+    return nil
 }

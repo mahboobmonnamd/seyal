@@ -67,6 +67,36 @@ Local evidence after the fix (exclusive Runtime free):
   That case **PASS**es isolated and in the 7-test cluster. Not treated as
   inspector-click FAIL. Do not weaken the alt-screen assertion.
 
+## Alternate-screen XCUI after History+UITests prefix (2026-09-18)
+
+Observed: `testAlternateScreenReturnRestoresFlowNotRawTerminal` **PASS** isolated,
+ABC-then-alt-screen pair **PASS**, 7-test cluster **PASS**. The same assertion
+**FAIL**ed after History + all `SeyalHostUITests`: composer stayed `available`
+and hittable for 12s after the bash `1049h` submit (editor had cleared).
+Leftover exclusive Runtime was idle `/bin/zsh` with no bash grandchild.
+
+Two cooperating defects:
+
+1. XCUI `typeText` of a long `FileManager.temporaryDirectory` path did not
+   start the bounded child under that prefix load, so `1049h` never ran.
+   The fixture now uses `/tmp/s1049-<token>.sh` and records a start marker.
+2. `reconcileChrome` returned immediately while `isReconcilingChrome` was
+   already true. A one-shot `1049h` during Flow `rebuildBlocks()` could be
+   dropped with no further frames while bash blocks in `read`. Nested pulses
+   now set `chromeNeedsReconcile` and the outer pass loops on a fresh snapshot
+   (bounded). Composer hide is still Rust eligibility.
+
+The XCUI wait still requires `isHittable == false`.
+
+Local evidence after the fix (exclusive Runtime free):
+
+- nested TUI chrome component case **PASS**
+- isolated alt-screen XCUI **PASS** (35.3s)
+- History + all `SeyalHostUITests` + workload alt-screen prefix **16/16 PASS**
+  (398.9s; the previously failing case 35.8s)
+- full native + XCUI `test-without-building` **27/27** component and **19/19**
+  XCUI **PASS** (alt-screen in-suite 35.6s)
+
 **Acceptance status (exact head `ad50bd1`):** hosted `make test` native suite
 PASS — Block selection XCUI PASS (28.53s), component live IME PASS (1.15s),
 XCUI 19 executed / 0 failures / 1 ABC-layout skip

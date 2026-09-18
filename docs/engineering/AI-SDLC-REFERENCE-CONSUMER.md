@@ -11,10 +11,10 @@ This is **reference-consumer integration evidence**, not the model/evaluation be
 Seyal consumes AI-SDLC `main` at exact commit:
 
 ```text
-105e0cedc392a4468308d9bbfd6c273ad44924fe
+8d329477e41f00e82435fe47d49cfedd724aefc5
 ```
 
-This is the merge commit for AI-SDLC PR #9, which adds the generic `pr-review` merge-readiness orchestrator while retaining focused `code-review` and criterion-level `verification` as separate reusable capabilities.
+This is the merge commit for AI-SDLC PR #12, which folds skip-gated working-loop rules (clarify only when needed, vertical slices, quoted proof, checkable Done) into the existing generic skills. It sits on top of PR #9's `pr-review` orchestrator; focused `code-review` and criterion-level `verification` remain separate reusable capabilities.
 
 The pin is developer tooling only and is materialized by `make bootstrap-agents` under ignored `.sdlc/framework/`. Product build/test/runtime paths do not depend on it.
 
@@ -24,8 +24,8 @@ The pin is developer tooling only and is materialized by `make bootstrap-agents`
 | --- | --- | --- |
 | `project-context` | AI-SDLC `project-context` | Seyal context/index + authority chain |
 | `development-readiness` | AI-SDLC `development-readiness` | `ISSUE-PROTOCOL.md` Ready checklist and architecture triggers |
-| `issue-refinement` | AI-SDLC `work-item-design` | GitHub Issue fields, milestone frontier, terminal evidence classification |
-| `implement-issue` | AI-SDLC `implementation` | one Issue/worktree/branch/PR, `make check`, docs/domain gates |
+| `issue-refinement` | AI-SDLC `work-item-design` | GitHub Issue fields, milestone frontier, terminal evidence classification, parent/sub-issue slice claim mapping |
+| `implement-issue` | AI-SDLC `implementation` | one Issue/worktree/branch/PR, `make check`, docs/domain gates, sub-issue claim/branch mapping |
 | `code-review` | AI-SDLC `code-review` | focused terminal architecture/hot-path implementation review |
 | `verification` | AI-SDLC `verification` | Seyal Issue criterion/evidence and repository/domain gates |
 | `pr-review` | AI-SDLC `pr-review` | final terminal architecture, exact-head, performance/security/evidence and Issue-state merge gates |

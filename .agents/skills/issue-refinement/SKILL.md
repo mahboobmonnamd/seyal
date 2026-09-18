@@ -9,7 +9,7 @@ Follow the canonical generic procedure in `.sdlc/framework/skills/work-item-desi
 
 Apply only these Seyal-specific rules on top of the generic procedure:
 
-1. GitHub Issues + Projects are Seyal's execution system; use native dependencies/sub-issues and the required fields in `docs/engineering/ISSUE-PROTOCOL.md`.
+1. GitHub Issues + Projects are Seyal's execution system; use native dependencies/sub-issues and the required fields in `docs/engineering/ISSUE-PROTOCOL.md`. If a parent Issue contains multiple independently reviewable slices, recommend GitHub sub-issues (one per slice). Keep the parent as the exclusive active-work claim surface until a slice sub-issue is the one being implemented; do not assign both parent and child to different implementers for the same slice.
 2. Link exact accepted architecture/ADR/spec/milestone authority. Existing code and `.sdlc` summaries are never architectural authority.
 3. Preserve one coherent independently reviewable outcome and the owning module/state boundary. Do not bundle unrelated cleanup or cross-authority work.
 4. For terminal/runtime work, classify required unit/integration/fixture/conformance/fuzz/failure/performance evidence and identify any applicable domain skill such as `vt-tdd`, `terminal-conformance`, `performance-gate`, `metal-renderer`, or `security-review`.

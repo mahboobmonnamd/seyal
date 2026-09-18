@@ -23,7 +23,7 @@ done
 grep -q 'XCODEBUILD_MCP_VERSION=' scripts/bootstrap-dev.sh || fail "XcodeBuildMCP is not pinned"
 grep -q 'AI_SDLC_REPO=' scripts/bootstrap-dev.sh || fail "AI-SDLC repository is not declared"
 grep -Eq 'AI_SDLC_COMMIT="[0-9a-f]{40}"' scripts/bootstrap-dev.sh || fail "AI-SDLC must be pinned by full commit SHA"
-grep -q 'AI_SDLC_COMMIT="105e0cedc392a4468308d9bbfd6c273ad44924fe"' scripts/bootstrap-dev.sh || fail "AI-SDLC pin must include merged generic pr-review"
+grep -q 'AI_SDLC_COMMIT="8d329477e41f00e82435fe47d49cfedd724aefc5"' scripts/bootstrap-dev.sh || fail "AI-SDLC pin must include merged working-loop revision"
 grep -q '^AI_SDLC_SKILLS=(' scripts/bootstrap-dev.sh || fail "AI-SDLC skill manifest is missing"
 grep -q '^ensure_ai_sdlc()' scripts/bootstrap-dev.sh || fail "AI-SDLC materialization is missing"
 for generic_skill in project-context development-readiness work-item-design implementation code-review verification pr-review; do
@@ -70,6 +70,14 @@ grep -Fq 'Issue #N is already taken by @login' "$claim_skill" || fail "implement
 grep -Fq 'Multiple assignees' "$claim_skill" || fail "implement-issue must fail closed on multiple assignees"
 grep -Fq 'exact remote branch name `issue/<number>`' "$claim_skill" || fail "implement-issue must use the deterministic issue branch collision backstop"
 grep -Fq 'never overwrite another valid claim to win a race' "$claim_skill" || fail "implement-issue must not steal a concurrent claim"
+grep -Fq 'If the work item is a GitHub sub-issue, fetch its parent immediately' "$claim_skill" || fail "implement-issue must inspect the parent claim before a child slice"
+grep -Fq 'stop with `BLOCKED` unless an explicit parent/slice handoff' "$claim_skill" || fail "implement-issue must fail closed when another implementer owns the parent"
+grep -Fq 're-fetch both parent and child' "$claim_skill" || fail "implement-issue must re-fetch parent and child after claim and branch creation"
+grep -Fq 'claim and branch that sub-issue only after the parent/slice handoff check' "$claim_skill" || fail "implement-issue must claim/branch the child Issue only after parent handoff"
+grep -Fq 'do not steal the parent' "$claim_skill" || fail "implement-issue must not steal a parent claim"
+refine_skill=.agents/skills/issue-refinement/SKILL.md
+grep -Fq 'recommend GitHub sub-issues (one per slice)' "$refine_skill" || fail "issue-refinement must recommend one GitHub sub-issue per slice"
+grep -Fq 'do not assign both parent and child to different implementers for the same slice' "$refine_skill" || fail "issue-refinement must forbid split parent/child assignees for one slice"
 grep -Fq 'Any request to **implement, fix, finish, code, or complete a specific GitHub Issue** must enter through' AGENTS.md || fail "AGENTS.md must route implementation requests through implement-issue"
 grep -Fq 'one deterministic issue/<number> branch' docs/engineering/DEVELOPMENT.md || fail "development workflow must use the deterministic issue branch"
 if grep -Fq '→ issue/<number>-<short-name>' docs/engineering/DEVELOPMENT.md; then

@@ -53,6 +53,19 @@ final class ThinPaneHostView: NSView {
         seyal_app_destroy(appHandle)
     }
 
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let hit = super.hitTest(point)
+        // Flow paints terminal pixels over Block bodies. Metal returns nil from
+        // hitTest, but this pane still sits above the transcript. Default
+        // NSView hit-testing would then return `self` and swallow the click
+        // so CommandBlockView never sees it. Fall through in Flow; keep the
+        // surface in Raw/TUI where drawsLiveGrid is true.
+        if hit === self, !inputSurface.inspectRendererPresentation().drawsLiveGrid {
+            return nil
+        }
+        return hit
+    }
+
     func activateAfterWindowPresentation() {
         inputSurface.activateRuntimeAfterWindowPresentation()
         bindFromBridgeIfNeeded()

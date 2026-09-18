@@ -71,11 +71,25 @@ Exclusive Runtime was free at launch. `scripts/test-macos-ui.sh`:
 | Gate | Result |
 | --- | --- |
 | `SeyalHostComponentTests` | **26/26 PASS** |
-| `SeyalUITests` XCUI runner | **ENVIRONMENT_UNSUPPORTED** — `Timed out while enabling automation mode` (host TCC / automation-mode), not a product assertion |
-| Leftover `seyal-runtime` from the failed runner | SIGTERM; socket free afterward |
+| `SeyalUITests` XCUI runner | A later exclusive-Runtime session on this host **did** enable automation. See 2026-09-18 headed rerun below. |
 
-Do not treat the component PASS as a new headed 1–7 result. Hosted
-`native-macos-smoke` on this head remains the green XCUI record.
+Do not treat the component PASS as a new headed 1–7 result.
+
+## Local headed rerun (2026-09-18, post `ThinPaneHostView` hit-test)
+
+Exclusive Runtime free. After Flow pane stopped swallowing Block clicks:
+
+| Gate | Result |
+| --- | --- |
+| `SeyalHostComponentTests` | **26/26 PASS** |
+| `testSelectingABlockRevealsRustBlockDetailsInInspector` isolated | **PASS** (26.2s) |
+| Same case in full 19-test suite | **PASS** (26.7s / 26.9s) — previously FAIL |
+| Workload 4/4 cluster + inspector + history alt-screen | **7/7 PASS** |
+| Full `scripts/test-macos-ui.sh` | **18/19** — `testAlternateScreenReturnRestoresFlowNotRawTerminal` FAIL (composer stayed hittable after alt-screen submit). Isolated and cluster PASS. |
+| Steps 8–10 XCUI | **PASS** (high-volume, Unicode resize, GUI relaunch) |
+| Steps 1–7 interactive GUI | still not a headed Vim/htop/tmux/ssh oracle |
+
+Still `Refs #824`. Do not close #824 / #672.
 
 Local exact-head gates on `cfbc848` (docs-only after `204d14c`; exclusive
 Runtime free):

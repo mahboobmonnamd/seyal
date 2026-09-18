@@ -42,6 +42,31 @@ CI at `d44662c`: Block-selection XCUI and all four workload XCUI cases PASS. Rem
 `testNativeIMELiveCallbacksDeliverOnlyCommittedUTF8AndTrackCursor` timing out on the
 "production Runtime and projection connected" wait; harden that wait with a connection poll.
 
+## Block selection click swallowed by Flow pane (2026-09-18)
+
+Local full `scripts/test-macos-ui.sh` on `accd4bb` reproduced
+`testSelectingABlockRevealsRustBlockDetailsInInspector` FAIL: XCUI clicked
+`seyal-block-8`, then `seyal-inspector` never appeared.
+
+Cause: `centerColumn` stacks the transcript under `ThinPaneHostView`. Flow
+Metal already returns `nil` from `hitTest`, but the pane's default NSView
+hit-test then returned `self` and swallowed the click, so `CommandBlockView`
+never saw `mouseDown`. Isolated inspector PASS was not enough; the card
+center is the body once output exists.
+
+Fix: `ThinPaneHostView.hitTest` returns `nil` in Flow (`drawsLiveGrid == false`)
+when it would otherwise claim the click. Raw/TUI keep the live grid.
+
+Local evidence after the fix (exclusive Runtime free):
+
+- isolated inspector XCUI **PASS** (26.2s)
+- inspector in the full 19-test suite **PASS** (26.7s / 26.9s)
+- 7-test cluster (inspector + both alt-screen cases + four workload cases) **7/7 PASS**
+- full 19-test suite still **FAIL**s `testAlternateScreenReturnRestoresFlowNotRawTerminal`
+  waiting for composer `isHittable == false` after the ABC dead-key case.
+  That case **PASS**es isolated and in the 7-test cluster. Not treated as
+  inspector-click FAIL. Do not weaken the alt-screen assertion.
+
 **Acceptance status (exact head `ad50bd1`):** hosted `make test` native suite
 PASS — Block selection XCUI PASS (28.53s), component live IME PASS (1.15s),
 XCUI 19 executed / 0 failures / 1 ABC-layout skip

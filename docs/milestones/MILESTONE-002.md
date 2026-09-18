@@ -108,18 +108,16 @@ Approved decomposition is **M002.1–M002.10** under #672, plus performance sibl
 | Performance contract | #673 (PR #919) | Contract on `master`; **measured PHYSICAL_ARM64 rows open**; first HistoryStore row on PR #969 is not Done |
 | Unicode-heavy ARM64 | #837 | **Open** — after accepted #673 ceilings |
 
-**Close-out order (mandatory):**
+**Epic close recipe (not a start gate):**
 
 ```text
-#824 Done (exclusive-Runtime headed/manual + independent review)
-  → close #672 with #824
-  → #673 PHYSICAL_ARM64 five-cohort × 20-warmup × 100-sample matrix
-  → #837 Unicode-heavy ARM64 vs those ceilings
-  → milestone-validation on one freeze SHA
-  → close #664
+#664 closes only after #824/#672, #673, and #837 are Done
+  + milestone-validation on one freeze SHA
 ```
 
-Do not start #673 or #837 from an #824 PR. Do not steal the #824 assignee claim.
+Unresolved tension, written explicitly: #824 issue-local evidence (`performance_claim=false`) is not #673 qualification, and #673 does **not** depend on #672/#824 closure — live #673 and PR #969 may keep measuring. There is no circular dependency. #837 still waits on accepted #673 ceilings.
+
+Do not start #673 or #837 from an #824 PR. Do not steal the #824 or #673 assignee claims. One Issue → one branch → one PR.
 
 After this freeze, **do not create new M002 implementation Issues** except:
 
@@ -157,7 +155,7 @@ Families: HistoryStore reflow vs #818 ceilings (active 2/4/8 ms, sealed 1/2/4 ms
 
 PR [#969](https://github.com/seyal-org/seyal/pull/969) is a first HistoryStore reflow row (`Refs #673`), not #673 Done. Its active-gate relative p95/p99 vs the 10% same-SHA rule is not an absolute-ceiling miss; diagnose before treating the row as accepted.
 
-Do not weaken functional tests to hit numbers. Start only after #824 is Done.
+Do not weaken functional tests to hit numbers. #673 may proceed independently of #824/#672 closure.
 
 ### 6.3 #837 — Unicode-heavy ARM64
 
@@ -169,13 +167,7 @@ After accepted #673 ceilings: Unicode PTY throughput, combining-storm RSS, 1/10/
 
 SPEC-011 still lists headed IME fixtures 37–41 (commit, cancel, replacement, candidate coordinates, detach discards preedit). #817 closed with AppKit IME **unverified**. #836 is multilingual / post-M004 and **must not** be pulled into M002.
 
-#824 PR #964 added native `NSTextInputClient` callback tests and a macOS ABC dead-key XCUI case (`c3 a9 78 1b`). Hosted CI skips that XCUI when ABC is not the active layout. That is evidence, not an automatic close classification.
-
-During #824 close, classify IME as exactly one of:
-
-1. covered by existing #823/#824 headed rows with retained evidence, or
-2. a **tiny remaining M002 evidence row** on #824 (or one scoped child of #824), or
-3. **not required for M002 technical preview**, with M004 still owning native IME as a launch blocker.
+#824 PR #964 recorded the close pick as **covered** by existing native `NSTextInputClient` + local ABC XCUI (`c3 a9 78 1b`). Hosted CI skips that XCUI when ABC is not the active layout. Physical / multilingual / mixed-scale IME stays on #836 and is not required for M002 technical preview. This classification does not close #824.
 
 Do not invent a new Unicode/IME architecture Issue for this.
 

@@ -24,14 +24,14 @@ This directory is the canonical entry point for Seyal foundation architecture.
 18. [`SEYAL-SCROLLBACK-HISTORY-RD-001.md`](SEYAL-SCROLLBACK-HISTORY-RD-001.md) — Issue #685 comparative representation, fixture-replay, segmentation and resource evidence behind ADR-010.
 19. [`SEYAL-UNICODE-GRAPHEME-RD-001.md`](SEYAL-UNICODE-GRAPHEME-RD-001.md) — Issue #684 representation, Unicode compatibility, pathological-cluster, projection and ARM64 shaping evidence behind ADR-011.
 20. [`../milestones/MILESTONE-001.md`](../milestones/MILESTONE-001.md) — authoritative M001 implementation scope, passes, tests, security gates, benchmarks, acceptance criteria, and demo procedure.
-20a. [`../milestones/MILESTONE-002.md`](../milestones/MILESTONE-002.md) — M002 close-out contract: remaining issues #824 / #673 / #837, non-goals, IME honesty, and final validation recipe. Subordinate to ADR-010 / ADR-011 / ADR-015 and SPEC-010 / SPEC-011. Does not claim M002 Done.
-21. [`ui/SEYAL-UI-ARCHITECTURE-001.md`](ui/SEYAL-UI-ARCHITECTURE-001.md) — presentation architecture for Flow/Raw/TUI, history, Blocks, workspace chrome, inspectors, attention/approvals, desktop/mobile continuity, and render priority.
-21a. [`ui/SEYAL-ADAPTIVE-DEPTH-DESIGN-LANGUAGE.md`](ui/SEYAL-ADAPTIVE-DEPTH-DESIGN-LANGUAGE.md) — universal visual language.
-21b. [`ui/M001-UI-DESIGN-SYSTEM.md`](ui/M001-UI-DESIGN-SYSTEM.md) — typed token/theme/config snapshot consumed by native UI.
-22. [`SEYAL-AGENT-PLATFORM-RD-PLAN-001.md`](SEYAL-AGENT-PLATFORM-RD-PLAN-001.md) — agent-native OSS foundation research plan; consumes stable Runtime/Workspace identities and remains outside terminal hot-path ownership.
-23. [`SEYAL-WORKFLOW-EXTENSION-PLATFORM-RD-001.md`](SEYAL-WORKFLOW-EXTENSION-PLATFORM-RD-001.md) — deferred R&D direction for task-focused DevOps/agent workflows and provider/adaptor seams; no implementation is authorized before Pass 5 plus required UI foundations.
-24. [`SEYAL-APPLICATION-PROTOCOL-RD-001.md`](SEYAL-APPLICATION-PROTOCOL-RD-001.md) — deferred R&D direction for a future capability-negotiated Seyal Application Protocol/SDK derived from proven integrations rather than a premature generic "Shell API".
-25. [`source/FOUNDATION-RD-BRIEF.md`](source/FOUNDATION-RD-BRIEF.md) — source requirements that initiated the architecture pass; not an implementation specification.
+21. [`../milestones/MILESTONE-002.md`](../milestones/MILESTONE-002.md) — M002 close-out contract: remaining issues #824 / #673 / #837, non-goals, IME honesty, and final validation recipe. Subordinate to ADR-010 / ADR-011 / ADR-015 and SPEC-010 / SPEC-011. Does not claim M002 Done.
+22. [`ui/SEYAL-UI-ARCHITECTURE-001.md`](ui/SEYAL-UI-ARCHITECTURE-001.md) — presentation architecture for Flow/Raw/TUI, history, Blocks, workspace chrome, inspectors, attention/approvals, desktop/mobile continuity, and render priority.
+22a. [`ui/SEYAL-ADAPTIVE-DEPTH-DESIGN-LANGUAGE.md`](ui/SEYAL-ADAPTIVE-DEPTH-DESIGN-LANGUAGE.md) — universal visual language.
+22b. [`ui/M001-UI-DESIGN-SYSTEM.md`](ui/M001-UI-DESIGN-SYSTEM.md) — typed token/theme/config snapshot consumed by native UI.
+23. [`SEYAL-AGENT-PLATFORM-RD-PLAN-001.md`](SEYAL-AGENT-PLATFORM-RD-PLAN-001.md) — agent-native OSS foundation research plan; consumes stable Runtime/Workspace identities and remains outside terminal hot-path ownership.
+24. [`SEYAL-WORKFLOW-EXTENSION-PLATFORM-RD-001.md`](SEYAL-WORKFLOW-EXTENSION-PLATFORM-RD-001.md) — deferred R&D direction for task-focused DevOps/agent workflows and provider/adaptor seams; no implementation is authorized before Pass 5 plus required UI foundations.
+25. [`SEYAL-APPLICATION-PROTOCOL-RD-001.md`](SEYAL-APPLICATION-PROTOCOL-RD-001.md) — deferred R&D direction for a future capability-negotiated Seyal Application Protocol/SDK derived from proven integrations rather than a premature generic "Shell API".
+26. [`source/FOUNDATION-RD-BRIEF.md`](source/FOUNDATION-RD-BRIEF.md) — source requirements that initiated the architecture pass; not an implementation specification.
 
 ## Authority
 

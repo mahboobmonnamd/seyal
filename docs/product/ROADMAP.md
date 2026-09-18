@@ -55,7 +55,7 @@ M003 may develop in parallel with late M002 only at stable boundaries; terminal-
 
 ### M002
 - Close-out contract: [`docs/milestones/MILESTONE-002.md`](../milestones/MILESTONE-002.md). Do not attach new product slices.
-- Remaining: #824 real-workload matrix (#672 closure), then #673 PHYSICAL_ARM64 rows, then #837 Unicode-heavy ARM64, then freeze-SHA milestone validation, then close #664.
+- Remaining: #824/#672 workload-matrix close, #673 PHYSICAL_ARM64 rows (may measure independently of #824), #837 Unicode-heavy ARM64 after accepted #673 ceilings, then freeze-SHA milestone validation and close #664.
 - Closed children: #815–#823, #834, #842. Spikes #684 / #685 are closed architecture (ADR-011 / ADR-010).
 
 ### M003

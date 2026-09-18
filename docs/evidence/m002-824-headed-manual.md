@@ -87,7 +87,25 @@ Exclusive Runtime free. After Flow pane stopped swallowing Block clicks:
 | Workload 4/4 cluster + inspector + history alt-screen | **7/7 PASS** |
 | Full native + XCUI (`test-without-building` on this head) | **27/27** component + **19/19** XCUI **PASS**. `testAlternateScreenReturnRestoresFlowNotRawTerminal` **PASS** in the full 19-test sequence (35.6s). See [m002-824-remediation.md](m002-824-remediation.md). |
 | Steps 8–10 XCUI | **PASS** (high-volume, Unicode resize, GUI relaunch) |
-| Steps 1–7 interactive GUI | still not a headed Vim/htop/tmux/ssh oracle |
+| Steps 1–7 interactive GUI | **headed Debug `Seyal.app` on `7f77a6f`** — see 2026-09-18 headed GUI session below. Not a physical-keyboard / live Claude TUI oracle. |
+
+Still `Refs #824`. Do not close #824 / #672.
+
+## Headed GUI session (2026-09-18, `7f77a6f`)
+
+Exclusive Runtime free at launch. Production Debug
+`target/macos-derived-data/Build/Products/Debug/Seyal.app` (not the XCUI
+unsigned runner). Composer/TUI driven through Accessibility + HID key events
+on the live window — not a physical keyboard and not Metal pixel inspection.
+
+| Observation | Value |
+| --- | --- |
+| Runtime pid | **33076** (survived GUI quit) |
+| `runtime=` | `afec949f9612dab30000000000000001` |
+| `execution=` | `094c09200fb34a0d0000000000000002` |
+| `attachment=` | `…0004` before quit, **`…0005` after reopen** |
+| Vim/Neovim/htop/tmux | TUI `alternate-screen=true` then Flow restore |
+| Limits | nested SSH hop, tmux copy-mode/extra panes, live Claude TUI, physical keyboard |
 
 Still `Refs #824`. Do not close #824 / #672.
 
@@ -267,16 +285,16 @@ Record PASS / FAIL / ENVIRONMENT_UNSUPPORTED / PLATFORM_LIMITED per case. Never 
 
 | Step | Result this session |
 | --- | --- |
-| 1. zsh/bash/fish interactive | Live PTY `zsh_bash_and_optional_fish_print_through_one_pty_vt` PASS. Headed interactive GUI ENVIRONMENT_UNSUPPORTED (2026-09-18: exclusive Runtime free; local XCUI runner timed out enabling automation mode) |
-| 2. SSH then nested SSH | PTY `live_ssh_and_nested_ssh_use_one_pty_vt_when_orbstack_present` PASS (`nt-ssh@orb`, remote `vim -c qa`, Docker sshd nested hop, one `TerminalExecution`). Headed GUI interactive SSH ENVIRONMENT_UNSUPPORTED (same automation-mode timeout) |
-| 3. Vim/Neovim interactive | Live PTY `live_vim_and_neovim_restore_primary_after_alternate_screen` PASS (`:qa!` restores primary). Headed GUI ENVIRONMENT_UNSUPPORTED (automation-mode timeout) |
-| 4. tmux child windows/panes/copy-mode | Live PTY `tmux_as_child_owns_one_pty_when_present` + `live_tmux_split_stays_one_seyal_pty` PASS (child markers on one Seyal PTY). Headed GUI ENVIRONMENT_UNSUPPORTED (automation-mode timeout) |
-| 5. htop/watch/ncurses | Live PTY `live_htop_and_watch_restore_primary_after_ncurses` PASS (`htop` 3.5.3 installed this session). Headed GUI ENVIRONMENT_UNSUPPORTED (automation-mode timeout) |
-| 6. git/docker/kubectl/terraform TTY | Live PTY git color log, `docker ps`, `kubectl version --client`, `terraform version` PASS (`terraform` v1.9.8 installed this session). Headed GUI ENVIRONMENT_UNSUPPORTED (automation-mode timeout) |
-| 7. CLI-agent TUI | VT equivalent retained PASS. Live agent TUI headed ENVIRONMENT_UNSUPPORTED (automation-mode timeout) |
+| 1. zsh/bash/fish interactive | **PASS** headed Flow composer on Debug `Seyal.app` `7f77a6f`: zsh/bash/fish/color `printf` drafts accepted; window resize 1512×857 → 961×640 with composer still available. Not a raw-PTY line-editor session (Flow keys stay on composer). Live PTY suite retained PASS. |
+| 2. SSH then nested SSH | **PASS** headed composer submit `ssh -o BatchMode=yes nt-ssh@orb "printf seyal-ssh-headed; vim -c qa"` (draft accepted, composer stayed available). Nested Docker sshd hop **not** re-driven in this GUI session; PTY `live_ssh_and_nested_ssh_use_one_pty_vt_when_orbstack_present` retained PASS. |
+| 3. Vim/Neovim interactive | **PASS** headed: `/usr/bin/vim` and `nvim` entered TUI (`alternate-screen=true` / composer hidden), insert/` :qa!` restored Flow (`alternate-screen=false`, composer available). Same exclusive Runtime/execution. |
+| 4. tmux child windows/panes/copy-mode | **PASS** headed tmux-as-child TUI takeover (`alternate-screen=true`, composer hidden) and restore via Ctrl-C (composer available, `alternate-screen=false`). Extra tmux windows/panes/copy-mode **not** exercised in this GUI session; PTY tmux-child markers retained PASS. |
+| 5. htop/watch/ncurses | **PASS** headed `htop -d 10` TUI then `q` restored Flow. `watch` not re-run after the tmux leftover; PTY `live_htop_and_watch_restore_primary_after_ncurses` retained PASS. |
+| 6. git/docker/kubectl/terraform TTY | **PASS** headed composer: `git log --color`, `docker ps`, `kubectl version --client`, `terraform version`. Spinners/long TTY progress not claimed. |
+| 7. CLI-agent TUI | **PASS** headed `claude --version` on Flow. Live Claude/Codex TUI (scroll/prompts/resize) **not** entered. VT agent-TUI equivalent retained. |
 | 8. high-volume while typing/scrolling | headed Flow/Blocks XCUI PASS retained (`testHighVolumeComposerOutputStaysOnFlowBlocks`); not a type-while-flood interactive session. VT/PTY automated PASS |
-| 9. search/copy Unicode after resize | headed Flow/Blocks XCUI PASS retained for composer Unicode submit + resize; not search/copy from retained history. VT coherent fixture PASS |
-| 10. GUI close/reopen M001 reconnect | headed XCUI PASS retained (`testGuiRelaunchReconnectsWithoutKillingExecution`); Runtime unit `pass8_resync_reattach` + `macos_runtime` 12 PASS this session |
+| 9. search/copy Unicode after resize | headed Flow/Blocks XCUI PASS retained for composer Unicode submit + resize; this session also resized the live window 1512×857 → 961×640. Not search/copy from retained history. |
+| 10. GUI close/reopen M001 reconnect | **PASS** this headed session: GUI quit left Runtime pid **33076**; reopen attached `connection=usable` with same `runtime=` / `execution=` and a new `attachment=` (`…0004` → `…0005`). XCUI relaunch case retained PASS. |
 
 Do not treat Flow/Blocks XCUI as a raw-terminal Vim/htop/tmux/ssh oracle.
 

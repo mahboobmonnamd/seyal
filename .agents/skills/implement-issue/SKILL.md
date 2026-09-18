@@ -22,7 +22,8 @@ Claiming the Issue is a coordination preflight, not implementation permission. P
    - **Exactly another implementer:** stop before planning or edits and report `Issue #N is already taken by @login` with the Issue URL.
    - **Multiple assignees:** stop as an ownership collision. Seyal implementation Issues have exactly one active implementer.
 5. After any assignment write, re-fetch the Issue and require the current implementer to be the **sole** assignee. A failed write, overwritten assignment, multiple assignees, or ambiguous result is `BLOCKED`; never overwrite another valid claim to win a race.
-6. Do not clear, replace, or steal another implementer's assignment. Ownership transfer requires an explicit handoff/reassignment under `ISSUE-PROTOCOL.md`.
+6. If the work item is a GitHub sub-issue, fetch its parent immediately before claiming or editing the child. If the parent is assigned to another implementer, stop with `BLOCKED` unless an explicit parent/slice handoff has already released that parent claim. After a valid child claim, do not leave parent and child assigned to different implementers for the same slice.
+7. Do not clear, replace, or steal another implementer's assignment. Ownership transfer requires an explicit handoff/reassignment under `ISSUE-PROTOCOL.md`.
 
 The GitHub assignee is the human-visible ownership claim. Project status such as `In Progress` is lifecycle metadata and must never substitute for the assignee check.
 
@@ -78,7 +79,7 @@ Legacy implementation branches already created as `issue/<number>-<short-name>` 
 Then apply only these Seyal-specific rules on top of the generic procedure:
 
 1. The GitHub Issue must already be **Ready** under `docs/engineering/ISSUE-PROTOCOL.md`. Re-run `development-readiness` if scope, authority, dependencies, or acceptance changed materially.
-2. Use one Issue → one sole GitHub assignee → one isolated worktree → deterministic `issue/<number>` → one scoped PR. When the work is a GitHub sub-issue slice, claim and branch that sub-issue; do not steal the parent's assignee. If the user asked for a parent end-to-end outcome that still has multiple sub-issues, implement the claimed slice Issue only and keep other slices on their own Issues/PRs.
+2. Use one Issue → one sole GitHub assignee → one isolated worktree → deterministic `issue/<number>` → one scoped PR. When the work is a GitHub sub-issue slice, claim and branch that sub-issue only after the parent/slice handoff check above passes; do not steal the parent's assignee. If the user asked for a parent end-to-end outcome that still has multiple sub-issues, implement the claimed slice Issue only and keep other slices on their own Issues/PRs.
 3. Before implementation, classify the work as **production** or **exploratory**. Mergeable Issue branches are production only. A spike/prototype/POC must use an explicitly isolated non-mergeable branch/worktree and must never be promoted wholesale into `master`.
 4. MVP is valid only when it is a narrow slice of the permanent architecture. Never add fake UI/data, temporary VT/renderer/runtime, duplicate state, alternate implementation, compatibility shim, feature-flag POC, or parallel old/new production path merely to demonstrate progress or bridge an unready dependency.
 5. If the permanent production path is blocked by an unresolved dependency/architecture question, stop. Route to `development-readiness`, `architecture-change`, or isolated evidence work instead of coding a temporary production path.

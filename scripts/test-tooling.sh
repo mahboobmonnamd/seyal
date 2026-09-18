@@ -70,6 +70,13 @@ grep -Fq 'Issue #N is already taken by @login' "$claim_skill" || fail "implement
 grep -Fq 'Multiple assignees' "$claim_skill" || fail "implement-issue must fail closed on multiple assignees"
 grep -Fq 'exact remote branch name `issue/<number>`' "$claim_skill" || fail "implement-issue must use the deterministic issue branch collision backstop"
 grep -Fq 'never overwrite another valid claim to win a race' "$claim_skill" || fail "implement-issue must not steal a concurrent claim"
+grep -Fq 'If the work item is a GitHub sub-issue, fetch its parent immediately' "$claim_skill" || fail "implement-issue must inspect the parent claim before a child slice"
+grep -Fq 'stop with `BLOCKED` unless an explicit parent/slice handoff' "$claim_skill" || fail "implement-issue must fail closed when another implementer owns the parent"
+grep -Fq 'claim and branch that sub-issue only after the parent/slice handoff check' "$claim_skill" || fail "implement-issue must claim/branch the child Issue only after parent handoff"
+grep -Fq 'do not steal the parent' "$claim_skill" || fail "implement-issue must not steal a parent claim"
+refine_skill=.agents/skills/issue-refinement/SKILL.md
+grep -Fq 'recommend GitHub sub-issues (one per slice)' "$refine_skill" || fail "issue-refinement must recommend one GitHub sub-issue per slice"
+grep -Fq 'do not assign both parent and child to different implementers for the same slice' "$refine_skill" || fail "issue-refinement must forbid split parent/child assignees for one slice"
 grep -Fq 'Any request to **implement, fix, finish, code, or complete a specific GitHub Issue** must enter through' AGENTS.md || fail "AGENTS.md must route implementation requests through implement-issue"
 grep -Fq 'one deterministic issue/<number> branch' docs/engineering/DEVELOPMENT.md || fail "development workflow must use the deterministic issue branch"
 if grep -Fq '→ issue/<number>-<short-name>' docs/engineering/DEVELOPMENT.md; then

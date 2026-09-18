@@ -2,7 +2,8 @@
 
 - **Issue:** #824
 - **Date:** 2026-09-18
-- **Exact PR head:** `2ef83322a382a142d17ae1e4cc6ec0600116af41`
+- **Exact production head (fingerprints / hosted FQ):** `2ef83322a382a142d17ae1e4cc6ec0600116af41`
+- **Docs-only tip after that head:** later ledger-honesty commits on `issue/824` (no further Swift/Rust delta).
 - **Production path:** ADR-015 thin AppKit host over Rust snapshots; headed oracle is Flow/Blocks, not a raw terminal.
 - **Exclusive Runtime rule:** if another process owns `control.sock`, the headed run is INCONCLUSIVE.
 - **Relationship:** `Refs #824` only. Does not close #824 / #672.
@@ -13,14 +14,20 @@
 Executable Swift moved after `ad50bd1` / `204d14c`: Flow Block hit-test
 fallthrough (`7cb7853`, `ThinPaneHostView`) and TUI chrome coalesce
 (`7f77a6f`, `ProductChromeHostView` + nested-reconcile component test +
-`/tmp` alt-screen XCUI fixture). `2ef8332` is docs-only headed-GUI ledger
-on top of that production head. Do not claim production sources are
-unchanged from `ad50bd1`.
+`/tmp` alt-screen XCUI fixture). `2ef8332` records headed-GUI steps 1–7 on
+top of that production head. Later docs-only tip commits only sync ledger
+honesty. Do not claim production sources are unchanged from `ad50bd1`.
 
-Hosted Foundation Quality + production fuzz on `2ef8332`
-([run 35305544844](https://github.com/seyal-org/seyal/actions/runs/35305544844)):
+Hosted Foundation Quality + production fuzz on exact production head
+`2ef8332`
+([run 35305544844](https://github.com/seyal-org/seyal/actions/runs/35305544844)).
+Docs-only tip re-check (same fingerprints; no executable delta): Foundation
+Quality
+([run 35319442002](https://github.com/seyal-org/seyal/actions/runs/35319442002))
+and production fuzz
+([run 35319411982](https://github.com/seyal-org/seyal/actions/runs/35319411982)).
 
-| Gate | Result |
+| Gate | Result on `2ef8332` (run 35305544844) |
 | --- | --- |
 | `repository-policy` | **SUCCESS** |
 | `rust-and-harness-quality` (`make check`, includes `pass7_local_ipc`) | **SUCCESS** |
@@ -255,9 +262,10 @@ manual, benchmark, or independent closing-review requirements.
 **Historical `make check` note (superseded):** before harness isolation, the
 complete local `make check` gate failed twice in `pass7_local_ipc` with
 `Exec(Io(code: -6))` while the isolated suite passed. Root cause and fix are
-in [m002-824-remediation.md](m002-824-remediation.md). Exact-head hosted
-`make check` on `ad50bd1` is PASS; do not treat the historical local failures
-as the current claim.
+in [m002-824-remediation.md](m002-824-remediation.md). Current-head hosted
+`make check` is PASS on `2ef8332` (run 35305544844); `ad50bd1` run
+35242876394 remains the first isolation-fix record only. Do not treat the
+historical local 44/45 or IPC FAIL rows as the current claim.
 
 ## Earlier session (2026-09-17, before the exclusive window)
 

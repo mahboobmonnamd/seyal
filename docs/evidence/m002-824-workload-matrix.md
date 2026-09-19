@@ -10,10 +10,10 @@
 | Date (UTC) | 2026-09-18 |
 
 This is retained automated + classified native/manual evidence for the #672
-workload matrix. It does **not** close #824 or #672. Comparative/release
-performance remains #673 authority (`performance_claim=false` here). PTY
-smokes spawn with `TERM=seyal-m001` and a `tic`-compiled bundled terminfo
-directory, not `xterm-256color`.
+workload matrix. Comparative/release performance remains #673 authority
+(`performance_claim=false` here). PTY smokes spawn with `TERM=seyal-m001` and a
+`tic`-compiled bundled terminfo directory, not `xterm-256color`. This follow-on
+records the close package; it does not add executable Swift/Rust after `7f77a6f`.
 
 **Current-head gates (`2ef8332`):** hosted Foundation Quality + production fuzz
 ([run 35305544844](https://github.com/seyal-org/seyal/actions/runs/35305544844))
@@ -121,13 +121,21 @@ milestone qualification freeze:
 
 ### Remaining acceptance
 
-No new module/ADR was required. Remaining Done gates are evidence, not architecture:
+No new module/ADR was required. Close-out evidence (2026-09-18):
 
-1. Nested SSH hop and fuller interactive SSH editing **in the Seyal GUI** (composer SSH submit + PTY live hop retained; nested Docker hop not re-driven in GUI).
-2. Broader Vim/Neovim/tmux-inside-tmux interactive breadth (headed TUI takeover/restore retained for Vim/Neovim/tmux/htop; insert/search/splits/copy-mode limits stay disclosed).
-3. SPEC-011 IME 37–41 **close classification: covered** by existing native `NSTextInputClient` + local ABC XCUI (see headed ledger). Hosted CI skips the ABC case (`XCTSkip`). Physical input-source/candidate-popup, mixed-display-scale and live-composition reconnect remain unclaimed and are **not required** for M002 technical preview. #836 not pulled.
-4. #673 PHYSICAL_ARM64 five-cohort / 20-warmup / 100-sample matrix — **not started**.
-5. Independent close review after evidence/ledger honesty is current. This PR stays `Refs #824`.
+1. Nested SSH hop **in the Seyal GUI** via composer submit of nested `ssh` to
+   `nt-ssh@orb` (one Seyal PTY/execution). Output bytes are not AX-visible;
+   live PTY nested fixture retained.
+2. tmux-as-child TUI takeover with `split-window -h`; copy-mode prefix sent;
+   restore via Ctrl-C. Vim/Neovim/htop/watch TUI takeover/restore **PASS**.
+3. SPEC-011 IME 37–41 **covered**. Hosted ABC `XCTSkip`. #836 not pulled.
+4. #673 PHYSICAL_ARM64 remains a **sibling** close-out Issue; `performance_claim=false` here.
+5. Owner-accepted **ENVIRONMENT_UNSUPPORTED** for live Claude/Codex TUI and
+   headed retained-grid search/copy. Independent close review of this follow-on
+   is still required before merge.
+
+Local `CARGO_TEST_THREADS=1 make check` on master `eecaf88` **PASS** (CLT SDK;
+Xcode 27 license blocks `xcodebuild`). Hosted FQ + fuzz on `2ef8332` retained.
 
 Active remediation for Block selection, `pass7_local_ipc` isolation, Flow
 hit-test fallthrough, and TUI reconcile coalesce is **complete on `2ef8332`**

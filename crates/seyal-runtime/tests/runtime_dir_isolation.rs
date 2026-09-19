@@ -2,11 +2,28 @@
 
 use std::{
     path::PathBuf,
+    sync::{Mutex, MutexGuard},
     time::{Duration, Instant},
 };
 
 use seyal_exec::{CommandSpec, WindowSize};
 use seyal_runtime::{LocalIpcMode, Runtime, RuntimeConfig, RuntimeError};
+
+/// The canonical user control socket is one global endpoint. Tests that
+/// sample its existence before/after an isolated fixture, and the one test
+/// that legitimately binds it in-process when no user Runtime is running,
+/// must not interleave, or a sample straddles the sibling's bind/unlink and
+/// the assertion reports a change the fixture never made. Only those tests
+/// take this lock; nothing else in the file is serialized.
+static CANONICAL_ENDPOINT: Mutex<()> = Mutex::new(());
+
+fn canonical_endpoint_guard() -> MutexGuard<'static, ()> {
+    // A panic in one holder must not turn every later sample into a
+    // poisoned-lock failure that hides the original assertion.
+    CANONICAL_ENDPOINT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 fn unique_dir(tag: &str) -> PathBuf {
     PathBuf::from(format!(
@@ -47,6 +64,7 @@ fn m001_defaults_remain_the_canonical_user_scope() {
 
 #[test]
 fn two_isolated_runtimes_coexist_and_do_not_bind_the_canonical_socket() {
+    let _canonical_endpoint = canonical_endpoint_guard();
     let canonical = seyal_runtime::local_ipc::discovery::darwin_user_runtime_dir()
         .expect("canonical runtime dir")
         .join("control.sock");
@@ -80,6 +98,7 @@ fn two_isolated_runtimes_coexist_and_do_not_bind_the_canonical_socket() {
 
 #[test]
 fn isolated_runtime_starts_while_the_production_m001_singleton_is_held() {
+    let _canonical_endpoint = canonical_endpoint_guard();
     let canonical = seyal_runtime::local_ipc::discovery::darwin_user_runtime_dir()
         .expect("canonical runtime dir")
         .join("control.sock");
@@ -162,6 +181,7 @@ fn incorrect_isolated_endpoint_is_rejected_without_using_production() {
 
 #[test]
 fn isolated_helper_binary_does_not_occupy_the_canonical_socket() {
+    let _canonical_endpoint = canonical_endpoint_guard();
     let canonical = seyal_runtime::local_ipc::discovery::darwin_user_runtime_dir()
         .expect("canonical runtime dir")
         .join("control.sock");

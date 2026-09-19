@@ -73,6 +73,7 @@ grep -Fq 'POST /repos/{owner}/{repo}/git/refs' "$claim_skill" || fail "implement
 grep -Fq 'The first unambiguous successful creation is the only winner.' "$claim_skill" || fail "implement-issue must make one branch creator the race winner"
 grep -Fq 'An existing ref, failed creation, competing creation, or ambiguous response means stop' "$claim_skill" || fail "implement-issue must fail closed on branch reservation conflicts"
 grep -Fq 'claimant, exact branch, base SHA, and a link to the confirmed plan comment' "$claim_skill" || fail "implement-issue must record auditable claim details"
+grep -Fq 'set the Issue body field `State` to **In Progress**' "$claim_skill" || fail "implement-issue must advance lifecycle after claim verification"
 grep -Fq 'Issue body/comments are the durable plan and confirmation record; chat is not a prerequisite.' "$claim_skill" || fail "implement-issue must store plan confirmation on the Issue"
 grep -Fq 'Claims never expire automatically.' "$claim_skill" || fail "implement-issue must not expire claims automatically"
 grep -Fq "A planning parent's assignee does not lock an independent Ready child." "$claim_skill" || fail "implement-issue must allow independent Ready child claims"
@@ -84,6 +85,7 @@ grep -Fq 'Any request to **implement, fix, finish, code, or complete a specific 
 grep -Fq 'one atomically created deterministic issue/<number> branch' docs/engineering/DEVELOPMENT.md || fail "development workflow must use an atomic deterministic issue branch"
 grep -Fq 'successful atomic creation of the exact remote `issue/<number>` ref is the exclusive race lock' docs/engineering/DEVELOPMENT.md || fail "development workflow must name the branch as the race lock"
 grep -Fq 'Record the execution plan as an Issue comment before reserving a branch.' docs/engineering/DEVELOPMENT.md || fail "development workflow must keep plans in GitHub"
+grep -Fq 'set the Issue body field `State` to **In Progress**' docs/engineering/DEVELOPMENT.md || fail "development workflow must mark a verified claim In Progress"
 grep -Fq 'No linked Project item is required.' docs/engineering/DEVELOPMENT.md || fail "development workflow must not require a Project item"
 if grep -Fq '→ issue/<number>-<short-name>' docs/engineering/DEVELOPMENT.md; then
   fail "new development workflow must not retain the legacy non-deterministic branch convention"
@@ -93,6 +95,7 @@ grep -Fq 'exact remote `issue/<number>` Git ref is the atomic claim' docs/engine
 grep -Fq 'There is no automatic claim expiry.' docs/engineering/ISSUE-PROTOCOL.md || fail "Issue protocol must not expire claims automatically"
 grep -Fq 'No linked Project item is required.' docs/engineering/ISSUE-PROTOCOL.md || fail "Issue protocol must not require a Project item"
 grep -Fq 'body `State` field is explicitly Ready' docs/engineering/ISSUE-PROTOCOL.md || fail "Issue protocol must gate pickup on the Issue State field"
+grep -Fq 'set the Issue body field `State` to **In Progress**' docs/engineering/ISSUE-PROTOCOL.md || fail "Issue protocol must advance lifecycle after claim verification"
 grep -Fq "Set the Issue body's" .agents/skills/issue-refinement/SKILL.md || fail "issue-refinement must set Ready on the Issue body"
 grep -Fq "A parent Issue's assignee or planning branch does not automatically lock an independent child." docs/engineering/ISSUE-PROTOCOL.md || fail "Issue protocol must permit non-overlapping child work"
 grep -Fq 'Issue-comment plan' site/src/content/docs/developer/index.mdx || fail "Developer Guide must put implementation plans on GitHub Issues"

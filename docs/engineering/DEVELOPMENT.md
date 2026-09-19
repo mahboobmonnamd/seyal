@@ -44,15 +44,16 @@ New implementation Issues remain unassigned. The authenticated claimant identity
 4. Any request to implement/fix/finish/code a specific GitHub Issue must enter `.agents/skills/implement-issue/SKILL.md`. Resolve identity with `gh api user`; fresh-read the open Issue and verify its body `State` field is `Ready`, its Ready checklist and dependencies pass, and any linked Project item has a compatible status. No linked Project item is required. Also inspect parent/child scope, the complete assignee list, existing claim comments, and exact remote branch. Fail closed if any required Issue state cannot be verified. Never mutate assignees. Another assignee retains ownership unless they explicitly hand off; multiple assignees or conflicting claims stop.
 5. Record the execution plan as an Issue comment before reserving a branch. Confirm in that same comment that the plan matches the Ready Issue and accepted authority. Keep scope decisions, questions, and answers in the Issue body/comments; chat is not a prerequisite. If a material scope or architecture decision is open, return the Issue to Refinement and resolve it there before implementation.
 6. Immediately before reservation, re-read Ready/dependency state and the branch. Fetch the accepted `master` base SHA, then create the exact remote ref `issue/<number>` atomically through GitHub's create-ref API. Only the successful ref-creation response wins; an existing ref or competing creation failure stops the pickup. Never overwrite it or create a suffix branch. After a successful creation, re-read Issue and branch state, verify the ref still points at the recorded base SHA, and post an Issue comment recording authenticated claimant, branch, base SHA, and a link to the confirmed plan comment. Do not edit production files until all checks and the comment succeed. An existing branch can be resumed only by its recorded owner on an explicit resume, by a new claimant after an explicit handoff from that owner, or after a maintainer explicitly resolves a stale claim.
-7. Create one isolated worktree from the verified deterministic Issue branch.
-8. Use tests/fixtures first for core behavior.
-9. Implement only the Issue scope.
-10. Assess **Documentation impact** before final validation. Run the `docs-authoring` skill and update the User Guide and/or Developer Guide in the same Issue/PR when applicable. If no documentation is needed, record a concrete `N/A` rationale in the PR.
-11. Run `make check` plus issue-specific tests/benchmarks/security checks. When documentation changed, also run `make docs-check` and `make docs-build`.
-12. Open a PR using the repository template, including documentation evidence or the `N/A` rationale.
-13. Require CI evidence; high-risk/core work gets independent review.
-14. Move to Validation where milestone/demo/performance evidence is required.
-15. Merge only after required gates pass. Do not start a dependent milestone early.
+7. After the verified claim comment, set the Issue body field `State` to **In Progress** (and any linked Project item to the matching status). Verify the update before production edits; if it fails or is ambiguous, stop and report the reserved branch.
+8. Create one isolated worktree from the verified deterministic Issue branch.
+9. Use tests/fixtures first for core behavior.
+10. Implement only the Issue scope.
+11. Assess **Documentation impact** before final validation. Run the `docs-authoring` skill and update the User Guide and/or Developer Guide in the same Issue/PR when applicable. If no documentation is needed, record a concrete `N/A` rationale in the PR.
+12. Run `make check` plus issue-specific tests/benchmarks/security checks. When documentation changed, also run `make docs-check` and `make docs-build`.
+13. Open a PR using the repository template, including documentation evidence or the `N/A` rationale.
+14. Require CI evidence; high-risk/core work gets independent review.
+15. Move to Validation where milestone/demo/performance evidence is required.
+16. Merge only after required gates pass. Do not start a dependent milestone early.
 
 Ownership handoff is explicit and does not change assignees. The current branch owner stops editing and records the recipient, branch/head, PR/check state, and remaining plan in an Issue comment. The recipient verifies that handoff with a fresh Issue/branch read, posts an acknowledgement, and resumes the same branch after the full Ready/dependency preflight. A planning parent does not reserve independent child work; each child must be Ready, dependency-safe, and non-overlapping with any active parent/child branch. A suspected stale claim never expires automatically: the claimant or a maintainer must record its disposition, and a new owner may proceed only after that explicit resolution.
 

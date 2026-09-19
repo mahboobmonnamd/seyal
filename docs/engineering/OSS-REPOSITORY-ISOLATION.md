@@ -4,7 +4,7 @@
 
 This public repository is the canonical source for Seyal OSS. It must remain independently cloneable, buildable, testable and useful.
 
-The architectural decision is recorded in `docs/architecture/ADR-003-OSS-REPOSITORY-ISOLATION.md`.
+The architectural decision is recorded in `docs/architecture/ADR-003-OSS-COMMERCIAL-REPOSITORY-BOUNDARY.md`.
 
 ## What belongs in Seyal OSS
 

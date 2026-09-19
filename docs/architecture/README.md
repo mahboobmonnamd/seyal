@@ -7,7 +7,7 @@ This directory is the canonical entry point for Seyal foundation architecture.
 1. [`SEYAL-ARCH-FOUNDATION-RD-001.md`](SEYAL-ARCH-FOUNDATION-RD-001.md) — accepted canonical foundation architecture.
 2. [`rationale/SEYAL-ARCH-FOUNDATION-RATIONALE-001.md`](rationale/SEYAL-ARCH-FOUNDATION-RATIONALE-001.md) — reasons, rejected alternatives, failure modes, and revisit conditions for foundation decisions and prohibitions.
 3. [`ADR-001-LOCAL-DISPLAY-PROJECTION.md`](ADR-001-LOCAL-DISPLAY-PROJECTION.md) — accepted local macOS display-projection decision for M001.
-4. [`ADR-003-OSS-REPOSITORY-ISOLATION.md`](ADR-003-OSS-REPOSITORY-ISOLATION.md) — accepted OSS repository independence and one-way dependency boundary.
+4. [`ADR-003-OSS-COMMERCIAL-REPOSITORY-BOUNDARY.md`](ADR-003-OSS-COMMERCIAL-REPOSITORY-BOUNDARY.md) — accepted public-OSS/private-commercial repository and dependency boundary.
 5. [`ADR-004-VT-STATE-OWNERSHIP.md`](ADR-004-VT-STATE-OWNERSHIP.md) — accepted M001 incremental VT parser, authoritative terminal state, logical-line identity and generation-damage ownership decision.
 6. [`ADR-005-PTY-EXECUTION-LIFECYCLE.md`](ADR-005-PTY-EXECUTION-LIFECYCLE.md) — accepted M001 PTY endpoint, child lifecycle, detach/terminate, readiness and execution-ownership decision.
 7. [`ADR-006-RUNTIME-REACTOR.md`](ADR-006-RUNTIME-REACTOR.md) — accepted M001 macOS multi-execution reactor, bounded fairness, child-exit and nonblocking Runtime-termination decision.
@@ -43,7 +43,7 @@ This directory is the canonical entry point for Seyal foundation architecture.
 - `MILESTONE-002.md` owns the M002 close-out contract (remaining issues, non-goals, validation recipe). It does not reopen architecture or authorize new M002 product slices.
 - `MILESTONE-003.md` owns the M003 workspace contract (parallel-with-M002 seam, remaining issues, non-goals, validation recipe). It does not reopen architecture or authorize implementing umbrella #674 as one PR.
 - The UI architecture is subordinate to terminal/runtime ownership and performance invariants.
-- ADR-003 owns the OSS repository-isolation rule: public Seyal is canonical and independent, and external/private consumers may depend on public capabilities without creating a reverse OSS dependency. Headless, lightweight and full OSS variants remain compositions of the same public terminal/runtime authority.
+- ADR-003 owns the repository/dependency boundary between public Seyal OSS and the private `seyal-commercial` superproject; headless, lightweight and full OSS variants remain compositions of the same public terminal/runtime authority.
 - ADR-004 owns the permanent VT parser/terminal-state separation and one-authoritative-state rule; ADR-010 and ADR-011 extend that same `TerminalState` authority for retained history/reflow and Unicode/grapheme semantics rather than creating another terminal/text/history engine.
 - ADR-005 owns the PTY/child execution boundary: `seyal-exec` owns endpoint/process lifecycle, detach is not terminate, and terminal bytes feed the single `seyal-terminal` authority without a second grid/state model.
 - ADR-006 owns the M001 macOS many-execution readiness composition: one bounded Runtime reactor over execution-owned PTYs, no thread-per-PTY, explicit primary-child exit observation, bounded input/fair output progress, and nonblocking Runtime termination scheduling.

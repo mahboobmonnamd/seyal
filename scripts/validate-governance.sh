@@ -19,7 +19,7 @@ required=(
   docs/engineering/OSS-REPOSITORY-ISOLATION.md
   docs/engineering/M001-DISTRIBUTION.md
   docs/engineering/GITHUB-WORKFLOW.md
-  docs/architecture/ADR-003-OSS-REPOSITORY-ISOLATION.md
+  docs/architecture/ADR-003-OSS-COMMERCIAL-REPOSITORY-BOUNDARY.md
   .github/pull_request_template.md
 )
 

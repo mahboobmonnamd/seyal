@@ -117,6 +117,7 @@ struct ContractSession {
     controller_attachment: seyal_runtime::AttachmentId,
 }
 
+#[cfg(target_os = "macos")]
 fn start_contract_session(workload: Workload, columns: u16, rows: u16) -> ContractSession {
     let suffix = format!("{:x}", process::id());
     let mut config = RuntimeConfig::m001().expect("M001 config");
@@ -156,6 +157,7 @@ fn start_contract_session(workload: Workload, columns: u16, rows: u16) -> Contra
     }
 }
 
+#[cfg(target_os = "macos")]
 fn finish_contract_session(mut session: ContractSession) {
     drop(session.clients);
     let _ = session.runtime.begin_shutdown();
@@ -166,6 +168,7 @@ fn finish_contract_session(mut session: ContractSession) {
     let _ = fs::remove_dir_all(session.runtime_dir);
 }
 
+#[cfg(target_os = "macos")]
 fn wait_cache_advance(session: &mut ContractSession, before: u64, deadline: Instant) {
     loop {
         session
@@ -183,6 +186,7 @@ fn wait_cache_advance(session: &mut ContractSession, before: u64, deadline: Inst
     }
 }
 
+#[cfg(target_os = "macos")]
 fn sample_damage_to_client_cache(session: &mut ContractSession) -> f64 {
     let before = session.clients[0].cache.generation;
     let started = Instant::now();
@@ -200,6 +204,7 @@ fn sample_damage_to_client_cache(session: &mut ContractSession) -> f64 {
     started.elapsed().as_secs_f64() * 1_000.0
 }
 
+#[cfg(target_os = "macos")]
 fn start_sustained_stream(session: &mut ContractSession) {
     let before = session.clients[0].cache.generation;
     send_client_frame(
@@ -215,6 +220,7 @@ fn start_sustained_stream(session: &mut ContractSession) {
     wait_cache_advance(session, before, Instant::now() + Duration::from_secs(2));
 }
 
+#[cfg(target_os = "macos")]
 fn activate_resize_and_scroll(session: &mut ContractSession, columns: u16, rows: u16) {
     send_client_frame(
         &mut session.runtime,
@@ -239,6 +245,7 @@ fn activate_resize_and_scroll(session: &mut ContractSession, columns: u16, rows:
     );
 }
 
+#[cfg(target_os = "macos")]
 fn sample_high_output_responsiveness(session: &mut ContractSession, flip: bool) -> f64 {
     if flip {
         activate_resize_and_scroll(session, 100, 30);
@@ -248,6 +255,7 @@ fn sample_high_output_responsiveness(session: &mut ContractSession, flip: bool) 
     sample_damage_to_client_cache(session)
 }
 
+#[cfg(target_os = "macos")]
 fn run_m002_contract_cohort() {
     let gate = m002_contract_gate().expect("contract gate");
     let cohort = m002_parse_usize_env("SEYAL_M002_COHORT", 1);
@@ -296,6 +304,7 @@ fn run_m002_contract_cohort() {
     );
 }
 
+#[cfg(target_os = "macos")]
 fn run_macos() {
     if m002_contract_gate().is_some() {
         run_m002_contract_cohort();

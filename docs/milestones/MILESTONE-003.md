@@ -6,7 +6,7 @@
 **Hierarchy umbrella:** [#674](https://github.com/seyal-org/seyal/issues/674)  
 **Presentation umbrella:** [#675](https://github.com/seyal-org/seyal/issues/675)  
 **Config umbrella:** [#676](https://github.com/seyal-org/seyal/issues/676)  
-**Shell-integration spike:** [#686](https://github.com/seyal-org/seyal/issues/686)
+**Shell-integration decision/refinement:** [#686](https://github.com/seyal-org/seyal/issues/686)
 
 **Entry gate:** M001 Done. M002.1–M002.9 terminal contracts are closed on the permanent path. Remaining M002 close-out (#824/#672, #673 PHYSICAL_ARM64, #837, then freeze-SHA validation and #664) may run **in parallel** and is **not** an M003 product blocker. #673 does not wait on #824 closure.
 
@@ -89,7 +89,8 @@ Linux/Windows GUI, remote-product attach (M007)
 plugins, collaboration, enterprise, cloud
 second terminal model, per-Block PTY, or popup/untracked PTYs
 implementing umbrella #674 as one PR
-stealing assigned issues (#686, #865, #890, #904, #824, …)
+stealing active assigned issues (#865, #890, #904, #824, …)
+treating the stale broad #686 shell-integration spike as a Ready implementation Issue
 creating issue/922 or issue/923 while cursor/issue-922-* or cursor/issue-923-* exist
   without an explicit resume or abandon decision
 reopening merged #932 / #933 / #935
@@ -101,7 +102,7 @@ A FAIL or INCONCLUSIVE **mandatory** criterion on a remaining §5 issue may crea
 
 ## 5. Finding-set freeze and remaining chain
 
-Approved umbrellas are **#674 / #675 / #676**, plus spike **#686**. Headed leftover slices after M001.1 parent #878 closed now live under this contract. Snapshot **2026-09-16** (live GitHub is authority over stale issue-body prose, including #937 merge-order text).
+Approved umbrellas are **#674 / #675 / #676**, plus shell-integration decision/refinement **#686**. Headed leftover slices after M001.1 parent #878 closed now live under this contract. Snapshot **2026-09-16** (live GitHub is authority over stale issue-body prose, including #937 merge-order text).
 
 ### 5.1 Already on `master` (do not reopen)
 
@@ -143,7 +144,7 @@ Do **not** create `issue/922` or `issue/923` while those Cursor branches exist u
 | Native hierarchy / windows / tabs / splits / navigation | #674 | **Open** umbrella — **not** one Ready implementation PR |
 | Pane input, Blocks, selection, same-execution presentation | #675 | **Open** — needs #674 pane/focus model; #686 where semantic boundaries are required |
 | Local config / themes / fonts / keybindings / launch policy | #676 | **Open** |
-| Trusted shell-integration / semantic command boundaries | #686 | **Open** spike; assignee **@mahboobmonnamd** — do not steal |
+| Trusted shell-integration / semantic command boundaries | #686 | **Refinement needed** against accepted ADR-009; zsh mechanism accepted, non-zsh shells remain Unsupported |
 | Flow compositor Block-region drawing | #865 | **Open**; assignee **@mahboobmonnamd** — do not steal |
 | Flow composer input/IME/focus fence | #866 | **Open** |
 | Raw/TUI full-Pane takeover | #867 | **Open** |
@@ -197,11 +198,11 @@ Lane B (native workspace) and lane A/C (terminal + performance) may run together
 
 ### 6.3 #923 — first headed slice after branch resolution
 
-Project the Tab `PaneTree` into visible Pane regions. Only the focused Pane hosts the live terminal/Metal/composer surface in that slice. Multiple simultaneous live PTY/Metal surfaces stay #936. Resume the existing Cursor branch only with an explicit resume request and sole assignee; otherwise abandon that branch before creating `issue/923`.
+Project the Tab `PaneTree` into visible Pane regions. Only the focused Pane hosts the live terminal/Metal/composer surface in that slice. Multiple simultaneous live PTY/Metal surfaces stay #936. The pre-existing Cursor branch is an active or unresolved claim: resume only under its recorded owner/handoff in `ISSUE-PROTOCOL.md`, or have a maintainer explicitly resolve it before a new pickup. Do not create a parallel branch. New work uses the exact remote `issue/923` branch reserved under the unassigned Ready-Issue claim protocol.
 
-### 6.4 #686 — spike, assigned
+### 6.4 #686 — bounded shell-integration refinement
 
-#686 answers how trusted prompt/CWD/command-start/end signals work for zsh/bash/fish without Warpify-style injection. It unblocks #675 semantic Block boundaries. It is a spike/ADR-or-spec output, not a silent production hook. Keep the current assignee.
+ADR-009's 2026-09-16 amendment accepts the silent injection mechanism for zsh, and the current implementation path targets zsh. The ADR explicitly leaves non-zsh shells Unsupported. The original broad zsh/bash/fish spike question is stale: refine #686 to a bounded remaining shell-support decision or evidence task, if any, consistent with ADR-009. Until that Issue is refined and passes the Ready gate, it is not an implementation pickup. It gates #675 only where an unresolved supported-shell boundary is shown to be necessary; do not reopen or duplicate the accepted zsh mechanism.
 
 ### 6.5 #675 / #865–#867 — same-execution presentation
 

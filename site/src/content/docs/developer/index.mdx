@@ -12,7 +12,7 @@ The Developer Guide explains **how to navigate and contribute to Seyal**. It doe
     Understand ownership boundaries, hot-path invariants, runtime state, PTY/VT/rendering responsibilities, persistence, Blocks, and the OSS/commercial boundary.
   </Card>
   <Card title="Contributing" icon="github">
-    Follow the Ready Issue → exclusive assignee claim → deterministic branch/worktree → tests → PR → independent validation workflow.
+    Follow the Ready Issue → Issue-comment plan → atomic issue-branch claim → worktree → tests → PR → independent validation workflow.
   </Card>
   <Card title="Quality" icon="approve-check-circle">
     Terminal correctness, performance, fuzzing, security, deterministic builds, and reproducible verification are completion gates.
@@ -30,20 +30,21 @@ The Developer Guide explains **how to navigate and contribute to Seyal**. It doe
 
 ## Claim an implementation Issue
 
-Seyal uses exclusive implementation ownership so parallel contributors do not unknowingly implement the same ticket.
+New implementation Issues stay unassigned. Seyal uses the exact remote `issue/<number>` branch as the atomic claim so parallel contributors cannot claim the same Issue. Never set, clear, or change an Issue assignee during pickup, handoff, or release.
 
 ```text
-Ready Issue
-→ authenticated GitHub developer
-→ sole Issue assignee
-→ confirmed plan
-→ issue/<number> branch
+fresh open Issue whose body `State` field is Ready, checklist, and dependency check
+→ authenticated identity from `gh api user --jq .login`
+→ implementation plan and confirmation in an Issue comment
+→ atomic creation of exact remote issue/<number> from accepted master SHA
+→ fresh Issue/branch verification
+→ claim comment with claimant, branch, base SHA, and plan link
 → isolated worktree
 → implementation
 ```
 
-If the Issue is already assigned to another developer, has multiple assignees, the current GitHub identity cannot be resolved, or the deterministic `issue/<number>` branch already exists for work you were not explicitly asked to resume, stop and report the collision. Do not create another branch or overwrite the existing assignee.
+Only the successful remote branch creator proceeds with a new claim. If the exact branch already exists, stop unless its recorded owner explicitly asked to resume, handed it off to you in an Issue comment, or a maintainer resolved a stale claim. Never create a suffix branch; claims do not expire automatically. Existing assigned work stays with its owner unless that owner explicitly hands it off, and the assignee field remains unchanged. A planning parent does not lock an independent Ready child when its dependencies and scope boundaries are clear.
 
-Ownership transfer is explicit: stop current edits, record the existing branch/PR/check state, reassign the Issue, and have the new developer re-run the implementation preflight before resuming the same branch.
+For the complete pickup, handoff, release, and conflict procedure, see the [Issue protocol](https://github.com/seyal-org/seyal/blob/master/docs/engineering/ISSUE-PROTOCOL.md) and [development workflow](https://github.com/seyal-org/seyal/blob/master/docs/engineering/DEVELOPMENT.md).
 
 When this guide conflicts with an accepted source-of-truth document, the source-of-truth document wins and this guide must be corrected.

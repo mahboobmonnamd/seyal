@@ -15,58 +15,59 @@ Milestone / Epic
   └─ Validation / benchmark
 ```
 
-Use native sub-issues, dependencies, milestones, issue types, assignees and Project fields rather than Markdown TODO duplication.
+Use native sub-issues, dependencies, milestones, issue types, and (where a Project exists) Project fields rather than Markdown TODO duplication. Leave new implementation Issues unassigned. Existing assignee metadata is read-only under this workflow; existing work remains with its current owner unless that owner explicitly hands it off.
 
-## Project workflow
+## Issue and optional Project workflow
+
+The required lifecycle state is recorded in the GitHub Issue body under `## State` (or an equivalent explicit `State: ...` field); for example, `## State` followed by `Ready — ...` means the Issue's State field is Ready. Valid values are Backlog, Refinement, Ready, In Progress, In Review, Validation, Blocked, and Done. A linked GitHub Project is an optional view of that lifecycle, not a prerequisite for implementation. Keep its status aligned when an Issue is linked.
 
 ```text
 Backlog → Refinement → Ready → In Progress → In Review → Validation → Done
                          ↘ Blocked ↗
 ```
 
-Only **Ready** items may be picked up by implementation agents.
+Only open Issues whose body `State` field is explicitly **Ready** and whose Ready checklist passes may be picked up by implementation agents. If linked Project items exist, a new pickup requires their workflow status to be Ready. For an existing matching claim, a lifecycle status such as In Progress is compatible only with resuming that claim. No linked Project item is required.
 
 ## Active implementation claim
 
-Seyal implementation work is exclusively owned while active. GitHub assignee state is the human-visible claim; the deterministic implementation branch is the collision backstop.
+Seyal implementation work is exclusively owned while active. For new work the exact remote `issue/<number>` Git ref is the atomic claim; GitHub assignees are never used as a lock and are never set, cleared, or changed by this workflow. An Issue comment records the claim for people and agents, but comments and Project status do not provide mutual exclusion.
 
 The pickup contract is:
 
 ```text
-fresh open Ready Issue
-→ resolve authenticated GitHub login
-→ exactly one assignee = current implementer
-→ plan confirmed
-→ create exact branch issue/<number>
-→ re-read Issue and verify same sole assignee
-→ create isolated worktree
+fresh open Ready Issue and dependencies
+→ authenticated login from `gh api user`
+→ inspect assignees, parent/child scope, claim comments, and exact branch
+→ execution plan and confirmation recorded in Issue comment
+→ fresh Ready/branch read and accepted master base SHA
+→ atomic create of remote issue/<number>
+→ fresh Issue/branch verification and claim comment linking the plan
+→ isolated worktree
 → implementation may begin
 ```
 
 Rules:
 
 - Production implementation of a GitHub Issue must enter through `.agents/skills/implement-issue/SKILL.md`.
-- Resolve the authenticated GitHub login from project-approved GitHub tooling. Never infer identity from git author configuration, local username, chat name, or repository ownership.
-- Fetch assignee state fresh immediately before pickup. Cached context is not ownership authority.
-- An unassigned Ready Issue may be assigned to the current authenticated implementer. Re-fetch after assignment; continue only if that implementer is now the sole assignee.
-- If exactly one different assignee exists, the Issue is already taken. Report the assignee and stop before planning, worktree/branch creation, or production edits.
-- Multiple assignees are an ownership collision for an implementation Issue. Stop and require explicit resolution.
-- If implementer identity, assignment write, or fresh verification is unavailable/ambiguous, fail closed. Do not code first and repair metadata later.
-- Project status (`Ready`, `In Progress`, and so on) is lifecycle metadata, not an ownership lock. Status never overrides the assignee rule.
-- For new production pickups the exact branch name is `issue/<number>`. Do not create alternative short-name branches to escape a collision.
-- Branch creation happens only after the implementation plan is confirmed. If `issue/<number>` already exists, stop by default. Resume it only when the user explicitly asks to continue/resume that existing work and the current implementer is still the sole assignee.
-- If concurrent assignment/branch operations produce disagreement, stop before production edits and require explicit ownership resolution. Never steal or overwrite another valid claim to win a race.
-- Legacy `issue/<number>-<short-name>` branches that were already active before this protocol may finish; new pickups use only `issue/<number>`.
+- Resolve the authenticated GitHub login using `gh api user --jq .login`. Never infer identity from git author configuration, local username, chat name, or repository ownership. If authentication or identity lookup is unavailable or ambiguous, fail closed.
+- Read the owning Issue fresh immediately before pickup. Require that it is open, its body `State` field is explicitly Ready, and every Ready checkbox below passes. Read any linked Project items too: a new pickup requires their workflow status to be Ready; when resuming a matching active claim, a status such as In Progress is compatible only with that claim. Absence of a linked Project item is not a blocker. Also read dependencies, parent/child relationships, the complete assignee list, claim/handoff comments, and existing implementation PRs/branches. Cached context is not authority. If required Issue state or any present Project status cannot be verified, do not reserve a branch or edit.
+- Read assignee state but never call an assignment or unassignment API. A new unassigned Ready Issue is eligible. Existing assigned work remains with its current owner: an Issue with one different assignee is blocked unless that assignee explicitly records a handoff to the authenticated login; an Issue assigned to the current login may be resumed by that owner. Multiple assignees or conflict between assignee and active claim fail closed. An explicit handoff does not change the assignee field.
+- A parent Issue's assignee or planning branch does not automatically lock an independent child. Fresh-read the parent and child, verify the child is Ready and its explicit dependencies are satisfied, and ensure its scope does not overlap active parent/child work. A conflicting active branch or unresolved boundary blocks the child until the owners or a maintainer resolve it.
+- Issue `State` and any Project status are lifecycle metadata, never the ownership lock. Ready cannot override an existing branch claim, active handoff, dependency, or ownership conflict.
+- Before branch creation, record an execution-plan comment on the Issue and explicitly confirm there that the plan matches the Ready Issue and accepted authority. The Issue body/comments are the durable plan and confirmation record; chat is not a prerequisite. The Issue's Ready status means its scope and acceptance are approved. If the execution plan exposes a material unresolved scope or architecture decision, return the Issue to Refinement and resolve it on the Issue before pickup.
+- After the Issue plan comment is confirmed, re-read the Issue, any linked Project status, dependencies, assignees, and exact remote branch. Fetch the current accepted `master` SHA as the claim's base. Do not create the branch before the plan is confirmed in the Issue.
+- Create the exact ref `refs/heads/issue/<number>` through GitHub's atomic Git reference creation endpoint (for example, `gh api --method POST "repos/{owner}/{repo}/git/refs" -f "ref=refs/heads/issue/<number>" -f "sha=<base-sha>"`). Only an unambiguous successful create-ref response wins the race. If the ref exists, another claimant wins, the create request fails, or its result is ambiguous, stop; do not overwrite, infer ownership, or select a suffix branch. An ambiguous create must be resolved by the recorded claim owner or a maintainer even if the ref points at the proposed base SHA.
+- Immediately after a successful create, fresh-read the Issue, any linked Project items, dependencies, and the remote ref. Require the Issue to remain open with its body `State` field still Ready, any present Project status to remain compatible, the assignment state to remain compatible, and the ref to point to the recorded base SHA. Then post an Issue comment recording the authenticated claimant, exact branch, base SHA, and a link to the confirmed plan comment. If a post-create check or comment fails, do no production work and report the reserved ref for explicit resolution; do not automatically delete it.
+- If `issue/<number>` already exists, do not start a second worktree or implementation. Resume only when the authenticated identity matches the recorded active claimant and the user explicitly requested continuation, or the recorded owner explicitly handed off the existing branch to this login, or a maintainer explicitly resolved a stale claim. Re-run the full Ready/dependency preflight, verify the remote branch/head, and record resumption before editing. A branch without a matching claim record is unresolved and fails closed.
+- Legacy `issue/<number>-<short-name>` branches may finish only under their existing owner. Treat an active legacy branch as a collision for a new pickup; do not create the deterministic branch in parallel and do not create another suffix branch.
 
-### Ownership handoff
+### Ownership handoff and release
 
-A handoff is explicit, never inferred from inactivity.
+A handoff or release is explicit, never inferred from inactivity, a status change, or branch disappearance.
 
-- The current owner stops editing and records the exact branch/PR/check state.
-- GitHub assignee is explicitly changed to the new implementer.
-- The new implementer re-runs the full Ready/ownership preflight and resumes the existing Issue branch; no second implementation branch is created.
-- If work was abandoned before implementation, remove an unused claim branch before clearing/reassigning ownership.
-- An agent that merely suspects a stale claim must report it and stop; it must not self-unassign another contributor.
+- The current branch owner stops editing and comments with the recipient (for handoff), exact branch/head, base SHA, PR/check state, remaining plan, and whether work is being handed off or released. A handoff keeps the same branch; the recipient fresh-reads state, verifies the comment author/recipient and branch, then acknowledges in an Issue comment before resuming. No assignee field changes.
+- A claim remains active through implementation and review. To release work with no active PR, the current owner or a maintainer must explicitly record release and remove the unused claim branch; branch deletion without a release comment does not by itself authorize another pickup. If a merged or externally deleted branch disappears while the Issue remains open, only the recorded owner may re-reserve it or a maintainer may resolve the claim.
+- There is no automatic claim expiry. A suspected stale claim is reported to its recorded owner or a maintainer. Only that owner may hand off/release, or a maintainer may document a stale-claim resolution; no agent may self-clear, steal, overwrite, or bypass the claim.
 
 ## Production implementation vs POC
 
@@ -118,7 +119,7 @@ Every implementation Issue must state:
 
 ## Ready gate
 
-An Issue is Ready only when all are true:
+An implementation Issue is Ready only when it is open, its body `State` field is explicitly Ready, and all of the following are true:
 
 - [ ] goal is unambiguous
 - [ ] relevant architecture/spec exists

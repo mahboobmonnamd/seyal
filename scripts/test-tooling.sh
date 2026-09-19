@@ -61,30 +61,61 @@ grep -q '.sdlc/framework/skills/verification/SKILL.md' .agents/skills/milestone-
 grep -q '.sdlc/framework/skills/development-readiness/SKILL.md' .agents/skills/development-readiness/SKILL.md || fail "development-readiness adapter must delegate to AI-SDLC"
 grep -q '.sdlc/framework/skills/verification/SKILL.md' .agents/skills/verification/SKILL.md || fail "verification adapter must delegate to AI-SDLC"
 
-# Parallel-development safety: implementation pickup must be an exclusive,
-# verified GitHub claim before any production branch/worktree/edit path.
+# Parallel-development safety: Ready issues stay unassigned, and the exact
+# remote issue branch is the atomic claim before any worktree/production edit.
 claim_skill=.agents/skills/implement-issue/SKILL.md
 grep -Fq 'mandatory entrypoint for production implementation of a Seyal GitHub Issue' "$claim_skill" || fail "implement-issue must be the mandatory production entrypoint"
-grep -Fq 'authenticated GitHub login' "$claim_skill" || fail "implement-issue must resolve authenticated GitHub identity"
-grep -Fq 'Issue #N is already taken by @login' "$claim_skill" || fail "implement-issue must report the existing assignee and stop"
-grep -Fq 'Multiple assignees' "$claim_skill" || fail "implement-issue must fail closed on multiple assignees"
-grep -Fq 'exact remote branch name `issue/<number>`' "$claim_skill" || fail "implement-issue must use the deterministic issue branch collision backstop"
-grep -Fq 'never overwrite another valid claim to win a race' "$claim_skill" || fail "implement-issue must not steal a concurrent claim"
-grep -Fq 'If the work item is a GitHub sub-issue, fetch its parent immediately' "$claim_skill" || fail "implement-issue must inspect the parent claim before a child slice"
-grep -Fq 'stop with `BLOCKED` unless an explicit parent/slice handoff' "$claim_skill" || fail "implement-issue must fail closed when another implementer owns the parent"
-grep -Fq 're-fetch both parent and child' "$claim_skill" || fail "implement-issue must re-fetch parent and child after claim and branch creation"
-grep -Fq 'claim and branch that sub-issue only after the parent/slice handoff check' "$claim_skill" || fail "implement-issue must claim/branch the child Issue only after parent handoff"
-grep -Fq 'do not steal the parent' "$claim_skill" || fail "implement-issue must not steal a parent claim"
+grep -Fq 'gh api user --jq .login' "$claim_skill" || fail "implement-issue must resolve authenticated GitHub identity with gh"
+grep -Fq 'never set, clear, or change GitHub assignees' "$claim_skill" || fail "implement-issue must leave assignee fields unchanged"
+grep -Fq 'its body `State` field explicitly to be Ready' "$claim_skill" || fail "implement-issue must require the Issue State field to be Ready"
+grep -Fq 'No linked Project item is required.' "$claim_skill" || fail "implement-issue must not require a Project item"
+grep -Fq 'POST /repos/{owner}/{repo}/git/refs' "$claim_skill" || fail "implement-issue must use atomic remote ref creation"
+grep -Fq 'The first unambiguous successful creation is the only winner.' "$claim_skill" || fail "implement-issue must make one branch creator the race winner"
+grep -Fq 'An existing ref, failed creation, competing creation, or ambiguous response means stop' "$claim_skill" || fail "implement-issue must fail closed on branch reservation conflicts"
+grep -Fq 'claimant, exact branch, base SHA, and a link to the confirmed plan comment' "$claim_skill" || fail "implement-issue must record auditable claim details"
+grep -Fq 'Issue body/comments are the durable plan and confirmation record; chat is not a prerequisite.' "$claim_skill" || fail "implement-issue must store plan confirmation on the Issue"
+grep -Fq 'Claims never expire automatically.' "$claim_skill" || fail "implement-issue must not expire claims automatically"
+grep -Fq "A planning parent's assignee does not lock an independent Ready child." "$claim_skill" || fail "implement-issue must allow independent Ready child claims"
 refine_skill=.agents/skills/issue-refinement/SKILL.md
 grep -Fq 'recommend GitHub sub-issues (one per slice)' "$refine_skill" || fail "issue-refinement must recommend one GitHub sub-issue per slice"
-grep -Fq 'do not assign both parent and child to different implementers for the same slice' "$refine_skill" || fail "issue-refinement must forbid split parent/child assignees for one slice"
+grep -Fq 'Leave new implementation Issues unassigned.' "$refine_skill" || fail "issue-refinement must leave implementation Issues unassigned"
+grep -Fq 'a planning parent is not an exclusive claim surface' "$refine_skill" || fail "issue-refinement must allow independent child claims"
 grep -Fq 'Any request to **implement, fix, finish, code, or complete a specific GitHub Issue** must enter through' AGENTS.md || fail "AGENTS.md must route implementation requests through implement-issue"
-grep -Fq 'one deterministic issue/<number> branch' docs/engineering/DEVELOPMENT.md || fail "development workflow must use the deterministic issue branch"
+grep -Fq 'one atomically created deterministic issue/<number> branch' docs/engineering/DEVELOPMENT.md || fail "development workflow must use an atomic deterministic issue branch"
+grep -Fq 'successful atomic creation of the exact remote `issue/<number>` ref is the exclusive race lock' docs/engineering/DEVELOPMENT.md || fail "development workflow must name the branch as the race lock"
+grep -Fq 'Record the execution plan as an Issue comment before reserving a branch.' docs/engineering/DEVELOPMENT.md || fail "development workflow must keep plans in GitHub"
+grep -Fq 'No linked Project item is required.' docs/engineering/DEVELOPMENT.md || fail "development workflow must not require a Project item"
 if grep -Fq '→ issue/<number>-<short-name>' docs/engineering/DEVELOPMENT.md; then
   fail "new development workflow must not retain the legacy non-deterministic branch convention"
 fi
-grep -Fq 'GitHub assignee state is the human-visible claim' docs/engineering/ISSUE-PROTOCOL.md || fail "Issue protocol must define assignee ownership authority"
-grep -Fq 'Project status (`Ready`, `In Progress`, and so on) is lifecycle metadata, not an ownership lock' docs/engineering/ISSUE-PROTOCOL.md || fail "Issue protocol must not use Project status as the ownership lock"
+grep -Fq 'GitHub assignees are never used as a lock' docs/engineering/ISSUE-PROTOCOL.md || fail "Issue protocol must use branch reservation instead of assignee lock"
+grep -Fq 'exact remote `issue/<number>` Git ref is the atomic claim' docs/engineering/ISSUE-PROTOCOL.md || fail "Issue protocol must define the exact branch claim"
+grep -Fq 'There is no automatic claim expiry.' docs/engineering/ISSUE-PROTOCOL.md || fail "Issue protocol must not expire claims automatically"
+grep -Fq 'No linked Project item is required.' docs/engineering/ISSUE-PROTOCOL.md || fail "Issue protocol must not require a Project item"
+grep -Fq 'body `State` field is explicitly Ready' docs/engineering/ISSUE-PROTOCOL.md || fail "Issue protocol must gate pickup on the Issue State field"
+grep -Fq "Set the Issue body's" .agents/skills/issue-refinement/SKILL.md || fail "issue-refinement must set Ready on the Issue body"
+grep -Fq "A parent Issue's assignee or planning branch does not automatically lock an independent child." docs/engineering/ISSUE-PROTOCOL.md || fail "Issue protocol must permit non-overlapping child work"
+grep -Fq 'Issue-comment plan' site/src/content/docs/developer/index.mdx || fail "Developer Guide must put implementation plans on GitHub Issues"
+grep -Fq 'atomic creation of exact remote issue/<number>' site/src/content/docs/developer/index.mdx || fail "Developer Guide must describe the atomic branch claim"
+if grep -Eiq 'exclusive assignee claim|sole Issue assignee|reassign the Issue' site/src/content/docs/developer/index.mdx; then
+  fail "Developer Guide must not describe assignees as the active-work lock"
+fi
+grep -Fq 'active or unresolved claim' docs/milestones/MILESTONE-003.md || fail "M003 must route an existing branch through claim resolution"
+grep -Fq 'exact remote `issue/923` branch' docs/milestones/MILESTONE-003.md || fail "M003 must use the deterministic unassigned-work branch"
+if grep -Fq 'sole assignee' docs/milestones/MILESTONE-003.md; then
+  fail "M003 must not use sole assignee state as the work lock"
+fi
+if grep -Eiq '#686.*(assigned|assignee)|Keep the current assignee|spike; assignee' docs/milestones/MILESTONE-003.md; then
+  fail "M003 must not describe #686 as assigned"
+fi
+grep -Fq 'bounded remaining shell-support decision or evidence task' docs/milestones/MILESTONE-003.md || fail "M003 must refine #686 against the accepted shell-integration decision"
+for policy_file in AGENTS.md docs/engineering/DEVELOPMENT.md docs/engineering/ISSUE-PROTOCOL.md "$claim_skill" "$refine_skill"; do
+  for forbidden in 'gh issue edit' '--add-assignee' '--remove-assignee' 'assignees.add' 'assignees.remove'; do
+    if grep -Fq -- "$forbidden" "$policy_file"; then
+      fail "claim policy must not mutate assignees: ${policy_file} contains ${forbidden}"
+    fi
+  done
+done
 
 [[ -f .sdlc/context/_meta.yaml ]] || fail "Seyal SDLC context metadata is missing"
 [[ -f .sdlc/graph/context-index.json ]] || fail "Seyal derived context index is missing"

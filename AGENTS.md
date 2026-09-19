@@ -61,31 +61,33 @@ An Issue or PR cannot override architecture/specification. Existing code is neve
 
 Any request to **implement, fix, finish, code, or complete a specific GitHub Issue** must enter through `.agents/skills/implement-issue/SKILL.md` before production edits. Do not implement a Ready Issue directly from chat instructions or bypass the skill because the requested change appears small.
 
-Seyal uses an exclusive active-work claim:
+Seyal uses an auditable, pull-based active-work claim. New implementation Issues remain unassigned; never set, clear, or change an Issue assignee as part of pickup, handoff, or release.
 
 ```text
 fresh Ready Issue
-→ authenticated GitHub login
-→ exactly one assignee (current implementer)
-→ confirmed implementation plan
-→ deterministic remote branch issue/<number>
+→ authenticated login from `gh api user`
+→ execution plan confirmed in the GitHub Issue
+→ atomic creation of remote issue/<number> from accepted master SHA
+→ fresh Issue/branch verification and claim comment
 → isolated worktree
 → production edits
 → one scoped PR
 ```
 
-If the Issue is assigned to another GitHub login, has multiple assignees, the authenticated implementer identity cannot be established, or `issue/<number>` already exists for an unrequested resume, **STOP before production work** and report the collision. Never clear or steal another contributor's assignment. Project status fields are lifecycle metadata, not an ownership lock.
+Only the successful creator of the exact remote branch may proceed with a new claim. A branch that already exists is an active or unresolved claim: resume it only when its recorded owner is the authenticated login and resumption was explicitly requested, or when its recorded owner explicitly handed it off to this login. A maintainer may resolve a stale claim explicitly. Never create a suffix branch, overwrite an existing branch, or infer release from inactivity. Record claimant, branch, base SHA, and confirmed plan in an Issue comment after reservation; the comment is audit evidence, while remote ref creation is the race lock.
+
+Read the complete assignee list but never mutate it. Existing assigned work remains with its current owner unless that owner explicitly records a handoff; multiple assignees or an assignment/claim conflict fail closed. A parent Issue's assignee does not lock an independent Ready child: verify parent/child scope, explicit dependencies, and active branch claims for overlap. Require an open Issue whose body `State` field is `Ready` and whose Ready checklist passes. If linked Project items exist, verify their status is Ready for a new pickup or compatible with the matching active claim when resuming; no linked Project item is required. If identity, fresh Issue state, any present linked Project state, branch state, or required evidence cannot be verified, **STOP before production work**.
 
 ## Before changing code
 
 1. For a production GitHub Issue, invoke `implement-issue` and pass its exclusive GitHub ownership/branch preflight before editing code.
-2. Read the Issue and verify Project status is **Ready**.
+2. Read the Issue fresh and verify it is open, its body `State` field is `Ready`, and its Ready checklist passes. If linked Project items exist, verify their status is Ready or compatible with the matching active claim; absence of a Project item is not a blocker.
 3. When the task needs broader project context than the Issue links provide, use the `project-context` skill to load the smallest relevant node/relationship set, validate it, then read the returned authoritative sources. Do not broadly reread the repository or trust the index summary as authority.
 4. Read every linked/retrieved architecture/spec/milestone document that materially governs the work.
 5. Verify dependencies are complete and ownership/module boundary is explicit.
 6. If architecture is missing or contradictory: **STOP** and use the `architecture-change` skill. Do not invent a workaround. Never amend an ADR inside an implementation PR; ADR create/amendment is always a separate PR.
 7. Confirm the requested work is production implementation rather than a spike/POC. If it is exploratory, isolate it on a non-mergeable path and do not open a mergeable production PR from that code.
-8. Use one Issue → one sole assignee/agent → one isolated worktree → one deterministic `issue/<number>` branch → one PR.
+8. Use one Issue → one authenticated, branch-reserved claimant → one isolated worktree → one deterministic `issue/<number>` branch → one PR. Keep new implementation Issues unassigned; never set, clear, or change assignees.
 9. Core behavior is test-first. Do not weaken tests to make code pass.
 10. Do not refactor unrelated code. Create/link another Issue instead.
 11. If an approved screenshot/mockup is visual authority for native UI, run the `image-to-code` skill before implementation. Complete its forensic design/component inventory and issue plan first; split the work into multiple Issues when the visual spans independently reviewable boundaries.

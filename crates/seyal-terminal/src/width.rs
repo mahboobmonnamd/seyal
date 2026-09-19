@@ -109,10 +109,7 @@ mod tests {
 
     #[test]
     fn empty_string_width_zero() {
-        assert_eq!(
-            grapheme_terminal_width("", AmbiguousWidthPolicy::Narrow),
-            0
-        );
+        assert_eq!(grapheme_terminal_width("", AmbiguousWidthPolicy::Narrow), 0);
     }
 
     #[test]
@@ -148,9 +145,6 @@ mod tests {
     #[test]
     fn ambiguous_wide_policy() {
         // ° U+00B0 is East Asian Ambiguous — wide policy gives width 2
-        assert_eq!(
-            grapheme_terminal_width("°", AmbiguousWidthPolicy::Wide),
-            2
-        );
+        assert_eq!(grapheme_terminal_width("°", AmbiguousWidthPolicy::Wide), 2);
     }
 }

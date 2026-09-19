@@ -1,14 +1,17 @@
 import XCTest
 
 /// XCUI launches a separate Seyal.app that does not load XCTest, so isolation
-/// must be explicit `--runtime-dir` launch arguments. One directory per runner
-/// process lets terminate/relaunch reconnect to the same fixture Runtime.
+/// must be explicit `--runtime-dir` launch arguments.
+///
+/// Each `XCUIApplication` gets its own directory so sequential cases do not
+/// inherit a dirty PTY. `terminate` + `launch()` keeps the same arguments so
+/// the relaunch-reconnect case stays on one fixture Runtime.
 enum IsolatedHostedRuntime {
   static let flag = "--runtime-dir"
 
-  static let directory: String = {
+  static func makeDirectory() -> String {
     let url = URL(fileURLWithPath: "/tmp").appendingPathComponent(
-      "s860ui-\(ProcessInfo.processInfo.processIdentifier)",
+      "s860ui-\(ProcessInfo.processInfo.processIdentifier)-\(UUID().uuidString.prefix(8))",
       isDirectory: true
     )
     try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
@@ -17,16 +20,18 @@ enum IsolatedHostedRuntime {
       ofItemAtPath: url.path
     )
     return url.path
-  }()
+  }
 
-  static var launchArguments: [String] { [flag, directory] }
+  static func makeLaunchArguments() -> [String] { [flag, makeDirectory()] }
 }
 
 extension XCUIApplication {
   @discardableResult
   func launchIsolatedHost() -> XCUIApplication {
     terminate()
-    launchArguments += IsolatedHostedRuntime.launchArguments
+    if !launchArguments.contains(IsolatedHostedRuntime.flag) {
+      launchArguments += IsolatedHostedRuntime.makeLaunchArguments()
+    }
     launch()
     return self
   }

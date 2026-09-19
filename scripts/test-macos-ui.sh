@@ -16,7 +16,11 @@ bash scripts/check-macos-toolchain.sh
 # pinned repository toolchain so `make ui-test` is self-contained.
 channel="$(sed -nE 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' rust-toolchain.toml | head -n1)"
 [[ -n "$channel" ]] || { echo "rust-toolchain.toml does not declare a Rust channel" >&2; exit 1; }
-rustup run "$channel" cargo build -p seyal-client -p seyal-runtime --bin seyal-runtime --locked
+# `--bin seyal-runtime` filters the whole cargo invocation, so `-p seyal-client`
+# is skipped and Xcode links a stale `libseyal_client.a`. Build the staticlib
+# and the Runtime helper as separate selections.
+rustup run "$channel" cargo build -p seyal-client --locked
+rustup run "$channel" cargo build -p seyal-runtime --bin seyal-runtime --locked
 
 DERIVED_DATA="$ROOT/target/macos-ui-tests"
 RESULT_BUNDLE="$ROOT/target/macos-ui-tests.xcresult"

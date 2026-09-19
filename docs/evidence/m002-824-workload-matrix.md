@@ -4,16 +4,16 @@
 | --- | --- |
 | Owning Issue | #824 (parent #672) |
 | Classification | production validation / focused gap closure |
-| Exact production head | `2ef83322a382a142d17ae1e4cc6ec0600116af41` (production Swift after `ad50bd1`: `7cb7853` / `7f77a6f`; headed-GUI ledger commit). Docs-only tip commits after this SHA sync honesty only. |
+| Exact production head | `2ef83322a382a142d17ae1e4cc6ec0600116af41` (production Swift after `ad50bd1`: `7cb7853` / `7f77a6f`). PR #984 local-gate SHA is `4d0cbb2`; hosted FQ + independent review SHA is `1ef537b` (run 35413837139). |
 | Prior automated pin | `dcbb90faaf870fdabbc543e6947adff2af48c8a3` remains the first retained matrix SHA; intermediate re-runs on `f0e8c01` plus live PTY expansions |
 | Host | Darwin arm64 / macOS 26.5.2 / Rust 1.98.0 (local matrix); hosted CI macOS-15 / Xcode 16.4 for exact-head gates |
 | Date (UTC) | 2026-09-18 |
 
 This is retained automated + classified native/manual evidence for the #672
-workload matrix. It does **not** close #824 or #672. Comparative/release
-performance remains #673 authority (`performance_claim=false` here). PTY
-smokes spawn with `TERM=seyal-m001` and a `tic`-compiled bundled terminfo
-directory, not `xterm-256color`.
+workload matrix. Comparative/release performance remains #673 authority
+(`performance_claim=false` here). PTY smokes spawn with `TERM=seyal-m001` and a
+`tic`-compiled bundled terminfo directory, not `xterm-256color`. This follow-on
+is `Refs #824` harness + evidence only. `#824` / `#672` stay open.
 
 **Current-head gates (`2ef8332`):** hosted Foundation Quality + production fuzz
 ([run 35305544844](https://github.com/seyal-org/seyal/actions/runs/35305544844))
@@ -22,9 +22,12 @@ SUCCESS — `repository-policy`, `rust-and-harness-quality`, `native-macos-smoke
 ([FQ 35319442002](https://github.com/seyal-org/seyal/actions/runs/35319442002),
 [fuzz 35319411982](https://github.com/seyal-org/seyal/actions/runs/35319411982))
 SUCCESS with the same production fingerprints. Local exclusive-Runtime native +
-XCUI on `7f77a6f` (recorded at this head): **27/27** component + **19/19** XCUI
-**PASS**. Parallel local `pass7_local_ipc` can still hit harness `Exec(Io -6)`
-and is not the current claim. See [headed ledger](m002-824-headed-manual.md).
+XCUI on `7f77a6f` (recorded at `2ef8332`): **27/27** component + **19/19** XCUI
+**PASS**. 2026-09-19 exact-head on `4d0cbb2`: `make check`
+**PASS** and `make ui-test` **20/20** XCUI **PASS**. See
+[headed ledger](m002-824-headed-manual.md) 2026-09-19 section. Parallel local
+`pass7_local_ipc` can still hit harness `Exec(Io -6)` and is not the current
+claim.
 Historical `ad50bd1` 26/26 + hosted run 35242876394, local 44/45 Block-selection
 FAIL, and pre-isolation IPC FAIL remain **superseded history**.
 
@@ -121,13 +124,21 @@ milestone qualification freeze:
 
 ### Remaining acceptance
 
-No new module/ADR was required. Remaining Done gates are evidence, not architecture:
+No new module/ADR was required. Refs evidence (not Issue Done):
 
-1. Nested SSH hop and fuller interactive SSH editing **in the Seyal GUI** (composer SSH submit + PTY live hop retained; nested Docker hop not re-driven in GUI).
-2. Broader Vim/Neovim/tmux-inside-tmux interactive breadth (headed TUI takeover/restore retained for Vim/Neovim/tmux/htop; insert/search/splits/copy-mode limits stay disclosed).
-3. SPEC-011 IME 37–41 **close classification: covered** by existing native `NSTextInputClient` + local ABC XCUI (see headed ledger). Hosted CI skips the ABC case (`XCTSkip`). Physical input-source/candidate-popup, mixed-display-scale and live-composition reconnect remain unclaimed and are **not required** for M002 technical preview. #836 not pulled.
-4. #673 PHYSICAL_ARM64 five-cohort / 20-warmup / 100-sample matrix — **not started**.
-5. Independent close review after evidence/ledger honesty is current. This PR stays `Refs #824`.
+1. Nested SSH hop **in the Seyal GUI** via composer submit of nested `ssh` to
+   `nt-ssh@orb` (one Seyal PTY/execution). Output bytes are not AX-visible;
+   live PTY nested fixture retained.
+2. tmux-as-child TUI takeover with `split-window -h`; copy-mode prefix sent;
+   restore via Ctrl-C. Vim/Neovim/htop/watch TUI takeover/restore **PASS**.
+3. SPEC-011 IME 37–41 **covered**. Hosted ABC `XCTSkip`. #836 not pulled.
+4. #673 PHYSICAL_ARM64 remains a **sibling** close-out Issue; `performance_claim=false` here.
+5. Live Claude/Codex TUI and headed retained-grid search/copy remain
+   **ENVIRONMENT_UNSUPPORTED**. Independent non-author Approve is still
+   required before merge of this Refs PR. `#824` stays open.
+
+Local `CARGO_TEST_THREADS=1 make check` and `make ui-test` **PASS** on
+`4d0cbb2` (Xcode 27 + Metal toolchain). Hosted FQ + fuzz on `2ef8332` retained.
 
 Active remediation for Block selection, `pass7_local_ipc` isolation, Flow
 hit-test fallthrough, and TUI reconcile coalesce is **complete on `2ef8332`**

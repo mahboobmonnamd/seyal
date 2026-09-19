@@ -2,12 +2,77 @@
 
 - **Issue:** #824
 - **Date:** 2026-09-18
-- **Exact production head (fingerprints / hosted FQ):** `2ef83322a382a142d17ae1e4cc6ec0600116af41`
-- **Docs-only tip after that head:** later ledger-honesty commits on `issue/824` (no further Swift/Rust delta).
+- **Exact production head (fingerprints / hosted FQ):** `2ef83322a382a142d17ae1e4cc6ec0600116af41` (merge `20418fa` / PR #964). Current master at close-out measurement: `eecaf888bd8aecb3d4afcff371ad91ddce76c55f` (docs/chore only after that merge).
+- **Local-gate SHA:** `4d0cbb211269bc34dc122033ae7aba6a5f39a5b9` (`make check` + 20/20 XCUI on 2026-09-19).
+- **Reviewed/CI SHA:** `1ef537bd205f2790f5c392f2c9edb60bab312841` (hosted FQ [35413837139](https://github.com/seyal-org/seyal/actions/runs/35413837139); independent review by @crdileep82).
+- **This PR head:** the follow-on ledger-label commit on `issue/824`. Still `Refs #824` until an independent Approve and an explicit closing relationship.
 - **Production path:** ADR-015 thin AppKit host over Rust snapshots; headed oracle is Flow/Blocks, not a raw terminal.
 - **Exclusive Runtime rule:** if another process owns `control.sock`, the headed run is INCONCLUSIVE.
-- **Relationship:** `Refs #824` only. Does not close #824 / #672.
+- **Relationship:** `Refs #824` / `Refs #672` only. PR #964 remains the merged production delta. `#824` DoD (including `#673` and owner confirmation) stays open after this PR.
 - **IME 37–41 close classification:** **covered** by existing native `NSTextInputClient` + local ABC XCUI. Not a new #824 row. Do not pull #836.
+
+## Local exact-head gates (2026-09-19) — actually executed
+
+PR #984 was opened too early as a docs-only `Closes` after classifying local
+`xcodebuild` / `scripts/test-macos-ui.sh` as ENVIRONMENT_UNSUPPORTED. That
+classification was wrong. This host can run those gates. The 2026-09-18
+close-out session below is retained as history, not Done evidence.
+
+Exact head for these local gates is `4d0cbb2` (isolation merge `a218c23`
+plus the harness fixes below):
+
+| Blocker found when the suite was actually run | Fix |
+| --- | --- |
+| `scripts/test-macos-ui.sh` used `cargo build -p seyal-client -p seyal-runtime --bin seyal-runtime`, which skipped the client staticlib. Xcode linked a Sep 17 `libseyal_client.a` missing `seyal_bridge_set_runtime_dir`. | Build `seyal-client` and the Runtime helper as separate cargo selections. |
+| Xcode 27 `metal` existed without `metallib` until the Metal component was installed. | `xcodebuild -downloadComponent MetalToolchain` (27A266a). |
+| `runtime_dir_isolation` observed the user `control.sock` in parallel. `CARGO_TEST_THREADS=1` does not serialize libtest. | Mutex around the cases that create or observe the canonical socket. |
+| Full XCUI reused one `--runtime-dir` per runner PID. After the ABC IME case, `testAlternateScreenReturnRestoresFlowNotRawTerminal` failed (`started=false`, `alternate-screen=false`). Isolated retry **PASS**. | One `--runtime-dir` per `XCUIApplication`; relaunch keeps the same arguments. |
+
+| Gate | Result |
+| --- | --- |
+| `CARGO_TEST_THREADS=1 make check` on this head (Xcode 27, Metal toolchain installed; local `site/node_modules` moved aside for `check-doc-links` only) | **PASS** (exit 0, 52.5s) including `runtime_dir_isolation` 5/5 and `fuzz-smoke` |
+| `make ui-test` / `scripts/test-macos-ui.sh` | **PASS** — component + **20/20** XCUI, including `testAlternateScreenReturnRestoresFlowNotRawTerminal` and `testSystemABCDeadKeyCommitAndCancelReachRealPty` |
+| First full UI rebuild (stale client) | **FAIL** link: missing `seyal_bridge_set_runtime_dir` |
+| First two full UI executions (shared fixture Runtime) | **19/20** — same alt-screen workload case **FAIL** in-suite, **PASS** isolated (34.95s) |
+| After per-app `--runtime-dir` | **20/20 PASS** (482s XCUI) |
+
+Still `Refs #824`. Independent review is still required. #673 remains
+`performance_claim=false` here.
+
+## Close-out headed session (2026-09-18, exclusive Runtime)
+
+Exclusive `control.sock` was free. Drove already-built Debug
+`Seyal.app` (`dev.seyal.Seyal` adhoc, UI-test products dated 2026-09-18 07:28)
+because that session incorrectly treated local `xcodebuild` /
+`scripts/test-macos-ui.sh` rebuild as **ENVIRONMENT_UNSUPPORTED** (Xcode 27
+license). The 2026-09-19 section above superseded that classification.
+Hosted `native-macos-smoke` on `2ef8332` (run 35305544844) remains the hosted
+XCUI record.
+
+AX oracle: `terminal-input` `connection=` / `runtime=` / `execution=` /
+`attachment=` / `alternate-screen=`. Metal does not expose PTY bytes as AX
+text.
+
+Initial attach: Runtime helper pid **96808**, GUI pid 96796,
+`runtime=856ec7b7bfa631bf0000000000000001`,
+`execution=c201c137e6fd067e0000000000000002`, `attachment=…0004`,
+`connection=usable`.
+
+Local exact-head `CARGO_TEST_THREADS=1 make check` on master `eecaf88` with
+`SDKROOT`/`DEVELOPER_DIR` = Command Line Tools (bypass Xcode 27 license for
+`cc`): **PASS** (exit 0, 71.9s). `python3 scripts/fuzz-smoke.py` is included
+in that `make check`.
+
+Owner-accepted classified gaps for M002 technical preview (not product FAIL):
+
+- live Claude/Codex TUI scroll/prompt/resize: **ENVIRONMENT_UNSUPPORTED**
+  (`claude` stayed Flow / `alternate-screen=false`; VT agent-TUI equivalent
+  retained)
+- headed retained-grid search/copy after resize: **ENVIRONMENT_UNSUPPORTED**
+  (⌃R opened composer command history, not grid search; VT combined fixture
+  retained)
+- hosted ABC dead-key XCUI: `XCTSkip` without that layout; local ABC bytes
+  `c3 a9 78 1b` retained
 
 ## Current-head exact evidence (`2ef8332`)
 
@@ -15,8 +80,9 @@ Executable Swift moved after `ad50bd1` / `204d14c`: Flow Block hit-test
 fallthrough (`7cb7853`, `ThinPaneHostView`) and TUI chrome coalesce
 (`7f77a6f`, `ProductChromeHostView` + nested-reconcile component test +
 `/tmp` alt-screen XCUI fixture). `2ef8332` records headed-GUI steps 1–7 on
-top of that production head. Later docs-only tip commits only sync ledger
-honesty. Do not claim production sources are unchanged from `ad50bd1`.
+top of that production head. Do not claim later `issue/824` commits are
+docs-only; `4d0cbb2` adds UI/isolation harness. Do not claim production
+sources are unchanged from `ad50bd1`.
 
 Hosted Foundation Quality + production fuzz on exact production head
 `2ef8332`
@@ -61,9 +127,11 @@ Source fingerprints for the production/test sources at `2ef8332`:
 | `SeyalHostWorkloadUITests.swift` | `d4e011fe197fdb1a043cff6cb3403916af7a06b456bf5e53631c051dbc7690e0` |
 | `pass7_local_ipc.rs` | `4da73af2632285064476d1cb88a5ea2bf402ea7b5c454b6af942a8c41244d918` |
 
-This is not #824 Done: classified headed-step limits, #673 release performance,
-milestone-length fuzz, and independent close review remain open. This ledger
-sync is docs-only; do not treat it as further executable delta after `7f77a6f`.
+#673 remains release-performance authority (`performance_claim=false` here).
+Milestone-length fuzz campaigns stay hosted production-fuzz SUCCESS plus
+`fuzz-smoke`; they are not a new long campaign. This PR also contains the
+UI/isolation harness fixes needed to run those gates. It is still `Refs #824`,
+not a close package.
 
 ## SPEC-011 IME 37–41 close classification (2026-09-18)
 
@@ -79,8 +147,8 @@ sync is docs-only; do not treat it as further executable delta after `7f77a6f`.
 
 `CompositionDocument` self-tests remain document invariants only; they are not
 this classification. Language-specific input-source breadth stays post-M004
-#836 and is **not required** for M002 technical preview. This classification
-does not waive headed steps 1–7 or `#824` Done.
+#836 and is **not required** for M002 technical preview. Headed steps 1–10 for
+this Refs evidence PR are in the close-out session and manual table above.
 
 ## Local native session (2026-09-18, `204d14c`)
 
@@ -305,16 +373,16 @@ Record PASS / FAIL / ENVIRONMENT_UNSUPPORTED / PLATFORM_LIMITED per case. Never 
 
 | Step | Result this session |
 | --- | --- |
-| 1. zsh/bash/fish interactive | **PASS** headed Flow composer on Debug `Seyal.app` `7f77a6f`: zsh/bash/fish/color `printf` drafts accepted; window resize 1512×857 → 961×640 with composer still available. Not a raw-PTY line-editor session (Flow keys stay on composer). Live PTY suite retained PASS. |
-| 2. SSH then nested SSH | **PASS** headed composer submit `ssh -o BatchMode=yes nt-ssh@orb "printf seyal-ssh-headed; vim -c qa"` (draft accepted, composer stayed available). Nested Docker sshd hop **not** re-driven in this GUI session; PTY `live_ssh_and_nested_ssh_use_one_pty_vt_when_orbstack_present` retained PASS. |
-| 3. Vim/Neovim interactive | **PASS** headed: `/usr/bin/vim` and `nvim` entered TUI (`alternate-screen=true` / composer hidden), insert/` :qa!` restored Flow (`alternate-screen=false`, composer available). Same exclusive Runtime/execution. |
-| 4. tmux child windows/panes/copy-mode | **PASS** headed tmux-as-child TUI takeover (`alternate-screen=true`, composer hidden) and restore via Ctrl-C (composer available, `alternate-screen=false`). Extra tmux windows/panes/copy-mode **not** exercised in this GUI session; PTY tmux-child markers retained PASS. |
-| 5. htop/watch/ncurses | **PASS** headed `htop -d 10` TUI then `q` restored Flow. `watch` not re-run after the tmux leftover; PTY `live_htop_and_watch_restore_primary_after_ncurses` retained PASS. |
-| 6. git/docker/kubectl/terraform TTY | **PASS** headed composer: `git log --color`, `docker ps`, `kubectl version --client`, `terraform version`. Spinners/long TTY progress not claimed. |
-| 7. CLI-agent TUI | **PASS** headed `claude --version` on Flow. Live Claude/Codex TUI (scroll/prompts/resize) **not** entered. VT agent-TUI equivalent retained. |
-| 8. high-volume while typing/scrolling | headed Flow/Blocks XCUI PASS retained (`testHighVolumeComposerOutputStaysOnFlowBlocks`); not a type-while-flood interactive session. VT/PTY automated PASS |
-| 9. search/copy Unicode after resize | headed Flow/Blocks XCUI PASS retained for composer Unicode submit + resize; this session also resized the live window 1512×857 → 961×640. Not search/copy from retained history. |
-| 10. GUI close/reopen M001 reconnect | **PASS** this headed session: GUI quit left Runtime pid **33076**; reopen attached `connection=usable` with same `runtime=` / `execution=` and a new `attachment=` (`…0004` → `…0005`). XCUI relaunch case retained PASS. |
+| 1. zsh/bash/fish interactive | **PASS** close-out session: zsh/bash/fish/color composer submits; window resized to 960×640; composer stayed `available`. Not a raw-PTY line-editor session. Live PTY suite retained PASS. |
+| 2. SSH then nested SSH | **PASS** composer submit nested `ssh` to `nt-ssh@orb` then again to `nt-ssh@orb`. One Seyal PTY/execution. Output bytes not AX-visible; live PTY nested fixture retained. |
+| 3. Vim/Neovim interactive | **PASS** `/usr/bin/vim -Nu NONE` and `nvim -u NONE` → `alternate-screen=true`; `:qa!` restored Flow. Same `runtime=` / `execution=`. |
+| 4. tmux child windows/panes/copy-mode | **PASS** TUI takeover `alternate-screen=true` with `split-window -h` in the spawn. `Ctrl-b [` sent while TUI. Restore to Flow via `Ctrl-C`. tmux hierarchy was not Seyal panes. |
+| 5. htop/watch/ncurses | **PASS** `htop -d 10` and `watch -n 1 date` → `alternate-screen=true`; `q` restored Flow / composer `available`. |
+| 6. git/docker/kubectl/terraform TTY | **PASS** composer: `git log --oneline --color -n 3`, `docker ps`, `kubectl version --client`, `terraform version`. Spinners/long TTY progress not claimed. |
+| 7. CLI-agent TUI | `claude --version` **PASS** on Flow. Live `claude` stayed `alternate-screen=false` / composer `available`. **ENVIRONMENT_UNSUPPORTED** for live Claude/Codex TUI. VT agent-TUI equivalent retained. |
+| 8. high-volume while typing/scrolling | headed Flow/Blocks XCUI PASS retained (`testHighVolumeComposerOutputStaysOnFlowBlocks`); this close-out session did not type-while-flood. VT/PTY automated PASS |
+| 9. search/copy Unicode after resize | Unicode composer submit + resize **PASS**. ⌃R opened composer command history, not retained-grid search/copy. **ENVIRONMENT_UNSUPPORTED** for headed history search/copy. VT combined fixture retained. |
+| 10. GUI close/reopen M001 reconnect | **PASS** GUI quit left helper pid **96808**; reopen GUI pid **2318** `connection=usable` same `runtime=` / `execution=` new `attachment=` (`…0004` → `…0005`). XCUI relaunch case retained PASS. |
 
 Do not treat Flow/Blocks XCUI as a raw-terminal Vim/htop/tmux/ssh oracle.
 

@@ -14,9 +14,9 @@ use seyal_render::{PreparationResult, PreparedSurface, RowDamage};
 use seyal_runtime::{
     display::{decode_chunk, DisplayCache},
     local_ipc::framing::{
-        encode_frame, BlockTimeline, ComposerResult, ComposerResultCode, ErrorCode, FrameHeader,
-        HistoryRangeRequest, HistoryRangeSnapshot, InputRef, Lifecycle, MessageType, ResizeResult,
-        Role, HEADER_LEN, MAX_FRAME_PAYLOAD,
+        encode_frame, BlockTimeline, ComposerResult, ComposerResultCode, ComposerStatus, ErrorCode,
+        FrameHeader, HistoryRangeRequest, HistoryRangeSnapshot, InputRef, Lifecycle, MessageType,
+        ResizeResult, Role, HEADER_LEN, MAX_FRAME_PAYLOAD,
     },
     pass8::{BlockLifecycle, BlockState, BLOCK_STATE_MESSAGE_TYPE},
     AttachmentId, ExecutionId,
@@ -114,6 +114,11 @@ pub struct LocalDisplayClient {
     pub(crate) block_timeline: BlockTimeline,
     pub(crate) command_blocks_supported: bool,
     pub(crate) last_composer_result: Option<ComposerResult>,
+    /// Latest Runtime-published composer eligibility for this attachment
+    /// (ADR-009 invariant 7). `None` until Runtime publishes; the composer
+    /// derives `Available` only from a current value, never from its own
+    /// bookkeeping.
+    pub(crate) composer_status: Option<ComposerStatus>,
     pub(crate) pending_composer_requests: std::collections::HashSet<u64>,
     pub(crate) next_composer_request_id: u64,
     /// Responses are correlated by both the Runtime Block and request fence;
@@ -187,6 +192,13 @@ impl LocalDisplayClient {
 
     pub fn last_composer_result(&self) -> Option<ComposerResult> {
         self.last_composer_result
+    }
+
+    /// Runtime-published composer eligibility, fenced to this attachment and
+    /// to a monotonic revision. `None` means Runtime has not proved eligibility
+    /// for this attachment yet, which the composer must treat as busy.
+    pub fn composer_status(&self) -> Option<ComposerStatus> {
+        self.composer_status
     }
 
     pub fn next_composer_request_id(&self) -> u64 {
@@ -366,6 +378,17 @@ impl LocalDisplayClient {
                             self.last_composer_result = Some(result);
                         }
                     }
+                    MessageType::ComposerStatus => {
+                        let status = ComposerStatus::decode(&frame[HEADER_LEN..])
+                            .map_err(|_| ClientError::Protocol)?;
+                        if validate_composer_status(
+                            status,
+                            self.attachment_id,
+                            self.composer_status,
+                        ) {
+                            self.composer_status = Some(status);
+                        }
+                    }
                     MessageType::HistoryRangeSnapshot => {
                         let snapshot = HistoryRangeSnapshot::decode(&frame[HEADER_LEN..])
                             .map_err(|_| ClientError::Protocol)?;
@@ -523,6 +546,20 @@ pub(crate) fn validate_composer_result(
         }
 }
 
+/// Accepts a ComposerStatus only for this attachment and only when its
+/// revision moves forward. A status for another attachment, a zero revision,
+/// or a stale/duplicate revision is dropped at the transport boundary so it
+/// can never re-enable a composer against a newer Runtime fact.
+pub(crate) fn validate_composer_status(
+    status: ComposerStatus,
+    attachment_id: AttachmentId,
+    current: Option<ComposerStatus>,
+) -> bool {
+    status.attachment_id == attachment_id
+        && status.revision != 0
+        && current.is_none_or(|current| status.revision > current.revision)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -573,6 +610,7 @@ mod tests {
             },
             command_blocks_supported: false,
             last_composer_result: None,
+            composer_status: None,
             pending_composer_requests: std::collections::HashSet::new(),
             next_composer_request_id: 1,
             history_ranges: HashMap::new(),
@@ -693,6 +731,70 @@ mod tests {
         assert!(result.is_some());
         assert_eq!(client.cache.generation, 2);
         assert_eq!(client.cache.cells[0].scalar, 'B');
+    }
+
+    #[test]
+    fn composer_status_is_fenced_to_attachment_and_forward_revision() {
+        use seyal_runtime::local_ipc::framing::ComposerEligibility;
+        let mine = AttachmentId::from_bytes([2; 16]);
+        let status = |attachment_id, revision| ComposerStatus {
+            attachment_id,
+            eligibility: ComposerEligibility::Available,
+            revision,
+        };
+        // First status for this attachment is accepted; zero revision never is.
+        assert!(validate_composer_status(status(mine, 1), mine, None));
+        assert!(!validate_composer_status(status(mine, 0), mine, None));
+        // Another attachment's eligibility cannot enable this composer.
+        let foreign = AttachmentId::from_bytes([3; 16]);
+        assert!(!validate_composer_status(status(foreign, 5), mine, None));
+        // Revision must move forward: duplicates and stale frames are dropped.
+        let current = Some(status(mine, 4));
+        assert!(validate_composer_status(status(mine, 5), mine, current));
+        assert!(!validate_composer_status(status(mine, 4), mine, current));
+        assert!(!validate_composer_status(status(mine, 3), mine, current));
+    }
+
+    #[test]
+    fn composer_status_frames_update_the_client_in_revision_order() {
+        use seyal_runtime::local_ipc::framing::ComposerEligibility;
+        let (ours, mut theirs) = UnixStream::pair().expect("socketpair");
+        ours.set_nonblocking(true).expect("nonblocking");
+        let mut client = test_client(ours);
+        let mine = client.attachment_id;
+        let frame = |attachment_id, eligibility, revision| {
+            encode_frame(
+                MessageType::ComposerStatus,
+                &ComposerStatus {
+                    attachment_id,
+                    eligibility,
+                    revision,
+                }
+                .encode(),
+            )
+        };
+        theirs
+            .write_all(&frame(mine, ComposerEligibility::Busy, 1))
+            .expect("write");
+        theirs
+            .write_all(&frame(mine, ComposerEligibility::Available, 2))
+            .expect("write");
+        // Stale replay and a foreign attachment must not regress the fact.
+        theirs
+            .write_all(&frame(mine, ComposerEligibility::Busy, 1))
+            .expect("write");
+        theirs
+            .write_all(&frame(
+                AttachmentId::from_bytes([9; 16]),
+                ComposerEligibility::Busy,
+                7,
+            ))
+            .expect("write");
+        assert!(client.composer_status().is_none());
+        client.poll_prepare().expect("poll");
+        let status = client.composer_status().expect("status published");
+        assert_eq!(status.eligibility, ComposerEligibility::Available);
+        assert_eq!(status.revision, 2);
     }
 
     #[test]

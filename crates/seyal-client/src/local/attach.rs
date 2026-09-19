@@ -524,6 +524,7 @@ impl LocalDisplayClient {
             },
             command_blocks_supported,
             last_composer_result: None,
+            composer_status: None,
             pending_composer_requests: std::collections::HashSet::new(),
             next_composer_request_id: 1,
             history_ranges: HashMap::new(),

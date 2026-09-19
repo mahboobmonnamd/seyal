@@ -1,5 +1,8 @@
 use seyal_exec::RegistrationToken;
-use seyal_protocol::{framing::CAP_GRAPHEME_DISPLAY, pass8::CAP_BLOCK_METADATA};
+use seyal_protocol::{
+    framing::{CAP_COMMAND_BLOCKS, CAP_GRAPHEME_DISPLAY},
+    pass8::CAP_BLOCK_METADATA,
+};
 
 use crate::{local_ipc::connection::MAX_CONNECTIONS, AttachmentId};
 
@@ -27,6 +30,13 @@ impl Runtime {
             .as_ref()
             .and_then(|state| state.connections.get(&token))
             .is_some_and(|meta| meta.client_capabilities & CAP_BLOCK_METADATA != 0)
+    }
+
+    pub(super) fn local_connection_supports_command_blocks(&self, token: u64) -> bool {
+        self.local_ipc
+            .as_ref()
+            .and_then(|state| state.connections.get(&token))
+            .is_some_and(|meta| meta.client_capabilities & CAP_COMMAND_BLOCKS != 0)
     }
 
     pub(super) fn local_connection_supports_grapheme_display(&self, token: u64) -> bool {

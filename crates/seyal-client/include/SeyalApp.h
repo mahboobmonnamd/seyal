@@ -72,7 +72,24 @@ enum SeyalAppActionKind {
     SEYAL_APP_ACTION_SET_PALETTE_QUERY = 48,
     SEYAL_APP_ACTION_MOVE_PALETTE_SELECTION = 49,
     SEYAL_APP_ACTION_RUN_PALETTE = 50,
-    SEYAL_APP_ACTION_CLOSE_PALETTE = 51
+    SEYAL_APP_ACTION_CLOSE_PALETTE = 51,
+    /*
+     * Relay the attached client's Runtime-published composer eligibility
+     * (ADR-009 invariant 7; #978). reserved = SeyalAppComposerEligibility,
+     * target_execution_lo = Runtime revision (from seyal_bridge_composer_status).
+     * The host copies the value; it never decides eligibility. Rust ignores a
+     * revision older than the one it holds. reserved = NONE clears the fact
+     * (transport lost) and the composer reads busy until Runtime republishes.
+     */
+    SEYAL_APP_ACTION_APPLY_COMPOSER_STATUS = 52
+};
+
+/* SEYAL_APP_ACTION_APPLY_COMPOSER_STATUS reserved values. */
+enum SeyalAppComposerEligibility {
+    SEYAL_APP_COMPOSER_ELIGIBILITY_NONE = 0,
+    SEYAL_APP_COMPOSER_ELIGIBILITY_AVAILABLE = 1,
+    SEYAL_APP_COMPOSER_ELIGIBILITY_BUSY = 2,
+    SEYAL_APP_COMPOSER_ELIGIBILITY_UNSUPPORTED = 3
 };
 
 /* SEYAL_APP_ACTION_SET_INSPECTOR reserved values and SeyalAppChrome.inspector_mode. */

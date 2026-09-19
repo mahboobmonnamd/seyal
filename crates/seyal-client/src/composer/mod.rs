@@ -27,6 +27,19 @@ pub enum ComposerMode {
     Hidden,
 }
 
+/// Runtime-published composer eligibility (ADR-009 invariant 7, mechanism 5):
+/// `Available` exactly when Runtime would admit a submission, `Busy` before
+/// the first trusted prompt, while a command runs, or while a foreground
+/// program owns the terminal, and `Unsupported` when the shell never proves
+/// trusted integration (the raw admission path). Runtime is the only writer;
+/// the client relays it from the attached transport and never infers it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuntimeComposerEligibility {
+    Available,
+    Busy,
+    Unsupported,
+}
+
 /// Why a [`ComposerAction`] was rejected. The previous state is unchanged
 /// unless the action is a matched result that only clears correlation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,6 +103,10 @@ impl ComposerMode {
     /// first-UI Flow shows the composer before a Pane is fully eligible.
     pub fn editor_placeholder(&self) -> &'static str {
         match self {
+            // Busy without a known command: Runtime has not announced a
+            // trusted prompt yet (launch, direct Raw input, or a foreground
+            // program), so nothing can be promised beyond waiting for it.
+            Self::Busy { process } if process.is_empty() => "Waiting for prompt...",
             Self::Busy { .. } => "Command running...",
             Self::Available | Self::Hidden => "Type a command...",
         }
@@ -177,6 +194,15 @@ pub enum ComposerAction {
         pane: PaneId,
         records: Vec<RuntimeBlockRecord>,
     },
+    /// Relay Runtime's composer eligibility for this Pane's attachment.
+    /// `None` clears it (transport lost); a revision lower than the current
+    /// one is stale and ignored so a delayed relay cannot re-enable the
+    /// composer against a newer Runtime fact.
+    ApplyRuntimeEligibility {
+        pane: PaneId,
+        eligibility: Option<RuntimeComposerEligibility>,
+        revision: u64,
+    },
     /// Open the history overlay above this Pane's composer. Requires
     /// [`ComposerMode::Available`] and at least one recorded entry.
     OpenHistory {
@@ -226,6 +252,9 @@ struct PaneComposer {
     next_request_id: u64,
     epoch: u64,
     busy_process: Option<String>,
+    /// Latest accepted Runtime eligibility and its revision; `None` until
+    /// Runtime publishes one for the current attachment.
+    runtime_eligibility: Option<(RuntimeComposerEligibility, u64)>,
     presentation_mode: PresentationMode,
     input_route: InputRoute,
     blocks: Vec<BlockProjection>,
@@ -241,6 +270,7 @@ impl PaneComposer {
             next_request_id: 1,
             epoch: 1,
             busy_process: None,
+            runtime_eligibility: None,
             presentation_mode: PresentationMode::Flow,
             input_route: InputRoute::Composer,
             blocks: Vec::new(),
@@ -301,7 +331,27 @@ impl PaneComposer {
                 process: self.draft.clone(),
             };
         }
-        ComposerMode::Available
+        match self.runtime_eligibility.map(|(eligibility, _)| eligibility) {
+            // Unsupported shells keep the raw admission path (out of scope
+            // for prompt gating), so the composer stays usable as before.
+            Some(RuntimeComposerEligibility::Available)
+            | Some(RuntimeComposerEligibility::Unsupported) => ComposerMode::Available,
+            // Runtime has not proved a trusted prompt for this attachment:
+            // fail closed rather than let Return silently receive `Busy`.
+            Some(RuntimeComposerEligibility::Busy) | None => ComposerMode::Busy {
+                process: self.running_command().unwrap_or_default(),
+            },
+        }
+    }
+
+    /// The Runtime-published Running Block's command, if any. Only Runtime
+    /// records say a command is running; the client never guesses one.
+    fn running_command(&self) -> Option<String> {
+        self.blocks
+            .iter()
+            .rev()
+            .find(|block| block.state == BlockPresentationState::Running)
+            .map(|block| block.command.clone())
     }
 
     fn can_submit(&self) -> bool {
@@ -419,6 +469,27 @@ impl ComposerState {
                 composer.blocks = composer.project_blocks(pane, &records);
                 Ok(None)
             }
+            ComposerAction::ApplyRuntimeEligibility {
+                pane,
+                eligibility,
+                revision,
+            } => {
+                let composer = self.pane_mut(pane);
+                let next = eligibility.map(|eligibility| (eligibility, revision));
+                if let (Some((_, current)), Some((_, incoming))) =
+                    (composer.runtime_eligibility, next)
+                    && incoming < current
+                {
+                    // Stale relay; the newer fact stands.
+                    return Ok(None);
+                }
+                if composer.runtime_eligibility != next {
+                    composer.runtime_eligibility = next;
+                    composer.bump_epoch();
+                    composer.close_overlay_if_unavailable();
+                }
+                Ok(None)
+            }
             ComposerAction::OpenHistory { pane } => {
                 let composer = self.existing_mut(pane)?;
                 // An empty history has no rows to show; the host affordance is
@@ -527,11 +598,165 @@ mod tests {
         BlockId::from_bytes([tag; 16])
     }
 
+    /// A Pane whose Runtime has published `Available`: the only way a
+    /// composer becomes submittable.
     fn ready(state: &mut ComposerState, pane: PaneId) -> u64 {
         state
             .apply(ComposerAction::EnsurePane { pane })
             .expect("ensure");
+        eligible(state, pane, RuntimeComposerEligibility::Available, 1);
         state.snapshot(pane).expect("snap").epoch
+    }
+
+    fn eligible(
+        state: &mut ComposerState,
+        pane: PaneId,
+        eligibility: RuntimeComposerEligibility,
+        revision: u64,
+    ) -> u64 {
+        state
+            .apply(ComposerAction::ApplyRuntimeEligibility {
+                pane,
+                eligibility: Some(eligibility),
+                revision,
+            })
+            .expect("eligibility");
+        state.snapshot(pane).expect("snap").epoch
+    }
+
+    #[test]
+    fn composer_is_busy_until_runtime_publishes_eligibility() {
+        let pane = pane();
+        let mut state = ComposerState::new();
+        state
+            .apply(ComposerAction::EnsurePane { pane })
+            .expect("ensure");
+        let epoch = state.snapshot(pane).unwrap().epoch;
+        state
+            .apply(ComposerAction::SetDraft {
+                pane,
+                text: "echo early".into(),
+                epoch,
+            })
+            .unwrap();
+        let snap = state.snapshot(pane).unwrap();
+        assert_eq!(
+            snap.mode,
+            ComposerMode::Busy {
+                process: String::new()
+            }
+        );
+        assert_eq!(snap.mode.editor_placeholder(), "Waiting for prompt...");
+        assert!(!snap.can_submit);
+        assert_eq!(
+            state.apply(ComposerAction::Submit {
+                pane,
+                epoch: snap.epoch
+            }),
+            Err(ComposerError::SubmitDisabled)
+        );
+        // The draft survives; the first trusted prompt enables it unchanged.
+        eligible(&mut state, pane, RuntimeComposerEligibility::Available, 1);
+        let snap = state.snapshot(pane).unwrap();
+        assert_eq!(snap.mode, ComposerMode::Available);
+        assert!(snap.can_submit);
+        assert_eq!(snap.draft, "echo early");
+    }
+
+    #[test]
+    fn runtime_busy_disables_and_available_restores_with_draft_intact() {
+        let pane = pane();
+        let mut state = ComposerState::new();
+        let epoch = ready(&mut state, pane);
+        state
+            .apply(ComposerAction::SetDraft {
+                pane,
+                text: "ls".into(),
+                epoch,
+            })
+            .unwrap();
+        let busy_epoch = eligible(&mut state, pane, RuntimeComposerEligibility::Busy, 2);
+        assert_ne!(busy_epoch, epoch, "mode change bumps the epoch");
+        let snap = state.snapshot(pane).unwrap();
+        assert!(matches!(snap.mode, ComposerMode::Busy { .. }));
+        assert!(!snap.can_submit);
+        assert_eq!(snap.draft, "ls");
+        eligible(&mut state, pane, RuntimeComposerEligibility::Available, 3);
+        let snap = state.snapshot(pane).unwrap();
+        assert_eq!(snap.mode, ComposerMode::Available);
+        assert_eq!(snap.draft, "ls");
+    }
+
+    #[test]
+    fn stale_runtime_eligibility_revision_is_ignored() {
+        let pane = pane();
+        let mut state = ComposerState::new();
+        ready(&mut state, pane);
+        let epoch = eligible(&mut state, pane, RuntimeComposerEligibility::Available, 3);
+        // A delayed relay of an older Busy fact cannot regress the composer.
+        let same = eligible(&mut state, pane, RuntimeComposerEligibility::Busy, 2);
+        assert_eq!(same, epoch);
+        assert_eq!(state.snapshot(pane).unwrap().mode, ComposerMode::Available);
+        // Equal revision with the same fact is idempotent.
+        let same = eligible(&mut state, pane, RuntimeComposerEligibility::Available, 3);
+        assert_eq!(same, epoch);
+    }
+
+    #[test]
+    fn cleared_runtime_eligibility_falls_back_to_busy() {
+        let pane = pane();
+        let mut state = ComposerState::new();
+        ready(&mut state, pane);
+        state
+            .apply(ComposerAction::ApplyRuntimeEligibility {
+                pane,
+                eligibility: None,
+                revision: 0,
+            })
+            .unwrap();
+        let snap = state.snapshot(pane).unwrap();
+        assert!(matches!(snap.mode, ComposerMode::Busy { .. }));
+        assert!(!snap.can_submit);
+        // A fresh attachment starts its own revision sequence.
+        eligible(&mut state, pane, RuntimeComposerEligibility::Available, 1);
+        assert_eq!(state.snapshot(pane).unwrap().mode, ComposerMode::Available);
+    }
+
+    #[test]
+    fn unsupported_shell_keeps_the_raw_composer_path_available() {
+        let pane = pane();
+        let mut state = ComposerState::new();
+        state
+            .apply(ComposerAction::EnsurePane { pane })
+            .expect("ensure");
+        eligible(&mut state, pane, RuntimeComposerEligibility::Unsupported, 1);
+        assert_eq!(state.snapshot(pane).unwrap().mode, ComposerMode::Available);
+    }
+
+    #[test]
+    fn busy_placeholder_names_only_a_runtime_running_command() {
+        let pane = pane();
+        let mut state = ComposerState::new();
+        ready(&mut state, pane);
+        eligible(&mut state, pane, RuntimeComposerEligibility::Busy, 2);
+        assert_eq!(
+            state.snapshot(pane).unwrap().mode.editor_placeholder(),
+            "Waiting for prompt..."
+        );
+        state
+            .apply(ComposerAction::ApplyRuntimeBlocks {
+                pane,
+                records: vec![running(block(1), "sleep 2", 3)],
+            })
+            .unwrap();
+        let snap = state.snapshot(pane).unwrap();
+        assert_eq!(
+            snap.mode,
+            ComposerMode::Busy {
+                process: "sleep 2".into()
+            }
+        );
+        assert_eq!(snap.mode.editor_placeholder(), "Command running...");
     }
 
     fn running(id: BlockId, command: &str, start: u64) -> RuntimeBlockRecord {

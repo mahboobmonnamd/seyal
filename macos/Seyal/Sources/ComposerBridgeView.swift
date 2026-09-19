@@ -153,12 +153,16 @@ final class ComposerBridgeView: NSView, NSTextViewDelegate {
         setAccessibilityValue(available ? "available" : (busy ? "busy" : "hidden"))
         if composer.epoch != lastEpoch {
             lastEpoch = composer.epoch
+            // The Rust draft is authoritative in every mode (SPEC-008 §4). A
+            // Runtime-published busy state with an empty draft (command
+            // accepted, prompt not back yet) must show the placeholder, not
+            // the text that was already submitted.
             if composer.draft_utf8_len > 0, let bytes = composer.draft_utf8 {
                 textView.string = String(
                     decoding: UnsafeBufferPointer(start: bytes, count: Int(composer.draft_utf8_len)),
                     as: UTF8.self
                 )
-            } else if composer.mode != UInt16(SEYAL_APP_COMPOSER_BUSY.rawValue) {
+            } else {
                 textView.string = ""
             }
         }

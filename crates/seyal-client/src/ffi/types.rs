@@ -392,6 +392,28 @@ impl SeyalComposerResult {
     }
 }
 
+/// Runtime-published composer eligibility for the active client (#978).
+/// `eligibility` uses `SeyalAppComposerEligibility` (0 = none published yet).
+/// `revision` is Runtime's monotonic fence; the host relays both unchanged
+/// through `SEYAL_APP_ACTION_APPLY_COMPOSER_STATUS`.
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct SeyalComposerStatus {
+    pub revision: u64,
+    pub eligibility: u8,
+    pub reserved: [u8; 7],
+}
+
+impl SeyalComposerStatus {
+    pub(crate) const fn empty() -> Self {
+        Self {
+            revision: 0,
+            eligibility: 0,
+            reserved: [0; 7],
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct SeyalHistoryCell {

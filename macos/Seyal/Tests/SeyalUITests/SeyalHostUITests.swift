@@ -185,6 +185,57 @@ final class SeyalHostUITests: XCTestCase {
         }
     }
 
+    /// #978 demo procedure: the composer is enabled only by Runtime's
+    /// published eligibility. It reads `available` at the prompt, `busy` while
+    /// `sleep 2` occupies the shell, and `available` again at the next prompt.
+    func testComposerReadsBusyWhileCommandRunsAndAvailableAtNextPrompt() throws {
+        let app = hostedApp()
+        waitForUsablePty(in: app)
+        let composer = app.descendants(matching: .any)["seyal-composer"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 12))
+        let available = NSPredicate(format: "value == 'available'")
+        let busy = NSPredicate(format: "value == 'busy'")
+        XCTAssertEqual(
+            XCTWaiter.wait(
+                for: [expectation(for: available, evaluatedWith: composer, handler: nil)],
+                timeout: 12
+            ),
+            .completed,
+            "composer never became available at the first prompt; value=\(composer.value ?? "nil")"
+        )
+        composer.firstMatch.click()
+        let editor = app.descendants(matching: .any)["seyal-composer-editor"]
+        if editor.waitForExistence(timeout: 2), editor.firstMatch.isHittable {
+            editor.firstMatch.click()
+            editor.firstMatch.typeText("sleep 2")
+            editor.firstMatch.typeKey("\r", modifierFlags: [])
+        } else {
+            composer.firstMatch.typeText("sleep 2")
+            app.typeKey("\r", modifierFlags: [])
+        }
+        // Runtime publishes Busy at admission; the host only relays it.
+        XCTAssertEqual(
+            XCTWaiter.wait(
+                for: [expectation(for: busy, evaluatedWith: composer, handler: nil)],
+                timeout: 4
+            ),
+            .completed,
+            "composer stayed \(composer.value ?? "nil") while sleep 2 owned the shell"
+        )
+        XCTAssertEqual(app.state, .runningForeground, "Seyal.app crashed during busy relay")
+        // The next trusted prompt re-enables it, with the draft cleared by
+        // the accepted submit.
+        XCTAssertEqual(
+            XCTWaiter.wait(
+                for: [expectation(for: available, evaluatedWith: composer, handler: nil)],
+                timeout: 10
+            ),
+            .completed,
+            "composer did not return to available after sleep 2; value=\(composer.value ?? "nil")"
+        )
+        assertFlowBlocksOrFail(in: app)
+    }
+
     func testAlternateScreenTakeoverDoesNotCrashTheHost() throws {
         let app = hostedApp()
         waitForUsablePty(in: app)

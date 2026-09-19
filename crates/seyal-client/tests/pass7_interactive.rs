@@ -12,7 +12,10 @@ use std::{
 
 use seyal_client::{ClientError, GridGeometry, InputAdmissionFailure, LocalDisplayClient};
 use seyal_exec::{CommandSpec, WindowSize};
-use seyal_runtime::{local_ipc::framing::Role, ExecutionId, LocalIpcMode, Runtime, RuntimeConfig};
+use seyal_runtime::{
+    local_ipc::framing::{ComposerEligibility, Role},
+    ExecutionId, LocalIpcMode, Runtime, RuntimeConfig,
+};
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -122,34 +125,37 @@ fn pump_until(client: &mut LocalDisplayClient, predicate: impl Fn(&LocalDisplayC
     }
 }
 
-/// Submit a composer command under the ADR-009 admission contract: Runtime
-/// accepts it only once the shell has announced a trusted prompt, and answers
-/// `Busy` (draft kept) before that. A client without the eligibility signal
-/// retries until the correlated result is `Accepted`.
+/// Wait until Runtime has published exactly this composer eligibility for
+/// the client's attachment (#978). No polling of admission results: the
+/// published fact is the client's only source of "Available".
+fn wait_for_eligibility(client: &mut LocalDisplayClient, eligibility: ComposerEligibility) {
+    pump_until(client, |client| {
+        client
+            .composer_status()
+            .is_some_and(|status| status.eligibility == eligibility)
+    });
+}
+
+/// Submit a composer command once Runtime has published `Available`. Under
+/// ADR-009 admission the correlated result must then be `Accepted`; a `Busy`
+/// here would mean the published eligibility lied.
 fn submit_when_eligible(client: &mut LocalDisplayClient, command: &str) {
     use seyal_runtime::local_ipc::framing::ComposerResultCode;
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let request_id = client.next_composer_request_id();
+    wait_for_eligibility(client, ComposerEligibility::Available);
+    let request_id = client.next_composer_request_id();
+    client
+        .submit_composer_command(command)
+        .expect("composer command admission");
+    pump_until(client, |client| {
         client
-            .submit_composer_command(command)
-            .expect("composer command admission");
-        pump_until(client, |client| {
-            client
-                .last_composer_result()
-                .is_some_and(|result| result.request_id == request_id)
-        });
-        match client.last_composer_result().map(|result| result.code) {
-            Some(ComposerResultCode::Accepted) => return,
-            Some(ComposerResultCode::Busy) => {}
-            other => panic!("unexpected composer result {other:?}"),
-        }
-        assert!(
-            Instant::now() < deadline,
-            "composer never became eligible (no trusted prompt observed)"
-        );
-        thread::sleep(Duration::from_millis(20));
-    }
+            .last_composer_result()
+            .is_some_and(|result| result.request_id == request_id)
+    });
+    assert_eq!(
+        client.last_composer_result().map(|result| result.code),
+        Some(ComposerResultCode::Accepted),
+        "Runtime published Available, so admission must accept"
+    );
 }
 
 #[test]
@@ -190,6 +196,62 @@ fn composer_command_reaches_real_pty_without_quarantining_block_metadata() {
         !client.block_timeline().records.is_empty()
     });
     assert_eq!(client.block_timeline().records.len(), 1);
+    drop(client);
+    runtime.finish();
+}
+
+#[test]
+fn composer_status_is_published_at_attach_and_on_every_eligibility_flip() {
+    use seyal_runtime::local_ipc::framing::ComposerResultCode;
+    let runtime = RuntimeHarness::start(CommandSpec::new("/bin/zsh"));
+    let mut client = runtime.connect_controller();
+
+    // Attach delivers the current fact for this attachment without waiting
+    // for a transition; the first trusted prompt then flips it to Available.
+    pump_until(&mut client, |client| client.composer_status().is_some());
+    let first = client.composer_status().expect("attach-time status");
+    assert_eq!(first.attachment_id, client.attachment_id());
+    wait_for_eligibility(&mut client, ComposerEligibility::Available);
+    let at_prompt = client.composer_status().expect("status").revision;
+
+    // A client attaching to an idle prompt is enabled immediately, with the
+    // fact fenced to its own attachment.
+    let mut late = runtime.connect_observer();
+    pump_until(&mut late, |client| client.composer_status().is_some());
+    let late_status = late.composer_status().expect("late attach status");
+    assert_eq!(late_status.eligibility, ComposerEligibility::Available);
+    assert_eq!(late_status.attachment_id, late.attachment_id());
+    drop(late);
+
+    // Submission flips to Busy at admission; the next prompt flips back
+    // with a strictly newer revision.
+    let request_id = client.next_composer_request_id();
+    client
+        .submit_composer_command("sleep 0.4")
+        .expect("composer command admission");
+    wait_for_eligibility(&mut client, ComposerEligibility::Busy);
+    let busy = client.composer_status().expect("status").revision;
+    assert!(busy > at_prompt);
+    pump_until(&mut client, |client| {
+        client
+            .last_composer_result()
+            .is_some_and(|result| result.request_id == request_id)
+    });
+    assert_eq!(
+        client.last_composer_result().map(|result| result.code),
+        Some(ComposerResultCode::Accepted)
+    );
+    wait_for_eligibility(&mut client, ComposerEligibility::Available);
+    assert!(client.composer_status().expect("status").revision > busy);
+
+    // Direct terminal input closes the gate at admission, before any marker,
+    // and the following prompt reopens it.
+    client
+        .submit_committed_text("sleep 0.4\r")
+        .expect("direct input admission");
+    wait_for_eligibility(&mut client, ComposerEligibility::Busy);
+    wait_for_eligibility(&mut client, ComposerEligibility::Available);
+
     drop(client);
     runtime.finish();
 }

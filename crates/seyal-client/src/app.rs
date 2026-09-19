@@ -16,6 +16,7 @@ use crate::chrome::{
 };
 use crate::composer::{
     ComposerAction, ComposerError, ComposerSnapshot, ComposerState, RuntimeBlockRecord,
+    RuntimeComposerEligibility,
 };
 use crate::palette::{PaletteAction, PaletteCommand, PaletteError, PaletteSnapshot, PaletteState};
 use crate::presentation::{
@@ -148,6 +149,13 @@ pub enum AppAction {
     ApplyRuntimeBlocks {
         fence: AppFence,
         records: Vec<RuntimeBlockRecord>,
+    },
+    /// Relay the attached client's Runtime-published composer eligibility
+    /// (ADR-009 invariant 7). `None` clears it when the transport is lost.
+    ApplyRuntimeComposerStatus {
+        fence: AppFence,
+        eligibility: Option<RuntimeComposerEligibility>,
+        revision: u64,
     },
     SetLeftPanel {
         mode: LeftPanelMode,
@@ -456,6 +464,11 @@ impl ApplicationRoot {
             AppAction::ApplyRuntimeBlocks { fence, records } => {
                 self.apply_runtime_blocks(fence, records)
             }
+            AppAction::ApplyRuntimeComposerStatus {
+                fence,
+                eligibility,
+                revision,
+            } => self.apply_runtime_composer_status(fence, eligibility, revision),
             AppAction::OpenComposerHistory { fence } => {
                 self.composer_history(fence, ComposerAction::OpenHistory { pane: fence.pane })
             }
@@ -1061,6 +1074,23 @@ impl ApplicationRoot {
         Ok(())
     }
 
+    fn apply_runtime_composer_status(
+        &mut self,
+        fence: AppFence,
+        eligibility: Option<RuntimeComposerEligibility>,
+        revision: u64,
+    ) -> Result<(), AppError> {
+        self.require_fence(fence)?;
+        self.composer
+            .apply(ComposerAction::ApplyRuntimeEligibility {
+                pane: fence.pane,
+                eligibility,
+                revision,
+            })
+            .map(|_| ())
+            .map_err(composer_error)
+    }
+
     fn derive_presentation(&mut self, alternate_screen: bool) -> Result<(), AppError> {
         let Some(bound) = self.authority else {
             self.sync_composer_presentation();
@@ -1241,6 +1271,73 @@ mod tests {
             pty_generation: 1,
             alternate_screen: alternate,
         }
+    }
+
+    /// Runtime published `Available` for the bound attachment: the only way
+    /// the composer becomes submittable.
+    fn runtime_available(root: &mut ApplicationRoot, revision: u64) {
+        root.apply(AppAction::ApplyRuntimeComposerStatus {
+            fence: root.fence(),
+            eligibility: Some(RuntimeComposerEligibility::Available),
+            revision,
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn bound_composer_is_busy_until_runtime_publishes_eligibility() {
+        use crate::composer::ComposerMode;
+
+        let mut root = ApplicationRoot::new();
+        root.apply(AppAction::Bind {
+            fence: root.fence(),
+            evidence: evidence(8, true, false),
+        })
+        .unwrap();
+        let bound = root.snapshot().composer.unwrap();
+        assert!(matches!(bound.mode, ComposerMode::Busy { .. }));
+        assert!(!bound.can_submit);
+        root.apply(AppAction::SetComposerDraft {
+            fence: root.fence(),
+            text: "echo hi".into(),
+            composer_epoch: bound.epoch,
+        })
+        .unwrap();
+        let epoch = root.snapshot().composer.unwrap().epoch;
+        assert_eq!(
+            root.apply(AppAction::SubmitComposer {
+                fence: root.fence(),
+                composer_epoch: epoch,
+            }),
+            Err(AppError::ComposerSubmitDisabled)
+        );
+        // A status relayed against a stale execution fence fails closed.
+        let mut stale = root.fence();
+        stale.execution = Some(ExecutionId::from_bytes([0x99; 16]));
+        assert_eq!(
+            root.apply(AppAction::ApplyRuntimeComposerStatus {
+                fence: stale,
+                eligibility: Some(RuntimeComposerEligibility::Available),
+                revision: 1,
+            }),
+            Err(AppError::StaleExecution)
+        );
+        assert!(!root.snapshot().composer.unwrap().can_submit);
+        runtime_available(&mut root, 1);
+        let ready = root.snapshot().composer.unwrap();
+        assert_eq!(ready.mode, ComposerMode::Available);
+        assert!(ready.can_submit);
+        assert_eq!(ready.draft, "echo hi");
+        // Runtime says busy again (command running): draft preserved.
+        root.apply(AppAction::ApplyRuntimeComposerStatus {
+            fence: root.fence(),
+            eligibility: Some(RuntimeComposerEligibility::Busy),
+            revision: 2,
+        })
+        .unwrap();
+        let busy = root.snapshot().composer.unwrap();
+        assert!(!busy.can_submit);
+        assert_eq!(busy.draft, "echo hi");
     }
 
     #[test]
@@ -1630,6 +1727,7 @@ mod tests {
             evidence: evidence(8, true, false),
         })
         .unwrap();
+        runtime_available(&mut root, 1);
         let epoch = root.snapshot().composer.unwrap().epoch;
         root.apply(AppAction::SetComposerDraft {
             fence: root.fence(),
@@ -1924,6 +2022,7 @@ mod tests {
             evidence: evidence(8, true, false),
         })
         .unwrap();
+        runtime_available(&mut root, 1);
         let epoch = root.snapshot().composer.as_ref().unwrap().epoch;
         root.apply(AppAction::SetComposerDraft {
             fence: root.fence(),

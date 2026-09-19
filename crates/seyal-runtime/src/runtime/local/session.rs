@@ -297,6 +297,14 @@ impl Runtime {
             entry.attachments.insert(attachment_id);
         }
         self.publish_block_timeline(attach.execution_id);
+        if self.local_connection_supports_command_blocks(token) {
+            self.send_composer_status(
+                token,
+                attachment_id,
+                attach.execution_id,
+                super::composer_status::StatusQueue::AfterDisplay,
+            );
+        }
     }
 
     fn handle_detach(&mut self, token: u64, payload: &[u8]) {

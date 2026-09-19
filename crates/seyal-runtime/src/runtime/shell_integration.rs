@@ -19,6 +19,8 @@ use super::entry::{Entry, PendingComposerCommand};
 use super::integration_state::{BlockExit, Effect, IntegrationEvent, IntegrationState};
 use super::Runtime;
 #[cfg(target_os = "macos")]
+use crate::local_ipc::framing::ComposerEligibility;
+#[cfg(target_os = "macos")]
 use crate::ShellIntegrationPolicy;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -154,7 +156,26 @@ impl Runtime {
             start_line,
         });
         entry.integration = entry.integration.submitted();
+        self.publish_composer_status_if_changed(id);
         Ok(ComposerAdmission::Accepted(block_id))
+    }
+
+    /// Publish the composer eligibility to attached clients when it flipped
+    /// since the last publish (ADR-009 invariant 7; #978). Called only at
+    /// integration-state transition points, never per byte: one enum compare
+    /// per transition, and one bounded frame per attachment per flip.
+    #[cfg(target_os = "macos")]
+    pub(in crate::runtime) fn publish_composer_status_if_changed(&mut self, id: ExecutionId) {
+        let Some(entry) = self.entries.get_mut(&id) else {
+            return;
+        };
+        let eligibility = composer_eligibility(entry);
+        if entry.published_composer_eligibility == Some(eligibility) {
+            return;
+        }
+        entry.published_composer_eligibility = Some(eligibility);
+        entry.composer_status_revision = entry.composer_status_revision.saturating_add(1);
+        self.publish_composer_status(id);
     }
 
     /// Consume bounded canonical parser events after their bytes were applied
@@ -206,6 +227,7 @@ impl Runtime {
         if changed {
             self.publish_block_timeline(id);
         }
+        self.publish_composer_status_if_changed(id);
         Ok(())
     }
 
@@ -218,6 +240,7 @@ impl Runtime {
             // No Block effects are possible from this event.
             let _ = apply_integration_event(entry, IntegrationEvent::DirectInputAdmitted);
         }
+        self.publish_composer_status_if_changed(id);
     }
 
     /// Primary child exit or PTY EOF: complete any Running Block through
@@ -237,6 +260,7 @@ impl Runtime {
         if changed {
             self.publish_block_timeline(id);
         }
+        self.publish_composer_status_if_changed(id);
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -259,6 +283,26 @@ impl Runtime {
             .ok_or(RuntimeError::UnknownExecution)?;
         while entry.execution.take_shell_integration_event().is_some() {}
         Ok(())
+    }
+}
+
+/// The eligibility Runtime would apply to a composer submission right now
+/// (mechanism 5), reduced to the facts that only change at transition points.
+/// Transient unwritten-input bookkeeping is deliberately left out: it drains
+/// without a transition, so publishing it could strand clients on `Busy`;
+/// admission itself still checks it and answers a correlated `Busy`.
+#[cfg(target_os = "macos")]
+pub(in crate::runtime) fn composer_eligibility(entry: &Entry) -> ComposerEligibility {
+    if entry.shell_integration_mode == ShellIntegrationMode::Unsupported {
+        return ComposerEligibility::Unsupported;
+    }
+    if entry.terminal_io_active()
+        && entry.integration.composer_eligible()
+        && !entry.execution.terminal().modes().alternate_screen
+    {
+        ComposerEligibility::Available
+    } else {
+        ComposerEligibility::Busy
     }
 }
 

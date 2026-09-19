@@ -1,8 +1,7 @@
 #[cfg(target_os = "macos")]
 use std::{
-    env, fs,
+    env,
     hint::black_box,
-    path::PathBuf,
     time::{Duration, Instant},
 };
 
@@ -13,21 +12,7 @@ use seyal_exec::{CommandSpec, ReadOutcome, TerminalExecution, TerminationPolicy,
 const PAYLOAD: &[u8] = b"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 #[cfg(target_os = "macos")]
-fn contract_gate() -> Option<String> {
-    env::var("SEYAL_M002_CONTRACT_GATE")
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-}
-
-#[cfg(target_os = "macos")]
-fn parse_usize_env(name: &str, default: usize) -> usize {
-    env::var(name)
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .filter(|value: &usize| *value > 0)
-        .unwrap_or(default)
-}
+include!("../../../benches/m002_contract_support.rs");
 
 #[cfg(target_os = "macos")]
 fn spawn_ready() -> (TerminalExecution, [u8; 4096]) {
@@ -84,27 +69,14 @@ fn read_echo(execution: &mut TerminalExecution, buffer: &mut [u8]) -> usize {
 }
 
 #[cfg(target_os = "macos")]
-fn write_cohort_file(path: &str, cohort: usize, samples: &[f64]) {
-    let mut body = format!("cohort = {cohort}\nsamples = [");
-    for (index, value) in samples.iter().enumerate() {
-        if index > 0 {
-            body.push_str(", ");
-        }
-        body.push_str(&format!("{value:.9}"));
-    }
-    body.push_str("]\n");
-    fs::write(PathBuf::from(path), body).expect("write M002 cohort file");
-}
-
-#[cfg(target_os = "macos")]
 fn run_contract_cohort() {
-    let gate = contract_gate().expect("contract gate");
+    let gate = m002_contract_gate().expect("contract gate");
     if gate != "pty_to_terminal_state" {
         panic!("unsupported M002 contract gate {gate:?}");
     }
-    let cohort = parse_usize_env("SEYAL_M002_COHORT", 1);
-    let warmups = parse_usize_env("SEYAL_M002_WARMUPS", 20);
-    let samples = parse_usize_env("SEYAL_M002_SAMPLES", 100);
+    let cohort = m002_parse_usize_env("SEYAL_M002_COHORT", 1);
+    let warmups = m002_parse_usize_env("SEYAL_M002_WARMUPS", 20);
+    let samples = m002_parse_usize_env("SEYAL_M002_SAMPLES", 100);
     let out = env::var("SEYAL_M002_COHORT_OUT").expect("SEYAL_M002_COHORT_OUT");
     let (mut execution, mut buffer) = spawn_ready();
     for _ in 0..warmups {
@@ -126,7 +98,7 @@ fn run_contract_cohort() {
         Duration::from_millis(100),
         Duration::from_secs(2),
     ));
-    write_cohort_file(&out, cohort, &retained);
+    m002_write_cohort_file(&out, cohort, &retained);
     println!(
         "[seyal pty benchmark] m002_contract gate={gate} cohort={cohort} warmups={warmups} samples={samples} out={out} performance_claim=false"
     );
@@ -134,7 +106,7 @@ fn run_contract_cohort() {
 
 #[cfg(target_os = "macos")]
 fn main() {
-    if contract_gate().is_some() {
+    if m002_contract_gate().is_some() {
         run_contract_cohort();
         return;
     }

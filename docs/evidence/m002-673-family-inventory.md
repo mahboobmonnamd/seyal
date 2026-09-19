@@ -19,8 +19,10 @@ and SPEC-010 §18.1 / #818 for the two accepted HistoryStore ceilings.
 
 Five fresh-process cohorts × 20 warmups × 100 samples. Nearest-rank
 percentiles. No best-run substitution. Proposed gates have no accepted
-numeric ceilings and cannot be evaluated as release PASS/FAIL. Missing
-metrics stay `unknown` or `not-instrumented`.
+numeric ceilings and cannot be evaluated as release PASS/FAIL. Every
+family now has a contract-clean collector; proposed numeric status stays
+`unknown` until a ceiling is accepted. `not-instrumented` is no longer a
+valid harness status for the v1 set.
 
 ## Inventory
 
@@ -28,17 +30,17 @@ metrics stay `unknown` or `not-instrumented`.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `history_active_reflow_ms` | accepted | 2/4/8 ms | `f105364` | ready | retained `20260916T171837Z` | `PLATFORM_LIMITED` | **FAIL** |
 | `history_sealed_segment_reflow_ms` | accepted | 1/2/4 ms | `f105364` | ready | retained `20260916T171837Z` | `PLATFORM_LIMITED` | PASS |
-| `pty_to_terminal_state` | proposed | none | none | ready (PTY→`TerminalState`) | none | `PLATFORM_LIMITED` | not-instrumented |
-| `damage_to_client_cache` | proposed | none | none | not-instrumented | none | `PLATFORM_LIMITED` | not-instrumented |
-| `renderer_prepare_submission` | proposed | none | none | not-instrumented | none | `PLATFORM_LIMITED` | not-instrumented |
-| `input_visible_proxy` | proposed | none | none | not-instrumented | none | `PLATFORM_LIMITED` | not-instrumented |
-| `high_output_responsiveness` | proposed | none | none | not-instrumented | none | `PLATFORM_LIMITED` | not-instrumented |
-| `resource_scaling_rss` | proposed | none | none | not-instrumented | none | `PLATFORM_LIMITED` | not-instrumented |
-| `resource_scaling_fds` | proposed | none | none | not-instrumented | none | `PLATFORM_LIMITED` | not-instrumented |
-| `resource_scaling_threads` | proposed | none | none | not-instrumented | none | `PLATFORM_LIMITED` | not-instrumented |
-| `startup` | proposed | none | none | not-instrumented | none | `PLATFORM_LIMITED` | not-instrumented |
-| `idle_cpu` | proposed | none | none | not-instrumented | none | `PLATFORM_LIMITED` | not-instrumented |
-| `teardown_recovery` | proposed | none | none | not-instrumented | none | `PLATFORM_LIMITED` | not-instrumented |
+| `pty_to_terminal_state` | proposed | none | none | ready | none | `PLATFORM_LIMITED` | unknown |
+| `damage_to_client_cache` | proposed | none | none | ready | none | `PLATFORM_LIMITED` | unknown |
+| `renderer_prepare_submission` | proposed | none | none | ready | none | `PLATFORM_LIMITED` | unknown |
+| `input_visible_proxy` | proposed | none | none | ready | none | `PLATFORM_LIMITED` | unknown |
+| `high_output_responsiveness` | proposed | none | none | ready | none | `PLATFORM_LIMITED` | unknown |
+| `resource_scaling_rss` | proposed | none | none | ready | none | `PLATFORM_LIMITED` | unknown |
+| `resource_scaling_fds` | proposed | none | none | ready | none | `PLATFORM_LIMITED` | unknown |
+| `resource_scaling_threads` | proposed | none | none | ready | none | `PLATFORM_LIMITED` | unknown |
+| `startup` | proposed | none | none | ready | none | `PLATFORM_LIMITED` | unknown |
+| `idle_cpu` | proposed | none | none | ready | none | `PLATFORM_LIMITED` | unknown |
+| `teardown_recovery` | proposed | none | none | ready | none | `PLATFORM_LIMITED` | unknown |
 
 The `f105364` HistoryStore row stays StatsAlloc-era `PLATFORM_LIMITED`.
 The active-reflow relative p95/p99 FAIL is retained. Do not remasure it
@@ -49,9 +51,11 @@ to hide host noise.
 ```sh
 python3 scripts/run-m002-performance-contract.py --inventory
 python3 scripts/run-m002-performance-contract.py --self-test
-# Opt-in collection for a harness-ready proposed family. Always PLATFORM_LIMITED
+# Opt-in collection for any proposed family. Always PLATFORM_LIMITED
 # on an uncontrolled host. Cannot evaluate a proposed gate as PASS/FAIL.
 python3 scripts/run-m002-performance-contract.py --gate pty_to_terminal_state
+python3 scripts/run-m002-performance-contract.py --gate damage_to_client_cache
+python3 scripts/run-m002-performance-contract.py --gate renderer_prepare_submission
 ```
 
 HistoryStore remasure stays on the landed opt-in runner and is not the

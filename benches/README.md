@@ -68,10 +68,10 @@ python3 scripts/run-m002-history-reflow-contract.py
 This runner is Apple Silicon macOS only. It is not part of `make bench` or CI.
 The finite #673 family map is `docs/evidence/m002-673-family-inventory.md`.
 The generalized dispatcher can inventory every v1 family and collect
-`pty_to_terminal_state` five-cohort samples as `PLATFORM_LIMITED` harness
+five-cohort samples for each proposed gate as `PLATFORM_LIMITED` harness
 proof. It refuses to remasure the retained `f105364` HistoryStore FAIL
-unless `--allow-history-remasure` is set. Other families stay
-`not-instrumented` until they have a contract-clean collector.
+unless `--allow-history-remasure` is set. Proposed numeric status stays
+`unknown` until a ceiling is accepted.
 
 ```sh
 python3 scripts/run-m002-performance-contract.py --inventory

@@ -26,7 +26,13 @@ samples per cohort unless an approved issue-specific exception is recorded.
 
 Platform-limited, thermal, display-session, PTY-capacity, and other invalid
 environment outcomes MUST be retained as such. They are neither product
-passes nor silently discarded samples.
+passes nor silently discarded samples. A `PHYSICAL_ARM64` `VALID` result
+requires a controlled power/thermal state; `uncontrolled-developer-host`
+records are `PLATFORM_LIMITED` and cannot establish that class.
+
+`--require-exact-head` is required when recording a new measurement against
+the current checkout. Historical `--record` validation keeps the recorded
+production SHA and does not require it to equal `HEAD`.
 
 ## M002 gate families
 

@@ -1,8 +1,11 @@
 use std::{env, fs, hint::black_box, path::PathBuf, process::Command, time::Instant};
 
 use seyal_terminal::TerminalState;
+
+#[cfg(not(feature = "history-reflow-contract"))]
 use stats_alloc::{Region, StatsAlloc, INSTRUMENTED_SYSTEM};
 
+#[cfg(not(feature = "history-reflow-contract"))]
 #[global_allocator]
 static GLOBAL: &StatsAlloc<std::alloc::System> = &INSTRUMENTED_SYSTEM;
 
@@ -202,6 +205,7 @@ fn measure(
     commit: &str,
 ) {
     let rss_before = process_rss_kib();
+    #[cfg(not(feature = "history-reflow-contract"))]
     let allocation_region = Region::new(GLOBAL);
     let append_samples_per_execution = samples.min(lines);
     let mut append_samples = Vec::with_capacity(executions * append_samples_per_execution);
@@ -265,7 +269,16 @@ fn measure(
     let rss_before_value = rss_before.unwrap_or(0);
     let rss_after_value = rss_after.unwrap_or(0);
     let rss_delta = rss_after_value.saturating_sub(rss_before_value);
+    #[cfg(not(feature = "history-reflow-contract"))]
     let allocation_stats = allocation_region.change();
+    #[cfg(not(feature = "history-reflow-contract"))]
+    let (allocation_calls, allocated_bytes, deallocated_bytes) = (
+        allocation_stats.allocations,
+        allocation_stats.bytes_allocated,
+        allocation_stats.bytes_deallocated,
+    );
+    #[cfg(feature = "history-reflow-contract")]
+    let (allocation_calls, allocated_bytes, deallocated_bytes) = (0, 0, 0);
 
     println!(
         "[seyal history benchmark] case workload={workload} lines={lines} executions={executions} columns={columns} commit={commit} resident_history_bytes={resident_history_bytes} derived_cache_bytes={derived_cache_bytes} rss_before_kib={rss_before_value} rss_after_kib={rss_after_value} rss_delta_kib={rss_delta} rss_available={} append_observations={} append_samples_per_execution={append_samples_per_execution} append_p50_ns={} append_p95_ns={} append_p99_ns={} reflow_p50_ns={} reflow_p95_ns={} reflow_p99_ns={} search_p50_ns={} search_p95_ns={} search_p99_ns={} anchor_p50_ns={} anchor_p95_ns={} anchor_p99_ns={} resolved_anchors={resolved_anchors} allocation_calls={} allocated_bytes={} deallocated_bytes={} allocation_status=measured samples={samples} percentile_method=nearest-rank performance_claim=false evidence_scope=TerminalState-comparative",
@@ -283,9 +296,9 @@ fn measure(
         percentile(&mut anchor_samples, 50),
         percentile(&mut anchor_samples, 95),
         percentile(&mut anchor_samples, 99),
-        allocation_stats.allocations,
-        allocation_stats.bytes_allocated,
-        allocation_stats.bytes_deallocated,
+        allocation_calls,
+        allocated_bytes,
+        deallocated_bytes,
     );
 }
 

@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Run PHYSICAL_ARM64 five-cohort HistoryStore reflow rows for #673.
+"""Record five-cohort HistoryStore reflow rows for #673.
 
-This is an opt-in controlled-host runner. It is not invoked by `make bench` or
-Foundation Quality. Default `history_reflow` smoke stays `performance_claim=false`.
+This opt-in runner is not invoked by `make bench` or Foundation Quality.
+Default `history_reflow` smoke stays `performance_claim=false`.
 
-Accepted numeric gates only: history_active_reflow_ms and
-history_sealed_segment_reflow_ms. Proposed #673 gates are left unevaluated.
+It always records `uncontrolled-developer-host` as `PLATFORM_LIMITED`.
+That cannot establish `PHYSICAL_ARM64`. Accepted numeric gates only:
+history_active_reflow_ms and history_sealed_segment_reflow_ms. Proposed
+#673 gates stay unevaluated. A numeric FAIL is retained; it does not
+rewrite the row to PASS.
 """
 from __future__ import annotations
 
@@ -109,7 +112,7 @@ def collect_cohorts(gate: str, dest: Path, sha: str) -> str:
                 "--bench",
                 "history_reflow",
                 "--features",
-                "history-reflow-bench",
+                "history-reflow-contract",
                 "--",
                 "--quiet",
             ],
@@ -141,7 +144,7 @@ def write_record(
     candidate: Path,
     baseline: Path,
     workload: str,
-) -> Path:
+) -> tuple[Path, str]:
     candidate_values = load_samples(candidate)
     baseline_values = load_samples(baseline)
     p50, p95, p99 = (nearest_rank(candidate_values, p) for p in (50, 95, 99))
@@ -154,7 +157,7 @@ def write_record(
         and p95 <= b95 * (1 + allowed / 100)
         and p99 <= b99 * (1 + allowed / 100)
     )
-    status = "PASS" if absolute_ok and relative_ok else "FAIL"
+    numeric_status = "PASS" if absolute_ok and relative_ok else "FAIL"
     record = evidence_root / "record.toml"
     workload_hash = hashlib.sha256(workload.encode()).hexdigest()
     rel = lambda path: path.relative_to(ROOT).as_posix()
@@ -182,10 +185,11 @@ def write_record(
                 "percentile_method = 'nearest-rank'",
                 "sample_count = 500",
                 "cohort_count = 5",
-                "environment_status = 'VALID'",
-                "platform_limit_reason = ''",
+                "environment_status = 'PLATFORM_LIMITED'",
+                "platform_limit_reason = 'uncontrolled-developer-host; same-SHA baseline is host-noise and cannot establish PHYSICAL_ARM64'",
                 "comparator = 'less_equal'",
-                f"status = {toml_str(status)}",
+                "status = 'PLATFORM_LIMITED'",
+                f"numeric_status = {toml_str(numeric_status)}",
                 f"p50 = {p50!r}",
                 f"p95 = {p95!r}",
                 f"p99 = {p99!r}",
@@ -201,12 +205,12 @@ def write_record(
         ),
         encoding="utf-8",
     )
-    return record
+    return record, numeric_status
 
 
 def main() -> None:
     if sys.platform != "darwin" or platform.machine() not in {"arm64", "aarch64"}:
-        raise SystemExit("PHYSICAL_ARM64 runner requires Apple Silicon macOS")
+        raise SystemExit("history-reflow contract runner requires Apple Silicon macOS")
     sha = git_sha()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     evidence_root = ROOT / "docs" / "evidence" / f"m002-673-history-reflow-{stamp}"
@@ -224,7 +228,7 @@ def main() -> None:
         candidate_log = collect_cohorts(gate, candidate, sha)
         baseline_log = collect_cohorts(gate, baseline, sha)
         log.write_text(candidate_log + "\n" + baseline_log, encoding="utf-8")
-        record = write_record(
+        record, numeric_status = write_record(
             gate=gate,
             sha=sha,
             evidence_root=gate_root,
@@ -233,14 +237,25 @@ def main() -> None:
             baseline=baseline,
             workload=workload,
         )
-        checked = run(["python3", str(VALIDATOR), "--record", str(record)])
+        checked = run(
+            [
+                "python3",
+                str(VALIDATOR),
+                "--record",
+                str(record),
+                "--require-exact-head",
+            ]
+        )
         sys.stdout.write(checked.stdout)
         if checked.returncode != 0:
             raise SystemExit(f"validator rejected {record}:\n{checked.stdout}")
-        if f"M002 performance result: PASS metric={gate}" not in checked.stdout:
-            raise SystemExit(f"validator did not PASS {gate}:\n{checked.stdout}")
+        if f"M002 performance result: PLATFORM_LIMITED metric={gate}" not in checked.stdout:
+            raise SystemExit(f"validator did not retain PLATFORM_LIMITED for {gate}:\n{checked.stdout}")
         ceilings = CEILINGS[gate]
-        print(f"[m002-673] {gate} PASS; frozen ceilings p50/p95/p99={ceilings}")
+        print(
+            f"[m002-673] {gate} PLATFORM_LIMITED; numeric {numeric_status}; "
+            f"frozen ceilings p50/p95/p99={ceilings}"
+        )
     print(f"[m002-673] evidence root {evidence_root.relative_to(ROOT)}")
 
 

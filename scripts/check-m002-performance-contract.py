@@ -47,6 +47,10 @@ def is_missing_metric(value: object) -> bool:
     return value in MISSING_METRIC_VALUES
 
 
+def is_uncontrolled_power_thermal(value: object) -> bool:
+    return "uncontrolled" in str(value).casefold()
+
+
 def require_exact_head(production_sha: str) -> None:
     probed = subprocess.run(
         ["git", "rev-parse", "--is-inside-work-tree"],
@@ -198,6 +202,7 @@ def self_test() -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--record")
+    parser.add_argument("--require-exact-head", action="store_true")
     parser.add_argument("--self-test", action="store_true")
     args, _ = parser.parse_known_args()
 
@@ -218,11 +223,11 @@ def main() -> None:
 
     validate_contract_shape(text, schema, schema_text)
     if args.record:
-        evaluate_record(Path(args.record), schema)
+        evaluate_record(Path(args.record), schema, require_head=args.require_exact_head)
     print("M002 performance contract shape passed.")
 
 
-def evaluate_record(path: Path, schema: dict) -> str:
+def evaluate_record(path: Path, schema: dict, *, require_head: bool = False) -> str:
     try:
         record = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError) as error:
@@ -262,7 +267,16 @@ def evaluate_record(path: Path, schema: dict) -> str:
     for field in ("production_sha", "harness_sha", "baseline_sha"):
         if not re.fullmatch(r"[0-9a-fA-F]{40}", record[field]):
             raise SystemExit(f"M002 performance result {field} must be a full commit SHA")
-    require_exact_head(record["production_sha"])
+    if (
+        record["evidence_class"] == "PHYSICAL_ARM64"
+        and record["environment_status"] == "VALID"
+        and is_uncontrolled_power_thermal(record["power_thermal_state"])
+    ):
+        raise SystemExit(
+            "PHYSICAL_ARM64 VALID results cannot use an uncontrolled power/thermal state"
+        )
+    if require_head:
+        require_exact_head(record["production_sha"])
 
     percentile_keys = ("p50", "p95", "p99")
     baseline_keys = ("baseline_p50", "baseline_p95", "baseline_p99")

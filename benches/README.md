@@ -50,10 +50,13 @@ selected with `SEYAL_HISTORY_BENCH_LINES`, `SEYAL_HISTORY_BENCH_EXECUTIONS`,
 controlled-host runs. Percentiles use nearest-rank samples and every output is
 marked `performance_claim=false`.
 
-## M002 #673 PHYSICAL_ARM64 HistoryStore reflow
+## M002 #673 HistoryStore reflow contract row
 
 The frozen #818 active/sealed reflow ceilings are measured with five fresh-process
-cohorts, 20 warmups, and 100 samples:
+cohorts, 20 warmups, and 100 samples. This runner records
+`uncontrolled-developer-host` as `PLATFORM_LIMITED` and does not establish
+`PHYSICAL_ARM64`. Contract cohorts compile without the process-wide
+`StatsAlloc` wrapper (`history-reflow-contract`). A numeric FAIL is retained:
 
 ```sh
 python3 scripts/run-m002-history-reflow-contract.py

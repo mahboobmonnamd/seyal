@@ -1082,7 +1082,8 @@ mod tests {
             ]
         );
         assert!(
-            rows.iter().all(|row| row.value != "0" && row.value != "Failed"),
+            rows.iter()
+                .all(|row| row.value != "0" && row.value != "Failed"),
             "Unknown must never present as exit 0 or Failed"
         );
     }

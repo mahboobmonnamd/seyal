@@ -954,10 +954,7 @@ mod tests {
         assert_eq!(snap.blocks[0].exit_status, None);
         assert_ne!(snap.blocks[0].state, BlockPresentationState::Completed);
         assert_ne!(snap.blocks[0].state, BlockPresentationState::Failed);
-        assert_eq!(
-            snap.blocks[0].state.transcript_status(),
-            "/ status unknown"
-        );
+        assert_eq!(snap.blocks[0].state.transcript_status(), "/ status unknown");
     }
 
     fn submit_accepted(state: &mut ComposerState, pane: PaneId, command: &str) {

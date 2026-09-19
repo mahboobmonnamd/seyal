@@ -949,7 +949,10 @@ mod command_block_tests {
         let encoded = timeline.encode();
         // Fixed record header: id(8)+start(8)+end(8)+tag(1)+pad(3)+exit(4)+cmd_len(2)+rsv(2).
         let record = &encoded[16..];
-        assert_eq!(record[24], 2, "Completed {{ exit_status: None }} encodes as tag 2");
+        assert_eq!(
+            record[24], 2,
+            "Completed {{ exit_status: None }} encodes as tag 2"
+        );
         assert_eq!(
             i32::from_le_bytes(record[28..32].try_into().unwrap()),
             0,
@@ -974,8 +977,7 @@ mod command_block_tests {
         let record_offset = 16;
 
         let mut nonzero_exit = good.clone();
-        nonzero_exit[record_offset + 28..record_offset + 32]
-            .copy_from_slice(&1i32.to_le_bytes());
+        nonzero_exit[record_offset + 28..record_offset + 32].copy_from_slice(&1i32.to_le_bytes());
         assert_eq!(
             BlockTimeline::decode(&nonzero_exit),
             Err(FramingError::MalformedPayload),
@@ -984,8 +986,7 @@ mod command_block_tests {
 
         let mut inverted_end = good;
         // end_raw at record+16; start_line is 50, so end 49 is inverted.
-        inverted_end[record_offset + 16..record_offset + 24]
-            .copy_from_slice(&49u64.to_le_bytes());
+        inverted_end[record_offset + 16..record_offset + 24].copy_from_slice(&49u64.to_le_bytes());
         assert_eq!(
             BlockTimeline::decode(&inverted_end),
             Err(FramingError::MalformedPayload),

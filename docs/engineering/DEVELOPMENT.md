@@ -25,36 +25,37 @@ Default distributed-development unit:
 
 ```text
 one Ready Issue
-→ one authenticated GitHub assignee/implementer
+→ one authenticated GitHub claimant
 → one confirmed implementation plan
-→ one deterministic issue/<number> branch
+→ one atomically created deterministic issue/<number> branch
 → one isolated worktree
 → one scoped PR
 ```
 
 One Issue should produce one coherent outcome that can normally be tested, reviewed and merged independently. Large or cross-authority work is refined before implementation. Two active Issues must not mutate the same authoritative subsystem unless independence is explicit and reviewable.
 
-The Issue assignee is the human-visible active-work claim. The exact `issue/<number>` branch is the collision backstop. New implementation branches do not add a short-name suffix; deterministic naming is deliberate so concurrent agents cannot evade a collision by choosing different slugs. Legacy `issue/<number>-<short-name>` branches that already existed before this rule may finish normally.
+New implementation Issues remain unassigned. The authenticated claimant identity comes from `gh api user`; the successful atomic creation of the exact remote `issue/<number>` ref is the exclusive race lock. Its Issue comment records claimant, branch, base SHA, and a link to the confirmed execution plan for audit. Never set, clear, or change assignees as part of pickup, handoff, or release. Read any existing assignee metadata: assigned work remains with its owner unless that owner explicitly hands it off. Deterministic naming prevents concurrent contributors from evading a collision with suffix branches; legacy `issue/<number>-<short-name>` branches that already existed before this rule may finish normally under their existing owner.
 
 ## Mandatory flow
 
 1. When project context beyond the Issue links is needed, use `project-context` to retrieve the smallest relevant node/relationship set, validate the derived index, and read the returned authoritative sources. A stale/no-match index routes to targeted source search; it never authorizes guessing.
 2. Refine the Issue using `.agents/skills/issue-refinement/SKILL.md`.
-3. Set Project status to **Ready** only after the readiness checklist in `ISSUE-PROTOCOL.md` passes.
-4. Any request to implement/fix/finish/code a specific GitHub Issue must enter `.agents/skills/implement-issue/SKILL.md`. Resolve the authenticated GitHub login, fresh-read assignees, and acquire/verify sole assignment before planning or production work. Assigned-to-other, multiple-assignee, or identity-unavailable cases stop as `BLOCKED`.
-5. Confirm the implementation plan in chat. Claim/Ready state is not permission to skip plan-first review.
-6. After plan confirmation, create the exact remote branch `issue/<number>` from current accepted `master`. If that branch already exists, stop unless the user explicitly requested resume/continue of that existing work. Re-read the Issue after branch creation and require the current implementer to remain the sole assignee before creating the worktree or editing production files.
-7. Create one isolated worktree from the deterministic Issue branch.
-8. Use tests/fixtures first for core behavior.
-9. Implement only the Issue scope.
-10. Assess **Documentation impact** before final validation. Run the `docs-authoring` skill and update the User Guide and/or Developer Guide in the same Issue/PR when applicable. If no documentation is needed, record a concrete `N/A` rationale in the PR.
-11. Run `make check` plus issue-specific tests/benchmarks/security checks. When documentation changed, also run `make docs-check` and `make docs-build`.
-12. Open a PR using the repository template, including documentation evidence or the `N/A` rationale.
-13. Require CI evidence; high-risk/core work gets independent review.
-14. Move to Validation where milestone/demo/performance evidence is required.
-15. Merge only after required gates pass. Do not start a dependent milestone early.
+3. Mark the GitHub Issue body's `State` field `Ready` only after the readiness checklist in `ISSUE-PROTOCOL.md` passes. If the Issue is linked to a Project, keep that item's status Ready as well.
+4. Any request to implement/fix/finish/code a specific GitHub Issue must enter `.agents/skills/implement-issue/SKILL.md`. Resolve identity with `gh api user`; fresh-read the open Issue and verify its body `State` field is `Ready`, its Ready checklist and dependencies pass, and any linked Project item has a compatible status. No linked Project item is required. Also inspect parent/child scope, the complete assignee list, existing claim comments, and exact remote branch. Fail closed if any required Issue state cannot be verified. Never mutate assignees. Another assignee retains ownership unless they explicitly hand off; multiple assignees or conflicting claims stop.
+5. Record the execution plan as an Issue comment before reserving a branch. Confirm in that same comment that the plan matches the Ready Issue and accepted authority. Keep scope decisions, questions, and answers in the Issue body/comments; chat is not a prerequisite. If a material scope or architecture decision is open, return the Issue to Refinement and resolve it there before implementation.
+6. Immediately before reservation, re-read Ready/dependency state and the branch. Fetch the accepted `master` base SHA, then create the exact remote ref `issue/<number>` atomically through GitHub's create-ref API. Only the successful ref-creation response wins; an existing ref or competing creation failure stops the pickup. Never overwrite it or create a suffix branch. After a successful creation, re-read Issue and branch state, verify the ref still points at the recorded base SHA, and post an Issue comment recording authenticated claimant, branch, base SHA, and a link to the confirmed plan comment. Do not edit production files until all checks and the comment succeed. An existing branch can be resumed only by its recorded owner on an explicit resume, by a new claimant after an explicit handoff from that owner, or after a maintainer explicitly resolves a stale claim.
+7. After the verified claim comment, set the Issue body field `State` to **In Progress** (and any linked Project item to the matching status). Verify the update before production edits; if it fails or is ambiguous, stop and report the reserved branch.
+8. Create one isolated worktree from the verified deterministic Issue branch.
+9. Use tests/fixtures first for core behavior.
+10. Implement only the Issue scope.
+11. Assess **Documentation impact** before final validation. Run the `docs-authoring` skill and update the User Guide and/or Developer Guide in the same Issue/PR when applicable. If no documentation is needed, record a concrete `N/A` rationale in the PR.
+12. Run `make check` plus issue-specific tests/benchmarks/security checks. When documentation changed, also run `make docs-check` and `make docs-build`.
+13. Open a PR using the repository template, including documentation evidence or the `N/A` rationale.
+14. Require CI evidence; high-risk/core work gets independent review.
+15. Move to Validation where milestone/demo/performance evidence is required.
+16. Merge only after required gates pass. Do not start a dependent milestone early.
 
-Ownership handoff is explicit. The current owner stops editing, records branch/PR/check state, and GitHub assignment is explicitly transferred. The new implementer re-runs the full claim/readiness preflight and resumes the existing Issue branch. An agent must never self-clear or steal a claim because it appears stale.
+Ownership handoff is explicit and does not change assignees. The current branch owner stops editing and records the recipient, branch/head, PR/check state, and remaining plan in an Issue comment. The recipient verifies that handoff with a fresh Issue/branch read, posts an acknowledgement, and resumes the same branch after the full Ready/dependency preflight. A planning parent does not reserve independent child work; each child must be Ready, dependency-safe, and non-overlapping with any active parent/child branch. A suspected stale claim never expires automatically: the claimant or a maintainer must record its disposition, and a new owner may proceed only after that explicit resolution.
 
 ## Documentation lifecycle
 

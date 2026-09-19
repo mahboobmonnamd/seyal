@@ -25,13 +25,14 @@ This directory is the canonical entry point for Seyal foundation architecture.
 19. [`SEYAL-UNICODE-GRAPHEME-RD-001.md`](SEYAL-UNICODE-GRAPHEME-RD-001.md) — Issue #684 representation, Unicode compatibility, pathological-cluster, projection and ARM64 shaping evidence behind ADR-011.
 20. [`../milestones/MILESTONE-001.md`](../milestones/MILESTONE-001.md) — authoritative M001 implementation scope, passes, tests, security gates, benchmarks, acceptance criteria, and demo procedure.
 21. [`../milestones/MILESTONE-002.md`](../milestones/MILESTONE-002.md) — M002 close-out contract: remaining issues #824 / #673 / #837, non-goals, IME honesty, and final validation recipe. Subordinate to ADR-010 / ADR-011 / ADR-015 and SPEC-010 / SPEC-011. Does not claim M002 Done.
-22. [`ui/SEYAL-UI-ARCHITECTURE-001.md`](ui/SEYAL-UI-ARCHITECTURE-001.md) — presentation architecture for Flow/Raw/TUI, history, Blocks, workspace chrome, inspectors, attention/approvals, desktop/mobile continuity, and render priority.
-22a. [`ui/SEYAL-ADAPTIVE-DEPTH-DESIGN-LANGUAGE.md`](ui/SEYAL-ADAPTIVE-DEPTH-DESIGN-LANGUAGE.md) — universal visual language.
-22b. [`ui/M001-UI-DESIGN-SYSTEM.md`](ui/M001-UI-DESIGN-SYSTEM.md) — typed token/theme/config snapshot consumed by native UI.
-23. [`SEYAL-AGENT-PLATFORM-RD-PLAN-001.md`](SEYAL-AGENT-PLATFORM-RD-PLAN-001.md) — agent-native OSS foundation research plan; consumes stable Runtime/Workspace identities and remains outside terminal hot-path ownership.
-24. [`SEYAL-WORKFLOW-EXTENSION-PLATFORM-RD-001.md`](SEYAL-WORKFLOW-EXTENSION-PLATFORM-RD-001.md) — deferred R&D direction for task-focused DevOps/agent workflows and provider/adaptor seams; no implementation is authorized before Pass 5 plus required UI foundations.
-25. [`SEYAL-APPLICATION-PROTOCOL-RD-001.md`](SEYAL-APPLICATION-PROTOCOL-RD-001.md) — deferred R&D direction for a future capability-negotiated Seyal Application Protocol/SDK derived from proven integrations rather than a premature generic "Shell API".
-26. [`source/FOUNDATION-RD-BRIEF.md`](source/FOUNDATION-RD-BRIEF.md) — source requirements that initiated the architecture pass; not an implementation specification.
+22. [`../milestones/MILESTONE-003.md`](../milestones/MILESTONE-003.md) — M003 workspace contract: parallel-with-late-M002 seam, leftover headed slices after #878, umbrellas #674/#675/#676/#686, and the rule that #674 is not one Ready PR. Does not claim M003 Done.
+23. [`ui/SEYAL-UI-ARCHITECTURE-001.md`](ui/SEYAL-UI-ARCHITECTURE-001.md) — presentation architecture for Flow/Raw/TUI, history, Blocks, workspace chrome, inspectors, attention/approvals, desktop/mobile continuity, and render priority.
+23a. [`ui/SEYAL-ADAPTIVE-DEPTH-DESIGN-LANGUAGE.md`](ui/SEYAL-ADAPTIVE-DEPTH-DESIGN-LANGUAGE.md) — universal visual language.
+23b. [`ui/M001-UI-DESIGN-SYSTEM.md`](ui/M001-UI-DESIGN-SYSTEM.md) — typed token/theme/config snapshot consumed by native UI.
+24. [`SEYAL-AGENT-PLATFORM-RD-PLAN-001.md`](SEYAL-AGENT-PLATFORM-RD-PLAN-001.md) — agent-native OSS foundation research plan; consumes stable Runtime/Workspace identities and remains outside terminal hot-path ownership.
+25. [`SEYAL-WORKFLOW-EXTENSION-PLATFORM-RD-001.md`](SEYAL-WORKFLOW-EXTENSION-PLATFORM-RD-001.md) — deferred R&D direction for task-focused DevOps/agent workflows and provider/adaptor seams; no implementation is authorized before Pass 5 plus required UI foundations.
+26. [`SEYAL-APPLICATION-PROTOCOL-RD-001.md`](SEYAL-APPLICATION-PROTOCOL-RD-001.md) — deferred R&D direction for a future capability-negotiated Seyal Application Protocol/SDK derived from proven integrations rather than a premature generic "Shell API".
+27. [`source/FOUNDATION-RD-BRIEF.md`](source/FOUNDATION-RD-BRIEF.md) — source requirements that initiated the architecture pass; not an implementation specification.
 
 ## Authority
 
@@ -40,6 +41,7 @@ This directory is the canonical entry point for Seyal foundation architecture.
 - ADRs exist only for distinct architectural decisions that deserve an independent lifecycle. They are not used as amendment or correction files for canonical documents.
 - `MILESTONE-001.md` owns the complete M001 implementation contract. M001 corrections and readiness gates are edited directly into that file.
 - `MILESTONE-002.md` owns the M002 close-out contract (remaining issues, non-goals, validation recipe). It does not reopen architecture or authorize new M002 product slices.
+- `MILESTONE-003.md` owns the M003 workspace contract (parallel-with-M002 seam, remaining issues, non-goals, validation recipe). It does not reopen architecture or authorize implementing umbrella #674 as one PR.
 - The UI architecture is subordinate to terminal/runtime ownership and performance invariants.
 - ADR-003 owns the repository/dependency boundary between public Seyal OSS and the private `seyal-commercial` superproject; headless, lightweight and full OSS variants remain compositions of the same public terminal/runtime authority.
 - ADR-004 owns the permanent VT parser/terminal-state separation and one-authoritative-state rule; ADR-010 and ADR-011 extend that same `TerminalState` authority for retained history/reflow and Unicode/grapheme semantics rather than creating another terminal/text/history engine.

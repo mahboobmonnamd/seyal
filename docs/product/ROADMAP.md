@@ -59,7 +59,8 @@ M003 may develop in parallel with late M002 only at stable boundaries; terminal-
 - Closed children: #815–#823, #834, #842. Spikes #684 / #685 are closed architecture (ADR-011 / ADR-010).
 
 ### M003
-- #674 native hierarchy/windows/tabs/splits/navigation.
+- Implementation contract: [`docs/milestones/MILESTONE-003.md`](../milestones/MILESTONE-003.md). Parallel with late M002 only at stable terminal seams; do not implement #674 as one PR.
+- #674 native hierarchy/windows/tabs/splits/navigation (umbrella).
 - #675 pane input, Blocks, selection and same-execution presentation.
 - #676 local config/themes/fonts/keybindings/launch policy.
 - #686 trusted shell-integration/semantic-boundary spike.
@@ -149,7 +150,7 @@ Good first external lanes are compatibility fixtures, shell/application reproduc
 
 ## Planning metadata
 
-Roadmap milestone authority is currently the M001 milestone document plus roadmap epic issues #664–#671. The connected GitHub interface used for this planning pass can assign an existing native GitHub Milestone but cannot create new Milestone or label definitions. Native GitHub milestone/label materialization is therefore project metadata, not an unstated roadmap dependency; it must be completed through an interface that supports those mutations. The roadmap must not invent milestone numbers or pretend labels exist.
+Roadmap milestone authority is currently `docs/milestones/MILESTONE-001.md`, `docs/milestones/MILESTONE-002.md`, `docs/milestones/MILESTONE-003.md`, and roadmap epic issues #664–#671. The connected GitHub interface used for this planning pass can assign an existing native GitHub Milestone but cannot create new Milestone or label definitions. Native GitHub milestone/label materialization is therefore project metadata, not an unstated roadmap dependency; it must be completed through an interface that supports those mutations. The roadmap must not invent milestone numbers or pretend labels exist.
 
 ## Coverage and change control
 

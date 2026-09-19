@@ -30,6 +30,37 @@ ACCEPTED_GATE_CEILINGS = {
 }
 
 
+def check_accepted_gate_ceilings(gates: dict, registry: dict) -> None:
+    """Freeze every registered accepted gate's ceiling; reject unregistered acceptance.
+
+    This is the single mechanism protecting ANY accepted M002 gate, not just
+    the two original HistoryStore families. `registry` is the immutable,
+    validator-owned ground truth (never derived from the TOML under test):
+    to accept a new gate, `registry` itself must gain an entry as an explicit,
+    reviewable change to this script. Two invariants follow from that:
+
+    1. Every gate registered here must still be present and accepted in the
+       live schema with exactly these ceiling values — a later TOML edit
+       cannot silently weaken (or unaccept) a gate once it is registered.
+    2. No gate may carry `status = "accepted"` in the live schema unless it
+       is registered here — otherwise it would be accepted but unprotected.
+    """
+    for name, expected in registry.items():
+        gate = gates.get(name, {})
+        if gate.get("status", "accepted") != "accepted":
+            raise SystemExit(f"M002 performance gate {name} must remain accepted")
+        for key, ceiling in expected.items():
+            if gate.get(key) != ceiling:
+                raise SystemExit(
+                    f"accepted M002 performance gate {name} frozen ceiling {key} must remain {ceiling}"
+                )
+    for name, gate in gates.items():
+        if gate.get("status", "accepted") == "accepted" and name not in registry:
+            raise SystemExit(
+                f"M002 performance gate {name} is accepted but has no frozen ceiling registry entry"
+            )
+
+
 def nearest_rank(values: list[float], percentile: int) -> float:
     ordered = sorted(values)
     rank = max(1, (len(ordered) * percentile + 99) // 100)
@@ -131,15 +162,7 @@ def validate_contract_shape(text: str, schema: dict, schema_text: str) -> None:
     for name, gate in gates.items():
         if gate.get("status", "accepted") == "accepted" and "source" not in gate:
             raise SystemExit(f"accepted M002 performance gate {name} is missing authority source")
-    for name, expected in ACCEPTED_GATE_CEILINGS.items():
-        gate = gates.get(name, {})
-        if gate.get("status", "accepted") != "accepted":
-            raise SystemExit(f"M002 performance gate {name} must remain accepted")
-        for key, ceiling in expected.items():
-            if gate.get(key) != ceiling:
-                raise SystemExit(
-                    f"accepted M002 performance gate {name} frozen ceiling {key} must remain {ceiling}"
-                )
+    check_accepted_gate_ceilings(gates, ACCEPTED_GATE_CEILINGS)
     matrix = schema.get("matrix", {})
     if (
         matrix.get("retained_content") != [10000, 100000, 1000000]
@@ -231,6 +254,61 @@ def self_test() -> None:
     bad_cohorts = dict(schema)
     bad_cohorts["cohorts"] = 3
     expect_fail("reduced cohort count", text, bad_cohorts, schema_text)
+
+    # Generic accepted-gate plumbing (issue #673 Task 1): the freeze mechanism
+    # must protect ANY accepted gate, not just the two hardcoded history
+    # families. (a) acceptance without a `source` field is rejected.
+    accepted_without_source = dict(schema)
+    gates_without_source = {name: dict(gate) for name, gate in schema["gates"].items()}
+    gates_without_source["startup"] = dict(gates_without_source["startup"])
+    gates_without_source["startup"].update({"status": "accepted", "p50": 1, "p95": 2, "p99": 3})
+    gates_without_source["startup"].pop("source", None)
+    accepted_without_source["gates"] = gates_without_source
+    expect_fail("accepted gate missing source", text, accepted_without_source, schema_text)
+
+    # (a-2) an accepted gate that DOES carry a source but was never added to
+    # ACCEPTED_GATE_CEILINGS is also rejected: acceptance alone must not be
+    # enough to escape the freeze mechanism.
+    accepted_unregistered = dict(schema)
+    gates_unregistered = {name: dict(gate) for name, gate in schema["gates"].items()}
+    gates_unregistered["startup"] = dict(gates_unregistered["startup"])
+    gates_unregistered["startup"].update(
+        {"status": "accepted", "source": "TEST FIXTURE", "p50": 1, "p95": 2, "p99": 3}
+    )
+    accepted_unregistered["gates"] = gates_unregistered
+    expect_fail("accepted gate not registered in ACCEPTED_GATE_CEILINGS", text, accepted_unregistered, schema_text)
+
+    # (b) weakening ANY accepted gate's ceiling is rejected, proven generically
+    # (not just for the 2 real history families) with a synthetic multi-gate
+    # registry that check_accepted_gate_ceilings must enforce uniformly.
+    synthetic_registry = {
+        "synthetic_alpha": {"p50": 1, "p95": 2, "p99": 3},
+        "synthetic_beta": {"p50": 4, "p95": 5, "p99": 6},
+        "synthetic_gamma": {"p50": 7, "p95": 8, "p99": 9},
+    }
+    synthetic_gates = {
+        name: {"status": "accepted", "source": "TEST FIXTURE", **ceilings}
+        for name, ceilings in synthetic_registry.items()
+    }
+    check_accepted_gate_ceilings(synthetic_gates, synthetic_registry)
+    exercised = 0
+    for weakened_name in synthetic_registry:
+        weakened_gates = {name: dict(gate) for name, gate in synthetic_gates.items()}
+        weakened_gates[weakened_name]["p50"] += 100
+        try:
+            check_accepted_gate_ceilings(weakened_gates, synthetic_registry)
+        except SystemExit:
+            exercised += 1
+        else:
+            raise SystemExit(
+                f"M002 self-test: weakening synthetic gate {weakened_name} ceiling was not rejected"
+            )
+    if exercised != len(synthetic_registry):
+        raise SystemExit("M002 self-test: generic ceiling-freeze mechanism was not exercised for every synthetic gate")
+    print(
+        f"M002 performance contract self-test: generic accepted-gate ceiling freeze verified "
+        f"for {exercised} synthetic non-history gates plus the 2 real history gates."
+    )
 
     if nearest_rank([1.0, 2.0, 3.0, 4.0], 50) != 2.0:
         raise SystemExit("nearest-rank self-check failed")

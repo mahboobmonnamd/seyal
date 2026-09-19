@@ -12,11 +12,23 @@ pub(crate) enum ControlMessage {
     Input(AcceptedInput),
 }
 
+/// Who produced admitted bytes. Composer submissions are the only kind that
+/// may start a Block; every other route is direct input and closes the
+/// prompt gate at admission (ADR-009 mechanism 5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InputKind {
+    Direct,
+    /// Only the macOS composer route constructs this today.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    Composer,
+}
+
 pub(crate) struct AcceptedInput {
     pub(crate) execution_id: ExecutionId,
     pub(crate) bytes: Vec<u8>,
     pub(crate) offset: usize,
     pub(crate) reservation: InputReservation,
+    pub(crate) kind: InputKind,
 }
 
 impl AcceptedInput {
@@ -138,6 +150,14 @@ impl InputIngress {
     }
 
     pub fn try_submit(&self, bytes: Vec<u8>) -> Result<(), RuntimeError> {
+        self.try_submit_kind(bytes, InputKind::Direct)
+    }
+
+    pub(crate) fn try_submit_kind(
+        &self,
+        bytes: Vec<u8>,
+        kind: InputKind,
+    ) -> Result<(), RuntimeError> {
         if !self.active.load(Ordering::Acquire) {
             return Err(RuntimeError::ExecutionNotRunning);
         }
@@ -157,6 +177,7 @@ impl InputIngress {
             bytes,
             offset: 0,
             reservation,
+            kind,
         });
         match self.sender.try_send(message) {
             Ok(()) => {}

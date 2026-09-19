@@ -246,6 +246,8 @@ enum SeyalAppComposerMode {
 #define SEYAL_APP_BLOCK_STATE_RUNNING 1u
 #define SEYAL_APP_BLOCK_STATE_COMPLETED 2u
 #define SEYAL_APP_BLOCK_STATE_FAILED 3u
+/* Completed without an observed exit status; never success or failure. */
+#define SEYAL_APP_BLOCK_STATE_UNKNOWN 4u
 #define SEYAL_APP_BLOCK_STATE_MASK 7u
 #define SEYAL_APP_BLOCK_SELECTED 8u
 

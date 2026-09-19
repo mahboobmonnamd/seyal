@@ -13,9 +13,11 @@ use std::{
 use seyal_exec::{CommandSpec, SignalDisposition, TerminalExecution, WindowSize};
 
 use super::entry::{Entry, ExecutionSummary};
+#[cfg(target_os = "macos")]
+use super::integration_state::IntegrationState;
 use super::lifecycle::{BlockCompletion, Lifecycle};
 #[cfg(target_os = "macos")]
-use super::shell_integration::shell_integration_mode;
+use super::shell_integration::{shell_integration_mode, ShellIntegrationMode};
 use super::Runtime;
 #[cfg(target_os = "macos")]
 use crate::command_block_timeline::CommandBlockTimeline;
@@ -137,7 +139,20 @@ impl Runtime {
         }
 
         let command = self.config.capability_policy.apply(command);
+        #[cfg(target_os = "macos")]
+        let (command, shell_integration_mode, shell_nonce) = {
+            let mode = shell_integration_mode(&command);
+            match (&self.config.shell_integration_policy, mode) {
+                (Some(policy), ShellIntegrationMode::ZshHook) => {
+                    let (command, nonce) = policy.apply(command)?;
+                    (command, ShellIntegrationMode::ZshHook, Some(nonce))
+                }
+                _ => (command, ShellIntegrationMode::Unsupported, None),
+            }
+        };
         let mut execution = TerminalExecution::spawn(&command, size)?;
+        // The child owns its copy of the nonce descriptor now; drop ours.
+        drop(command);
         let initial_primary_line_id = execution.initial_primary_line_id().map(|line| line.0);
         let token = match self.reactor.register(&execution) {
             Ok(token) => token,
@@ -178,15 +193,17 @@ impl Runtime {
             #[cfg(target_os = "macos")]
             mouse_host_anchor: None,
             #[cfg(target_os = "macos")]
-            pending_composer_commands: VecDeque::new(),
+            pending_composer: None,
             #[cfg(target_os = "macos")]
-            shell_integration_mode: shell_integration_mode(&command),
+            shell_integration_mode,
+            #[cfg(target_os = "macos")]
+            shell_nonce,
+            #[cfg(target_os = "macos")]
+            integration: IntegrationState::Unproven,
+            #[cfg(target_os = "macos")]
+            untrusted_markers: 0,
             #[cfg(target_os = "macos")]
             block_timeline: CommandBlockTimeline::default(),
-            #[cfg(target_os = "macos")]
-            active_block: None,
-            #[cfg(target_os = "macos")]
-            active_block_token: None,
             #[cfg(target_os = "macos")]
             block_revision: 0,
         };

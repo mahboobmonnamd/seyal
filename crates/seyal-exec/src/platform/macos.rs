@@ -3,7 +3,7 @@ use std::{
     io,
     mem::MaybeUninit,
     os::{
-        fd::{AsRawFd, FromRawFd, OwnedFd},
+        fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
         unix::process::CommandExt,
     },
     process::Command,
@@ -53,18 +53,29 @@ pub(crate) fn open_pty(size: WindowSize) -> Result<PtyPair, ExecError> {
     })
 }
 
-pub(crate) fn configure_child(command: &mut Command) -> Result<(), ExecError> {
+pub(crate) fn configure_child(
+    command: &mut Command,
+    inherited_fds: Vec<RawFd>,
+) -> Result<(), ExecError> {
     // SAFETY: the closure executes after fork and before exec. It performs only
     // the async-signal-safe session/controlling-terminal syscalls required for
-    // the PTY child. No allocation, locking, logging or Rust runtime service is
+    // the PTY child plus fcntl on descriptors the caller explicitly asked to
+    // inherit. The descriptor list is allocated before fork; the closure only
+    // iterates it. No allocation, locking, logging or Rust runtime service is
     // used inside the closure.
     unsafe {
-        command.pre_exec(|| {
+        command.pre_exec(move || {
             if libc::setsid() < 0 {
                 return Err(io::Error::last_os_error());
             }
             if libc::ioctl(libc::STDIN_FILENO, libc::TIOCSCTTY as _, 0) < 0 {
                 return Err(io::Error::last_os_error());
+            }
+            for &fd in &inherited_fds {
+                let flags = libc::fcntl(fd, libc::F_GETFD);
+                if flags < 0 || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                    return Err(io::Error::last_os_error());
+                }
             }
             Ok(())
         });

@@ -122,6 +122,36 @@ fn pump_until(client: &mut LocalDisplayClient, predicate: impl Fn(&LocalDisplayC
     }
 }
 
+/// Submit a composer command under the ADR-009 admission contract: Runtime
+/// accepts it only once the shell has announced a trusted prompt, and answers
+/// `Busy` (draft kept) before that. A client without the eligibility signal
+/// retries until the correlated result is `Accepted`.
+fn submit_when_eligible(client: &mut LocalDisplayClient, command: &str) {
+    use seyal_runtime::local_ipc::framing::ComposerResultCode;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let request_id = client.next_composer_request_id();
+        client
+            .submit_composer_command(command)
+            .expect("composer command admission");
+        pump_until(client, |client| {
+            client
+                .last_composer_result()
+                .is_some_and(|result| result.request_id == request_id)
+        });
+        match client.last_composer_result().map(|result| result.code) {
+            Some(ComposerResultCode::Accepted) => return,
+            Some(ComposerResultCode::Busy) => {}
+            other => panic!("unexpected composer result {other:?}"),
+        }
+        assert!(
+            Instant::now() < deadline,
+            "composer never became eligible (no trusted prompt observed)"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
 #[test]
 fn committed_text_is_one_controller_action_and_reaches_real_pty() {
     let runtime = RuntimeHarness::start(CommandSpec::new("/bin/cat"));
@@ -149,9 +179,7 @@ fn composer_command_reaches_real_pty_without_quarantining_block_metadata() {
     // becoming usable before the user presses Return.
     pump_until(&mut client, |client| client.block_state().is_some());
 
-    client
-        .submit_composer_command("printf COMPOSER_PASS7")
-        .expect("composer command admission");
+    submit_when_eligible(&mut client, "printf COMPOSER_PASS7");
     pump_until(&mut client, |client| {
         prepared_text(client).contains("COMPOSER_PASS7")
     });
@@ -171,9 +199,7 @@ fn composer_command_does_not_race_initial_block_metadata() {
     let runtime = RuntimeHarness::start(CommandSpec::new("/bin/zsh"));
     let mut client = runtime.connect_controller();
 
-    client
-        .submit_composer_command("printf COMPOSER_RACE_PASS7")
-        .expect("composer command admission");
+    submit_when_eligible(&mut client, "printf COMPOSER_RACE_PASS7");
     pump_until(&mut client, |client| {
         prepared_text(client).contains("COMPOSER_RACE_PASS7")
     });
@@ -194,9 +220,7 @@ fn composer_command_survives_resize_traffic() {
             columns: 96,
         })
         .expect("resize admission");
-    client
-        .submit_composer_command("printf COMPOSER_RESIZE_PASS7")
-        .expect("composer command admission");
+    submit_when_eligible(&mut client, "printf COMPOSER_RESIZE_PASS7");
     pump_until(&mut client, |client| {
         prepared_text(client).contains("COMPOSER_RESIZE_PASS7")
     });

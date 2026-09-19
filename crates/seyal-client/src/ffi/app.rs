@@ -893,7 +893,7 @@ fn runtime_block_from_command(record: &CommandBlock) -> RuntimeBlockRecord {
         running: matches!(record.state, CommandBlockState::Running),
         exit_status: match record.state {
             CommandBlockState::Running => None,
-            CommandBlockState::Completed { exit_status } => Some(exit_status),
+            CommandBlockState::Completed { exit_status } => exit_status,
         },
     }
 }
@@ -1363,6 +1363,7 @@ fn encode_block_rows(state: &mut AppHandle) {
             crate::composer::BlockPresentationState::Running => 1,
             crate::composer::BlockPresentationState::Completed => 2,
             crate::composer::BlockPresentationState::Failed => 3,
+            crate::composer::BlockPresentationState::Unknown => 4,
         };
         debug_assert_eq!(flags & BLOCK_STATE_MASK, flags);
         if selected == Some(block.id) {
@@ -2123,7 +2124,9 @@ mod tests {
             command: "false".into(),
             start_line: 4,
             end_line: Some(4),
-            state: CommandBlockState::Completed { exit_status: 1 },
+            state: CommandBlockState::Completed {
+                exit_status: Some(1),
+            },
         };
         let projected = runtime_block_from_command(&failed);
         assert!(!projected.running);

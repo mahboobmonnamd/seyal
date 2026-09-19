@@ -15,6 +15,8 @@ use crate::{AttachmentId, ExecutionId, WorkspaceId};
 use seyal_exec::{ShellIntegrationToken, VisualPos};
 
 use super::config::PtyEofReapProbe;
+#[cfg(target_os = "macos")]
+use super::integration_state::IntegrationState;
 use super::lifecycle::{ExecutionLifecycle, Lifecycle};
 #[cfg(target_os = "macos")]
 use super::shell_integration::ShellIntegrationMode;
@@ -42,18 +44,23 @@ pub(in crate::runtime) struct Entry {
     pub(in crate::runtime) mouse_buttons: u8,
     #[cfg(target_os = "macos")]
     pub(in crate::runtime) mouse_host_anchor: Option<VisualPos>,
-    /// Accepted composer commands awaiting trusted OSC-133 `CommandStarted`.
+    /// The single in-flight composer submission awaiting a trusted `C`.
     /// This is metadata only; PTY input continues through `pending_input`.
     #[cfg(target_os = "macos")]
-    pub(in crate::runtime) pending_composer_commands: VecDeque<PendingComposerCommand>,
+    pub(in crate::runtime) pending_composer: Option<PendingComposerCommand>,
     #[cfg(target_os = "macos")]
     pub(in crate::runtime) shell_integration_mode: ShellIntegrationMode,
+    /// Per-execution secret carried by every trusted marker; `None` when the
+    /// shell is `Unsupported`.
+    #[cfg(target_os = "macos")]
+    pub(in crate::runtime) shell_nonce: Option<ShellIntegrationToken>,
+    #[cfg(target_os = "macos")]
+    pub(in crate::runtime) integration: IntegrationState,
+    /// Markers whose nonce was missing or wrong; never affect state.
+    #[cfg(target_os = "macos")]
+    pub(in crate::runtime) untrusted_markers: u64,
     #[cfg(target_os = "macos")]
     pub(in crate::runtime) block_timeline: CommandBlockTimeline,
-    #[cfg(target_os = "macos")]
-    pub(in crate::runtime) active_block: Option<CommandBlockId>,
-    #[cfg(target_os = "macos")]
-    pub(in crate::runtime) active_block_token: Option<ShellIntegrationToken>,
     #[cfg(target_os = "macos")]
     pub(in crate::runtime) block_revision: u64,
 }
@@ -61,7 +68,6 @@ pub(in crate::runtime) struct Entry {
 #[cfg(target_os = "macos")]
 #[derive(Clone, Debug)]
 pub(super) struct PendingComposerCommand {
-    pub(super) token: ShellIntegrationToken,
     pub(super) command: String,
     pub(super) block_id: CommandBlockId,
     pub(super) start_line: u64,

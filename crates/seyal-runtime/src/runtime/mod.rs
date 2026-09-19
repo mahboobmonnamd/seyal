@@ -20,10 +20,14 @@ use crate::{
 mod config;
 mod deadlines;
 mod entry;
+#[cfg(target_os = "macos")]
+mod integration_state;
 mod lifecycle;
 mod reactor_io;
 mod registry;
 mod shell_integration;
+#[cfg(all(test, target_os = "macos"))]
+mod shell_integration_live_tests;
 
 #[cfg(target_os = "macos")]
 mod local;

@@ -47,6 +47,10 @@ pub struct Diagnostics {
 /// Runtime/application integration, not by this crate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShellIntegrationEvent {
+    /// OSC `133;A;<nonce>`: the shell is about to draw a prompt.
+    PromptStarted {
+        token: ShellIntegrationToken,
+    },
     CommandStarted {
         token: ShellIntegrationToken,
     },
@@ -2035,6 +2039,8 @@ impl Actions for TerminalCore {
             Some(payload) => {
                 let mut fields = payload.split(|byte| *byte == b';');
                 match (fields.next(), fields.next(), fields.next()) {
+                    (Some(b"A"), Some(token), None) => ShellIntegrationToken::from_hex(token)
+                        .map(|token| ShellIntegrationEvent::PromptStarted { token }),
                     (Some(b"C"), Some(token), None) => ShellIntegrationToken::from_hex(token)
                         .map(|token| ShellIntegrationEvent::CommandStarted { token }),
                     (Some(b"D"), Some(token), Some(status)) => {
@@ -2184,6 +2190,24 @@ mod tests {
         let mut terminal = TerminalState::new(80, 24).unwrap();
         terminal
             .feed(b"\x1b]133;C\x07\x1b]133;C;short\x07\x1b]133;D;00112233445566778899aabbccddeeff;bad\x07")
+            .unwrap();
+        assert_eq!(terminal.take_shell_integration_event(), None);
+    }
+
+    #[test]
+    fn prompt_start_marker_is_a_trusted_shell_event_with_exact_shape() {
+        let mut terminal = TerminalState::new(80, 24).unwrap();
+        let token = ShellIntegrationToken::from_bytes([0xab; 16]);
+        terminal
+            .feed(b"\x1b]133;A;abababababababababababababababab\x07")
+            .unwrap();
+        assert_eq!(
+            terminal.take_shell_integration_event(),
+            Some(ShellIntegrationEvent::PromptStarted { token })
+        );
+        // Shapes outside A;<32hex> / C;<32hex> / D;<32hex>;<i32> stay deferred.
+        terminal
+            .feed(b"\x1b]133;A\x07\x1b]133;A;abababababababababababababababab;extra\x07\x1b]133;C;abababababababababababababababab;pwd\x07\x1b]133;B;abababababababababababababababab\x07")
             .unwrap();
         assert_eq!(terminal.take_shell_integration_event(), None);
     }

@@ -538,6 +538,7 @@ fn block_rows(
         BlockPresentationState::Running => "Running",
         BlockPresentationState::Completed => "Completed",
         BlockPresentationState::Failed => "Failed",
+        BlockPresentationState::Unknown => "Completed (status unknown)",
     };
     let mut rows = vec![
         row("block-command", "Block", "Command", block.command.clone()),
@@ -549,6 +550,13 @@ fn block_rows(
             "Block",
             "Exit code",
             exit_status.to_string(),
+        ));
+    } else if block.state == BlockPresentationState::Unknown {
+        rows.push(row(
+            "block-exit",
+            "Block",
+            "Exit code",
+            "unknown".to_owned(),
         ));
     }
     if let Some(end_line) = block.end_line
@@ -1039,6 +1047,44 @@ mod tests {
                 "Duration" | "Started" | "Finished" | "cwd" | "Shell"
             )),
             "no fabricated telemetry"
+        );
+    }
+
+    #[test]
+    fn completed_unknown_block_rows_render_unknown_never_zero_or_failed() {
+        let shell = seed_shell();
+        let snap = shell.snapshot();
+        let mut chrome = ChromeState::new();
+        let mut unknown = block(9, "sleep 1", BlockPresentationState::Unknown);
+        unknown.end_line = Some(12);
+        unknown.exit_status = None;
+        chrome
+            .apply(
+                ChromeAction::SelectBlock {
+                    id: unknown.id,
+                    blocks: vec![unknown.clone()],
+                },
+                &snap,
+            )
+            .unwrap();
+        let rows = chrome
+            .snapshot(&snap, std::slice::from_ref(&unknown))
+            .visible_inspector_rows;
+        assert_eq!(
+            values(&rows),
+            vec![
+                ("block-command", "sleep 1"),
+                ("block-state", "Completed (status unknown)"),
+                ("block-exit", "unknown"),
+                ("block-lines", "3"),
+                ("block-pane", "Pane 1"),
+                ("block-workspace", "Seyal OSS"),
+            ]
+        );
+        assert!(
+            rows.iter()
+                .all(|row| row.value != "0" && row.value != "Failed"),
+            "Unknown must never present as exit 0 or Failed"
         );
     }
 

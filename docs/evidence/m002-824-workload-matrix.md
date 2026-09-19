@@ -4,7 +4,7 @@
 | --- | --- |
 | Owning Issue | #824 (parent #672) |
 | Classification | production validation / focused gap closure |
-| Exact production head | `2ef83322a382a142d17ae1e4cc6ec0600116af41` (production Swift after `ad50bd1`: `7cb7853` / `7f77a6f`). PR #984 evidence/harness head is `4d0cbb2`. |
+| Exact production head | `2ef83322a382a142d17ae1e4cc6ec0600116af41` (production Swift after `ad50bd1`: `7cb7853` / `7f77a6f`). PR #984 local-gate SHA is `4d0cbb2`; hosted FQ + independent review SHA is `1ef537b` (run 35413837139). |
 | Prior automated pin | `dcbb90faaf870fdabbc543e6947adff2af48c8a3` remains the first retained matrix SHA; intermediate re-runs on `f0e8c01` plus live PTY expansions |
 | Host | Darwin arm64 / macOS 26.5.2 / Rust 1.98.0 (local matrix); hosted CI macOS-15 / Xcode 16.4 for exact-head gates |
 | Date (UTC) | 2026-09-18 |

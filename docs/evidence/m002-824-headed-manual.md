@@ -3,7 +3,9 @@
 - **Issue:** #824
 - **Date:** 2026-09-18
 - **Exact production head (fingerprints / hosted FQ):** `2ef83322a382a142d17ae1e4cc6ec0600116af41` (merge `20418fa` / PR #964). Current master at close-out measurement: `eecaf888bd8aecb3d4afcff371ad91ddce76c55f` (docs/chore only after that merge).
-- **This PR head:** `4d0cbb211269bc34dc122033ae7aba6a5f39a5b9` (harness + 2026-09-19 local-gate ledger). Not a close SHA.
+- **Local-gate SHA:** `4d0cbb211269bc34dc122033ae7aba6a5f39a5b9` (`make check` + 20/20 XCUI on 2026-09-19).
+- **Reviewed/CI SHA:** `1ef537bd205f2790f5c392f2c9edb60bab312841` (hosted FQ [35413837139](https://github.com/seyal-org/seyal/actions/runs/35413837139); independent review by @crdileep82).
+- **This PR head:** the follow-on ledger-label commit on `issue/824`. Still `Refs #824` until an independent Approve and an explicit closing relationship.
 - **Production path:** ADR-015 thin AppKit host over Rust snapshots; headed oracle is Flow/Blocks, not a raw terminal.
 - **Exclusive Runtime rule:** if another process owns `control.sock`, the headed run is INCONCLUSIVE.
 - **Relationship:** `Refs #824` / `Refs #672` only. PR #964 remains the merged production delta. `#824` DoD (including `#673` and owner confirmation) stays open after this PR.

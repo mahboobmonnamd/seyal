@@ -1,7 +1,7 @@
 # ADR-009 — Command Blocks, Pane Composer, and Presentation Takeover
 
-- **Status:** Accepted 2026-08-28; presentation amendment accepted 2026-09-11 by #858 / PR #859 (`8d08f2f`); trusted shell-integration injection mechanism accepted 2026-09-16 by #968; duration amendment proposed under #686 and effective only on merge of its Architecture/R&D PR
-- **Date:** 2026-08-28; presentation amendment 2026-09-11; shell-integration injection amendment 2026-09-16
+- **Status:** Accepted 2026-08-28; presentation amendment accepted 2026-09-11 by #858 / PR #859 (`8d08f2f`); trusted shell-integration injection mechanism accepted 2026-09-16 by #968; duration amendment proposed by #686 / PR #991 and accepted on merge of PR #991
+- **Date:** 2026-08-28; presentation amendment 2026-09-11; shell-integration injection amendment 2026-09-16; duration amendment proposed 2026-09-19 and accepted on merge of PR #991
 - **Scope:** Post-Pass-7 command/Block presentation and Flow/Raw/TUI mode ownership
 - **Supersedes for this behavior:** the Pass 8 minimal-only boundary in `SPEC-007`; historical M001 presentation wording in SPEC-006/SPEC-009 and M001 UI design documents only where it assumes a permanently visible/focusable terminal surface while Flow is active
 - **Depends on:** ADR-004, ADR-005, ADR-006, ADR-007, ADR-008, SPEC-001, SPEC-003, SPEC-004, SPEC-005, SPEC-006
@@ -732,13 +732,13 @@ clarification requested by product authority on 2026-09-11 under #858 and
 accepted on merge of PR #859 as `8d08f2f`. Silent shell-integration injection
 mechanism approved by product authority on 2026-09-16 under #968.
 
-## Proposed 2026-09-19 amendment — M003 shell metadata boundary (#686)
+## 2026-09-19 amendment — M003 shell metadata boundary (#686)
 
-**Status:** Proposed for review in the Architecture/R&D PR referenced by #686.
-Acceptance occurs only when that PR merges; this section is not normative
-before merge. Product code and SPEC-008 changes remain out of scope for #686.
+**Status:** Proposed in PR #991; accepted and normative only when PR #991
+merges. Before merge, this section is not normative. Product code and SPEC-008
+changes remain out of scope for #686.
 
-### Decision proposal
+### Decision
 
 Keep trusted shell integration at the accepted zsh-only boundary, and define
 Runtime-owned elapsed duration for completed Blocks. Do not add trusted live
@@ -746,7 +746,7 @@ CWD or Bash/fish integration to M003.
 
 | Context | M003 trust and presentation contract |
 |---|---|
-| Interactive zsh launched by Seyal | The existing per-execution nonce authenticates the accepted `A`/`C`/`D` events. `C`/`D` delimit a composer-correlated Block; only Runtime supplies exit status and elapsed duration. |
+| Interactive zsh launched by Seyal | The existing per-execution nonce authenticates the accepted `A`/`C`/`D` events. `C`/`D` delimit a composer-correlated Block; the trusted shell hook supplies exit status in `D`, which Runtime validates and records. Runtime independently measures elapsed duration. |
 | Interactive Bash, fish, or any other shell without an accepted integration | `Unsupported`; keep the shell usable in full-Pane Raw. Do not create Blocks from prompt/output scraping. |
 | Nested shell or SSH child | No secret or hook is propagated. It remains part of the already-running outer command until that child exits; no nested/remote Block or live CWD claim is made. |
 | Startup working directory | Runtime launch/config policy may supply the initial CWD. It is not inferred from terminal output and is not a trusted live-CWD event. |
@@ -785,27 +785,53 @@ already owns:
 
 The duration field changes the existing exact-length `BlockTimeline` record
 schema. Add `CAP_COMMAND_BLOCK_DURATION = 1 << 8` as a separately negotiated
-capability that depends on `CAP_COMMAND_BLOCKS`. The extended record carries
+capability that depends on `CAP_COMMAND_BLOCKS`; a ClientHello requesting
+duration without command Blocks is invalid, and Runtime must not advertise
+duration without command Blocks. The extended record carries
 `duration_ns: Option<u64>` with explicit presence encoding; unknown duration is
-not a numeric sentinel. A Runtime sends the extended record shape only to
-peers that request this capability; other peers continue to receive the
-current record shape byte-for-byte. Because peers may request different
-capabilities, Runtime groups attached Block clients by schema and emits at
-most two bounded encodings (legacy and duration-capable), sharing each frame
-within its compatible group. An encoding/capacity failure is reported to the
-affected group; it must not silently leave those clients with a stale timeline.
+not a numeric sentinel.
 
-New clients decode both shapes and use a bounded, ordered ClientHello fallback:
-drop unsupported optional capabilities one at a time (duration before
-extended terminal keys and optional Block metadata) until the peer accepts the
-baseline, or the bounded retry budget is exhausted. Retry only when ClientHello
-is rejected for unsupported optional capability bits; do not retry unrelated
-protocol or transport failures. Keep `CAP_COMMAND_BLOCKS` only when accepted;
-otherwise use the existing Unsupported/Raw behavior. This must cover an older
-Runtime rejecting the duration bit alone and one rejecting both duration and
-the extended-key bit. Do not append a field under the existing schema and
-assume older decoders ignore it. SPEC-008 and the implementation Issue must
-define the exact byte layout and display rounding after this ADR is accepted.
+For each connection, the negotiated schema is the intersection of the
+ClientHello request and ServerHello capabilities. Without the duration bit,
+Runtime sends the current record shape byte-for-byte and the client uses only
+the legacy decoder. With the duration bit, Runtime sends the extended shape
+and the client uses only the duration decoder. The client must never infer the
+schema from payload length. A record whose shape disagrees with the negotiated
+capability, or a duration capability without command Blocks, is a protocol
+violation: fail closed before applying that timeline.
+
+Runtime groups attached Block clients by negotiated schema and emits at most
+two bounded encodings (legacy and duration-capable), sharing each frame within
+its compatible group. Timeline admission and eviction must reserve enough
+payload capacity for the largest supported schema for every retained record,
+including duration presence. Before adding a Running Block, evict completed
+records until both encodings fit `MAX_FRAME_PAYLOAD`; never evict a Running
+record. Plan the required evictions first. If the timeline still cannot fit,
+reject the new admission with the existing timeline unchanged; otherwise apply
+the planned evictions and admission atomically. Consequently every admitted
+timeline must encode within the frame limit for both schemas. A later encode
+failure is an invariant failure: fail the affected group closed and do not
+silently leave it with a stale timeline.
+
+New clients use a bounded ClientHello downgrade sequence when an older Runtime
+rejects a capability set. Retry only after a decoded Error has
+`error_code=MalformedPayload` and `offending_message_type=ClientHello` for a
+ClientHello the client itself encoded and validated. Each retry uses a fresh
+connection and removes the next requested capability in this fixed order:
+`CAP_COMMAND_BLOCK_DURATION`, `CAP_EXTENDED_TERMINAL_KEY`,
+`CAP_BLOCK_METADATA`, `CAP_COMMAND_BLOCKS`, then
+`CAP_GRAPHEME_DISPLAY`. Each bit is removed at most once; thus there are at
+most six ClientHello attempts, including the initial request. Removing
+`CAP_COMMAND_BLOCKS` also removes the dependent duration bit; block metadata
+remains an independent capability. If command Blocks are not negotiated, use
+the existing Unsupported/Raw behavior. If grapheme display is not negotiated,
+use the existing scalar compatibility rules. Propagate all other protocol and
+transport failures without retry; if the bounded sequence is exhausted,
+return the final error. Never append a field under the existing schema and
+assume older decoders ignore it.
+
+SPEC-008 and the implementation Issue must define the exact byte layout and
+display rounding after this ADR is accepted.
 
 Before product implementation, the implementation Issue must also require:
 
@@ -816,11 +842,14 @@ Before product implementation, the implementation Issue must also require:
   `C`/`D` coalesced in one read (the coalesced case must be unknown, not a
   misleading near-zero duration);
 - protocol tests for old/new record shapes, malformed presence encoding,
-  bounded lengths, and mixed-client fan-out where only one client negotiates
+  negotiated-schema binding (including shape mismatch), bounded lengths,
+  worst-case timeline capacity for both schemas, rejected admission without
+  timeline mutation, and mixed-client fan-out where only one client negotiates
   duration;
 - ClientHello fallback tests for duration-only rejection, duration plus
-  extended-key rejection, exhaustion of optional-capability retries, and
-  Unsupported/Raw fallback when command Blocks are unavailable;
+  extended-key rejection, each downgrade step, unrelated-error/transport
+  non-retry, exhaustion after at most six attempts, and Unsupported/Raw
+  fallback when command Blocks are unavailable;
 - hot-path/performance evidence showing that timing and per-capability encoding
   never block PTY/VT/output progress or allocate a frame per attached client.
 
@@ -905,7 +934,7 @@ The following remain evidence limits rather than reasons to broaden M003:
   requirement needs an explicit trust source and a separate architecture/spec
   decision before production work.
 
-After this proposal is accepted, update SPEC-008 and refine the separate
+After this amendment is accepted, update SPEC-008 and refine the separate
 implementation Issue before adding duration to Runtime, the wire protocol, or
 the client. Reopen #686 if a concrete M003 requirement appears for live CWD,
 Bash/fish integration, or trusted remote-shell Blocks.

@@ -348,7 +348,35 @@ def git_sha() -> str:
     return sha
 
 
-def collect_gate(gate: str, *, allow_history: bool) -> None:
+def probe_ac_power_confirmed() -> tuple[bool, str]:
+    """Probe the real host power/thermal state instead of trusting a label.
+
+    Returns (confirmed, detail). Inability to confirm AC power -- non-macOS,
+    `pmset` missing/failing, or output that does not clearly show AC power --
+    invalidates the probe (confirmed=False); a thermal/power-noisy host must
+    never be silently treated as controlled.
+    """
+    if sys.platform != "darwin":
+        return False, "pmset power probe requires macOS"
+    result = run(["pmset", "-g", "batt"])
+    if result.returncode != 0:
+        return False, f"pmset -g batt failed: {result.stdout.strip()}"
+    output = result.stdout
+    first_line = next((line.strip() for line in output.splitlines() if line.strip()), "")
+    if "AC Power" in output:
+        return True, first_line or "AC Power"
+    if "Battery Power" in output:
+        return False, "host is running on battery power, not AC"
+    return False, f"pmset output did not confirm AC power: {output.strip()!r}"
+
+
+def collect_gate(
+    gate: str,
+    *,
+    allow_history: bool,
+    controlled: bool = False,
+    baseline_sha: str | None = None,
+) -> None:
     inventory = load_inventory()
     require_uncontrolled_honesty(inventory)
     family = inventory["families"].get(gate)
@@ -381,16 +409,79 @@ def collect_gate(gate: str, *, allow_history: bool) -> None:
     candidate = evidence_root / "cohorts"
     log = evidence_root / "raw-output.txt"
     log.write_text(collect_cohorts(gate, candidate, sha), encoding="utf-8")
-    note = evidence_root / "PLATFORM_LIMITED.txt"
+
+    if not controlled:
+        # Default path: unconditional PLATFORM_LIMITED diagnostic collection,
+        # unchanged from before --controlled existed.
+        note = evidence_root / "PLATFORM_LIMITED.txt"
+        note.write_text(
+            "\n".join(
+                [
+                    f"gate={gate}",
+                    "environment=PLATFORM_LIMITED",
+                    "physical_arm64_valid=false",
+                    "gate_status=proposed",
+                    "reason=uncontrolled-developer-host; proposed gate has no accepted ceiling; "
+                    "samples are harness proof only and must not be evaluated as PASS/FAIL",
+                    f"production_sha={sha}",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        print(
+            f"[m002-673] {gate} collected as PLATFORM_LIMITED harness proof at "
+            f"{evidence_root.relative_to(ROOT)}; not a release evaluation"
+        )
+        return
+
+    # --controlled: explicit opt-in. Only ever emits something other than
+    # PLATFORM_LIMITED when a distinct baseline SHA was supplied AND the
+    # host's real power state probes as AC-confirmed.
+    reasons: list[str] = []
+    if baseline_sha is None:
+        reasons.append("no --baseline-sha supplied")
+    elif baseline_sha == sha:
+        raise SystemExit(
+            "--controlled requires --baseline-sha distinct from the candidate production SHA"
+        )
+    ac_confirmed, ac_detail = probe_ac_power_confirmed()
+    if not ac_confirmed:
+        reasons.append(f"AC power not confirmed: {ac_detail}")
+
+    if reasons:
+        note = evidence_root / "PLATFORM_LIMITED.txt"
+        note.write_text(
+            "\n".join(
+                [
+                    f"gate={gate}",
+                    "environment=PLATFORM_LIMITED",
+                    "controlled_mode=true",
+                    "physical_arm64_valid=false",
+                    "gate_status=proposed",
+                    f"reason={'; '.join(reasons)}",
+                    f"production_sha={sha}",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        print(
+            f"[m002-673] {gate} controlled collection PLATFORM_LIMITED: {'; '.join(reasons)}"
+        )
+        return
+
+    note = evidence_root / "CONTROLLED.txt"
     note.write_text(
         "\n".join(
             [
                 f"gate={gate}",
-                "environment=PLATFORM_LIMITED",
+                "environment_status=VALID",
+                "controlled_mode=true",
                 "physical_arm64_valid=false",
                 "gate_status=proposed",
-                "reason=uncontrolled-developer-host; proposed gate has no accepted ceiling; "
-                "samples are harness proof only and must not be evaluated as PASS/FAIL",
+                f"baseline_sha={baseline_sha}",
+                f"ac_power_detail={ac_detail}",
                 f"production_sha={sha}",
                 "",
             ]
@@ -398,8 +489,9 @@ def collect_gate(gate: str, *, allow_history: bool) -> None:
         encoding="utf-8",
     )
     print(
-        f"[m002-673] {gate} collected as PLATFORM_LIMITED harness proof at "
-        f"{evidence_root.relative_to(ROOT)}; not a release evaluation"
+        f"[m002-673] {gate} controlled collection environment_status=VALID "
+        f"baseline_sha={baseline_sha} at {evidence_root.relative_to(ROOT)}; "
+        "proposed gate still has no accepted ceiling and is not a PASS/FAIL evaluation"
     )
 
 
@@ -409,12 +501,26 @@ def main() -> None:
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--gate")
     parser.add_argument("--allow-history-remasure", action="store_true")
+    parser.add_argument(
+        "--controlled",
+        action="store_true",
+        help="opt-in controlled-environment collection: requires --baseline-sha and probes real AC power",
+    )
+    parser.add_argument(
+        "--baseline-sha",
+        help="baseline production SHA for --controlled mode; must differ from the candidate HEAD SHA",
+    )
     args = parser.parse_args()
     if args.self_test:
         self_test()
         return
     if args.gate:
-        collect_gate(args.gate, allow_history=args.allow_history_remasure)
+        collect_gate(
+            args.gate,
+            allow_history=args.allow_history_remasure,
+            controlled=args.controlled,
+            baseline_sha=args.baseline_sha,
+        )
         return
     print_inventory(load_inventory())
     if not args.inventory and args.gate is None:

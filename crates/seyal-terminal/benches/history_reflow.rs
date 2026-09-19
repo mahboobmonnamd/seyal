@@ -1,8 +1,11 @@
-use std::{env, hint::black_box, process::Command, time::Instant};
+use std::{env, fs, hint::black_box, path::PathBuf, process::Command, time::Instant};
 
 use seyal_terminal::TerminalState;
+
+#[cfg(not(feature = "history-reflow-contract"))]
 use stats_alloc::{Region, StatsAlloc, INSTRUMENTED_SYSTEM};
 
+#[cfg(not(feature = "history-reflow-contract"))]
 #[global_allocator]
 static GLOBAL: &StatsAlloc<std::alloc::System> = &INSTRUMENTED_SYSTEM;
 
@@ -47,6 +50,82 @@ fn parse_samples() -> usize {
         .and_then(|value| value.parse().ok())
         .filter(|value: &usize| *value > 0)
         .unwrap_or(DEFAULT_SAMPLES)
+}
+
+fn parse_usize_env(name: &str, default: usize) -> usize {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|value: &usize| *value > 0)
+        .unwrap_or(default)
+}
+
+fn contract_gate() -> Option<String> {
+    env::var("SEYAL_M002_CONTRACT_GATE")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+fn populate(lines: usize, workload: &str) -> TerminalState {
+    let (line, _) = line_for(workload, 0);
+    let mut terminal = TerminalState::new(120, 40).expect("valid benchmark geometry");
+    for _ in 0..lines {
+        terminal.feed(&line).expect("history feed succeeds");
+    }
+    terminal
+}
+
+fn sample_ms(gate: &str, terminal: &mut TerminalState, columns: u16) -> f64 {
+    match gate {
+        "history_active_reflow_ms" => {
+            terminal.drop_primary_history_derived_cache();
+            let started = Instant::now();
+            black_box(terminal.primary_history_reflow(columns, ACTIVE_WINDOW_ROWS));
+            started.elapsed().as_secs_f64() * 1_000.0
+        }
+        "history_sealed_segment_reflow_ms" => {
+            let started = Instant::now();
+            black_box(terminal.primary_history_reflow_uncached(columns, ACTIVE_WINDOW_ROWS));
+            started.elapsed().as_secs_f64() * 1_000.0
+        }
+        other => panic!("unsupported M002 contract gate {other:?}"),
+    }
+}
+
+fn write_cohort_file(path: &str, cohort: usize, samples: &[f64]) {
+    let mut body = format!("cohort = {cohort}\nsamples = [");
+    for (index, value) in samples.iter().enumerate() {
+        if index > 0 {
+            body.push_str(", ");
+        }
+        body.push_str(&format!("{value:.9}"));
+    }
+    body.push_str("]\n");
+    fs::write(PathBuf::from(path), body).expect("write M002 cohort file");
+}
+
+fn run_contract_cohort() {
+    let gate = contract_gate().expect("contract gate");
+    let cohort = parse_usize_env("SEYAL_M002_COHORT", 1);
+    let warmups = parse_usize_env("SEYAL_M002_WARMUPS", 20);
+    let samples = parse_usize_env("SEYAL_M002_SAMPLES", 100);
+    let out = env::var("SEYAL_M002_COHORT_OUT").expect("SEYAL_M002_COHORT_OUT");
+    let lines = parse_scales("SEYAL_HISTORY_BENCH_LINES", &[10_000])[0];
+    let columns = parse_scales("SEYAL_HISTORY_BENCH_COLUMNS", &[80])[0];
+    let workload = workload_names()[0];
+    let mut terminal = populate(lines, workload);
+    for _ in 0..warmups {
+        let _ = sample_ms(&gate, &mut terminal, columns);
+    }
+    let mut retained = Vec::with_capacity(samples);
+    for _ in 0..samples {
+        retained.push(sample_ms(&gate, &mut terminal, columns));
+    }
+    write_cohort_file(&out, cohort, &retained);
+    println!(
+        "[seyal history benchmark] m002_contract gate={gate} cohort={cohort} warmups={warmups} samples={samples} lines={lines} columns={columns} workload={workload} out={out}"
+    );
 }
 
 fn workload_names() -> Vec<&'static str> {
@@ -126,6 +205,7 @@ fn measure(
     commit: &str,
 ) {
     let rss_before = process_rss_kib();
+    #[cfg(not(feature = "history-reflow-contract"))]
     let allocation_region = Region::new(GLOBAL);
     let append_samples_per_execution = samples.min(lines);
     let mut append_samples = Vec::with_capacity(executions * append_samples_per_execution);
@@ -189,7 +269,16 @@ fn measure(
     let rss_before_value = rss_before.unwrap_or(0);
     let rss_after_value = rss_after.unwrap_or(0);
     let rss_delta = rss_after_value.saturating_sub(rss_before_value);
+    #[cfg(not(feature = "history-reflow-contract"))]
     let allocation_stats = allocation_region.change();
+    #[cfg(not(feature = "history-reflow-contract"))]
+    let (allocation_calls, allocated_bytes, deallocated_bytes) = (
+        allocation_stats.allocations,
+        allocation_stats.bytes_allocated,
+        allocation_stats.bytes_deallocated,
+    );
+    #[cfg(feature = "history-reflow-contract")]
+    let (allocation_calls, allocated_bytes, deallocated_bytes) = (0, 0, 0);
 
     println!(
         "[seyal history benchmark] case workload={workload} lines={lines} executions={executions} columns={columns} commit={commit} resident_history_bytes={resident_history_bytes} derived_cache_bytes={derived_cache_bytes} rss_before_kib={rss_before_value} rss_after_kib={rss_after_value} rss_delta_kib={rss_delta} rss_available={} append_observations={} append_samples_per_execution={append_samples_per_execution} append_p50_ns={} append_p95_ns={} append_p99_ns={} reflow_p50_ns={} reflow_p95_ns={} reflow_p99_ns={} search_p50_ns={} search_p95_ns={} search_p99_ns={} anchor_p50_ns={} anchor_p95_ns={} anchor_p99_ns={} resolved_anchors={resolved_anchors} allocation_calls={} allocated_bytes={} deallocated_bytes={} allocation_status=measured samples={samples} percentile_method=nearest-rank performance_claim=false evidence_scope=TerminalState-comparative",
@@ -207,13 +296,18 @@ fn measure(
         percentile(&mut anchor_samples, 50),
         percentile(&mut anchor_samples, 95),
         percentile(&mut anchor_samples, 99),
-        allocation_stats.allocations,
-        allocation_stats.bytes_allocated,
-        allocation_stats.bytes_deallocated,
+        allocation_calls,
+        allocated_bytes,
+        deallocated_bytes,
     );
 }
 
 fn main() {
+    if contract_gate().is_some() {
+        run_contract_cohort();
+        return;
+    }
+
     let full = full_matrix_enabled();
     let lines = parse_scales(
         "SEYAL_HISTORY_BENCH_LINES",

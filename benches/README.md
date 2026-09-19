@@ -50,6 +50,24 @@ selected with `SEYAL_HISTORY_BENCH_LINES`, `SEYAL_HISTORY_BENCH_EXECUTIONS`,
 controlled-host runs. Percentiles use nearest-rank samples and every output is
 marked `performance_claim=false`.
 
+## M002 #673 HistoryStore reflow contract row
+
+The frozen #818 active/sealed reflow ceilings are measured with five fresh-process
+cohorts, 20 warmups, and 100 samples. This runner records
+`uncontrolled-developer-host` as `PLATFORM_LIMITED` and does not establish
+`PHYSICAL_ARM64`. Future contract cohorts compile without the process-wide
+`StatsAlloc` wrapper (`history-reflow-contract`). The landed
+`f105364` row in `docs/evidence/m002-673-history-reflow-20260916T171837Z/`
+is StatsAlloc-era / `PLATFORM_LIMITED` and is not a contract-clean first
+`PHYSICAL_ARM64` row. A numeric FAIL is retained:
+
+```sh
+python3 scripts/run-m002-history-reflow-contract.py
+```
+
+This runner is Apple Silicon macOS only. It is not part of `make bench` or CI.
+Other #673 gate families remain `status = proposed` and are not evaluated here.
+
 Append timings use evenly sized feed chunks within each execution. The harness
 records up to `SEYAL_HISTORY_BENCH_SAMPLES` append observations per execution
 (bounded by the retained line count), then reports their p50/p95/p99. This keeps

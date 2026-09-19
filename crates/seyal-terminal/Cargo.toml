@@ -12,7 +12,10 @@ test-fault-injection = []
 # Opt-in so `cargo bench --workspace` / native-macos-smoke `make bench` does not
 # compile this comparative harness on the 35-minute hosted job. Evidence runs:
 # cargo bench -p seyal-terminal --bench history_reflow --features history-reflow-bench
+# Contract cohorts disable the process-wide StatsAlloc wrapper:
+# cargo bench -p seyal-terminal --bench history_reflow --features history-reflow-contract
 history-reflow-bench = []
+history-reflow-contract = ["history-reflow-bench"]
 
 [[bench]]
 name = "vt_parser_state"

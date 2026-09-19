@@ -503,9 +503,99 @@ def main() -> None:
         shutil.copytree(accepted_pass, missing_git)
         shutil.rmtree(missing_git / ".git")
         run_negative(
-            ["python3", str(ROOT / "scripts/check-m002-performance-contract.py"), "--record", "record.toml"],
+            [
+                "python3",
+                str(ROOT / "scripts/check-m002-performance-contract.py"),
+                "--record",
+                "record.toml",
+                "--require-exact-head",
+            ],
             missing_git,
             "cannot verify exact production SHA without a git checkout",
+        )
+
+        recorded_later_head = base / "m002-performance-recorded-later-head"
+        shutil.copytree(accepted_pass, recorded_later_head)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=seyal",
+                "-c",
+                "user.email=seyal@test",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "later-head",
+            ],
+            cwd=recorded_later_head,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        result = subprocess.run(
+            ["python3", str(ROOT / "scripts/check-m002-performance-contract.py"), "--record", "record.toml"],
+            cwd=recorded_later_head,
+            env={**os.environ, ENV_ROOT: str(recorded_later_head)},
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+        require(
+            result.returncode == 0 and "M002 performance result: PASS" in result.stdout,
+            "historical --record validation required HEAD to match production_sha",
+        )
+        run_negative(
+            [
+                "python3",
+                str(ROOT / "scripts/check-m002-performance-contract.py"),
+                "--record",
+                "record.toml",
+                "--require-exact-head",
+            ],
+            recorded_later_head,
+            "production_sha does not match validation checkout",
+        )
+
+        uncontrolled_valid = base / "m002-performance-uncontrolled-physical-valid"
+        shutil.copytree(accepted_pass, uncontrolled_valid)
+        record = (uncontrolled_valid / "record.toml").read_text(encoding="utf-8").replace(
+            "power_thermal_state = 'nominal'",
+            "power_thermal_state = 'uncontrolled-developer-host'",
+        )
+        (uncontrolled_valid / "record.toml").write_text(record, encoding="utf-8")
+        run_negative(
+            ["python3", str(ROOT / "scripts/check-m002-performance-contract.py"), "--record", "record.toml"],
+            uncontrolled_valid,
+            "PHYSICAL_ARM64 VALID results cannot use an uncontrolled power/thermal state",
+        )
+
+        uncontrolled_limited = base / "m002-performance-uncontrolled-platform-limited"
+        shutil.copytree(accepted_pass, uncontrolled_limited)
+        record = (uncontrolled_limited / "record.toml").read_text(encoding="utf-8")
+        record = record.replace(
+            "power_thermal_state = 'nominal'",
+            "power_thermal_state = 'uncontrolled-developer-host'",
+        )
+        record = record.replace(
+            "environment_status = 'VALID'\nplatform_limit_reason = ''",
+            "environment_status = 'PLATFORM_LIMITED'\n"
+            "platform_limit_reason = 'uncontrolled-developer-host'",
+        )
+        (uncontrolled_limited / "record.toml").write_text(record, encoding="utf-8")
+        result = subprocess.run(
+            ["python3", str(ROOT / "scripts/check-m002-performance-contract.py"), "--record", "record.toml"],
+            cwd=uncontrolled_limited,
+            env={**os.environ, ENV_ROOT: str(uncontrolled_limited)},
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+        require(
+            result.returncode == 0 and "M002 performance result: PLATFORM_LIMITED" in result.stdout,
+            "uncontrolled PHYSICAL_ARM64 row was not retained as PLATFORM_LIMITED",
         )
 
         missing_metrics = base / "m002-performance-missing-metrics"

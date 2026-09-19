@@ -1,0 +1,31 @@
+    Finished `bench` profile [optimized] target(s) in 0.18s
+     Running benches/history_reflow.rs (/var/folders/p0/z6_c1q9n0wl_qjqxbjldz65m0000gn/T/cursor-sandbox-cache/06734c351259111a938886ea2ed4fca4/cargo-target/release/deps/history_reflow-fbfee0fb2d971837)
+[seyal history benchmark] m002_contract gate=history_active_reflow_ms cohort=1 warmups=20 samples=100 lines=10000 columns=80 workload=ascii out=/Users/anulal/Developer/seyal-issue-673/docs/evidence/m002-673-history-reflow-20260916T171837Z/history_active_reflow_ms/cohorts/1.toml
+    Finished `bench` profile [optimized] target(s) in 0.00s
+     Running benches/history_reflow.rs (/var/folders/p0/z6_c1q9n0wl_qjqxbjldz65m0000gn/T/cursor-sandbox-cache/06734c351259111a938886ea2ed4fca4/cargo-target/release/deps/history_reflow-fbfee0fb2d971837)
+[seyal history benchmark] m002_contract gate=history_active_reflow_ms cohort=2 warmups=20 samples=100 lines=10000 columns=80 workload=ascii out=/Users/anulal/Developer/seyal-issue-673/docs/evidence/m002-673-history-reflow-20260916T171837Z/history_active_reflow_ms/cohorts/2.toml
+    Finished `bench` profile [optimized] target(s) in 0.01s
+     Running benches/history_reflow.rs (/var/folders/p0/z6_c1q9n0wl_qjqxbjldz65m0000gn/T/cursor-sandbox-cache/06734c351259111a938886ea2ed4fca4/cargo-target/release/deps/history_reflow-fbfee0fb2d971837)
+[seyal history benchmark] m002_contract gate=history_active_reflow_ms cohort=3 warmups=20 samples=100 lines=10000 columns=80 workload=ascii out=/Users/anulal/Developer/seyal-issue-673/docs/evidence/m002-673-history-reflow-20260916T171837Z/history_active_reflow_ms/cohorts/3.toml
+    Finished `bench` profile [optimized] target(s) in 0.01s
+     Running benches/history_reflow.rs (/var/folders/p0/z6_c1q9n0wl_qjqxbjldz65m0000gn/T/cursor-sandbox-cache/06734c351259111a938886ea2ed4fca4/cargo-target/release/deps/history_reflow-fbfee0fb2d971837)
+[seyal history benchmark] m002_contract gate=history_active_reflow_ms cohort=4 warmups=20 samples=100 lines=10000 columns=80 workload=ascii out=/Users/anulal/Developer/seyal-issue-673/docs/evidence/m002-673-history-reflow-20260916T171837Z/history_active_reflow_ms/cohorts/4.toml
+    Finished `bench` profile [optimized] target(s) in 0.00s
+     Running benches/history_reflow.rs (/var/folders/p0/z6_c1q9n0wl_qjqxbjldz65m0000gn/T/cursor-sandbox-cache/06734c351259111a938886ea2ed4fca4/cargo-target/release/deps/history_reflow-fbfee0fb2d971837)
+[seyal history benchmark] m002_contract gate=history_active_reflow_ms cohort=5 warmups=20 samples=100 lines=10000 columns=80 workload=ascii out=/Users/anulal/Developer/seyal-issue-673/docs/evidence/m002-673-history-reflow-20260916T171837Z/history_active_reflow_ms/cohorts/5.toml
+
+    Finished `bench` profile [optimized] target(s) in 0.01s
+     Running benches/history_reflow.rs (/var/folders/p0/z6_c1q9n0wl_qjqxbjldz65m0000gn/T/cursor-sandbox-cache/06734c351259111a938886ea2ed4fca4/cargo-target/release/deps/history_reflow-fbfee0fb2d971837)
+[seyal history benchmark] m002_contract gate=history_active_reflow_ms cohort=1 warmups=20 samples=100 lines=10000 columns=80 workload=ascii out=/Users/anulal/Developer/seyal-issue-673/docs/evidence/m002-673-history-reflow-20260916T171837Z/history_active_reflow_ms/baseline-cohorts/1.toml
+    Finished `bench` profile [optimized] target(s) in 0.00s
+     Running benches/history_reflow.rs (/var/folders/p0/z6_c1q9n0wl_qjqxbjldz65m0000gn/T/cursor-sandbox-cache/06734c351259111a938886ea2ed4fca4/cargo-target/release/deps/history_reflow-fbfee0fb2d971837)
+[seyal history benchmark] m002_contract gate=history_active_reflow_ms cohort=2 warmups=20 samples=100 lines=10000 columns=80 workload=ascii out=/Users/anulal/Developer/seyal-issue-673/docs/evidence/m002-673-history-reflow-20260916T171837Z/history_active_reflow_ms/baseline-cohorts/2.toml
+    Finished `bench` profile [optimized] target(s) in 0.00s
+     Running benches/history_reflow.rs (/var/folders/p0/z6_c1q9n0wl_qjqxbjldz65m0000gn/T/cursor-sandbox-cache/06734c351259111a938886ea2ed4fca4/cargo-target/release/deps/history_reflow-fbfee0fb2d971837)
+[seyal history benchmark] m002_contract gate=history_active_reflow_ms cohort=3 warmups=20 samples=100 lines=10000 columns=80 workload=ascii out=/Users/anulal/Developer/seyal-issue-673/docs/evidence/m002-673-history-reflow-20260916T171837Z/history_active_reflow_ms/baseline-cohorts/3.toml
+    Finished `bench` profile [optimized] target(s) in 0.01s
+     Running benches/history_reflow.rs (/var/folders/p0/z6_c1q9n0wl_qjqxbjldz65m0000gn/T/cursor-sandbox-cache/06734c351259111a938886ea2ed4fca4/cargo-target/release/deps/history_reflow-fbfee0fb2d971837)
+[seyal history benchmark] m002_contract gate=history_active_reflow_ms cohort=4 warmups=20 samples=100 lines=10000 columns=80 workload=ascii out=/Users/anulal/Developer/seyal-issue-673/docs/evidence/m002-673-history-reflow-20260916T171837Z/history_active_reflow_ms/baseline-cohorts/4.toml
+    Finished `bench` profile [optimized] target(s) in 0.00s
+     Running benches/history_reflow.rs (/var/folders/p0/z6_c1q9n0wl_qjqxbjldz65m0000gn/T/cursor-sandbox-cache/06734c351259111a938886ea2ed4fca4/cargo-target/release/deps/history_reflow-fbfee0fb2d971837)
+[seyal history benchmark] m002_contract gate=history_active_reflow_ms cohort=5 warmups=20 samples=100 lines=10000 columns=80 workload=ascii out=/Users/anulal/Developer/seyal-issue-673/docs/evidence/m002-673-history-reflow-20260916T171837Z/history_active_reflow_ms/baseline-cohorts/5.toml

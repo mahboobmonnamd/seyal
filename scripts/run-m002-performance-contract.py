@@ -13,6 +13,8 @@ PASS/FAIL (the validator rejects proposed gates).
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 import platform
 import subprocess
@@ -27,7 +29,10 @@ CONTRACT = ROOT / "docs/evidence/M002-PERFORMANCE-CONTRACT-V1.toml"
 VALIDATOR = ROOT / "scripts/check-m002-performance-contract.py"
 HISTORY_RUNNER = ROOT / "scripts/run-m002-history-reflow-contract.py"
 BUILD_MACOS = ROOT / "scripts/build-macos.sh"
-SEYAL_APP = ROOT / "target/macos-derived-data/Build/Products/Debug/Seyal.app/Contents/MacOS/Seyal"
+# Contract collection always builds/uses a Release Seyal.app: a Debug binary
+# is not a production-representative renderer_prepare_submission measurement.
+SEYAL_APP_CONFIGURATION = "Release"
+SEYAL_APP = ROOT / "target/macos-derived-data/Build/Products/Release/Seyal.app/Contents/MacOS/Seyal"
 RETAINED_ACTIVE = (
     ROOT
     / "docs/evidence/m002-673-history-reflow-20260916T171837Z/history_active_reflow_ms/record.toml"
@@ -220,12 +225,74 @@ def self_test() -> None:
     print("M002 #673 family inventory self-test passed.")
 
 
+def app_manifest_path() -> Path:
+    return SEYAL_APP.parent / "m002-app-identity-manifest.json"
+
+
+def sha256_of_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def load_app_manifest() -> dict | None:
+    manifest_path = app_manifest_path()
+    if not manifest_path.is_file():
+        return None
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return manifest if isinstance(manifest, dict) else None
+
+
+def write_app_manifest(sha: str, configuration: str) -> None:
+    manifest = {
+        "sha": sha,
+        "configuration": configuration,
+        "built_at": datetime.now(timezone.utc).isoformat(),
+        "sha256": sha256_of_file(SEYAL_APP),
+    }
+    app_manifest_path().write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def app_identity_matches(requested_sha: str, requested_configuration: str) -> bool:
+    """True only when an existing Seyal.app binary is provably the requested
+    production SHA/configuration, not merely present and executable.
+
+    A stale binary left over from a previous SHA, a previous configuration
+    (e.g. a Debug build from an ordinary `make build`), or a binary whose
+    content no longer matches what was recorded at build time must never be
+    silently reused for contract collection.
+    """
+    if not (SEYAL_APP.is_file() and os.access(SEYAL_APP, os.X_OK)):
+        return False
+    manifest = load_app_manifest()
+    if manifest is None:
+        return False
+    if manifest.get("sha") != requested_sha or manifest.get("configuration") != requested_configuration:
+        return False
+    if manifest.get("sha256") != sha256_of_file(SEYAL_APP):
+        return False
+    return True
+
+
 def ensure_seyal_app() -> Path:
-    if SEYAL_APP.is_file() and os.access(SEYAL_APP, os.X_OK):
+    requested_sha = git_sha()
+    requested_configuration = SEYAL_APP_CONFIGURATION
+    if app_identity_matches(requested_sha, requested_configuration):
         return SEYAL_APP
-    built = run(["bash", str(BUILD_MACOS)])
+    env = os.environ.copy()
+    # An env-var override for THIS collection run only, not a change to
+    # build-macos.sh's own Debug default (other callers may legitimately
+    # want Debug).
+    env["SEYAL_MACOS_CONFIGURATION"] = requested_configuration
+    built = run(["bash", str(BUILD_MACOS)], env=env)
     if built.returncode != 0 or not SEYAL_APP.is_file():
         raise SystemExit(f"Seyal.app build failed for renderer contract:\n{built.stdout}")
+    write_app_manifest(requested_sha, requested_configuration)
     return SEYAL_APP
 
 

@@ -1,11 +1,11 @@
-use seyal_runtime::local_ipc::framing::ComposerResultCode;
+use seyal_runtime::local_ipc::framing::{ComposerEligibility, ComposerResultCode};
 
 use crate::LocalDisplayClient;
 
 use super::{
     error_code, with_active_client, with_active_client_mut, SeyalBlockRecord, SeyalComposerResult,
-    SeyalExecutionBlockMetadata, SeyalHistoryCell, SeyalHistoryRange, SeyalHistoryRow,
-    SeyalHistorySidecar, SeyalPreparedFrame,
+    SeyalComposerStatus, SeyalExecutionBlockMetadata, SeyalHistoryCell, SeyalHistoryRange,
+    SeyalHistoryRow, SeyalHistorySidecar, SeyalPreparedFrame,
 };
 
 #[unsafe(no_mangle)]
@@ -180,6 +180,25 @@ pub extern "C" fn seyal_bridge_composer_result() -> SeyalComposerResult {
             reserved: [0; 7],
         })
         .unwrap_or_else(SeyalComposerResult::empty)
+}
+
+/// Copies the latest Runtime composer eligibility for the active client into
+/// a typed C value. Revision 0 / eligibility 0 means nothing published yet.
+/// The host relays it verbatim; Rust remains the only reader of its meaning.
+#[unsafe(no_mangle)]
+pub extern "C" fn seyal_bridge_composer_status() -> SeyalComposerStatus {
+    with_active_client(|client| client.composer_status())
+        .flatten()
+        .map(|status| SeyalComposerStatus {
+            revision: status.revision,
+            eligibility: match status.eligibility {
+                ComposerEligibility::Available => 1,
+                ComposerEligibility::Busy => 2,
+                ComposerEligibility::Unsupported => 3,
+            },
+            reserved: [0; 7],
+        })
+        .unwrap_or_else(SeyalComposerStatus::empty)
 }
 
 /// Read-only Pass 8 execution metadata for the active Pane client. No command

@@ -20,6 +20,7 @@ pub(super) const RESYNC_SNAPSHOT_BUDGET_PER_POLL: usize = 2;
 pub(super) const ACCEPT_BACKOFF_INITIAL: Duration = Duration::from_millis(10);
 pub(super) const ACCEPT_BACKOFF_MAX: Duration = Duration::from_millis(250);
 
+mod composer_status;
 mod connection;
 mod display_publish;
 mod history_blocks;

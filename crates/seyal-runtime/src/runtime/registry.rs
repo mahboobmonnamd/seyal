@@ -206,6 +206,10 @@ impl Runtime {
             block_timeline: CommandBlockTimeline::default(),
             #[cfg(target_os = "macos")]
             block_revision: 0,
+            #[cfg(target_os = "macos")]
+            published_composer_eligibility: None,
+            #[cfg(target_os = "macos")]
+            composer_status_revision: 0,
         };
         let previous = self.by_token.insert(token, id);
         debug_assert!(previous.is_none());

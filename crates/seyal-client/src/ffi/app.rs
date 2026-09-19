@@ -11,8 +11,8 @@ use crate::app::{
 };
 use crate::chrome::{AgentId, AttentionId, InspectorMode, LeftPanelMode};
 use crate::composer::{
-    ComposerMode, RuntimeBlockRecord, BLOCK_PROMPT, COMPOSER_EXECUTE_LABEL, COMPOSER_HISTORY_LABEL,
-    COMPOSER_HISTORY_PLACEHOLDER,
+    ComposerMode, RuntimeBlockRecord, RuntimeComposerEligibility, BLOCK_PROMPT,
+    COMPOSER_EXECUTE_LABEL, COMPOSER_HISTORY_LABEL, COMPOSER_HISTORY_PLACEHOLDER,
 };
 use crate::input_policy::process_input_policy;
 use crate::recovery::{AttemptOutcome, LaunchResult, RecoveryEffect, RecoveryStage};
@@ -1061,6 +1061,17 @@ fn decode_action(action: &SeyalAppAction) -> Result<AppAction, i32> {
         }),
         50 => Ok(AppAction::RunPalette { fence }),
         51 => Ok(AppAction::ClosePalette { fence }),
+        52 => Ok(AppAction::ApplyRuntimeComposerStatus {
+            fence,
+            eligibility: match action.reserved {
+                0 => None,
+                1 => Some(RuntimeComposerEligibility::Available),
+                2 => Some(RuntimeComposerEligibility::Busy),
+                3 => Some(RuntimeComposerEligibility::Unsupported),
+                _ => return Err(-6),
+            },
+            revision: action.target_execution_lo,
+        }),
         _ => Err(-6),
     }
 }
@@ -1628,8 +1639,73 @@ mod tests {
             reserved: 0,
         };
         assert_eq!(unsafe { seyal_app_apply(handle, &bind) }, 0);
+        relay_composer_status(handle, 1, 1);
         let bound = seyal_app_snapshot(handle);
         (handle, bound)
+    }
+
+    /// Relay a Runtime composer status exactly as the thin host does:
+    /// `reserved` = eligibility code, `target_execution_lo` = revision.
+    fn relay_composer_status(handle: u64, eligibility: u32, revision: u64) -> i32 {
+        let snap = seyal_app_snapshot(handle);
+        let mut status = identity_fence(52, &snap);
+        status.reserved = eligibility;
+        status.target_execution_lo = revision;
+        unsafe { seyal_app_apply(handle, &status) }
+    }
+
+    #[test]
+    fn composer_status_relay_gates_availability_and_rejects_bad_codes() {
+        let handle = seyal_app_create();
+        let snap = seyal_app_snapshot(handle);
+        let bind = SeyalAppAction {
+            version: APP_ABI_VERSION,
+            size: size_of::<SeyalAppAction>() as u16,
+            kind: 1,
+            flags: FLAG_TARGET_CONTROLLER,
+            fence_pane_lo: snap.pane_lo,
+            fence_pane_hi: snap.pane_hi,
+            fence_execution_lo: 0,
+            fence_execution_hi: 0,
+            fence_attachment_lo: 0,
+            fence_attachment_hi: 0,
+            fence_epoch: snap.epoch,
+            target_execution_lo: 1,
+            target_execution_hi: 0,
+            target_attachment_lo: 2,
+            target_attachment_hi: 0,
+            target_pty_generation: 1,
+            payload: ptr::null(),
+            payload_len: 0,
+            reserved: 0,
+        };
+        assert_eq!(unsafe { seyal_app_apply(handle, &bind) }, 0);
+        // Bound but Runtime has published nothing: busy, not submittable,
+        // and the placeholder says so.
+        let composer = seyal_app_composer(handle);
+        assert_eq!(composer.mode, 2);
+        assert_eq!(composer.flags & 1, 0);
+        assert_eq!(
+            copy_text(seyal_app_copy(handle, 0)),
+            "Waiting for prompt..."
+        );
+        // An unknown eligibility code is a malformed action, not a guess.
+        assert_eq!(relay_composer_status(handle, 9, 1), -6);
+        assert_eq!(seyal_app_composer(handle).mode, 2);
+        assert_eq!(relay_composer_status(handle, 1, 1), 0);
+        assert_eq!(seyal_app_composer(handle).mode, 1);
+        assert_eq!(copy_text(seyal_app_copy(handle, 0)), "Type a command...");
+        // Busy at a newer revision disables; a stale Available cannot undo it.
+        assert_eq!(relay_composer_status(handle, 2, 3), 0);
+        assert_eq!(seyal_app_composer(handle).mode, 2);
+        assert_eq!(relay_composer_status(handle, 1, 2), 0);
+        assert_eq!(seyal_app_composer(handle).mode, 2);
+        // Transport lost: cleared, still busy; the next attachment restarts.
+        assert_eq!(relay_composer_status(handle, 0, 0), 0);
+        assert_eq!(seyal_app_composer(handle).mode, 2);
+        assert_eq!(relay_composer_status(handle, 3, 1), 0);
+        assert_eq!(seyal_app_composer(handle).mode, 1);
+        assert_eq!(seyal_app_destroy(handle), 0);
     }
 
     fn accepted_submit(handle: u64, command: &str) {

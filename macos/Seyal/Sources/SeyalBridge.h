@@ -112,6 +112,14 @@ typedef struct SeyalComposerResult {
     uint8_t reserved[7];
 } SeyalComposerResult;
 
+/* Runtime-published composer eligibility (#978): eligibility uses
+ * SeyalAppComposerEligibility; revision 0 means nothing published yet. */
+typedef struct SeyalComposerStatus {
+    uint64_t revision;
+    uint8_t eligibility;
+    uint8_t reserved[7];
+} SeyalComposerStatus;
+
 typedef struct SeyalRecoveryResult {
     uint8_t stage;
     uint8_t failure_class;
@@ -219,6 +227,7 @@ SeyalHistoryRow seyal_bridge_history_range_row_for(uint64_t block_id, uint64_t r
 SeyalHistorySidecar seyal_bridge_history_range_sidecar_for(uint64_t block_id, uint64_t request_id);
 uint8_t seyal_bridge_history_range_consume(uint64_t block_id, uint64_t request_id);
 SeyalComposerResult seyal_bridge_composer_result(void);
+SeyalComposerStatus seyal_bridge_composer_status(void);
 SeyalRecoveryResult seyal_bridge_last_recovery_result(void);
 SeyalPass9DiagSnapshot seyal_bridge_pass9_diag_snapshot(void);
 int32_t seyal_bridge_submit_key(uint16_t kind, uint32_t scalar);

@@ -15,8 +15,9 @@ use seyal_exec::LineId;
 use seyal_exec::{CommandSpec, ShellIntegrationToken, WindowSize};
 
 use super::integration_state::IntegrationState;
-use super::shell_integration::ComposerAdmission;
+use super::shell_integration::{composer_eligibility, ComposerAdmission};
 use crate::command_block_timeline::CommandBlockLifecycle;
+use crate::local_ipc::framing::ComposerEligibility;
 use crate::{ExecutionId, LocalIpcMode, Runtime, RuntimeConfig, ShellIntegrationPolicy};
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(1);
@@ -130,6 +131,17 @@ impl Harness {
         });
     }
 
+    /// The eligibility Runtime has published to clients (#978), with the
+    /// revision that fences it. Publication is transition-driven, so this is
+    /// exactly what a client attached from the start would hold.
+    fn published(&self) -> (Option<ComposerEligibility>, u64) {
+        let entry = &self.runtime.entries[&self.id];
+        (
+            entry.published_composer_eligibility,
+            entry.composer_status_revision,
+        )
+    }
+
     fn submit(&mut self, command: &str) -> ComposerAdmission {
         self.runtime
             .submit_composer_command(self.id, command.to_owned())
@@ -224,6 +236,60 @@ fn first_prompt_follows_user_rc_and_makes_composer_eligible() {
     h.wait_at_prompt();
     assert!(h.text().contains("user-rc-ran"), "{}", h.text());
     h.assert_no_instrumentation_visible();
+}
+
+#[test]
+fn published_composer_eligibility_tracks_every_admission_flip() {
+    // #978: what Runtime publishes must equal what admission would decide,
+    // and must move only on transitions, each with a strictly newer revision.
+    let mut h = spawn("eligibility", PLAIN_RC, None);
+    // Before the first trusted A nothing is proved; the composer stays busy.
+    assert_eq!(h.state(), IntegrationState::Unproven);
+    assert_eq!(
+        composer_eligibility(&h.runtime.entries[&h.id]),
+        ComposerEligibility::Busy
+    );
+    assert_eq!(h.published(), (None, 0));
+    h.wait_at_prompt();
+    let (eligibility, at_prompt) = h.published();
+    assert_eq!(eligibility, Some(ComposerEligibility::Available));
+    assert!(at_prompt >= 1);
+    // Submission flips to Busy at admission time, before any marker.
+    assert!(matches!(
+        h.submit("sleep 0.3"),
+        ComposerAdmission::Accepted(_)
+    ));
+    let (eligibility, pending) = h.published();
+    assert_eq!(eligibility, Some(ComposerEligibility::Busy));
+    assert!(pending > at_prompt);
+    // C and D never flip eligibility while the command runs; only the next
+    // trusted A does, so exactly one newer revision separates the two prompts
+    // (D and A may arrive in one read, so the Running state is not observable).
+    assert_eq!(
+        h.wait_block_completed(0),
+        CommandBlockLifecycle::Completed {
+            exit_status: Some(0)
+        }
+    );
+    h.wait_at_prompt();
+    let (eligibility, back) = h.published();
+    assert_eq!(eligibility, Some(ComposerEligibility::Available));
+    assert_eq!(back, pending + 1);
+    // Direct Raw input closes the gate at admission, without a marker.
+    h.direct(b"sleep 0.3\r");
+    h.runtime
+        .poll_once(Some(Duration::from_millis(10)))
+        .expect("poll");
+    let (eligibility, direct) = h.published();
+    assert_eq!(eligibility, Some(ComposerEligibility::Busy));
+    assert!(direct > back);
+    h.wait_at_prompt();
+    assert_eq!(h.published().0, Some(ComposerEligibility::Available));
+    // Execution end disables the composer for good.
+    h.runtime.note_execution_ended(h.id);
+    let (eligibility, ended) = h.published();
+    assert_eq!(eligibility, Some(ComposerEligibility::Busy));
+    assert!(ended > direct);
 }
 
 #[test]
@@ -523,6 +589,10 @@ fn unsupported_shell_keeps_the_raw_composer_path() {
     h.pump_for(Duration::from_millis(300));
     assert_eq!(h.state(), IntegrationState::Unproven);
     assert!(h.runtime.entries[&h.id].shell_nonce.is_none());
+    assert_eq!(
+        composer_eligibility(&h.runtime.entries[&h.id]),
+        ComposerEligibility::Unsupported
+    );
     assert_eq!(h.submit("echo raw-sh"), ComposerAdmission::Unsupported);
     h.pump_until(|runtime, id| {
         (0..24).any(|row| {

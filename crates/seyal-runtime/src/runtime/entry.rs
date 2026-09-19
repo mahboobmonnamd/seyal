@@ -14,6 +14,9 @@ use crate::{AttachmentId, ExecutionId, WorkspaceId};
 #[cfg(target_os = "macos")]
 use seyal_exec::{ShellIntegrationToken, VisualPos};
 
+#[cfg(target_os = "macos")]
+use crate::local_ipc::framing::ComposerEligibility;
+
 use super::config::PtyEofReapProbe;
 #[cfg(target_os = "macos")]
 use super::integration_state::IntegrationState;
@@ -63,6 +66,12 @@ pub(in crate::runtime) struct Entry {
     pub(in crate::runtime) block_timeline: CommandBlockTimeline,
     #[cfg(target_os = "macos")]
     pub(in crate::runtime) block_revision: u64,
+    /// The composer eligibility last published to attached clients, and the
+    /// monotonic revision that fences it. `None` until the first publish.
+    #[cfg(target_os = "macos")]
+    pub(in crate::runtime) published_composer_eligibility: Option<ComposerEligibility>,
+    #[cfg(target_os = "macos")]
+    pub(in crate::runtime) composer_status_revision: u64,
 }
 
 #[cfg(target_os = "macos")]

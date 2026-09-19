@@ -181,6 +181,17 @@ struct NativeComposerResult: Equatable {
   let code: Code
 }
 
+/// Runtime-published composer eligibility, relayed verbatim to the Rust
+/// application root (#978). `eligibility` is `SeyalAppComposerEligibility`;
+/// `.cleared` (revision 0) means the transport is gone and Rust must treat
+/// the composer as busy until Runtime republishes.
+struct NativeComposerStatus: Equatable {
+  let eligibility: UInt8
+  let revision: UInt64
+
+  static let cleared = NativeComposerStatus(eligibility: 0, revision: 0)
+}
+
 /// Geometry for one canonical Block projection on the Pane-owned Metal
 /// surface. The surface consumes a complete frame, so lifecycle updates never
 /// replace one history buffer at a time or expose a partially updated order.
@@ -367,6 +378,7 @@ final class RustDisplayBridge {
   typealias TimelineHandler = @MainActor () -> Void
   typealias HistoryHandler = @MainActor (NativeHistoryRange) -> Void
   typealias ComposerResultHandler = @MainActor (NativeComposerResult) -> Void
+  typealias ComposerStatusHandler = @MainActor (NativeComposerStatus) -> Void
   typealias ErrorHandler = @MainActor (Int32) -> Void
   typealias StatusHandler = @MainActor () -> Void
 
@@ -447,6 +459,7 @@ final class RustDisplayBridge {
   private let onTimeline: TimelineHandler
   private let onHistory: HistoryHandler
   private let onComposerResult: ComposerResultHandler
+  private let onComposerStatus: ComposerStatusHandler
   private let onError: ErrorHandler
   var onStatusChanged: StatusHandler
   var onCopiedText: ((String) -> Void)?
@@ -476,6 +489,7 @@ final class RustDisplayBridge {
   private var historyContinuations:
     [PaneHistoryRequestKey: (startUnit: UInt32, range: NativeHistoryRange)] = [:]
   private var lastComposerResultRequestID: UInt64 = 0
+  private var lastComposerStatusRevision: UInt64 = 0
 
   static func teardownReconnectStateSelfTest() -> Bool {
     var disconnects = 0
@@ -503,6 +517,7 @@ final class RustDisplayBridge {
     onTimeline: @escaping TimelineHandler = {},
     onHistory: @escaping HistoryHandler = { _ in },
     onComposerResult: @escaping ComposerResultHandler = { _ in },
+    onComposerStatus: @escaping ComposerStatusHandler = { _ in },
     paneID: String = "unbound",
     executionIdentity: String? = nil,
     allowsImplicitExecutionBootstrap: Bool = true
@@ -511,6 +526,7 @@ final class RustDisplayBridge {
     self.onTimeline = onTimeline
     self.onHistory = onHistory
     self.onComposerResult = onComposerResult
+    self.onComposerStatus = onComposerStatus
     self.onError = onError
     self.onStatusChanged = onStatusChanged
     self.paneID = paneID
@@ -711,6 +727,7 @@ final class RustDisplayBridge {
     historyContinuations.removeAll(keepingCapacity: false)
     lastTimelineRevision = 0
     lastComposerResultRequestID = 0
+    clearComposerStatus()
     runtimeIdentityWords = (0, 0)
     attachmentIdentityWords = (0, 0)
     if let readSource {
@@ -754,6 +771,7 @@ final class RustDisplayBridge {
     historyContinuations.removeAll(keepingCapacity: false)
     lastTimelineRevision = 0
     lastComposerResultRequestID = 0
+    clearComposerStatus()
     runtimeIdentityWords = (0, 0)
     attachmentIdentityWords = (0, 0)
 
@@ -865,6 +883,23 @@ final class RustDisplayBridge {
   func nextComposerRequestID() -> UInt64 {
     guard isConnected, reconstructionState.canMutate, selectClient() else { return 0 }
     return seyal_bridge_next_composer_request_id()
+  }
+
+  /// Relay a newer Runtime composer eligibility. Only the revision decides
+  /// novelty; the host never interprets the eligibility code.
+  private func publishComposerStatus() {
+    guard isConnected, reconstructionState.canMutate, selectClient() else { return }
+    let status = seyal_bridge_composer_status()
+    guard status.revision != 0, status.revision != lastComposerStatusRevision else { return }
+    lastComposerStatusRevision = status.revision
+    onComposerStatus(NativeComposerStatus(eligibility: status.eligibility, revision: status.revision))
+  }
+
+  /// Transport lost: the relayed fact no longer describes a live attachment.
+  private func clearComposerStatus() {
+    guard lastComposerStatusRevision != 0 else { return }
+    lastComposerStatusRevision = 0
+    onComposerStatus(.cleared)
   }
 
   private func publishComposerResult() {
@@ -1264,6 +1299,7 @@ final class RustDisplayBridge {
       runtimeBlockMetadata = currentBlockMetadata()
       publishHistoryRanges()
       publishComposerResult()
+      publishComposerStatus()
       if let text = copiedText() {
         onCopiedText?(text)
         _ = consumeCopiedText()

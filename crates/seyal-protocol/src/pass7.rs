@@ -28,6 +28,14 @@ pub const HISTORY_CELL_WIDTH_MASK: u16 = 0b11 << 4;
 /// `HistoryCell.flags` bit 7: `reserved` is a sidecar byte offset, not zero.
 pub const HISTORY_CELL_SIDECAR_FLAG: u16 = 1 << 7;
 
+/// Runtime's answer to "would a composer submission be admitted right now?"
+/// (ADR-009 invariant 7, 2026-09-16 amendment mechanism 5). `Available` is
+/// exactly the admission-time prompt gate: a trusted prompt was announced and
+/// nothing was admitted since, on the primary screen, with I/O active.
+/// `Busy` covers everything before the first trusted prompt, a submission in
+/// flight, a running command, direct input, a foreground full-screen program,
+/// and a terminated execution. `Unsupported` means the shell never proves
+/// trusted integration, so submissions take the raw path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ComposerEligibility {
@@ -36,6 +44,13 @@ pub enum ComposerEligibility {
     Unsupported = 2,
 }
 
+/// Runtime→client message type 23 (`MessageType::ComposerStatus`), gated on
+/// `CAP_COMMAND_BLOCKS`. Runtime sends it once at attach and again on every
+/// eligibility flip; it is never sent per byte or per marker. `revision` is a
+/// per-execution monotonic fence: a client accepts a status only for its own
+/// `attachment_id` and only when the revision moves forward, so a delayed or
+/// replayed frame can never re-enable a composer against a newer fact. A
+/// client that has not received one yet must treat the composer as busy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ComposerStatus {
     pub attachment_id: AttachmentId,

@@ -185,6 +185,68 @@ final class SeyalHostUITests: XCTestCase {
         }
     }
 
+    /// #978 demo procedure: the composer is enabled only by Runtime's
+    /// published eligibility. It reads `available` at the prompt, `busy` while
+    /// `sleep 2` occupies the shell, and `available` again at the next prompt.
+    ///
+    /// Requires a zsh login shell: the headed host spawns the account's
+    /// `pw_shell` (`BundledRuntimeLauncher`), and only trusted zsh integration
+    /// publishes `Busy`; any other shell is `Unsupported` and keeps the composer
+    /// on the raw path by design (ADR-009 mechanism 6). Hosted runners use a
+    /// bash account, so their busy/available evidence is the Rust live tests,
+    /// which spawn `/bin/zsh` explicitly.
+    func testComposerReadsBusyWhileCommandRunsAndAvailableAtNextPrompt() throws {
+        guard loginShellIsZsh() else {
+            throw XCTSkip(
+                "This composer-eligibility case requires a zsh login shell; the host spawns pw_shell.")
+        }
+        let app = hostedApp()
+        waitForUsablePty(in: app)
+        let composer = app.descendants(matching: .any)["seyal-composer"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 12))
+        let available = NSPredicate(format: "value == 'available'")
+        let busy = NSPredicate(format: "value == 'busy'")
+        XCTAssertEqual(
+            XCTWaiter.wait(
+                for: [expectation(for: available, evaluatedWith: composer, handler: nil)],
+                timeout: 12
+            ),
+            .completed,
+            "composer never became available at the first prompt; value=\(composer.value ?? "nil")"
+        )
+        composer.firstMatch.click()
+        let editor = app.descendants(matching: .any)["seyal-composer-editor"]
+        if editor.waitForExistence(timeout: 2), editor.firstMatch.isHittable {
+            editor.firstMatch.click()
+            editor.firstMatch.typeText("sleep 2")
+            editor.firstMatch.typeKey("\r", modifierFlags: [])
+        } else {
+            composer.firstMatch.typeText("sleep 2")
+            app.typeKey("\r", modifierFlags: [])
+        }
+        // Runtime publishes Busy at admission; the host only relays it.
+        XCTAssertEqual(
+            XCTWaiter.wait(
+                for: [expectation(for: busy, evaluatedWith: composer, handler: nil)],
+                timeout: 4
+            ),
+            .completed,
+            "composer stayed \(composer.value ?? "nil") while sleep 2 owned the shell"
+        )
+        XCTAssertEqual(app.state, .runningForeground, "Seyal.app crashed during busy relay")
+        // The next trusted prompt re-enables it, with the draft cleared by
+        // the accepted submit.
+        XCTAssertEqual(
+            XCTWaiter.wait(
+                for: [expectation(for: available, evaluatedWith: composer, handler: nil)],
+                timeout: 10
+            ),
+            .completed,
+            "composer did not return to available after sleep 2; value=\(composer.value ?? "nil")"
+        )
+        assertFlowBlocksOrFail(in: app)
+    }
+
     func testAlternateScreenTakeoverDoesNotCrashTheHost() throws {
         let app = hostedApp()
         waitForUsablePty(in: app)
@@ -706,5 +768,14 @@ final class SeyalHostUITests: XCTestCase {
 
     private func waitBriefly(_ seconds: TimeInterval) {
         RunLoop.current.run(until: Date().addingTimeInterval(seconds))
+    }
+
+    /// The same predicate as `ShellIntegrationPolicy::supports` applied to the
+    /// shell the headed host will spawn (`pw_shell`, never inherited `SHELL`).
+    private func loginShellIsZsh() -> Bool {
+        guard let account = getpwuid(geteuid()), let shell = account.pointee.pw_shell else {
+            return false
+        }
+        return URL(fileURLWithPath: String(cString: shell)).lastPathComponent == "zsh"
     }
 }

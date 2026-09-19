@@ -349,6 +349,9 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
         onComposerResult: { [weak self] result in
           self?.onComposerResultChanged?(result)
         },
+        onComposerStatus: { [weak self] status in
+          self?.onComposerStatusChanged?(status)
+        },
         paneID: paneID,
         executionIdentity: executionIdentity,
         allowsImplicitExecutionBootstrap: allowsImplicitExecutionBootstrap
@@ -427,6 +430,7 @@ class MetalSurfaceView: NSView, CAMetalDisplayLinkDelegate {
   var onTimelineChanged: (() -> Void)?
   var onHistoryRangeChanged: ((NativeHistoryRange) -> Void)?
   var onComposerResultChanged: ((NativeComposerResult) -> Void)?
+  var onComposerStatusChanged: ((NativeComposerStatus) -> Void)?
 
   var terminalBridgeIsConnected: Bool {
     bridge?.isConnected == true

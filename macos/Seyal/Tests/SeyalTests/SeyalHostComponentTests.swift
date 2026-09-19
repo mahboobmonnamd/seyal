@@ -21,6 +21,7 @@ final class SeyalHostComponentTests: XCTestCase {
         let theme = seyal_app_theme(0)
         XCTAssertNotEqual(theme.canvas, theme.text)
         XCTAssertEqual(MemoryLayout<SeyalAppComposer>.size, 40)
+        XCTAssertEqual(MemoryLayout<SeyalComposerStatus>.size, 16)
         XCTAssertEqual(MemoryLayout<SeyalAppChrome>.size, 24)
         XCTAssertEqual(MemoryLayout<SeyalAppShell>.size, 64)
         XCTAssertEqual(MemoryLayout<SeyalAppRow>.size, 56)
@@ -593,6 +594,7 @@ final class SeyalHostComponentTests: XCTestCase {
         bind.target_attachment_lo = 2
         bind.target_pty_generation = 1
         XCTAssertEqual(seyal_app_apply(handle, &bind), 0)
+        XCTAssertEqual(relayComposerStatus(handle, eligibility: 1, revision: 1), 0)
         for command in commands {
             let bound = seyal_app_snapshot(handle)
             let composer = seyal_app_composer(handle)
@@ -625,6 +627,171 @@ final class SeyalHostComponentTests: XCTestCase {
             XCTAssertEqual(seyal_app_apply(handle, &result), 0)
         }
         return handle
+    }
+
+    /// Relay a Runtime composer status exactly as `ProductChromeHostView`
+    /// does: eligibility code in `reserved`, Runtime revision in
+    /// `target_execution_lo`. The value is a Runtime fixture, never a host
+    /// decision.
+    private func relayComposerStatus(_ handle: UInt64, eligibility: UInt32, revision: UInt64) -> Int32 {
+        let snap = seyal_app_snapshot(handle)
+        var action = SeyalAppAction()
+        action.version = UInt16(SEYAL_APP_ABI_VERSION)
+        action.size = UInt16(MemoryLayout<SeyalAppAction>.size)
+        action.kind = UInt16(SEYAL_APP_ACTION_APPLY_COMPOSER_STATUS.rawValue)
+        action.applySnapshotFence(snap)
+        action.reserved = eligibility
+        action.target_execution_lo = revision
+        return seyal_app_apply(handle, &action)
+    }
+
+    // MARK: - Composer eligibility (#978)
+
+    /// A bound Pane reads busy until Runtime publishes Available, flips back
+    /// to busy on a newer Busy revision, and ignores a stale Available relay.
+    func testComposerReadsBusyUntilRuntimePublishesEligibility() {
+        let handle = seyal_app_create()
+        defer { XCTAssertEqual(seyal_app_destroy(handle), 0) }
+        let snap = seyal_app_snapshot(handle)
+        var bind = SeyalAppAction()
+        bind.version = UInt16(SEYAL_APP_ABI_VERSION)
+        bind.size = UInt16(MemoryLayout<SeyalAppAction>.size)
+        bind.kind = UInt16(SEYAL_APP_ACTION_BIND.rawValue)
+        bind.flags = UInt16(SEYAL_APP_FLAG_TARGET_CONTROLLER)
+        bind.fence_pane_lo = snap.pane_lo
+        bind.fence_pane_hi = snap.pane_hi
+        bind.fence_epoch = snap.epoch
+        bind.target_execution_lo = 1
+        bind.target_attachment_lo = 2
+        bind.target_pty_generation = 1
+        XCTAssertEqual(seyal_app_apply(handle, &bind), 0)
+
+        var composer = seyal_app_composer(handle)
+        XCTAssertEqual(composer.mode, UInt16(SEYAL_APP_COMPOSER_BUSY.rawValue))
+        XCTAssertEqual(composer.flags & UInt16(SEYAL_APP_COMPOSER_CAN_SUBMIT), 0)
+        XCTAssertEqual(
+            utf8(seyal_app_copy(handle, UInt16(SEYAL_APP_COPY_COMPOSER_PLACEHOLDER))),
+            "Waiting for prompt..."
+        )
+
+        XCTAssertEqual(
+            relayComposerStatus(
+                handle, eligibility: UInt32(SEYAL_APP_COMPOSER_ELIGIBILITY_AVAILABLE.rawValue), revision: 1),
+            0
+        )
+        composer = seyal_app_composer(handle)
+        XCTAssertEqual(composer.mode, UInt16(SEYAL_APP_COMPOSER_AVAILABLE.rawValue))
+        XCTAssertEqual(
+            utf8(seyal_app_copy(handle, UInt16(SEYAL_APP_COPY_COMPOSER_PLACEHOLDER))),
+            "Type a command..."
+        )
+
+        XCTAssertEqual(
+            relayComposerStatus(
+                handle, eligibility: UInt32(SEYAL_APP_COMPOSER_ELIGIBILITY_BUSY.rawValue), revision: 3),
+            0
+        )
+        XCTAssertEqual(seyal_app_composer(handle).mode, UInt16(SEYAL_APP_COMPOSER_BUSY.rawValue))
+        // A delayed relay of an older Available cannot re-enable the composer.
+        XCTAssertEqual(
+            relayComposerStatus(
+                handle, eligibility: UInt32(SEYAL_APP_COMPOSER_ELIGIBILITY_AVAILABLE.rawValue), revision: 2),
+            0
+        )
+        XCTAssertEqual(seyal_app_composer(handle).mode, UInt16(SEYAL_APP_COMPOSER_BUSY.rawValue))
+        // Transport lost clears the fact; a fresh attachment restarts at 1.
+        XCTAssertEqual(
+            relayComposerStatus(
+                handle, eligibility: UInt32(SEYAL_APP_COMPOSER_ELIGIBILITY_NONE.rawValue), revision: 0),
+            0
+        )
+        XCTAssertEqual(seyal_app_composer(handle).mode, UInt16(SEYAL_APP_COMPOSER_BUSY.rawValue))
+        XCTAssertEqual(
+            relayComposerStatus(
+                handle, eligibility: UInt32(SEYAL_APP_COMPOSER_ELIGIBILITY_AVAILABLE.rawValue), revision: 1),
+            0
+        )
+        XCTAssertEqual(seyal_app_composer(handle).mode, UInt16(SEYAL_APP_COMPOSER_AVAILABLE.rawValue))
+    }
+
+    /// After an accepted submit, Runtime's `Busy` may already be relayed when
+    /// the result clears the Rust draft; the native editor must mirror the
+    /// empty draft (placeholder visible) rather than keep the submitted text.
+    @MainActor
+    func testEditorMirrorsEmptyRustDraftWhileRuntimeBusy() throws {
+        let view = ProductChromeHostView(frame: NSRect(x: 0, y: 0, width: 800, height: 560))
+        let handle = view.pane.appHandle
+        let snap = seyal_app_snapshot(handle)
+        var bind = SeyalAppAction()
+        bind.version = UInt16(SEYAL_APP_ABI_VERSION)
+        bind.size = UInt16(MemoryLayout<SeyalAppAction>.size)
+        bind.kind = UInt16(SEYAL_APP_ACTION_BIND.rawValue)
+        bind.flags = UInt16(SEYAL_APP_FLAG_TARGET_CONTROLLER)
+        bind.fence_pane_lo = snap.pane_lo
+        bind.fence_pane_hi = snap.pane_hi
+        bind.fence_epoch = snap.epoch
+        bind.target_execution_lo = 1
+        bind.target_attachment_lo = 2
+        bind.target_pty_generation = 1
+        XCTAssertEqual(seyal_app_apply(handle, &bind), 0)
+        XCTAssertEqual(relayComposerStatus(handle, eligibility: 1, revision: 1), 0)
+        view.reconcileChrome()
+        let composer = try XCTUnwrap(accessibilityChild(view, identifier: "seyal-composer"))
+        let editor = try XCTUnwrap(
+            accessibilityChild(view, identifier: "seyal-composer-editor") as? NSTextView)
+        XCTAssertEqual(composer.accessibilityValue() as? String, "available")
+
+        // Native typing is the source of the draft: the editor already holds
+        // the text and the host commits it to Rust (SetDraft) as it changes.
+        let bound = seyal_app_snapshot(handle)
+        editor.string = "sleep 2"
+        var draft = SeyalAppAction()
+        draft.version = bind.version
+        draft.size = bind.size
+        draft.kind = UInt16(SEYAL_APP_ACTION_SET_COMPOSER_DRAFT.rawValue)
+        draft.applySnapshotFence(bound)
+        draft.target_pty_generation = seyal_app_composer(handle).epoch
+        let draftBytes = Array("sleep 2".utf8)
+        draftBytes.withUnsafeBufferPointer { buffer in
+            draft.payload = buffer.baseAddress
+            draft.payload_len = UInt32(buffer.count)
+            XCTAssertEqual(seyal_app_apply(handle, &draft), 0)
+        }
+        view.reconcileChrome()
+        XCTAssertEqual(editor.string, "sleep 2")
+
+        var submit = SeyalAppAction()
+        submit.version = bind.version
+        submit.size = bind.size
+        submit.kind = UInt16(SEYAL_APP_ACTION_SUBMIT_COMPOSER.rawValue)
+        submit.applySnapshotFence(bound)
+        submit.target_pty_generation = seyal_app_composer(handle).epoch
+        XCTAssertEqual(seyal_app_apply(handle, &submit), 0)
+        // Runtime's Busy flip arrives before the correlated result.
+        XCTAssertEqual(relayComposerStatus(handle, eligibility: 2, revision: 2), 0)
+        view.reconcileChrome()
+        XCTAssertEqual(composer.accessibilityValue() as? String, "busy")
+        XCTAssertEqual(editor.string, "sleep 2", "draft is kept while the request is in flight")
+
+        var result = SeyalAppAction()
+        result.version = bind.version
+        result.size = bind.size
+        result.kind = UInt16(SEYAL_APP_ACTION_APPLY_COMPOSER_RESULT.rawValue)
+        result.applySnapshotFence(bound)
+        result.target_execution_lo = seyal_app_composer(handle).request_id
+        result.reserved = 1
+        XCTAssertEqual(seyal_app_apply(handle, &result), 0)
+        view.reconcileChrome()
+        XCTAssertEqual(composer.accessibilityValue() as? String, "busy")
+        XCTAssertEqual(editor.string, "", "accepted submit clears the editor even while Runtime is busy")
+        XCTAssertEqual(
+            utf8(seyal_app_copy(handle, UInt16(SEYAL_APP_COPY_COMPOSER_PLACEHOLDER))),
+            "Waiting for prompt..."
+        )
+        XCTAssertEqual(relayComposerStatus(handle, eligibility: 1, revision: 3), 0)
+        view.reconcileChrome()
+        XCTAssertEqual(composer.accessibilityValue() as? String, "available")
+        XCTAssertEqual(editor.string, "")
     }
 
     private func applyHistory(_ handle: UInt64, kind: UInt16, payload: String? = nil, reserved: UInt32 = 0) -> Int32 {

@@ -281,6 +281,10 @@ final class ProductChromeHostView: NSView {
             self?.composer.applyComposerResult(requestID: result.requestID, accepted: accepted)
             self?.reconcileChrome()
         }
+        pane.inputSurface.onComposerStatusChanged = { [weak self] status in
+            self?.relayComposerStatus(status)
+            self?.reconcileChrome()
+        }
         pane.onProductChanged = { [weak self] in
             self?.reconcileChrome()
         }
@@ -532,6 +536,20 @@ final class ProductChromeHostView: NSView {
         action.size = UInt16(MemoryLayout<SeyalAppAction>.size)
         action.kind = UInt16(SEYAL_APP_ACTION_APPLY_RUNTIME_BLOCKS.rawValue)
         action.applySnapshotFence(snapshot)
+        _ = seyal_app_apply(pane.appHandle, &action)
+    }
+
+    /// Relay Runtime's composer eligibility into the Rust root unchanged
+    /// (#978). Rust decides what the composer shows; this only carries it.
+    private func relayComposerStatus(_ status: NativeComposerStatus) {
+        let snapshot = seyal_app_snapshot(pane.appHandle)
+        var action = SeyalAppAction()
+        action.version = UInt16(SEYAL_APP_ABI_VERSION)
+        action.size = UInt16(MemoryLayout<SeyalAppAction>.size)
+        action.kind = UInt16(SEYAL_APP_ACTION_APPLY_COMPOSER_STATUS.rawValue)
+        action.applySnapshotFence(snapshot)
+        action.reserved = UInt32(status.eligibility)
+        action.target_execution_lo = status.revision
         _ = seyal_app_apply(pane.appHandle, &action)
     }
 

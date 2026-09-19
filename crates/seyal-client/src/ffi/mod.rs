@@ -36,9 +36,9 @@ use std::{
 use crate::LocalDisplayClient;
 
 pub(crate) use types::{
-    SeyalBlockRecord, SeyalComposerResult, SeyalCopiedText, SeyalExecutionBlockMetadata,
-    SeyalHistoryCell, SeyalHistoryRange, SeyalHistoryRow, SeyalHistorySidecar,
-    SeyalPass9DiagSnapshot, SeyalPreparedFrame, SeyalRecoveryResult,
+    SeyalBlockRecord, SeyalComposerResult, SeyalComposerStatus, SeyalCopiedText,
+    SeyalExecutionBlockMetadata, SeyalHistoryCell, SeyalHistoryRange, SeyalHistoryRow,
+    SeyalHistorySidecar, SeyalPass9DiagSnapshot, SeyalPreparedFrame, SeyalRecoveryResult,
 };
 
 #[allow(unused_imports)]

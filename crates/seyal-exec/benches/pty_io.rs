@@ -149,14 +149,21 @@ fn selftest_payload_identity() {
     let same_length_wrong_content: Vec<u8> = PAYLOAD
         .iter()
         .enumerate()
-        .map(|(index, byte)| if index == 3 { byte.wrapping_add(1) } else { *byte })
+        .map(|(index, byte)| {
+            if index == 3 {
+                byte.wrapping_add(1)
+            } else {
+                *byte
+            }
+        })
         .collect();
     assert_eq!(
         same_length_wrong_content.len(),
         PAYLOAD.len(),
         "selftest precondition: corrupted payload must keep the same length"
     );
-    let panicked = std::panic::catch_unwind(|| assert_payload_identity(&same_length_wrong_content)).is_err();
+    let panicked =
+        std::panic::catch_unwind(|| assert_payload_identity(&same_length_wrong_content)).is_err();
     assert!(
         panicked,
         "FAIL: a single corrupted byte (same length as PAYLOAD) was NOT caught -- \

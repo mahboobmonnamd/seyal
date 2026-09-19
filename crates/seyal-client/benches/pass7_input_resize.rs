@@ -45,7 +45,10 @@ static INPUT_MARKER_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// Q3/Q4 correlation fix).
 #[cfg(target_os = "macos")]
 fn next_input_marker() -> String {
-    format!("m{:07}", INPUT_MARKER_COUNTER.fetch_add(1, Ordering::Relaxed))
+    format!(
+        "m{:07}",
+        INPUT_MARKER_COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 /// True when `marker` is visible somewhere in the committed display cache.
@@ -143,7 +146,10 @@ fn run_m002_contract_cohort() {
     }
     let mut retained = Vec::with_capacity(samples);
     for _ in 0..samples {
-        retained.push(sample_input_visible_proxy(&mut client, &next_input_marker()));
+        retained.push(sample_input_visible_proxy(
+            &mut client,
+            &next_input_marker(),
+        ));
     }
     drop(client);
     runtime.finish();
@@ -211,8 +217,13 @@ fn selftest_correlation() {
             if index >= cells.len() {
                 break;
             }
-            cells[index] =
-                DisplayCell::lead_scalar(ch, 1, DisplayColor::Default, DisplayColor::Default, DisplayAttributes::default());
+            cells[index] = DisplayCell::lead_scalar(
+                ch,
+                1,
+                DisplayColor::Default,
+                DisplayColor::Default,
+                DisplayAttributes::default(),
+            );
         }
         DisplayCache {
             generation,
@@ -233,7 +244,10 @@ fn selftest_correlation() {
     // old `generation > before` check alone would have falsely accepted this
     // as proof of completion.
     let unrelated = cache_with_row_text(2, "unrelated-content", 80);
-    assert!(unrelated.generation > 1, "precondition: generation advanced");
+    assert!(
+        unrelated.generation > 1,
+        "precondition: generation advanced"
+    );
     assert!(
         !cache_contains_marker(&unrelated, marker),
         "FAIL: an unrelated generation bump was wrongly accepted as correlated with our marker"
@@ -242,7 +256,10 @@ fn selftest_correlation() {
     // A generation bump that genuinely carries this sample's marker text
     // must be accepted.
     let correlated = cache_with_row_text(2, marker, 80);
-    assert!(correlated.generation > 1, "precondition: generation advanced");
+    assert!(
+        correlated.generation > 1,
+        "precondition: generation advanced"
+    );
     assert!(
         cache_contains_marker(&correlated, marker),
         "FAIL: a correlated generation bump carrying our marker was wrongly rejected"

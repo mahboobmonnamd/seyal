@@ -229,7 +229,10 @@ static DAMAGE_MARKER_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// geometry (columns as low as 80).
 #[cfg(target_os = "macos")]
 fn next_damage_marker() -> String {
-    format!("d{:06}", DAMAGE_MARKER_COUNTER.fetch_add(1, Ordering::Relaxed) % 1_000_000)
+    format!(
+        "d{:06}",
+        DAMAGE_MARKER_COUNTER.fetch_add(1, Ordering::Relaxed) % 1_000_000
+    )
 }
 
 #[cfg(target_os = "macos")]
@@ -494,14 +497,20 @@ fn run_worker(executable: &std::path::Path, case: Case) {
 #[cfg(target_os = "macos")]
 fn selftest_correlation() {
     let unrelated = cache_with_row_text(2, "unrelated-content", 80);
-    assert!(unrelated.generation > 1, "precondition: generation advanced");
+    assert!(
+        unrelated.generation > 1,
+        "precondition: generation advanced"
+    );
     assert!(
         !cache_contains_ascii(&unrelated, b"d000001"),
         "FAIL: an unrelated generation bump was wrongly accepted as correlated with our marker"
     );
 
     let correlated = cache_with_row_text(2, "d000001", 80);
-    assert!(correlated.generation > 1, "precondition: generation advanced");
+    assert!(
+        correlated.generation > 1,
+        "precondition: generation advanced"
+    );
     assert!(
         cache_contains_ascii(&correlated, b"d000001"),
         "FAIL: a correlated generation bump carrying our marker was wrongly rejected"

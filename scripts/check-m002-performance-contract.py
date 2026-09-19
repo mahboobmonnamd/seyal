@@ -187,6 +187,61 @@ def validate_contract_shape(text: str, schema: dict, schema_text: str) -> None:
         raise SystemExit("M002 performance result schema is incomplete")
 
 
+MATRIX_MANIFEST_SCHEMA = "seyal.m002.history-reflow-matrix-manifest"
+MATRIX_CLAIMS = {"complete", "partial", "single-point"}
+MATRIX_DIMENSIONS = ("retained_content", "execution_populations", "columns", "workloads")
+
+
+def required_matrix_point_count(schema: dict) -> int:
+    """The accepted matrix's total point count, computed from the CONTRACT's
+    own `[matrix]` table rather than a hardcoded number that could silently
+    drift from it (retained_content x execution_populations x columns x
+    workloads)."""
+    matrix = schema.get("matrix", {})
+    count = 1
+    for dimension in MATRIX_DIMENSIONS:
+        values = matrix.get(dimension)
+        if not values:
+            raise SystemExit(f"M002 performance matrix is missing dimension {dimension}")
+        count *= len(values)
+    return count
+
+
+def check_matrix_completeness_claim(manifest: dict, schema: dict) -> None:
+    """Reject a submission that CLAIMS full accepted-matrix coverage without
+    actually carrying that many distinct tagged (lines, columns, workload,
+    executions) configurations. A single-point diagnostic record is fine as
+    long as it does not claim completeness -- the claim is a distinct
+    explicit field (`claim`), never inferred from row count alone, so a
+    small diagnostic run is never mistaken for full-matrix evidence and a
+    genuinely complete run cannot be faked by a short manifest.
+    """
+    if manifest.get("schema") != MATRIX_MANIFEST_SCHEMA:
+        raise SystemExit("M002 matrix manifest has unsupported identity")
+    if manifest.get("version") != 1:
+        raise SystemExit("M002 matrix manifest has unsupported version")
+    claim = manifest.get("claim")
+    if claim not in MATRIX_CLAIMS:
+        raise SystemExit(f"M002 matrix manifest claim must be one of {sorted(MATRIX_CLAIMS)}")
+    configurations = manifest.get("configurations")
+    if not isinstance(configurations, list) or not configurations:
+        raise SystemExit("M002 matrix manifest must carry at least one configuration")
+    distinct = set()
+    for entry in configurations:
+        if not isinstance(entry, dict):
+            raise SystemExit("M002 matrix manifest configuration entries must be tables")
+        key = (entry.get("lines"), entry.get("columns"), entry.get("workload"), entry.get("executions"))
+        if any(value is None for value in key):
+            raise SystemExit("M002 matrix manifest configuration is missing lines/columns/workload/executions")
+        distinct.add(key)
+    required = required_matrix_point_count(schema)
+    if claim == "complete" and len(distinct) < required:
+        raise SystemExit(
+            f"M002 matrix manifest claims complete coverage with only {len(distinct)} distinct "
+            f"configurations; the accepted matrix requires {required}"
+        )
+
+
 def validate_family_inventory(schema: dict) -> None:
     """Lock the finite #673 family map when the real-repo inventory is present.
 
@@ -310,6 +365,57 @@ def self_test() -> None:
         f"for {exercised} synthetic non-history gates plus the 2 real history gates."
     )
 
+    # Matrix-completeness guard (issue #673 Task 8): a "complete matrix"
+    # claim must actually carry every required distinct configuration; a
+    # single-point diagnostic record is fine as long as it does not claim
+    # completeness. required_matrix_point_count() derives the count from the
+    # real contract's [matrix] table instead of trusting a hardcoded number.
+    required_points = required_matrix_point_count(schema)
+    if required_points != 336:
+        raise SystemExit(
+            f"M002 self-test: expected the accepted matrix to require 336 points "
+            f"(retained_content x execution_populations x columns x workloads), got {required_points}"
+        )
+    single_row_manifest = {
+        "schema": MATRIX_MANIFEST_SCHEMA,
+        "version": 1,
+        "claim": "complete",
+        "gate": "history_active_reflow_ms",
+        "configurations": [{"lines": 10000, "columns": 80, "workload": "ascii", "executions": 1}],
+    }
+    try:
+        check_matrix_completeness_claim(single_row_manifest, schema)
+    except SystemExit:
+        pass
+    else:
+        raise SystemExit("M002 self-test: a single-row 'complete matrix' claim was wrongly accepted")
+
+    single_row_diagnostic = dict(single_row_manifest, claim="single-point")
+    check_matrix_completeness_claim(single_row_diagnostic, schema)  # must not raise
+
+    full_configurations = [
+        {"lines": lines, "columns": columns, "workload": workload, "executions": executions}
+        for lines in schema["matrix"]["retained_content"]
+        for executions in schema["matrix"]["execution_populations"]
+        for columns in schema["matrix"]["columns"]
+        for workload in schema["matrix"]["workloads"]
+    ]
+    if len(full_configurations) != required_points:
+        raise SystemExit("M002 self-test: constructed full matrix does not match required point count")
+    full_manifest = {
+        "schema": MATRIX_MANIFEST_SCHEMA,
+        "version": 1,
+        "claim": "complete",
+        "gate": "history_active_reflow_ms",
+        "configurations": full_configurations,
+    }
+    check_matrix_completeness_claim(full_manifest, schema)  # must not raise
+    print(
+        f"M002 performance contract self-test: matrix-completeness guard verified "
+        f"({required_points} required points; rejected a 1-row complete claim, "
+        f"accepted a 1-row single-point claim, accepted a {len(full_configurations)}-row complete claim)."
+    )
+
     if nearest_rank([1.0, 2.0, 3.0, 4.0], 50) != 2.0:
         raise SystemExit("nearest-rank self-check failed")
     print("M002 performance contract self-test passed.")
@@ -320,6 +426,7 @@ def main() -> None:
     parser.add_argument("--record")
     parser.add_argument("--require-exact-head", action="store_true")
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--matrix-manifest")
     args, _ = parser.parse_known_args()
 
     if not CONTRACT.is_file():
@@ -340,6 +447,14 @@ def main() -> None:
     validate_contract_shape(text, schema, schema_text)
     if args.record:
         evaluate_record(Path(args.record), schema, require_head=args.require_exact_head)
+    if args.matrix_manifest:
+        manifest_path = Path(args.matrix_manifest)
+        try:
+            manifest = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError) as error:
+            raise SystemExit(f"invalid M002 matrix manifest: {error}") from error
+        check_matrix_completeness_claim(manifest, schema)
+        print(f"M002 matrix manifest {manifest.get('claim')} claim verified.")
     print("M002 performance contract shape passed.")
 
 

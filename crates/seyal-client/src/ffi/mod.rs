@@ -80,7 +80,7 @@ pub use session::{
     seyal_bridge_open_execution_until, seyal_bridge_open_first,
     seyal_bridge_open_first_observer_until, seyal_bridge_open_first_until,
     seyal_bridge_runtime_id_high, seyal_bridge_runtime_id_low, seyal_bridge_select,
-    seyal_bridge_socket_fd, test_register_pending_client,
+    seyal_bridge_set_runtime_dir, seyal_bridge_socket_fd, test_register_pending_client,
 };
 
 /// A completed lifecycle connection crosses executors exactly once, before it
@@ -161,8 +161,9 @@ mod adversarial_ffi_misuse_tests {
 
     use super::{
         seyal_bridge_adopt_handle, seyal_bridge_disconnect_handle, seyal_bridge_frame,
-        seyal_bridge_poll, seyal_bridge_select, seyal_bridge_submit_composer,
-        seyal_bridge_submit_paste, seyal_bridge_submit_utf8, SeyalPreparedFrame,
+        seyal_bridge_poll, seyal_bridge_select, seyal_bridge_set_runtime_dir,
+        seyal_bridge_submit_composer, seyal_bridge_submit_paste, seyal_bridge_submit_utf8,
+        SeyalPreparedFrame,
     };
 
     #[test]
@@ -253,5 +254,23 @@ mod adversarial_ffi_misuse_tests {
         let after = seyal_bridge_frame();
         assert!(after.cells.is_null());
         assert_eq!(after.cell_count, 0);
+    }
+
+    #[test]
+    fn set_runtime_dir_rejects_null_and_relative_paths() {
+        let _lock = seyal_runtime::runtime_dir::override_test_lock();
+        seyal_runtime::runtime_dir::reset_explicit_runtime_dir();
+        assert_eq!(unsafe { seyal_bridge_set_runtime_dir(ptr::null()) }, -2);
+        let relative = std::ffi::CString::new("relative").unwrap();
+        assert_eq!(
+            unsafe { seyal_bridge_set_runtime_dir(relative.as_ptr()) },
+            -2
+        );
+        let absolute = std::ffi::CString::new("/tmp/seyal-860-ffi").unwrap();
+        assert_eq!(
+            unsafe { seyal_bridge_set_runtime_dir(absolute.as_ptr()) },
+            0
+        );
+        seyal_runtime::runtime_dir::reset_explicit_runtime_dir();
     }
 }

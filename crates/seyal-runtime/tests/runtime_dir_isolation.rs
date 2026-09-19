@@ -2,27 +2,22 @@
 
 use std::{
     path::PathBuf,
-    sync::{Mutex, MutexGuard},
+    sync::Mutex,
     time::{Duration, Instant},
 };
 
 use seyal_exec::{CommandSpec, WindowSize};
 use seyal_runtime::{LocalIpcMode, Runtime, RuntimeConfig, RuntimeError};
 
-/// The canonical user control socket is one global endpoint. Tests that
-/// sample its existence before/after an isolated fixture, and the one test
-/// that legitimately binds it in-process when no user Runtime is running,
-/// must not interleave, or a sample straddles the sibling's bind/unlink and
-/// the assertion reports a change the fixture never made. Only those tests
-/// take this lock; nothing else in the file is serialized.
-static CANONICAL_ENDPOINT: Mutex<()> = Mutex::new(());
+/// Cases that create or observe the per-user `control.sock` cannot share a
+/// process with each other. `CARGO_TEST_THREADS` does not serialize libtest.
+static CANONICAL_SOCKET: Mutex<()> = Mutex::new(());
 
-fn canonical_endpoint_guard() -> MutexGuard<'static, ()> {
-    // A panic in one holder must not turn every later sample into a
-    // poisoned-lock failure that hides the original assertion.
-    CANONICAL_ENDPOINT
+fn with_canonical_socket<T>(body: impl FnOnce() -> T) -> T {
+    let _guard = CANONICAL_SOCKET
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    body()
 }
 
 fn unique_dir(tag: &str) -> PathBuf {
@@ -64,90 +59,93 @@ fn m001_defaults_remain_the_canonical_user_scope() {
 
 #[test]
 fn two_isolated_runtimes_coexist_and_do_not_bind_the_canonical_socket() {
-    let _canonical_endpoint = canonical_endpoint_guard();
-    let canonical = seyal_runtime::local_ipc::discovery::darwin_user_runtime_dir()
-        .expect("canonical runtime dir")
-        .join("control.sock");
-    let existed_before = canonical.exists();
+    with_canonical_socket(|| {
+        let canonical = seyal_runtime::local_ipc::discovery::darwin_user_runtime_dir()
+            .expect("canonical runtime dir")
+            .join("control.sock");
+        let existed_before = canonical.exists();
 
-    let mut first = Runtime::new(isolated_config("a")).expect("first isolated Runtime");
-    let mut second = Runtime::new(isolated_config("b")).expect("second isolated Runtime");
-    let first_socket = first
-        .local_ipc_socket_path()
-        .expect("first socket")
-        .to_path_buf();
-    let second_socket = second
-        .local_ipc_socket_path()
-        .expect("second socket")
-        .to_path_buf();
+        let mut first = Runtime::new(isolated_config("a")).expect("first isolated Runtime");
+        let mut second = Runtime::new(isolated_config("b")).expect("second isolated Runtime");
+        let first_socket = first
+            .local_ipc_socket_path()
+            .expect("first socket")
+            .to_path_buf();
+        let second_socket = second
+            .local_ipc_socket_path()
+            .expect("second socket")
+            .to_path_buf();
 
-    assert_ne!(first_socket, second_socket);
-    assert_ne!(first_socket, canonical);
-    assert_ne!(second_socket, canonical);
-    assert!(first_socket.ends_with("control.sock"));
-    assert!(second_socket.ends_with("control.sock"));
-    assert_eq!(
-        canonical.exists(),
-        existed_before,
-        "isolated fixtures must not create or remove the user control socket"
-    );
+        assert_ne!(first_socket, second_socket);
+        assert_ne!(first_socket, canonical);
+        assert_ne!(second_socket, canonical);
+        assert!(first_socket.ends_with("control.sock"));
+        assert!(second_socket.ends_with("control.sock"));
+        assert_eq!(
+            canonical.exists(),
+            existed_before,
+            "isolated fixtures must not create or remove the user control socket"
+        );
 
-    shutdown(&mut first);
-    shutdown(&mut second);
+        shutdown(&mut first);
+        shutdown(&mut second);
+    })
 }
 
 #[test]
 fn isolated_runtime_starts_while_the_production_m001_singleton_is_held() {
-    let _canonical_endpoint = canonical_endpoint_guard();
-    let canonical = seyal_runtime::local_ipc::discovery::darwin_user_runtime_dir()
-        .expect("canonical runtime dir")
-        .join("control.sock");
-    let production_lock = RuntimeConfig::m001()
-        .expect("M001 Runtime config")
-        .singleton_path;
+    with_canonical_socket(|| {
+        let canonical = seyal_runtime::local_ipc::discovery::darwin_user_runtime_dir()
+            .expect("canonical runtime dir")
+            .join("control.sock");
+        let production_lock = RuntimeConfig::m001()
+            .expect("M001 Runtime config")
+            .singleton_path;
 
-    let mut production = match Runtime::new(RuntimeConfig::m001().expect("M001 Runtime config")) {
-        Ok(runtime) => Some(runtime),
-        Err(RuntimeError::AlreadyRunning) => None,
-        Err(error) => panic!("unexpected production Runtime start error: {error}"),
-    };
-    let production_held_in_process = production.is_some();
-    if let Some(runtime) = production.as_ref() {
-        assert_eq!(
-            runtime.local_ipc_socket_path().map(PathBuf::from),
-            Some(canonical.clone()),
-            "in-process stand-in must occupy the canonical user endpoint"
-        );
-        assert!(
-            canonical.exists(),
-            "held production Runtime must bind the canonical control socket"
-        );
-    }
+        let mut production = match Runtime::new(RuntimeConfig::m001().expect("M001 Runtime config"))
+        {
+            Ok(runtime) => Some(runtime),
+            Err(RuntimeError::AlreadyRunning) => None,
+            Err(error) => panic!("unexpected production Runtime start error: {error}"),
+        };
+        let production_held_in_process = production.is_some();
+        if let Some(runtime) = production.as_ref() {
+            assert_eq!(
+                runtime.local_ipc_socket_path().map(PathBuf::from),
+                Some(canonical.clone()),
+                "in-process stand-in must occupy the canonical user endpoint"
+            );
+            assert!(
+                canonical.exists(),
+                "held production Runtime must bind the canonical control socket"
+            );
+        }
 
-    let mut isolated = Runtime::new(isolated_config("held"))
-        .expect("isolated Runtime must start while the production singleton is held");
-    let isolated_socket = isolated
-        .local_ipc_socket_path()
-        .expect("isolated socket")
-        .to_path_buf();
-    assert_ne!(isolated_socket, canonical);
-    assert!(isolated_socket.ends_with("control.sock"));
-    if production_held_in_process {
-        assert!(
-            canonical.exists(),
-            "isolated fixture must not steal or unlink the held production socket"
-        );
-    }
-    let isolated_lock = isolated_socket
-        .parent()
-        .expect("isolated runtime dir")
-        .join("runtime.lock");
-    assert_ne!(isolated_lock, production_lock);
+        let mut isolated = Runtime::new(isolated_config("held"))
+            .expect("isolated Runtime must start while the production singleton is held");
+        let isolated_socket = isolated
+            .local_ipc_socket_path()
+            .expect("isolated socket")
+            .to_path_buf();
+        assert_ne!(isolated_socket, canonical);
+        assert!(isolated_socket.ends_with("control.sock"));
+        if production_held_in_process {
+            assert!(
+                canonical.exists(),
+                "isolated fixture must not steal or unlink the held production socket"
+            );
+        }
+        let isolated_lock = isolated_socket
+            .parent()
+            .expect("isolated runtime dir")
+            .join("runtime.lock");
+        assert_ne!(isolated_lock, production_lock);
 
-    shutdown(&mut isolated);
-    if let Some(runtime) = production.as_mut() {
-        shutdown(runtime);
-    }
+        shutdown(&mut isolated);
+        if let Some(runtime) = production.as_mut() {
+            shutdown(runtime);
+        }
+    })
 }
 
 #[test]
@@ -181,35 +179,36 @@ fn incorrect_isolated_endpoint_is_rejected_without_using_production() {
 
 #[test]
 fn isolated_helper_binary_does_not_occupy_the_canonical_socket() {
-    let _canonical_endpoint = canonical_endpoint_guard();
-    let canonical = seyal_runtime::local_ipc::discovery::darwin_user_runtime_dir()
-        .expect("canonical runtime dir")
-        .join("control.sock");
-    let existed_before = canonical.exists();
-    let dir = unique_dir("bin");
-    let socket = dir.join("control.sock");
-    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_seyal-runtime"))
-        .args([
-            "--runtime-dir",
-            dir.to_str().expect("utf8 runtime dir"),
-            "/bin/sleep",
-            "30",
-        ])
-        .env("SEYAL_RUNTIME_DIR", "/tmp/seyal-should-ignore")
-        .spawn()
-        .expect("spawn isolated seyal-runtime");
+    with_canonical_socket(|| {
+        let canonical = seyal_runtime::local_ipc::discovery::darwin_user_runtime_dir()
+            .expect("canonical runtime dir")
+            .join("control.sock");
+        let existed_before = canonical.exists();
+        let dir = unique_dir("bin");
+        let socket = dir.join("control.sock");
+        let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_seyal-runtime"))
+            .args([
+                "--runtime-dir",
+                dir.to_str().expect("utf8 runtime dir"),
+                "/bin/sleep",
+                "30",
+            ])
+            .env("SEYAL_RUNTIME_DIR", "/tmp/seyal-should-ignore")
+            .spawn()
+            .expect("spawn isolated seyal-runtime");
 
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while !socket.exists() && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    let started = socket.exists();
-    let _ = child.kill();
-    let _ = child.wait();
-    assert!(started, "isolated helper must bind its own control socket");
-    assert_eq!(
-        canonical.exists(),
-        existed_before,
-        "helper --runtime-dir must not bind the user control socket"
-    );
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !socket.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let started = socket.exists();
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(started, "isolated helper must bind its own control socket");
+        assert_eq!(
+            canonical.exists(),
+            existed_before,
+            "helper --runtime-dir must not bind the user control socket"
+        );
+    })
 }

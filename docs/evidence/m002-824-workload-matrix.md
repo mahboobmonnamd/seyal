@@ -22,9 +22,12 @@ SUCCESS — `repository-policy`, `rust-and-harness-quality`, `native-macos-smoke
 ([FQ 35319442002](https://github.com/seyal-org/seyal/actions/runs/35319442002),
 [fuzz 35319411982](https://github.com/seyal-org/seyal/actions/runs/35319411982))
 SUCCESS with the same production fingerprints. Local exclusive-Runtime native +
-XCUI on `7f77a6f` (recorded at this head): **27/27** component + **19/19** XCUI
-**PASS**. Parallel local `pass7_local_ipc` can still hit harness `Exec(Io -6)`
-and is not the current claim. See [headed ledger](m002-824-headed-manual.md).
+XCUI on `7f77a6f` (recorded at `2ef8332`): **27/27** component + **19/19** XCUI
+**PASS**. 2026-09-19 exact-head on `a218c23` plus harness fixes: `make check`
+**PASS** and `make ui-test` **20/20** XCUI **PASS**. See
+[headed ledger](m002-824-headed-manual.md) 2026-09-19 section. Parallel local
+`pass7_local_ipc` can still hit harness `Exec(Io -6)` and is not the current
+claim.
 Historical `ad50bd1` 26/26 + hosted run 35242876394, local 44/45 Block-selection
 FAIL, and pre-isolation IPC FAIL remain **superseded history**.
 

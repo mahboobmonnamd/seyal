@@ -6,17 +6,46 @@
 - **Docs-only tip after that head:** later ledger-honesty commits on `issue/824` (no further Swift/Rust delta).
 - **Production path:** ADR-015 thin AppKit host over Rust snapshots; headed oracle is Flow/Blocks, not a raw terminal.
 - **Exclusive Runtime rule:** if another process owns `control.sock`, the headed run is INCONCLUSIVE.
-- **Relationship:** this follow-on evidence PR is the close package (`Closes #824` / `Closes #672`). PR #964 remains the merged `Refs` production delta.
+- **Relationship:** `Refs #824` / `Refs #672` only. PR #964 remains the merged production delta. Do not `Closes` until independent review of the 2026-09-19 local gates.
 - **IME 37–41 close classification:** **covered** by existing native `NSTextInputClient` + local ABC XCUI. Not a new #824 row. Do not pull #836.
+
+## Local exact-head gates (2026-09-19) — actually executed
+
+PR #984 was opened too early as a docs-only `Closes` after classifying local
+`xcodebuild` / `scripts/test-macos-ui.sh` as ENVIRONMENT_UNSUPPORTED. That
+classification was wrong. This host can run those gates. The 2026-09-18
+close-out session below is retained as history, not Done evidence.
+
+Base SHA `a218c23` (isolation merge from master) plus local harness fixes
+needed to make the suite rebuild and stay exclusive:
+
+| Blocker found when the suite was actually run | Fix |
+| --- | --- |
+| `scripts/test-macos-ui.sh` used `cargo build -p seyal-client -p seyal-runtime --bin seyal-runtime`, which skipped the client staticlib. Xcode linked a Sep 17 `libseyal_client.a` missing `seyal_bridge_set_runtime_dir`. | Build `seyal-client` and the Runtime helper as separate cargo selections. |
+| Xcode 27 `metal` existed without `metallib` until the Metal component was installed. | `xcodebuild -downloadComponent MetalToolchain` (27A266a). |
+| `runtime_dir_isolation` observed the user `control.sock` in parallel. `CARGO_TEST_THREADS=1` does not serialize libtest. | Mutex around the cases that create or observe the canonical socket. |
+| Full XCUI reused one `--runtime-dir` per runner PID. After the ABC IME case, `testAlternateScreenReturnRestoresFlowNotRawTerminal` failed (`started=false`, `alternate-screen=false`). Isolated retry **PASS**. | One `--runtime-dir` per `XCUIApplication`; relaunch keeps the same arguments. |
+
+| Gate | Result |
+| --- | --- |
+| `CARGO_TEST_THREADS=1 make check` on this head (Xcode 27, Metal toolchain installed; local `site/node_modules` moved aside for `check-doc-links` only) | **PASS** (exit 0, 52.5s) including `runtime_dir_isolation` 5/5 and `fuzz-smoke` |
+| `make ui-test` / `scripts/test-macos-ui.sh` | **PASS** — component + **20/20** XCUI, including `testAlternateScreenReturnRestoresFlowNotRawTerminal` and `testSystemABCDeadKeyCommitAndCancelReachRealPty` |
+| First full UI rebuild (stale client) | **FAIL** link: missing `seyal_bridge_set_runtime_dir` |
+| First two full UI executions (shared fixture Runtime) | **19/20** — same alt-screen workload case **FAIL** in-suite, **PASS** isolated (34.95s) |
+| After per-app `--runtime-dir` | **20/20 PASS** (482s XCUI) |
+
+Still `Refs #824`. Independent review is still required. #673 remains
+`performance_claim=false` here.
 
 ## Close-out headed session (2026-09-18, exclusive Runtime)
 
 Exclusive `control.sock` was free. Drove already-built Debug
 `Seyal.app` (`dev.seyal.Seyal` adhoc, UI-test products dated 2026-09-18 07:28)
-because local `xcodebuild` / `scripts/test-macos-ui.sh` rebuild is
-**ENVIRONMENT_UNSUPPORTED**: Xcode 27.0 (`27A266a`) requires
-`sudo xcodebuild -license`. Hosted `native-macos-smoke` on `2ef8332`
-(run 35305544844) remains the XCUI record.
+because that session incorrectly treated local `xcodebuild` /
+`scripts/test-macos-ui.sh` rebuild as **ENVIRONMENT_UNSUPPORTED** (Xcode 27
+license). The 2026-09-19 section above superseded that classification.
+Hosted `native-macos-smoke` on `2ef8332` (run 35305544844) remains the hosted
+XCUI record.
 
 AX oracle: `terminal-input` `connection=` / `runtime=` / `execution=` /
 `attachment=` / `alternate-screen=`. Metal does not expose PTY bytes as AX

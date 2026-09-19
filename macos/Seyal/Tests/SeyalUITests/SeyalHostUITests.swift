@@ -188,7 +188,18 @@ final class SeyalHostUITests: XCTestCase {
     /// #978 demo procedure: the composer is enabled only by Runtime's
     /// published eligibility. It reads `available` at the prompt, `busy` while
     /// `sleep 2` occupies the shell, and `available` again at the next prompt.
+    ///
+    /// Requires a zsh login shell: the headed host spawns the account's
+    /// `pw_shell` (`BundledRuntimeLauncher`), and only trusted zsh integration
+    /// publishes `Busy`; any other shell is `Unsupported` and keeps the composer
+    /// on the raw path by design (ADR-009 mechanism 6). Hosted runners use a
+    /// bash account, so their busy/available evidence is the Rust live tests,
+    /// which spawn `/bin/zsh` explicitly.
     func testComposerReadsBusyWhileCommandRunsAndAvailableAtNextPrompt() throws {
+        guard loginShellIsZsh() else {
+            throw XCTSkip(
+                "This composer-eligibility case requires a zsh login shell; the host spawns pw_shell.")
+        }
         let app = hostedApp()
         waitForUsablePty(in: app)
         let composer = app.descendants(matching: .any)["seyal-composer"]
@@ -757,5 +768,14 @@ final class SeyalHostUITests: XCTestCase {
 
     private func waitBriefly(_ seconds: TimeInterval) {
         RunLoop.current.run(until: Date().addingTimeInterval(seconds))
+    }
+
+    /// The same predicate as `ShellIntegrationPolicy::supports` applied to the
+    /// shell the headed host will spawn (`pw_shell`, never inherited `SHELL`).
+    private func loginShellIsZsh() -> Bool {
+        guard let account = getpwuid(geteuid()), let shell = account.pointee.pw_shell else {
+            return false
+        }
+        return URL(fileURLWithPath: String(cString: shell)).lastPathComponent == "zsh"
     }
 }

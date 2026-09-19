@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import importlib.util
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -79,6 +81,158 @@ def pin_exact_head(root: Path, record_path: Path) -> None:
         encoding="utf-8",
     )
 
+
+
+def run_accepted_gate_evaluation_unit_test(base: Path) -> None:
+    """Exercise evaluate_record()'s PASS/FAIL arithmetic for an accepted
+    NON-history gate.
+
+    In the real contract only the 2 HistoryStore families ever carry
+    status="accepted", so evaluate_record's PASS/FAIL branch is otherwise
+    never exercised for any other gate. evaluate_record() never calls
+    validate_contract_shape() and never reads ACCEPTED_GATE_CEILINGS, so a
+    synthetic in-memory schema dict naming a placeholder-accepted "startup"
+    gate is sufficient to test it in isolation. This never edits the real
+    docs/evidence/M002-PERFORMANCE-CONTRACT-V1.toml file.
+    """
+    fixture_root = base / "m002-accepted-gate-unit-test"
+    fixture_root.mkdir()
+
+    previous_root_env = os.environ.get(ENV_ROOT)
+    previous_dont_write_bytecode = sys.dont_write_bytecode
+    os.environ[ENV_ROOT] = str(fixture_root)
+    sys.dont_write_bytecode = True
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "seyal_check_m002_performance_contract_unit",
+            ROOT / "scripts/check-m002-performance-contract.py",
+        )
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = previous_dont_write_bytecode
+        if previous_root_env is None:
+            os.environ.pop(ENV_ROOT, None)
+        else:
+            os.environ[ENV_ROOT] = previous_root_env
+
+    # TEST FIXTURE — NOT AN ACCEPTED PRODUCT CEILING. This placeholder "startup"
+    # gate and its p50/p95/p99 ceiling exist only to prove evaluate_record's
+    # PASS/FAIL arithmetic for a non-history accepted gate; it is never the
+    # real contract and D1 (final numeric ceilings) is not decided here.
+    synthetic_schema = {
+        "schema": "seyal.m002.performance-contract",
+        "version": 1,
+        "percentile_method": "nearest-rank",
+        "cohorts": 5,
+        "samples_per_cohort": 100,
+        "raw_cohorts": {"file_count": 5, "observations_per_file": 100},
+        "result_schema": {
+            "required": [
+                "contract_schema", "contract_version", "production_sha", "harness_sha",
+                "baseline_sha", "build_mode", "os_version", "toolchain", "hardware", "display",
+                "power_thermal_state", "workload_hash", "topology", "evidence_class", "gate",
+                "metric", "boundary", "unit", "percentile_method", "sample_count", "cohort_count",
+                "environment_status", "platform_limit_reason", "comparator", "p50", "p95", "p99",
+                "baseline_p50", "baseline_p95", "baseline_p99", "relative_regression_percent",
+                "raw_log", "raw_cohorts", "baseline_raw_cohorts",
+            ],
+            "environment_statuses": ["VALID", "PLATFORM_LIMITED"],
+            "comparators": ["less_equal"],
+        },
+        "gates": {
+            "startup": {
+                "evidence_class": "NATIVE_HEADED",
+                "boundary": "process launch to first usable terminal state",
+                "unit": "ms",
+                "status": "accepted",
+                "source": "TEST FIXTURE — NOT AN ACCEPTED PRODUCT CEILING",
+                "p50": 100,
+                "p95": 200,
+                "p99": 400,
+                "relative_regression_percent": 10,
+            },
+        },
+    }
+
+    def write_cohort_files(directory: Path, samples: list[int]) -> None:
+        for cohort in range(1, 6):
+            write(
+                directory / f"cohort-{cohort}.toml",
+                f"cohort = {cohort}\nsamples = [{', '.join(map(str, samples))}]\n",
+            )
+
+    def build_record(case_dir: str, *, tail_value: int) -> Path:
+        case_root = fixture_root / case_dir
+        cohort_samples = [100] * 50 + [200] * 45 + [tail_value] * 5
+        write_cohort_files(case_root / "cohorts", cohort_samples)
+        baseline_samples = [100] * 50 + [200] * 45 + [400] * 5
+        write_cohort_files(case_root / "baseline-cohorts", baseline_samples)
+        write(case_root / "raw.log", "synthetic startup contract fixture\n")
+        record = case_root / "record.toml"
+        write(
+            record,
+            "\n".join(
+                [
+                    "contract_schema = 'seyal.m002.performance-contract'",
+                    "contract_version = 1",
+                    "production_sha = '1111111111111111111111111111111111111111'",
+                    "harness_sha = '2222222222222222222222222222222222222222'",
+                    "baseline_sha = '3333333333333333333333333333333333333333'",
+                    "build_mode = 'release'",
+                    "os_version = 'macOS'",
+                    "toolchain = 'Xcode/Rust'",
+                    "hardware = 'arm64'",
+                    "display = 'headless-unit-test'",
+                    "power_thermal_state = 'nominal'",
+                    "workload_hash = 'hash'",
+                    "topology = 'one-execution-headless'",
+                    "evidence_class = 'NATIVE_HEADED'",
+                    "gate = 'startup'",
+                    "metric = 'startup'",
+                    "boundary = 'process launch to first usable terminal state'",
+                    "unit = 'ms'",
+                    "percentile_method = 'nearest-rank'",
+                    "sample_count = 500",
+                    "cohort_count = 5",
+                    "environment_status = 'VALID'",
+                    "platform_limit_reason = ''",
+                    "comparator = 'less_equal'",
+                    "p50 = 100",
+                    "p95 = 200",
+                    f"p99 = {tail_value}",
+                    "baseline_p50 = 100",
+                    "baseline_p95 = 200",
+                    "baseline_p99 = 400",
+                    "relative_regression_percent = 10",
+                    f"raw_log = '{case_dir}/raw.log'",
+                    f"raw_cohorts = '{case_dir}/cohorts/'",
+                    f"baseline_raw_cohorts = '{case_dir}/baseline-cohorts/'",
+                    "",
+                ]
+            ),
+        )
+        return record
+
+    passing_record = build_record("matching", tail_value=400)
+    passing_status = module.evaluate_record(passing_record, synthetic_schema)
+    require(
+        passing_status == "PASS",
+        f"evaluate_record did not PASS a matching-percentile accepted non-history gate record: {passing_status}",
+    )
+
+    failing_record = build_record("exceeding", tail_value=900)
+    failing_status = module.evaluate_record(failing_record, synthetic_schema)
+    require(
+        failing_status == "FAIL",
+        f"evaluate_record did not FAIL an exceeding-percentile accepted non-history gate record: {failing_status}",
+    )
+
+    print(
+        "[seyal CI validator self-test] evaluate_record PASS/FAIL arithmetic verified for a "
+        "synthetic non-history accepted gate without touching the real M002 contract file."
+    )
 
 
 def main() -> None:
@@ -655,6 +809,8 @@ def main() -> None:
             rewritten_fail,
             "must retain the f105364 history_active_reflow_ms FAIL",
         )
+
+        run_accepted_gate_evaluation_unit_test(base)
 
 
         unicode_benchmark = base / "unicode-benchmark-contract"

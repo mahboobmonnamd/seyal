@@ -12,10 +12,12 @@ rewrite the row to PASS.
 """
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -67,6 +69,40 @@ def git_sha() -> str:
 def rustc_version() -> str:
     result = run(["rustc", "--version"])
     return result.stdout.strip() or "unknown"
+
+
+def probe_ac_power_confirmed() -> tuple[bool, str]:
+    """Probe the real host power/thermal state instead of trusting a label.
+
+    Returns (confirmed, detail). Inability to confirm AC power -- non-macOS,
+    `pmset` missing/failing, or output that does not clearly show AC power --
+    invalidates the probe (confirmed=False).
+    """
+    if sys.platform != "darwin":
+        return False, "pmset power probe requires macOS"
+    result = run(["pmset", "-g", "batt"])
+    if result.returncode != 0:
+        return False, f"pmset -g batt failed: {result.stdout.strip()}"
+    output = result.stdout
+    first_line = next((line.strip() for line in output.splitlines() if line.strip()), "")
+    if "AC Power" in output:
+        return True, first_line or "AC Power"
+    if "Battery Power" in output:
+        return False, "host is running on battery power, not AC"
+    return False, f"pmset output did not confirm AC power: {output.strip()!r}"
+
+
+def require_apple_silicon_collection_host() -> None:
+    """Refuse a real history-reflow contract run off Apple Silicon macOS.
+
+    Factored out (rather than inlined in `main`) so a test can monkeypatch
+    this one function to exercise `main`'s --controlled branch-selection
+    logic on any CI runner, the same way it already monkeypatches
+    `probe_ac_power_confirmed` and `collect_cohorts` -- without weakening
+    the real guard for an actual collection run.
+    """
+    if sys.platform != "darwin" or platform.machine() not in {"arm64", "aarch64"}:
+        raise SystemExit("history-reflow contract runner requires Apple Silicon macOS")
 
 
 def hardware() -> str:
@@ -144,6 +180,12 @@ def write_record(
     candidate: Path,
     baseline: Path,
     workload: str,
+    baseline_sha: str | None = None,
+    environment_status: str = "PLATFORM_LIMITED",
+    platform_limit_reason: str = (
+        "uncontrolled-developer-host; same-SHA baseline is host-noise and cannot establish PHYSICAL_ARM64"
+    ),
+    power_thermal_state: str = "uncontrolled-developer-host",
 ) -> tuple[Path, str]:
     candidate_values = load_samples(candidate)
     baseline_values = load_samples(baseline)
@@ -158,9 +200,18 @@ def write_record(
         and p99 <= b99 * (1 + allowed / 100)
     )
     numeric_status = "PASS" if absolute_ok and relative_ok else "FAIL"
+    # `status` mirrors what evaluate_record() will independently recompute:
+    # PLATFORM_LIMITED rows always retain PLATFORM_LIMITED; only a VALID
+    # (controlled) row ever carries the real PASS/FAIL evaluation.
+    status_field = environment_status if environment_status == "PLATFORM_LIMITED" else numeric_status
+    resolved_baseline_sha = baseline_sha or sha
     record = evidence_root / "record.toml"
     workload_hash = hashlib.sha256(workload.encode()).hexdigest()
     rel = lambda path: path.relative_to(ROOT).as_posix()
+    # Single-quote literal, matching the pre---controlled hardcoded format
+    # exactly (not toml_str's double quotes) so the default path's record
+    # bytes are unchanged.
+    sq = lambda value: "'" + value.replace("'", "\\'") + "'"
     record.write_text(
         "\n".join(
             [
@@ -168,13 +219,13 @@ def write_record(
                 "contract_version = 1",
                 f"production_sha = {toml_str(sha)}",
                 f"harness_sha = {toml_str(sha)}",
-                f"baseline_sha = {toml_str(sha)}",
+                f"baseline_sha = {toml_str(resolved_baseline_sha)}",
                 "build_mode = 'release'",
                 f"os_version = {toml_str(platform.platform())}",
                 f"toolchain = {toml_str(rustc_version())}",
                 f"hardware = {toml_str(hardware())}",
                 "display = 'none-headless-history-reflow'",
-                "power_thermal_state = 'uncontrolled-developer-host'",
+                f"power_thermal_state = {sq(power_thermal_state)}",
                 f"workload_hash = {toml_str(workload_hash)}",
                 "topology = 'one-execution-headless-TerminalState'",
                 "evidence_class = 'PHYSICAL_ARM64'",
@@ -185,10 +236,10 @@ def write_record(
                 "percentile_method = 'nearest-rank'",
                 "sample_count = 500",
                 "cohort_count = 5",
-                "environment_status = 'PLATFORM_LIMITED'",
-                "platform_limit_reason = 'uncontrolled-developer-host; same-SHA baseline is host-noise and cannot establish PHYSICAL_ARM64'",
+                f"environment_status = {sq(environment_status)}",
+                f"platform_limit_reason = {sq(platform_limit_reason)}",
                 "comparator = 'less_equal'",
-                "status = 'PLATFORM_LIMITED'",
+                f"status = {sq(status_field)}",
                 f"numeric_status = {toml_str(numeric_status)}",
                 f"p50 = {p50!r}",
                 f"p95 = {p95!r}",
@@ -209,8 +260,23 @@ def write_record(
 
 
 def main() -> None:
-    if sys.platform != "darwin" or platform.machine() not in {"arm64", "aarch64"}:
-        raise SystemExit("history-reflow contract runner requires Apple Silicon macOS")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--controlled",
+        action="store_true",
+        help="opt-in controlled-environment run: requires --baseline-sha/--baseline-cohorts-dir and probes real AC power",
+    )
+    parser.add_argument(
+        "--baseline-sha",
+        help="baseline production SHA for --controlled mode; must differ from the candidate HEAD SHA",
+    )
+    parser.add_argument(
+        "--baseline-cohorts-dir",
+        help="directory of pre-collected baseline cohorts for --baseline-sha, one <gate>/ subdirectory per gate",
+    )
+    args = parser.parse_args()
+
+    require_apple_silicon_collection_host()
     sha = git_sha()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     evidence_root = ROOT / "docs" / "evidence" / f"m002-673-history-reflow-{stamp}"
@@ -220,14 +286,64 @@ def main() -> None:
         f"cols={os.environ.get('SEYAL_HISTORY_BENCH_COLUMNS', '80')} "
         "workload=ascii executions=1 warmups=20 samples=100 cohorts=5"
     )
+
+    # --controlled is additive and opt-in: when absent, every line below this
+    # block is unreachable and behavior is byte-for-byte the pre-existing
+    # always-diagnostic default.
+    controlled_reasons: list[str] = []
+    baseline_source: Path | None = None
+    ac_detail = "uncontrolled-developer-host"
+    if args.controlled:
+        if args.baseline_sha is None:
+            controlled_reasons.append("no --baseline-sha supplied")
+        elif args.baseline_sha == sha:
+            raise SystemExit(
+                "--controlled requires --baseline-sha distinct from the candidate production SHA"
+            )
+        elif args.baseline_cohorts_dir is None:
+            controlled_reasons.append("no --baseline-cohorts-dir supplied for the distinct baseline SHA")
+        else:
+            baseline_source = Path(args.baseline_cohorts_dir)
+            if not baseline_source.is_dir():
+                controlled_reasons.append(f"--baseline-cohorts-dir does not exist: {baseline_source}")
+        ac_confirmed, ac_detail = probe_ac_power_confirmed()
+        if not ac_confirmed:
+            controlled_reasons.append(f"AC power not confirmed: {ac_detail}")
+
+    controlled_valid = args.controlled and not controlled_reasons
+
     for gate in GATES:
         gate_root = evidence_root / gate
         candidate = gate_root / "cohorts"
         baseline = gate_root / "baseline-cohorts"
         log = gate_root / "raw-output.txt"
         candidate_log = collect_cohorts(gate, candidate, sha)
-        baseline_log = collect_cohorts(gate, baseline, sha)
+        if controlled_valid:
+            assert baseline_source is not None
+            baseline_gate_dir = baseline_source / gate
+            if not baseline_gate_dir.is_dir():
+                raise SystemExit(f"--baseline-cohorts-dir is missing a {gate} subdirectory: {baseline_gate_dir}")
+            shutil.copytree(baseline_gate_dir, baseline)
+            baseline_log = f"[controlled] reused pre-collected baseline cohorts from {baseline_gate_dir}\n"
+        else:
+            baseline_log = collect_cohorts(gate, baseline, sha)
         log.write_text(candidate_log + "\n" + baseline_log, encoding="utf-8")
+
+        if controlled_valid:
+            environment_status = "VALID"
+            platform_limit_reason = ""
+            power_thermal_state = ac_detail
+            baseline_sha_value = args.baseline_sha
+        else:
+            environment_status = "PLATFORM_LIMITED"
+            platform_limit_reason = (
+                "; ".join(controlled_reasons)
+                if args.controlled
+                else "uncontrolled-developer-host; same-SHA baseline is host-noise and cannot establish PHYSICAL_ARM64"
+            )
+            power_thermal_state = "uncontrolled-developer-host"
+            baseline_sha_value = None
+
         record, numeric_status = write_record(
             gate=gate,
             sha=sha,
@@ -236,6 +352,10 @@ def main() -> None:
             candidate=candidate,
             baseline=baseline,
             workload=workload,
+            baseline_sha=baseline_sha_value,
+            environment_status=environment_status,
+            platform_limit_reason=platform_limit_reason,
+            power_thermal_state=power_thermal_state,
         )
         checked = run(
             [
@@ -249,11 +369,12 @@ def main() -> None:
         sys.stdout.write(checked.stdout)
         if checked.returncode != 0:
             raise SystemExit(f"validator rejected {record}:\n{checked.stdout}")
-        if f"M002 performance result: PLATFORM_LIMITED metric={gate}" not in checked.stdout:
-            raise SystemExit(f"validator did not retain PLATFORM_LIMITED for {gate}:\n{checked.stdout}")
+        if environment_status == "PLATFORM_LIMITED":
+            if f"M002 performance result: PLATFORM_LIMITED metric={gate}" not in checked.stdout:
+                raise SystemExit(f"validator did not retain PLATFORM_LIMITED for {gate}:\n{checked.stdout}")
         ceilings = CEILINGS[gate]
         print(
-            f"[m002-673] {gate} PLATFORM_LIMITED; numeric {numeric_status}; "
+            f"[m002-673] {gate} {environment_status}; numeric {numeric_status}; "
             f"frozen ceilings p50/p95/p99={ceilings}"
         )
     print(f"[m002-673] evidence root {evidence_root.relative_to(ROOT)}")

@@ -40,6 +40,8 @@ Pull requests must report commands run, evidence obtained, and any skipped manua
 
 ## Scope and architecture
 
+Keep public generic terminal capabilities here. Commercial Pro, Teams, Enterprise, hosted-service, billing, identity, and private-deployment capabilities belong in the separate commercial composition repository. Do not add a dependency from this repository to proprietary code.
+
 Architecture decisions and implementation requirements remain authoritative in the existing `docs/architecture`, `docs/specs`, `docs/milestones`, and `docs/engineering` documents. C4 views are orientation projections only. Summarize canonical documents rather than creating competing sources of truth.
 
 The authority chain is:

@@ -1,6 +1,6 @@
 # Seyal
 
-**Seyal OSS** is an open-source, agent-native terminal workspace foundation for software development and operations.
+Seyal is an open-source, commercial, enterprise-grade, agent-native terminal workspace for software development and operations.
 
 It is being built as a real terminal first: Seyal owns its PTY/VT/state/rendering path, treats Blocks as a native presentation primitive, and keeps agents additive rather than placing AI in the terminal hot path.
 
@@ -65,12 +65,12 @@ If you are new to the codebase, use this order:
 5. [`docs/engineering/TESTING.md`](docs/engineering/TESTING.md) — TDD, conformance, fuzz, integration and UI testing expectations.
 6. [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution workflow.
 
-For OSS product scope, see [`PRODUCT.md`](PRODUCT.md). For milestone direction, see [`docs/product/ROADMAP.md`](docs/product/ROADMAP.md).
+For the current milestone product slice, see [`PRODUCT.md`](PRODUCT.md). For milestone direction, see [`docs/product/ROADMAP.md`](docs/product/ROADMAP.md). The public repository owns the generic terminal foundation; commercial Pro, Teams, Enterprise, hosted-service, billing, identity, and private-deployment capabilities belong in the separate commercial composition repository and must not become dependencies here.
 
 ## Documentation authority
 
 ```text
-OSS product requirements
+Product & Engineering Constitution
 → accepted architecture / ADR
 → specification
 → milestone

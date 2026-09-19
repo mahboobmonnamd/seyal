@@ -3,7 +3,7 @@
 **Document:** SEYAL-AGENT-PLATFORM-RD-PLAN-001  
 **Status:** Proposed R&D plan  
 **Issue:** #48  
-**Scope:** OSS agent-native foundation and stable public extension seams. No production implementation is authorized by this document.
+**Scope:** OSS agent-native foundation and stable extension seams. No production implementation is authorized by this document.
 
 ## 1. Purpose
 
@@ -15,19 +15,35 @@ PTY → VT/parser → TerminalState → damage → renderer
 
 Agent, context, cache, evaluation, workflow and orchestration capabilities are additive. They consume stable execution/workspace primitives without owning or synchronously gating terminal infrastructure.
 
-This R&D plan defines the local OSS foundation needed so a developer can use agents, local context, local caching, local workflows and basic multi-agent execution through public, provider-neutral capabilities.
+This R&D plan defines the **strong local OSS foundation** needed so a developer can use agents, local context, local caching, local workflows and basic multi-agent execution without a paid service. Commercial products may consume these public seams for managed team/org context, hosted execution, proprietary optimization and organization-scale operations, but Seyal OSS must not depend on commercial code.
 
-## 2. OSS ownership principle
+## 2. Ownership principle
 
-A capability belongs in this foundation when it:
+The split is explicitly **not**:
+
+```text
+terminal = OSS
+AI = commercial
+```
+
+The default split is:
+
+```text
+portable + local + generic + independently useful = OSS
+
+managed multi-user service + hosted infrastructure + organization-scale state
++ proprietary learned optimization + enterprise operations = external/commercial consumer
+```
+
+A capability should default to OSS when it:
 
 - is needed for an excellent local agent-native experience;
-- works with local or user-configured providers;
-- creates a useful ecosystem/interoperability seam;
+- can work with local/BYOK providers without Seyal-operated infrastructure;
+- creates an ecosystem/interoperability seam;
 - improves user trust, portability or debuggability;
-- is independently useful without an external hosted service.
+- would make the OSS product feel artificially crippled if withheld.
 
-Private service/product concerns are outside this document and must not become dependencies of the OSS terminal/runtime foundation.
+A capability may live outside OSS when its value materially depends on hosted infrastructure, organization-wide state, proprietary learned intelligence, centralized operations or paid service delivery.
 
 ## 3. Target architecture
 
@@ -58,7 +74,7 @@ flowchart TB
     WF[Local Workflow / Orchestrator] --> WI
     WF --> AR
 
-    EXT[External consumer / integration] -->|consume versioned public seams| WI
+    EXT[External managed services] -->|consume versioned OSS seams| WI
     EXT --> CE
     EXT --> EV
     EXT --> O
@@ -72,79 +88,81 @@ flowchart TB
 
 ### 4.1 Execution and harness foundation
 
-The public foundation should provide:
+| Capability | OSS recommendation | Notes |
+|---|---|---|
+| `AgentId`, `AgentRunId`, `WorkItemId`, `AttemptId` | Yes | stable provider-neutral identity |
+| harness capability/adapter interface | Yes | no vendor lock-in |
+| basic first-party local harness adapters | Yes, subject to upstream licensing/API terms | Claude Code/Codex-class tools should work without paid Seyal code |
+| execution capability registry | Yes | local/remote capability description, not proprietary ranking |
+| structured run events | Yes | bounded/asynchronous relative to terminal I/O |
+| artifact/diff/result model | Yes | local files/results require no cloud |
+| attention/approval integration | Yes | core agent-native local UX |
 
-- provider-neutral `AgentId`, `AgentRunId`, `WorkItemId` and `AttemptId` identity;
-- versioned harness capability/adapter interfaces;
-- local harness adapters where upstream licensing/API terms allow;
-- execution capability registry;
-- bounded structured run events;
-- artifact/diff/result model;
-- attention/approval integration.
+### 4.2 Local context and context enhancement
 
-Unsupported or unknown agents remain ordinary terminal/TUI workloads and must still work correctly.
+The OSS product should include a real **Local Context Engine**, not only a schema.
 
-### 4.2 Local Context Engine
-
-The OSS product should include a real Local Context Engine, not only a schema.
-
-Candidate capabilities:
+Recommended local capabilities:
 
 - project/repository/workspace/user context scopes;
 - repository structure and symbol/index metadata;
 - relevant documentation and instruction discovery;
 - git status/diff/branch/worktree context;
-- retained local run discoveries/artifacts where explicitly allowed;
+- prior local run discoveries and artifacts when explicitly retained;
 - task-specific retrieval/ranking;
 - deterministic context provenance;
 - freshness/staleness detection;
 - conflict/precedence rules;
 - duplicate detection;
-- context compaction/summarization through pluggable local or user-configured models;
+- context compaction/summarization through pluggable local/BYOK models;
 - token-budget-aware selection;
-- sensitivity/privacy metadata;
-- user inspection of context selected for external processing.
+- explicit sensitivity/privacy metadata;
+- user inspection of exactly what context will be sent.
 
-Source truth must be distinct from derived summaries. Derived material is invalidatable and rebuildable.
+The context engine must distinguish **source truth** from derived summaries. Derived material is invalidatable and rebuildable.
 
 ### 4.3 Local caching
+
+Local caching is an OSS performance/cost capability. It must be explicitly designed rather than hidden inside adapters.
 
 Candidate cache layers:
 
 | Cache | Purpose | Invalidation key |
 |---|---|---|
 | content-addressed source cache | avoid rereading unchanged files/artifacts | content hash |
-| repository metadata/index cache | avoid rebuilding repository/symbol metadata | revision + file changes |
-| embedding/retrieval index cache | avoid repeated semantic indexing | content hash + model/version |
-| context selection cache | reuse retrieval results when inputs are unchanged | context fingerprint + task fingerprint |
-| summary/compaction cache | avoid repeatedly summarizing identical source material | source hash + summarizer/config |
+| repository metadata/index cache | avoid rebuilding repo/symbol metadata | repo revision + file changes |
+| embedding/retrieval index cache | avoid repeated semantic indexing | content hash + embedding model/version |
+| context selection cache | reuse retrieval results when task/context inputs are unchanged | context fingerprint + task fingerprint |
+| summary/compaction cache | avoid repeatedly summarizing identical source material | source hash + summarizer/model/config |
 | prompt/context bundle cache | reuse deterministic assembled bundles | ordered component hashes + policy/config |
-| provider prompt-cache metadata | expose cache eligibility/hit accounting | provider/model/session semantics |
-| outcome/evaluation cache | reuse deterministic local checks when safe | artifact/worktree/test/config hashes |
+| provider prompt-cache metadata | expose provider cache eligibility/hit accounting | provider/model/session semantics |
+| outcome/evaluation cache | reuse deterministic local checks when inputs are identical and safe | artifact/worktree/test/config hashes |
 
 Rules:
 
 - cache entries are derived, never authoritative project truth;
 - secret/sensitive content needs explicit storage policy;
-- caches are bounded and inspectable/clearable;
-- cache correctness should use strong revision/hash keys where available;
-- unsafe semantic results are not reused merely because text looks similar;
-- provider-side prompt caching and Seyal local caching remain separate mechanisms.
+- caches must be bounded and inspectable/clearable;
+- cache correctness must never rely on wall-clock freshness alone when stronger revision/hash keys exist;
+- unsafe semantic results must not be reused merely because text looks similar;
+- provider-side prompt caching and Seyal local caching are separate mechanisms.
 
 ### 4.4 Prompt/context builder baseline
 
-The local context/prompt builder should support:
+A local OSS context/prompt builder should support:
 
 - stable vs task-specific context partitions;
 - deterministic ordering/fingerprinting;
-- provider capability metadata without provider business logic in domain objects;
-- cache-friendly stable prefixes where supported;
+- provider capability metadata without embedding provider business logic into domain objects;
+- cache-friendly stable prefixes where the provider supports them;
 - token/context-window budgets;
 - progressive context expansion;
 - deduplication;
 - context provenance manifest;
-- local or user-configured model use;
-- cached/uncached token accounting when reported.
+- local/BYOK model use;
+- cached/uncached token accounting when the provider reports it.
+
+Advanced learned optimization across teams/providers can remain outside OSS; the baseline mechanism should not.
 
 ### 4.5 Evaluation, outcomes and cost accounting
 
@@ -160,7 +178,11 @@ OSS should expose and locally use:
 - acceptance/review hooks;
 - local metrics such as cost per successful run and first-attempt success.
 
+Organization aggregation/benchmarking is not required for the local foundation.
+
 ### 4.6 Local routing
+
+Routing should not be entirely paywalled.
 
 OSS should support:
 
@@ -168,16 +190,16 @@ OSS should support:
 - deterministic rule-based routing;
 - explicit user routing rules;
 - provider/model availability constraints;
-- local cost/latency budgets when data is available;
+- rough local cost/latency budgets when data is available;
 - fallback/escalation chains;
-- local routing explanations;
-- a versioned router interface for public extensions.
+- routing decision explanation/audit locally;
+- a versioned router interface for plugins/managed consumers.
 
-Learned or service-operated routing is outside this OSS plan.
+A proprietary learned router trained/tuned on organization-scale outcomes is a separate higher-level capability.
 
 ### 4.7 Local workflows and multi-agent execution
 
-The OSS baseline should support:
+Because Seyal is agent-native, OSS should support a useful local baseline:
 
 - local workflow/DAG representation;
 - dependencies and parallel nodes;
@@ -190,11 +212,13 @@ The OSS baseline should support:
 - conflict detection hooks;
 - human approval nodes;
 - attention routing;
-- deterministic workflow-state persistence/recovery where practical.
+- deterministic workflow state persistence/recovery where practical.
+
+Organization-wide fleet scheduling, hosted workers, team permissions and managed reliability remain separate services.
 
 ### 4.8 Extension seams
 
-Expose versioned public capability seams for:
+OSS should expose versioned capability seams for:
 
 - harness adapters;
 - context sources/enhancers;
@@ -206,24 +230,38 @@ Expose versioned public capability seams for:
 - artifact processors;
 - attention integrations.
 
-Extension APIs must remain coherent public capabilities, never hidden hooks for a private consumer.
+## 5. External/commercial boundary contract
 
-## 5. Repository isolation
+This OSS document does **not** define a commercial product roadmap. It defines only what OSS must make possible without reverse dependency.
 
-This document defines only the public OSS foundation. The dependency rule is:
+Examples of capabilities that may be built by external/commercial consumers of OSS seams include:
 
-```text
-external/private consumer → public Seyal OSS capabilities
-Seyal OSS                 ↛ non-OSS/private implementation
-```
+- managed multi-user synchronization;
+- organization-wide shared state;
+- hosted/background execution;
+- proprietary learned optimization;
+- centrally operated fleet scheduling;
+- enterprise identity/policy/administration;
+- billing/support/SLA services.
 
-No outside repository, hosted service, entitlement system, pricing model or private implementation may become required to build, test or use the canonical OSS foundation.
+The detailed product packaging, monetization and commercial feature roadmap belong in `seyal-commercial`, not this repository.
 
 ## 6. R&D work packages
 
 ### WP-1 — Domain model and lifecycle
 
-Define exact lifecycle/state machines for `WorkItem`, `Agent`, `AgentRun`, `Execution`, `Attempt`, `Artifact`, `Outcome`, `Evaluation`, `Handoff`, and `WorkflowRun`.
+Define exact lifecycle/state machines for:
+
+- `WorkItem`
+- `Agent`
+- `AgentRun`
+- `Execution`
+- `Attempt`
+- `Artifact`
+- `Outcome`
+- `Evaluation`
+- `Handoff`
+- `WorkflowRun`
 
 Questions include multi-execution runs, multiple agents per work item, durable vs ephemeral identity, GUI/runtime/provider restart semantics, cancellation and recovery.
 
@@ -231,7 +269,18 @@ Questions include multi-execution runs, multiple agents per work item, durable v
 
 ### WP-2 — Harness capability protocol and adapter study
 
-Research Claude Code, Codex CLI and at least one additional harness. Define provider-neutral capabilities for discover/start/resume/cancel, structured status/events, input/actions, artifacts/diffs, approvals/questions, tools, usage/token/cache/cost metadata, capability discovery, raw TUI compatibility and failure/reconnect behavior.
+Research Claude Code, Codex CLI and at least one additional harness. Define provider-neutral capabilities for:
+
+- discover/start/resume/cancel;
+- structured status/events;
+- input/actions;
+- artifacts/diffs;
+- approvals/questions;
+- tools;
+- usage/token/cache/cost metadata;
+- capability discovery;
+- raw TUI compatibility;
+- failure/reconnect behavior.
 
 Avoid lowest-common-denominator design. Optional capabilities are explicit.
 
@@ -239,7 +288,7 @@ Avoid lowest-common-denominator design. Optional capabilities are explicit.
 
 ### WP-3 — Local Context Engine
 
-Define the pipeline:
+Define the complete local context pipeline:
 
 ```text
 sources
@@ -253,64 +302,136 @@ sources
 → context bundle + manifest
 ```
 
-Research repository/source indexing, local semantic retrieval, deterministic/model-assisted ranking, summarization/compaction, invalidation, precedence/conflicts, sensitivity filtering, explainability and large-repository scaling.
+Research:
+
+- repository/source indexing;
+- local semantic retrieval;
+- deterministic and model-assisted ranking;
+- local/BYOK summarization/compaction;
+- freshness/invalidation cascade;
+- context precedence/conflicts;
+- sensitivity filtering;
+- explainability: why each context item was selected;
+- large repository scaling.
 
 **Exit:** schemas + pipeline + invalidation algorithm + threat model + benchmark/evaluation corpus.
 
 ### WP-4 — Local cache architecture and cache-aware prompt builder
 
-Define cache namespaces, keys, bounds, invalidation and security for all cache layers in §4.3.
+Define cache namespaces, keys, bounds, invalidation and security for all cache layers listed in §4.3.
 
-Provider prompt-cache capabilities are adapter metadata, not core domain authority.
+Research provider prompt-cache capabilities as adapter metadata, but keep provider-specific behavior out of core domain models.
 
-Required measurements include local cache hit rate, index rebuild avoided, summary/compaction reuse, stable-prefix ratio, cached/uncached token accounting where reported, latency/cost avoided and correctness failures.
+Required metrics:
 
-**Exit:** cache architecture + prompt/context fingerprint spec + invalidation tests + capability matrix.
+- local cache hit rate;
+- index rebuild avoided;
+- summary/compaction reuse;
+- prompt stable-prefix ratio;
+- cached vs uncached tokens where reported;
+- tokens/latency/cost avoided;
+- cache correctness failures.
+
+**Exit:** cache architecture, prompt/context fingerprint specification, cache invalidation tests and provider capability matrix.
 
 ### WP-5 — Events, outcomes, local evaluation and cost hooks
 
-Define a generic event/evaluation system covering run lifecycle, retries, tests/checks/CI hooks, acceptance/review hooks, human interventions, elapsed time, token/cache usage, cost when reported/derived, compute time and evaluator confidence/provenance.
+Define a generic event/evaluation system including:
 
-Create a local evaluation harness for repeatable task fixtures.
+- run lifecycle;
+- retries;
+- tests/checks/CI hooks;
+- acceptance/review hooks;
+- human interventions;
+- elapsed time;
+- tokens/cache usage;
+- monetary cost when reported/derived;
+- compute time;
+- evaluator confidence/provenance.
 
-**Exit:** event envelope + ordering rules + evaluator contract + fixture format + derived metrics.
+Create a local evaluation harness that can compare harness/model/config choices on repeatable task fixtures.
+
+**Exit:** event envelope + ordering rules + evaluator contract + baseline task fixture format + derived metric definitions.
 
 ### WP-6 — Local routing and escalation
 
-Design a deterministic OSS router:
+Design a deterministic OSS router before any learned router:
 
 ```text
 task + required capabilities + policy + budget + availability
 → candidate harness/model/execution targets
-→ explainable rule decision
+→ explainable score/rule decision
 → fallback/escalation chain
 ```
+
+Research cost/latency/success inputs without requiring hosted intelligence.
 
 **Exit:** routing interface + rule precedence + worked examples + evaluation method.
 
 ### WP-7 — Workflow engine and local scheduler
 
-Research a minimal local workflow engine supporting DAG dependencies, parallelism, retries/cancellation/timeouts, local queues, budget hints, typed inputs/outputs, approval nodes, persistence/recovery, workflow versioning and safe local triggers.
+Research a minimal local workflow engine supporting:
+
+- DAG dependencies;
+- parallelism;
+- retries/cancellation/timeouts;
+- local queues;
+- budget hints;
+- typed inputs/outputs;
+- approval nodes;
+- persistence/recovery;
+- workflow versioning;
+- safe local triggers.
 
 **Exit:** workflow state machine + recovery semantics + three worked workflows.
 
 ### WP-8 — Multi-agent coordination, isolation and handoff
 
-Research one-task/many-agent patterns, planner/implementer/tester/reviewer roles, worktree isolation, artifact ownership, context handoff minimization, conflict/duplicate detection, cancellation/replacement and attention escalation.
+Research:
+
+- one task → many agents;
+- planner/implementer/tester/reviewer patterns;
+- worktree/repository isolation;
+- artifact ownership;
+- context handoff minimization;
+- conflict detection/reconciliation;
+- duplicate-work detection;
+- agent cancellation/replacement;
+- shared vs private context boundaries;
+- attention escalation.
 
 **Exit:** coordination model + isolation rules + conflict/handoff protocol + failure scenarios.
 
 ### WP-9 — Attention and human supervision model
 
-Extend `AttentionItem` for approval, question, conflict, validation failure, security/policy stop, ready-for-review and completion summary.
+Extend the existing `AttentionItem` foundation for agent work:
 
-Define safe supervision of multiple concurrent runs without scraping arbitrary PTY prompts.
+- approval;
+- question;
+- conflict;
+- validation failure;
+- security/policy stop;
+- ready-for-review;
+- completion summary.
+
+Define how one user safely supervises multiple concurrent runs without scraping arbitrary PTY prompts.
 
 **Exit:** typed interaction contracts + prioritization model + supervision metrics.
 
 ### WP-10 — Security, privacy and trust
 
-Threat-model malicious/compromised harnesses, prompt/context poisoning, secret leakage, untrusted artifacts, command execution, cross-workspace context exposure, forged events, cache poisoning, unsafe workflow triggers and plugin/provider trust.
+Threat-model:
+
+- malicious/compromised harnesses;
+- prompt/context poisoning;
+- secret leakage into context/cache/prompts;
+- untrusted artifacts;
+- arbitrary command execution;
+- cross-workspace context exposure;
+- forged outcome/evaluation events;
+- cache poisoning;
+- unsafe workflow triggers;
+- plugin/provider trust.
 
 **Exit:** trust boundaries + storage classifications + capability/permission checks + deletion/clear semantics.
 
@@ -326,7 +447,7 @@ agent/context/cache/index/model/persistence/network delay
 PTY → VT → TerminalState → damage → render
 ```
 
-Measure CPU/RSS/disk/index cost separately from terminal latency. Background work must be bounded, cancelable and priority-aware.
+Measure CPU/RSS/disk/index cost separately from terminal latency. Background context/index work must be bounded, cancelable and priority-aware.
 
 **Exit:** latency/resource budgets + benchmark plan + overload/failure behavior.
 
@@ -335,26 +456,32 @@ Measure CPU/RSS/disk/index cost separately from terminal latency. Background wor
 ```mermaid
 flowchart TB
     D[WP-1 Domain/lifecycle]
+
     D --> H[WP-2 Harness]
     D --> C[WP-3 Context engine]
     D --> E[WP-5 Events/evaluation]
     D --> W[WP-7 Workflow]
+
     C --> K[WP-4 Cache + prompt builder]
     E --> R[WP-6 Local routing]
     H --> M[WP-8 Multi-agent]
     W --> M
     C --> M
+
     H --> A[WP-9 Attention]
     M --> A
+
     S[WP-10 Security] -. reviews all .-> H
     S -.-> C
     S -.-> K
     S -.-> W
     S -.-> M
+
     P[WP-11 Performance] -. constrains all .-> C
     P -.-> K
     P -.-> E
     P -.-> M
+
     H --> G[Integration gate]
     K --> G
     R --> G
@@ -362,10 +489,11 @@ flowchart TB
     A --> G
     S --> G
     P --> G
+
     G --> ADR[ADRs + vertical implementation milestones]
 ```
 
-WP-1 establishes shared terminology. Security and performance research start immediately and review every other package. Harness, context, evaluation and workflow R&D can then proceed in parallel. Cache work follows context; routing follows measurable outcomes; multi-agent coordination combines harness/context/workflow primitives.
+WP-1 establishes shared terminology. Security and performance research start immediately and review every other package. Harness, context, evaluation and workflow R&D can then proceed in parallel. Cache work follows the context model; routing follows measurable outcomes; multi-agent coordination combines harness/context/workflow primitives.
 
 ## 8. Implementation recommendation after R&D
 
@@ -431,7 +559,7 @@ This R&D program is incomplete if any of these areas remain unaddressed:
 - [ ] cache/context poisoning defenses
 - [ ] plugin/extension seams
 - [ ] performance/resource isolation
-- [ ] no reverse dependency on non-OSS/private implementation
+- [ ] no reverse dependency on commercial code
 
 ## 10. Decisions intentionally deferred
 
@@ -440,11 +568,13 @@ Do not prematurely choose:
 - exact provider SDK implementation;
 - vector database/storage engine;
 - embedding model;
-- learned routing algorithm;
-- external synchronization technology;
-- distributed scheduler technology.
+- proprietary/learned routing algorithm;
+- hosted synchronization technology;
+- distributed fleet scheduler;
+- enterprise policy language;
+- billing metric.
 
-These need evidence from R&D and are outside this plan until an OSS requirement justifies them.
+These need evidence from R&D and, where commercial, revenue validation.
 
 ## 11. R&D completion gate
 
@@ -460,5 +590,5 @@ This phase completes only when:
 8. local workflows and basic multi-agent execution are representable;
 9. isolation/handoff/conflict semantics are defined;
 10. security and terminal hot-path isolation are proven architecturally;
-11. OSS remains independently useful with no non-OSS/private dependency;
+11. OSS remains independently useful with no commercial dependency;
 12. implementation can be split into vertical milestones with measurable exit criteria.

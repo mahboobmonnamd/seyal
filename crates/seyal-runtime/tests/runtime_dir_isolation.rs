@@ -150,31 +150,34 @@ fn isolated_runtime_starts_while_the_production_m001_singleton_is_held() {
 
 #[test]
 fn incorrect_isolated_endpoint_is_rejected_without_using_production() {
-    let mut runtime = Runtime::new(isolated_config("live")).expect("isolated Runtime");
-    let live = runtime
-        .local_ipc_socket_path()
-        .expect("live socket")
-        .to_path_buf();
-    runtime
-        .create_execution(
-            CommandSpec::new("/bin/sh").args(["-c", "sleep 30"]),
-            WindowSize::new(80, 24, 0, 0).expect("geometry"),
-        )
-        .expect("execution");
-
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while !live.exists() && Instant::now() < deadline {
+    with_canonical_socket(|| {
+        let mut runtime = Runtime::new(isolated_config("live")).expect("isolated Runtime");
+        let live = runtime
+            .local_ipc_socket_path()
+            .expect("live socket")
+            .to_path_buf();
         runtime
-            .poll_once(Some(Duration::from_millis(10)))
-            .expect("poll");
-    }
-    assert!(live.exists(), "isolated control socket must exist");
-    std::os::unix::net::UnixStream::connect(&live).expect("live isolated endpoint is connectable");
+            .create_execution(
+                CommandSpec::new("/bin/sh").args(["-c", "sleep 30"]),
+                WindowSize::new(80, 24, 0, 0).expect("geometry"),
+            )
+            .expect("execution");
 
-    let missing = unique_dir("missing").join("control.sock");
-    assert!(std::os::unix::net::UnixStream::connect(&missing).is_err());
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !live.exists() && Instant::now() < deadline {
+            runtime
+                .poll_once(Some(Duration::from_millis(10)))
+                .expect("poll");
+        }
+        assert!(live.exists(), "isolated control socket must exist");
+        std::os::unix::net::UnixStream::connect(&live)
+            .expect("live isolated endpoint is connectable");
 
-    shutdown(&mut runtime);
+        let missing = unique_dir("missing").join("control.sock");
+        assert!(std::os::unix::net::UnixStream::connect(&missing).is_err());
+
+        shutdown(&mut runtime);
+    })
 }
 
 #[test]

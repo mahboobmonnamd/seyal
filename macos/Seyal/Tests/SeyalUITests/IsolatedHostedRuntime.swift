@@ -22,7 +22,7 @@ enum IsolatedHostedRuntime {
     return url.path
   }
 
-  static var launchArguments: [String] { [flag, makeDirectory()] }
+  static func makeLaunchArguments() -> [String] { [flag, makeDirectory()] }
 }
 
 extension XCUIApplication {
@@ -30,7 +30,7 @@ extension XCUIApplication {
   func launchIsolatedHost() -> XCUIApplication {
     terminate()
     if !launchArguments.contains(IsolatedHostedRuntime.flag) {
-      launchArguments += IsolatedHostedRuntime.launchArguments
+      launchArguments += IsolatedHostedRuntime.makeLaunchArguments()
     }
     launch()
     return self

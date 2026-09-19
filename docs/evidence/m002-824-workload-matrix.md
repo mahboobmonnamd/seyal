@@ -4,7 +4,7 @@
 | --- | --- |
 | Owning Issue | #824 (parent #672) |
 | Classification | production validation / focused gap closure |
-| Exact production head | `2ef83322a382a142d17ae1e4cc6ec0600116af41` (production Swift after `ad50bd1`: `7cb7853` / `7f77a6f`; headed-GUI ledger commit). Docs-only tip commits after this SHA sync honesty only. |
+| Exact production head | `2ef83322a382a142d17ae1e4cc6ec0600116af41` (production Swift after `ad50bd1`: `7cb7853` / `7f77a6f`). PR #984 evidence/harness head is `4d0cbb2`. |
 | Prior automated pin | `dcbb90faaf870fdabbc543e6947adff2af48c8a3` remains the first retained matrix SHA; intermediate re-runs on `f0e8c01` plus live PTY expansions |
 | Host | Darwin arm64 / macOS 26.5.2 / Rust 1.98.0 (local matrix); hosted CI macOS-15 / Xcode 16.4 for exact-head gates |
 | Date (UTC) | 2026-09-18 |
@@ -13,7 +13,7 @@ This is retained automated + classified native/manual evidence for the #672
 workload matrix. Comparative/release performance remains #673 authority
 (`performance_claim=false` here). PTY smokes spawn with `TERM=seyal-m001` and a
 `tic`-compiled bundled terminfo directory, not `xterm-256color`. This follow-on
-records the close package; it does not add executable Swift/Rust after `7f77a6f`.
+is `Refs #824` harness + evidence only. `#824` / `#672` stay open.
 
 **Current-head gates (`2ef8332`):** hosted Foundation Quality + production fuzz
 ([run 35305544844](https://github.com/seyal-org/seyal/actions/runs/35305544844))
@@ -23,7 +23,7 @@ SUCCESS — `repository-policy`, `rust-and-harness-quality`, `native-macos-smoke
 [fuzz 35319411982](https://github.com/seyal-org/seyal/actions/runs/35319411982))
 SUCCESS with the same production fingerprints. Local exclusive-Runtime native +
 XCUI on `7f77a6f` (recorded at `2ef8332`): **27/27** component + **19/19** XCUI
-**PASS**. 2026-09-19 exact-head on `a218c23` plus harness fixes: `make check`
+**PASS**. 2026-09-19 exact-head on `4d0cbb2`: `make check`
 **PASS** and `make ui-test` **20/20** XCUI **PASS**. See
 [headed ledger](m002-824-headed-manual.md) 2026-09-19 section. Parallel local
 `pass7_local_ipc` can still hit harness `Exec(Io -6)` and is not the current
@@ -124,7 +124,7 @@ milestone qualification freeze:
 
 ### Remaining acceptance
 
-No new module/ADR was required. Close-out evidence (2026-09-18):
+No new module/ADR was required. Refs evidence (not Issue Done):
 
 1. Nested SSH hop **in the Seyal GUI** via composer submit of nested `ssh` to
    `nt-ssh@orb` (one Seyal PTY/execution). Output bytes are not AX-visible;
@@ -133,12 +133,12 @@ No new module/ADR was required. Close-out evidence (2026-09-18):
    restore via Ctrl-C. Vim/Neovim/htop/watch TUI takeover/restore **PASS**.
 3. SPEC-011 IME 37–41 **covered**. Hosted ABC `XCTSkip`. #836 not pulled.
 4. #673 PHYSICAL_ARM64 remains a **sibling** close-out Issue; `performance_claim=false` here.
-5. Owner-accepted **ENVIRONMENT_UNSUPPORTED** for live Claude/Codex TUI and
-   headed retained-grid search/copy. Independent close review of this follow-on
-   is still required before merge.
+5. Live Claude/Codex TUI and headed retained-grid search/copy remain
+   **ENVIRONMENT_UNSUPPORTED**. Independent non-author Approve is still
+   required before merge of this Refs PR. `#824` stays open.
 
-Local `CARGO_TEST_THREADS=1 make check` on master `eecaf88` **PASS** (CLT SDK;
-Xcode 27 license blocks `xcodebuild`). Hosted FQ + fuzz on `2ef8332` retained.
+Local `CARGO_TEST_THREADS=1 make check` and `make ui-test` **PASS** on
+`4d0cbb2` (Xcode 27 + Metal toolchain). Hosted FQ + fuzz on `2ef8332` retained.
 
 Active remediation for Block selection, `pass7_local_ipc` isolation, Flow
 hit-test fallthrough, and TUI reconcile coalesce is **complete on `2ef8332`**

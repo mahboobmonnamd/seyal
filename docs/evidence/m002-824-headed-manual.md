@@ -3,10 +3,10 @@
 - **Issue:** #824
 - **Date:** 2026-09-18
 - **Exact production head (fingerprints / hosted FQ):** `2ef83322a382a142d17ae1e4cc6ec0600116af41` (merge `20418fa` / PR #964). Current master at close-out measurement: `eecaf888bd8aecb3d4afcff371ad91ddce76c55f` (docs/chore only after that merge).
-- **Docs-only tip after that head:** later ledger-honesty commits on `issue/824` (no further Swift/Rust delta).
+- **This PR head:** `4d0cbb211269bc34dc122033ae7aba6a5f39a5b9` (harness + 2026-09-19 local-gate ledger). Not a close SHA.
 - **Production path:** ADR-015 thin AppKit host over Rust snapshots; headed oracle is Flow/Blocks, not a raw terminal.
 - **Exclusive Runtime rule:** if another process owns `control.sock`, the headed run is INCONCLUSIVE.
-- **Relationship:** `Refs #824` / `Refs #672` only. PR #964 remains the merged production delta. Do not `Closes` until independent review of the 2026-09-19 local gates.
+- **Relationship:** `Refs #824` / `Refs #672` only. PR #964 remains the merged production delta. `#824` DoD (including `#673` and owner confirmation) stays open after this PR.
 - **IME 37–41 close classification:** **covered** by existing native `NSTextInputClient` + local ABC XCUI. Not a new #824 row. Do not pull #836.
 
 ## Local exact-head gates (2026-09-19) — actually executed
@@ -16,8 +16,8 @@ PR #984 was opened too early as a docs-only `Closes` after classifying local
 classification was wrong. This host can run those gates. The 2026-09-18
 close-out session below is retained as history, not Done evidence.
 
-Base SHA `a218c23` (isolation merge from master) plus local harness fixes
-needed to make the suite rebuild and stay exclusive:
+Exact head for these local gates is `4d0cbb2` (isolation merge `a218c23`
+plus the harness fixes below):
 
 | Blocker found when the suite was actually run | Fix |
 | --- | --- |
@@ -78,8 +78,9 @@ Executable Swift moved after `ad50bd1` / `204d14c`: Flow Block hit-test
 fallthrough (`7cb7853`, `ThinPaneHostView`) and TUI chrome coalesce
 (`7f77a6f`, `ProductChromeHostView` + nested-reconcile component test +
 `/tmp` alt-screen XCUI fixture). `2ef8332` records headed-GUI steps 1–7 on
-top of that production head. Later docs-only tip commits only sync ledger
-honesty. Do not claim production sources are unchanged from `ad50bd1`.
+top of that production head. Do not claim later `issue/824` commits are
+docs-only; `4d0cbb2` adds UI/isolation harness. Do not claim production
+sources are unchanged from `ad50bd1`.
 
 Hosted Foundation Quality + production fuzz on exact production head
 `2ef8332`
@@ -126,9 +127,9 @@ Source fingerprints for the production/test sources at `2ef8332`:
 
 #673 remains release-performance authority (`performance_claim=false` here).
 Milestone-length fuzz campaigns stay hosted production-fuzz SUCCESS plus
-`fuzz-smoke`; they are not a new long campaign. Independent close review of
-this follow-on PR is still required before merge. This ledger sync is
-docs-only; do not treat it as further executable delta after `7f77a6f`.
+`fuzz-smoke`; they are not a new long campaign. This PR also contains the
+UI/isolation harness fixes needed to run those gates. It is still `Refs #824`,
+not a close package.
 
 ## SPEC-011 IME 37–41 close classification (2026-09-18)
 
@@ -145,7 +146,7 @@ docs-only; do not treat it as further executable delta after `7f77a6f`.
 `CompositionDocument` self-tests remain document invariants only; they are not
 this classification. Language-specific input-source breadth stays post-M004
 #836 and is **not required** for M002 technical preview. Headed steps 1–10 for
-this close package are in the close-out session and manual table above.
+this Refs evidence PR are in the close-out session and manual table above.
 
 ## Local native session (2026-09-18, `204d14c`)
 

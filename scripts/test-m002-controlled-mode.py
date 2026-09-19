@@ -61,6 +61,12 @@ def test_performance_contract_runner(base: Path) -> None:
     module.ROOT.mkdir()
     module.collect_cohorts = stub_collect_cohorts
     module.git_sha = lambda: "1111111111111111111111111111111111111111"
+    # collect_gate() refuses real cohort collection off Apple Silicon macOS
+    # (by design -- see require_apple_silicon_collection_host). This test
+    # exercises --controlled's branch-selection logic, not real hardware
+    # collection, and must run on any CI runner, so the host guard itself
+    # (not collect_cohorts, which is already stubbed above) is bypassed here.
+    module.require_apple_silicon_collection_host = lambda gate: None
 
     # (a) regression guard: without --controlled, behavior is unchanged --
     # unconditional PLATFORM_LIMITED, no power probe, no baseline requirement.
@@ -142,6 +148,10 @@ def test_history_reflow_runner(base: Path) -> None:
     module.ROOT.mkdir()
     module.collect_cohorts = stub_collect_cohorts
     module.git_sha = lambda: "3333333333333333333333333333333333333333"
+    # See the matching comment in test_performance_contract_runner: main()'s
+    # Apple Silicon host guard is bypassed here so this test can exercise
+    # --controlled's branch-selection logic on any CI runner.
+    module.require_apple_silicon_collection_host = lambda: None
 
     # Stub the validator subprocess call so this test does not depend on the
     # real validator's exact acceptance path for a fabricated baseline SHA

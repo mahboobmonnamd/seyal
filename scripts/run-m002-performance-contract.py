@@ -370,6 +370,19 @@ def probe_ac_power_confirmed() -> tuple[bool, str]:
     return False, f"pmset output did not confirm AC power: {output.strip()!r}"
 
 
+def require_apple_silicon_collection_host(gate: str) -> None:
+    """Refuse real cohort collection off Apple Silicon macOS.
+
+    Factored out (rather than inlined in `collect_gate`) so a test can
+    monkeypatch this one function to exercise `collect_gate`'s branch logic
+    on any CI runner, the same way it already monkeypatches
+    `probe_ac_power_confirmed` and `collect_cohorts` -- without weakening
+    the real guard for an actual collection run.
+    """
+    if sys.platform != "darwin" or platform.machine() not in {"arm64", "aarch64"}:
+        raise SystemExit(f"{gate} contract collection requires Apple Silicon macOS")
+
+
 def collect_gate(
     gate: str,
     *,
@@ -400,8 +413,7 @@ def collect_gate(
         return
     if gate not in COLLECTORS:
         raise SystemExit(f"{gate} is inventoried but has no five-cohort collector")
-    if sys.platform != "darwin" or platform.machine() not in {"arm64", "aarch64"}:
-        raise SystemExit(f"{gate} contract collection requires Apple Silicon macOS")
+    require_apple_silicon_collection_host(gate)
     sha = git_sha()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     evidence_root = ROOT / "docs" / "evidence" / f"m002-673-{gate}-{stamp}"

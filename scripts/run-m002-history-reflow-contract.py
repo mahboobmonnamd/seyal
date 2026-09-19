@@ -92,6 +92,19 @@ def probe_ac_power_confirmed() -> tuple[bool, str]:
     return False, f"pmset output did not confirm AC power: {output.strip()!r}"
 
 
+def require_apple_silicon_collection_host() -> None:
+    """Refuse a real history-reflow contract run off Apple Silicon macOS.
+
+    Factored out (rather than inlined in `main`) so a test can monkeypatch
+    this one function to exercise `main`'s --controlled branch-selection
+    logic on any CI runner, the same way it already monkeypatches
+    `probe_ac_power_confirmed` and `collect_cohorts` -- without weakening
+    the real guard for an actual collection run.
+    """
+    if sys.platform != "darwin" or platform.machine() not in {"arm64", "aarch64"}:
+        raise SystemExit("history-reflow contract runner requires Apple Silicon macOS")
+
+
 def hardware() -> str:
     if sys.platform == "darwin":
         model = run(["sysctl", "-n", "hw.model"]).stdout.strip()
@@ -263,8 +276,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if sys.platform != "darwin" or platform.machine() not in {"arm64", "aarch64"}:
-        raise SystemExit("history-reflow contract runner requires Apple Silicon macOS")
+    require_apple_silicon_collection_host()
     sha = git_sha()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     evidence_root = ROOT / "docs" / "evidence" / f"m002-673-history-reflow-{stamp}"
